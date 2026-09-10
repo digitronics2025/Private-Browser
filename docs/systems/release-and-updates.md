@@ -347,13 +347,22 @@ when that ref is absent or all-zeros), and skips when every changed path is unde
 `docs/` or a top-level `.md`. Before this, every push to `main` minted a new
 active release — including docs commits (F-04).
 
+**Application releases are versioned automatically.** On a `main` push,
+`prepare-release-version.mjs` reads the authenticated active manifest. It keeps
+a manually raised stable version from `package.json`, or increments the active
+patch version when the declared version is not higher. The Windows job patches
+both package files only in its runner, builds that version and adds `VERSION.txt`
+to the artifact. The publish job restores that exact version before writing R2
+and D1, so the installer filename, object key and manifest cannot disagree.
+
 | Job | Runs on | Does |
 | --- | --- | --- |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
-| `windows-installer` | windows, 25 min, needs `verify` | Writes the bundled update bootstrap (see **Bundled Bootstrap**), then `npm run dist`, then a pwsh step that hashes the first `release\*.exe` and writes `release\SHA256SUMS.txt`, then uploads artifact `private-browser-windows` (`if-no-files-found: error`, 30-day retention) |
-| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Skips entirely when the push changed nothing outside `docs/` and top-level `*.md` (checked out at `fetch-depth: 0` and diffed against `github.event.before`), so documentation commits no longer mint a release. Otherwise downloads the artifact, uploads the exe to R2, registers metadata in D1, then re-downloads it through the live authenticated route to prove the whole path works ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)) |
+| `windows-installer` | windows, 25 min, needs `verify` | Selects the next stable version on `main`, writes the bundled update bootstrap (see **Bundled Bootstrap**), runs `npm run dist`, then writes the checksum and `VERSION.txt`; uploads artifact `private-browser-windows` (`if-no-files-found: error`, 30-day retention) |
+| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Restores the artifact's recorded version, skips documentation-only pushes, otherwise uploads the exe to R2, registers metadata in D1, then re-downloads it through the live authenticated route to prove the whole path works ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)) |
 
-The publish job uploads with
+The publish job validates `VERSION.txt`, applies it to its local package files,
+then uploads with
 `wrangler r2 object put private-browser-releases/releases/<version>/<run-number>/<basename> --file <exe> --content-type application/vnd.microsoft.portable-executable --remote`,
 then runs
 [publish-release.mjs](../../cloudflare/scripts/publish-release.mjs), which reads
