@@ -211,6 +211,22 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .settings-row strong { font-size: 9px; }
 .settings-row small { font-size: 8px; line-height: 1.45; color: #6d788c; margin-top: 3px; }
 .settings-row b { display: flex; align-items: center; gap: 3px; color: var(--green); font-size: 7px; white-space: nowrap; }
+.settings-row > button, .update-actions button { border: 1px solid var(--line-bright); background: #111722; color: #9aa8bf; border-radius: 7px; padding: 7px 9px; font-size: 8px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.settings-row > button:hover, .update-actions button:hover { color: white; border-color: rgba(106,146,255,.6); }
+.update-settings { padding-bottom: 11px; }
+.update-form { display: flex; flex-direction: column; gap: 7px; padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
+.update-form input { width: 100%; border-radius: 7px; border: 1px solid var(--line-bright); background: #0d1016; color: white; padding: 9px 10px; font-size: 9px; outline: 0; }
+.update-form input:focus { border-color: rgba(106,146,255,.7); }
+.update-form p { margin: 0 0 2px; color: #d49aa3; font-size: 8px; line-height: 1.5; }
+.update-form .primary-button { margin: 1px 0 0; justify-content: center; }
+.update-actions { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; margin-top: 10px; border-top: 1px solid var(--line); }
+.update-actions button.download-update { color: #b7f2d6; border-color: rgba(79,209,165,.35); }
+.update-actions button.danger { margin-left: auto; color: #b66c78; }
+.update-result { display: flex; flex-direction: column; gap: 3px; margin-top: 9px; padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #0e131b; }
+.update-result strong { font-size: 9px; color: #acb8cc; }
+.update-result small { font-size: 7px; color: #68758a; }
+.update-result.available { border-color: rgba(79,209,165,.28); background: rgba(79,209,165,.045); }
+.update-result.available strong { color: #8ee0bd; }
 .about-card { display: flex; align-items: center; gap: 10px; margin-top: 18px; padding: 12px; border-top: 1px solid var(--line); color: #91aaff; }
 .about-card > span { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--blue-soft); }
 .about-card > div { display: flex; flex-direction: column; }

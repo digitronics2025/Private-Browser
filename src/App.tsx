@@ -37,7 +37,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
+import type { AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
 
 type SidebarMode = 'assistant' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
 
@@ -137,6 +137,10 @@ export default function App() {
   useEffect(() => window.privateBrowser.onFocusAddress(() => {
     addressRef.current?.focus();
     addressRef.current?.select();
+  }), []);
+
+  useEffect(() => window.privateBrowser.onUpdateAvailable((result) => {
+    setToast(`Private Browser ${result.latest.version} is ready to download`);
   }), []);
 
   useEffect(() => {
@@ -523,7 +527,18 @@ function PrivacyPanel({ state }: { state: BrowserSnapshot }) {
 
 function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
   const [isDefault, setIsDefault] = useState(false);
-  useEffect(() => { void window.privateBrowser.getDefaultBrowserStatus().then(setIsDefault).catch(() => undefined); }, []);
+  const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
+  const [editingUpdates, setEditingUpdates] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [updateForm, setUpdateForm] = useState<UpdateServiceInput>({ endpoint: '', accessToken: '' });
+  useEffect(() => {
+    void window.privateBrowser.getDefaultBrowserStatus().then(setIsDefault).catch(() => undefined);
+    void window.privateBrowser.getUpdateService().then((status) => {
+      setUpdateStatus(status);
+      setUpdateForm((value) => ({ ...value, endpoint: status.endpoint ?? '' }));
+    }).catch((error) => onToast(error instanceof Error ? error.message : String(error)));
+  }, []);
   const makeDefault = async () => {
     try {
       const result = await window.privateBrowser.setDefaultBrowser();
@@ -531,11 +546,56 @@ function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
       onToast(result ? 'Private Browser is now your default' : 'Windows requires you to choose Private Browser in Default Apps');
     } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
   };
+  const configureUpdates = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      const status = await window.privateBrowser.configureUpdateService(updateForm);
+      setUpdateStatus(status);
+      setUpdateForm({ endpoint: status.endpoint ?? '', accessToken: '' });
+      setEditingUpdates(false);
+      onToast('Private download service connected');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+  };
+  const checkUpdates = async () => {
+    setChecking(true);
+    try {
+      const result = await window.privateBrowser.checkForUpdates();
+      setUpdateResult(result);
+      onToast(result.state === 'available' ? `Version ${result.latest.version} is available` : 'Private Browser is up to date');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    finally { setChecking(false); }
+  };
+  const disconnectUpdates = async () => {
+    try {
+      const status = await window.privateBrowser.clearUpdateService();
+      setUpdateStatus(status);
+      setUpdateResult(null);
+      setUpdateForm({ endpoint: '', accessToken: '' });
+      setEditingUpdates(false);
+      onToast('Private download service disconnected');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+  };
   return <div className="side-panel">
     <PanelHeader icon={Settings} eyebrow="Application" title="Settings" />
     <div className="settings-card"><div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Default browser</strong><small>{isDefault ? 'Private Browser opens web links.' : 'Use Private Browser for HTTP and HTTPS links.'}</small></div>{isDefault ? <b><Check size={14} /> Set</b> : <button onClick={() => void makeDefault()}>Set default</button>}</div></div>
+    <div className="settings-card update-settings">
+      <div className="settings-row"><span><Cloud size={17} /></span><div><strong>Private downloads</strong><small>{updateStatus?.configured ? updateStatus.endpoint : 'Cloudflare Worker · D1 metadata · R2 installers'}</small></div>{updateStatus?.configured ? <b><Check size={14} /> Connected</b> : <button onClick={() => setEditingUpdates((value) => !value)}>Connect</button>}</div>
+      {(editingUpdates || updateStatus?.error) && <form className="update-form" onSubmit={configureUpdates}>
+        {updateStatus?.error && <p>{updateStatus.error === 'configuration-corrupt' ? 'The encrypted update configuration is unreadable. Saving replaces it.' : 'Windows encryption is unavailable on this device.'}</p>}
+        <input type="url" required placeholder="https://private-browser-downloads.example.workers.dev" value={updateForm.endpoint} onChange={(event) => setUpdateForm({ ...updateForm, endpoint: event.target.value })} />
+        <input type="password" required minLength={32} placeholder="Download access token" value={updateForm.accessToken} onChange={(event) => setUpdateForm({ ...updateForm, accessToken: event.target.value })} />
+        <button className="primary-button" type="submit"><LockKeyhole size={14} /> Encrypt and connect</button>
+      </form>}
+      {updateStatus?.configured && <div className="update-actions">
+        <button onClick={() => void checkUpdates()} disabled={checking}>{checking ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} Check now</button>
+        {updateResult?.state === 'available' && <button className="download-update" onClick={() => void window.privateBrowser.openUpdatePage().catch((error) => onToast(error.message))}><Download size={14} /> Download {updateResult.latest.version}</button>}
+        <button onClick={() => setEditingUpdates((value) => !value)}>Change</button>
+        <button className="danger" onClick={() => void disconnectUpdates()}>Disconnect</button>
+      </div>}
+      {updateResult && <div className={`update-result ${updateResult.state}`}><strong>{updateResult.state === 'available' ? `Version ${updateResult.latest.version} available` : `Up to date · ${updateResult.currentVersion}`}</strong><small>{updateResult.state === 'available' ? `${humanBytes(updateResult.latest.sizeBytes)} · SHA-256 verified in release metadata` : `Checked ${timeAgo(updateResult.checkedAt)}`}</small></div>}
+    </div>
     <div className="settings-card"><div className="settings-row"><span><ShieldCheck size={17} /></span><div><strong>Security baseline</strong><small>Sandboxed pages, isolated sessions, strict IPC and encrypted secrets.</small></div><b><Check size={14} /> Active</b></div></div>
-    <div className="about-card"><span><ShieldCheck size={23} /></span><div><strong>Private Browser</strong><small>Version 0.2.0 · Digitronics</small></div></div>
+    <div className="about-card"><span><ShieldCheck size={23} /></span><div><strong>Private Browser</strong><small>Version {updateStatus?.currentVersion ?? '0.3.0'} · Digitronics</small></div></div>
   </div>;
 }
 

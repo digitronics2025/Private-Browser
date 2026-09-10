@@ -25,9 +25,11 @@ import type {
   PersistedState,
   PrivacyEvent,
   VaultItemInput,
+  UpdateServiceInput,
   WorkspaceId,
 } from './types.js';
 import { VaultStore } from './vault.js';
+import { UpdateServiceStore } from './update-service.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -67,6 +69,7 @@ class BrowserController {
     private readonly store: StateStore,
     private readonly vault: VaultStore,
     private readonly aiProvider: AiProviderStore,
+    private readonly updates: UpdateServiceStore,
   ) {
     for (const tab of this.store.get().tabs) {
       this.runtimeTabs.set(tab.id, { loading: false, canGoBack: false, canGoForward: false });
@@ -430,6 +433,41 @@ class BrowserController {
     return http && https;
   }
 
+  getUpdateService() {
+    return this.updates.status(app.getVersion());
+  }
+
+  configureUpdateService(input: UpdateServiceInput) {
+    const status = this.updates.configure(input, app.getVersion());
+    this.addPrivacyEvent('vault', 'Download service connected', status.endpoint ?? 'Encrypted update service');
+    return status;
+  }
+
+  clearUpdateService() {
+    const status = this.updates.clear(app.getVersion());
+    this.addPrivacyEvent('vault', 'Download service disconnected', 'Encrypted access token removed');
+    return status;
+  }
+
+  async checkForUpdates() {
+    return this.updates.check(app.getVersion());
+  }
+
+  async openUpdatePage(): Promise<void> {
+    const result = await this.checkForUpdates();
+    await this.newTab('development', result.latest.downloadPageUrl);
+  }
+
+  async checkForUpdatesInBackground(): Promise<void> {
+    if (!this.getUpdateService().configured || this.window.isDestroyed()) return;
+    try {
+      const result = await this.checkForUpdates();
+      if (result.state === 'available') this.window.webContents.send('updates:available', result);
+    } catch {
+      // Background checks stay quiet; explicit checks show actionable errors.
+    }
+  }
+
   private activeTab(state: PersistedState) {
     const id = state.activeTabByWorkspace[state.activeWorkspaceId];
     return state.tabs.find((tab) => tab.id === id) ?? state.tabs.find((tab) => tab.workspaceId === state.activeWorkspaceId) ?? state.tabs[0];
@@ -665,7 +703,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const store = new StateStore(join(app.getPath('userData'), 'browser-state.json'));
   const vault = new VaultStore(join(app.getPath('userData'), 'vault.enc'));
   const aiProvider = new AiProviderStore(join(app.getPath('userData'), 'ai-provider.enc'));
-  controller = new BrowserController(store, vault, aiProvider);
+  const updates = new UpdateServiceStore(join(app.getPath('userData'), 'update-service.enc'));
+  controller = new BrowserController(store, vault, aiProvider, updates);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -699,8 +738,15 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('system:copy', (_event, value: string) => clipboard.writeText(String(value).slice(0, 100_000)));
   handle('system:is-default-browser', () => controller!.isDefaultBrowser());
   handle('system:set-default-browser', () => controller!.setDefaultBrowser());
+  handle('updates:status', () => controller!.getUpdateService());
+  handle('updates:configure', (_event, input: UpdateServiceInput) => controller!.configureUpdateService(input));
+  handle('updates:clear', () => controller!.clearUpdateService());
+  handle('updates:check', () => controller!.checkForUpdates());
+  handle('updates:open-page', () => controller!.openUpdatePage());
 
   await controller.createWindow();
+  setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();
+  setInterval(() => void controller?.checkForUpdatesInBackground(), 24 * 60 * 60_000).unref();
   if (pendingLaunchUrl) {
     const url = pendingLaunchUrl;
     pendingLaunchUrl = undefined;

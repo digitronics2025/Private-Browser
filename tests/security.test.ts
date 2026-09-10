@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowedRemoteUrl, isProtectedPage, isSafeAiEndpoint, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from '../electron/security';
+import { isAllowedRemoteUrl, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from '../electron/security';
 import { createDefaultState, sanitizeState } from '../electron/state-store';
 import { generateTotp } from '../electron/vault';
 
@@ -36,6 +36,12 @@ describe('navigation security', () => {
     expect(isSafeAiEndpoint('https://192.168.1.5/api')).toBe(false);
     expect(isSafeAiEndpoint('https://169.254.169.254/latest')).toBe(false);
     expect(isSafeAiEndpoint('https://[::1]/api')).toBe(false);
+  });
+
+  it('accepts only a public HTTPS origin for the update service', () => {
+    expect(isSafeUpdateEndpoint('https://downloads.example.com')).toBe(true);
+    expect(isSafeUpdateEndpoint('https://downloads.example.com/tenant')).toBe(false);
+    expect(isSafeUpdateEndpoint('http://downloads.example.com')).toBe(false);
   });
 
   it('shares only an origin with a cloud provider', () => {

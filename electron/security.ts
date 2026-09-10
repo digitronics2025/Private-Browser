@@ -90,3 +90,13 @@ export function isSafeAiEndpoint(value: string): boolean {
     return false;
   }
 }
+
+export function isSafeUpdateEndpoint(value: string): boolean {
+  if (!isSafeAiEndpoint(value)) return false;
+  try {
+    const url = new URL(value);
+    return (url.pathname === '' || url.pathname === '/') && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}

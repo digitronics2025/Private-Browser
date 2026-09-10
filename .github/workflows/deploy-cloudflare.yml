@@ -1,0 +1,63 @@
+name: Deploy download service
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-cloudflare.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-browser-cloudflare-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+      DOWNLOAD_ACCESS_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
+      SIGNING_SECRET: ${{ secrets.PRIVATE_BROWSER_SIGNING_SECRET }}
+      ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Detect deployment configuration
+        id: configured
+        shell: bash
+        run: |
+          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$CLOUDFLARE_D1_DATABASE_ID" && ${#DOWNLOAD_ACCESS_TOKEN} -ge 32 && ${#SIGNING_SECRET} -ge 32 && ${#ADMIN_API_KEY} -ge 32 ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Cloudflare deployment is not configured. Add the documented repository secrets, then run this workflow again."
+          fi
+      - if: steps.configured.outputs.ready == 'true'
+        run: npm run worker:typecheck
+      - if: steps.configured.outputs.ready == 'true'
+        run: node cloudflare/scripts/render-config.mjs
+      - name: Apply D1 migrations
+        if: steps.configured.outputs.ready == 'true'
+        run: npx wrangler d1 migrations apply DB --remote --config cloudflare/wrangler.deploy.jsonc
+      - name: Deploy Worker
+        if: steps.configured.outputs.ready == 'true'
+        run: npx wrangler deploy --config cloudflare/wrangler.deploy.jsonc --keep-vars
+      - name: Install Worker secrets
+        if: steps.configured.outputs.ready == 'true'
+        shell: bash
+        run: |
+          node -e "process.stdout.write(JSON.stringify({DOWNLOAD_ACCESS_TOKEN:process.env.DOWNLOAD_ACCESS_TOKEN,SIGNING_SECRET:process.env.SIGNING_SECRET,ADMIN_API_KEY:process.env.ADMIN_API_KEY}))" |
+            npx wrangler secret bulk --config cloudflare/wrangler.deploy.jsonc

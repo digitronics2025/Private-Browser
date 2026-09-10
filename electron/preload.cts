@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
+import type { AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 
 const api = {
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
@@ -34,6 +34,11 @@ const api = {
   copyText: (value: string): Promise<void> => ipcRenderer.invoke('system:copy', value),
   getDefaultBrowserStatus: (): Promise<boolean> => ipcRenderer.invoke('system:is-default-browser'),
   setDefaultBrowser: (): Promise<boolean> => ipcRenderer.invoke('system:set-default-browser'),
+  getUpdateService: (): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:status'),
+  configureUpdateService: (input: UpdateServiceInput): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:configure', input),
+  clearUpdateService: (): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:clear'),
+  checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check'),
+  openUpdatePage: (): Promise<void> => ipcRenderer.invoke('updates:open-page'),
   onState: (callback: (state: BrowserSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: BrowserSnapshot) => callback(state);
     ipcRenderer.on('browser:state', listener);
@@ -43,6 +48,11 @@ const api = {
     const listener = () => callback();
     ipcRenderer.on('browser:focus-address', listener);
     return () => { ipcRenderer.removeListener('browser:focus-address', listener); };
+  },
+  onUpdateAvailable: (callback: (result: UpdateCheckResult) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, result: UpdateCheckResult) => callback(result);
+    ipcRenderer.on('updates:available', listener);
+    return () => { ipcRenderer.removeListener('updates:available', listener); };
   },
 };
 

@@ -125,3 +125,39 @@ export interface VaultStatus {
   reason?: 'os-encryption-unavailable' | 'vault-corrupt';
   items: VaultItemMeta[];
 }
+
+export interface UpdateServiceInput {
+  endpoint: string;
+  accessToken: string;
+}
+
+export interface UpdateServiceStatus {
+  configured: boolean;
+  currentVersion: string;
+  endpoint?: string;
+  error?: 'configuration-corrupt' | 'os-encryption-unavailable';
+}
+
+export interface ReleaseManifest {
+  schemaVersion: 1;
+  appId: 'private-browser';
+  version: string;
+  buildNumber: number;
+  channel: 'stable' | 'beta';
+  publishedAt: string;
+  filename: string;
+  sizeBytes: number;
+  sha256: string;
+  commitSha: string;
+  releaseNotes: string;
+  downloadUrl: string;
+  downloadPageUrl: string;
+  expiresAt: string;
+}
+
+export interface UpdateCheckResult {
+  state: 'available' | 'up-to-date';
+  currentVersion: string;
+  latest: ReleaseManifest;
+  checkedAt: string;
+}

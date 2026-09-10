@@ -16,6 +16,8 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - Windows default-browser registration and single-instance external-link handling.
 - Safe one-click routines that open common work setups without sending, buying, publishing or deleting anything.
 - An auditable privacy activity log.
+- A Cloudflare-native private release service with D1 metadata, R2 installers, a protected download page and resumable downloads.
+- OS-encrypted update-service configuration with startup and daily release checks.
 
 ## Run locally
 
@@ -40,13 +42,19 @@ Create the Windows installer on a Windows machine:
 npm run dist
 ```
 
-The installer is written to `release/Private-Browser-0.2.0-Setup.exe`. GitHub Actions also creates a downloadable Windows artifact for every push to `main`.
+The installer is written to `release/Private-Browser-0.3.0-Setup.exe`. GitHub Actions also creates a downloadable Windows artifact for every push to `main`.
 
 The installer is not code-signed yet, so Windows SmartScreen may show an unknown-publisher warning. Production distribution requires a trusted code-signing certificate.
 
+## Cloudflare download service
+
+The `cloudflare/` project contains the Worker, D1 migrations, private R2 release flow, protected download page and automated deployment/publishing workflows. Cloudflare account identifiers and credentials must be configured privately in the repository settings before running **Deploy download service**; they are intentionally not included in source documentation.
+
+After deployment, open **Settings → Private downloads** in the desktop app to connect the Worker and check for releases. The connection is encrypted with Windows credential protection and is never returned to the renderer after it is saved.
+
 ## Privacy model
 
-Local browser state never includes passwords, form contents, cookies or AI page text. Workspace cookies live in distinct Electron session partitions. Vault values are encrypted through Electron `safeStorage`, which uses the operating system's credential protection.
+Local browser state never includes passwords, form contents, cookies or AI page text. Workspace cookies live in distinct Electron session partitions. Vault values are encrypted using Electron `safeStorage`, which uses the operating system's credential protection.
 
 The AI panel first extracts visible page text locally. It removes common credentials, tokens, card numbers, JWTs and authenticator secrets, strips the page URL down to its origin, and protects banking/payment pages. The sanitized preview must be approved for one request. You can connect any public HTTPS OpenAI-compatible endpoint; its API key is stored with operating-system encryption.
 

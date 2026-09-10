@@ -2,6 +2,10 @@ node_modules/
 dist/
 dist-electron/
 release/
+.wrangler/
+.wrangler-dist/
+cloudflare/wrangler.deploy.jsonc
+cloudflare/.dev.vars
 *.log
 .DS_Store
 .env

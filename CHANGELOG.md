@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-09-10
+
+- Added a Cloudflare Worker release service with separate client and administrator authentication.
+- Added D1 release metadata and private R2 installer storage; executable binaries never enter D1.
+- Added a private branded download page with HMAC-signed, expiring links.
+- Added `update.json`, resumable byte-range downloads, correct executable metadata and SHA-256 release checksums.
+- Added an OS-encrypted Cloudflare connection in desktop settings, manual and daily update checks, and in-browser release downloads.
+- Added D1 migrations, Worker deployment automation and automatic R2 publishing after verified Windows builds.
+- Expanded validation to cover signed links, metadata sanitization, range handling, manifest origin pinning and Worker bundling.
+
 ## 0.2.0 — 2026-09-10
 
 - Replaced mutable AI approvals with expiring, single-use capability tokens.

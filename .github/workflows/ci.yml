@@ -52,3 +52,50 @@ jobs:
             release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+  publish-cloudflare-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: windows-installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
+      PRIVATE_BROWSER_ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v5
+        with:
+          name: private-browser-windows
+          path: release
+      - name: Detect publishing configuration
+        id: configured
+        shell: bash
+        run: |
+          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Cloudflare release publishing is not configured; the verified GitHub artifact remains available."
+          fi
+      - name: Upload installer to private R2 bucket
+        if: steps.configured.outputs.ready == 'true'
+        id: upload
+        shell: bash
+        run: |
+          installer="$(find release -maxdepth 1 -type f -name '*.exe' -print -quit)"
+          test -n "$installer"
+          version="$(node -p "require('./package.json').version")"
+          object_key="releases/${version}/${GITHUB_RUN_NUMBER}/$(basename "$installer")"
+          npx wrangler r2 object put "private-browser-releases/${object_key}" --file "$installer" --content-type application/vnd.microsoft.portable-executable --remote
+          echo "installer=$installer" >> "$GITHUB_OUTPUT"
+          echo "object_key=$object_key" >> "$GITHUB_OUTPUT"
+      - name: Publish D1 release metadata
+        if: steps.configured.outputs.ready == 'true'
+        run: node cloudflare/scripts/publish-release.mjs "${{ steps.upload.outputs.installer }}" "${{ steps.upload.outputs.object_key }}"
