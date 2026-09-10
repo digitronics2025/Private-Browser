@@ -3,7 +3,7 @@ system: ipc-contract
 sources:
   - electron/preload.cts
   - electron/types.ts
-verified_at: ef6ba2e8
+verified_at: 017e88ff
 ---
 
 # IPC Contract
@@ -13,7 +13,7 @@ verified_at: ef6ba2e8
 ## Agent Brief
 
 **Scope.** The whole surface between the Electron main process and the React
-renderer: 37 `invoke` channels in five namespaces, three main-to-renderer event
+renderer: 40 `invoke` channels in six namespaces, three main-to-renderer event
 subscriptions, and every shared payload type. Defined in
 [preload.cts](../../electron/preload.cts) and
 [types.ts](../../electron/types.ts).
@@ -83,7 +83,7 @@ contextBridge.exposeInMainWorld('privateBrowser', api);
 export type PrivateBrowserApi = typeof api;
 ```
 
-- The exposed object is the literal `api` const: 37 `invoke` wrappers and three
+- The exposed object is the literal `api` const: 40 `invoke` wrappers and three
   `on*` subscription helpers. Nothing else crosses.
 - `PrivateBrowserApi` is derived with `typeof`, so the renderer's type follows the
   implementation automatically. This is the one place in the contract that cannot
@@ -122,6 +122,19 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 `setLayout` is the only argument shape written as an inline object literal rather
 than a named type. `main.ts` has its own unexported `Layout` interface with the
 same four fields, and neither file imports the other.
+
+### developer: — 3 channels
+
+| Channel | Preload method | Arguments | Resolves with |
+| --- | --- | --- | --- |
+| `developer:toggle-tools` | `toggleDeveloperTools(mode)` | `mode: DevToolsMode` | `void` |
+| `developer:capture-diagnostics` | `captureDeveloperDiagnostics()` | — | `DeveloperDiagnosticReport` |
+| `developer:clear-diagnostics` | `clearDeveloperDiagnostics()` | — | `void` |
+
+The controller enforces the Development-workspace and protected-page boundary;
+the renderer's disabled state is only presentation. `DevToolsMode` is
+`'right' | 'bottom' | 'detach'`. Diagnostics are sanitized in the main process
+before this bridge can return them.
 
 ### ai: — 6 channels
 
@@ -215,7 +228,8 @@ preload and the renderer.
 ### Browsing data
 
 - `BrowserTab` — `id`, `workspaceId`, `title`, `url`, `favicon?`, `loading`,
-  `canGoBack`, `canGoForward`, `isHome`.
+  `canGoBack`, `canGoForward`, `isHome`, `developerToolsAllowed`,
+  `developerToolsOpen`.
 - `Bookmark` — `id`, `title`, `url`, `workspaceId`, `createdAt`.
 - `HistoryEntry` — same, with `visitedAt` instead of `createdAt`.
 - `DownloadEntry` — now also carries `checksum?: 'verified' | 'mismatch' | 'unchecked'`,
@@ -239,7 +253,8 @@ preload and the renderer.
   `history`, `privacyLog`, `trackerBlocking`. What reaches disk.
 
 These two are deliberately different, and the `Pick` is where the split is
-declared: `loading`, `canGoBack`, `canGoForward` and `favicon` are runtime-only.
+declared: `loading`, `canGoBack`, `canGoForward`, `favicon`,
+`developerToolsAllowed` and `developerToolsOpen` are runtime-only.
 The snapshot also truncates `history` to 100 and `privacyLog` to 50, and adds
 `downloads`, which is never persisted.
 
@@ -250,6 +265,17 @@ The snapshot also truncates `history` to 100 and `privacyLog` to 50, and adds
 - `AiProviderStatus` — `configured`, `endpoint?`, `model?`,
   `error?: 'provider-corrupt' | 'os-encryption-unavailable'`.
 - `AiProviderInput` — `endpoint`, `model`, `apiKey`.
+
+### Developer diagnostics
+
+- `DevToolsMode` — `'right' | 'bottom' | 'detach'`.
+- `DeveloperConsoleEntry` — timestamp, warning/error level, sanitized message,
+  sanitized source and line.
+- `DeveloperNetworkIssue` — timestamp, method, resource type, sanitized URL,
+  optional status and error.
+- `DeveloperDiagnosticReport` — schema version, capture/app metadata, sanitized
+  page metadata and DOM counts, bounded console/network arrays, redaction count,
+  and the preformatted AI-ready report.
 
 ### Vault
 
@@ -336,7 +362,7 @@ response field by field before it is cast — see
 
 ## Related Systems
 
-- [browser-shell.md](browser-shell.md) — registers all 37 channels and sends all
+- [browser-shell.md](browser-shell.md) — registers all 40 channels and sends all
   three events.
 - [renderer-ui.md](renderer-ui.md) — the only consumer of the bridge.
 - [workspaces-and-state.md](workspaces-and-state.md) — owns `PersistedState` and

@@ -4,7 +4,7 @@ sources:
   - src/App.tsx
   - src/styles.css
   - index.html
-verified_at: ef6ba2e8
+verified_at: 017e88ff
 ---
 
 # Renderer UI
@@ -14,8 +14,8 @@ verified_at: ef6ba2e8
 ## Agent Brief
 
 **Scope.** The entire chrome of Private Browser — title bar, tab strip, toolbar,
-workspace rail, home dashboard and the six-mode right sidebar — lives in one
-604-line file, [App.tsx](../../src/App.tsx), styled by one 249-line stylesheet.
+workspace rail, home dashboard and the seven-mode right sidebar — lives in one
+732-line file, [App.tsx](../../src/App.tsx), styled by one 307-line stylesheet.
 The renderer owns no browsing state: it renders a `BrowserSnapshot` pushed from
 the main process and calls back over `window.privateBrowser`.
 
@@ -96,8 +96,9 @@ All in [App.tsx](../../src/App.tsx).
 | `App` (default) | Title bar, tab strip, toolbar, rail, dashboard, sidebar, toast | `state` (snapshot or `null`), `address`, `sidebarOpen` (default `true`), `sidebarMode` (default `assistant`), `toast`, `addressRef` |
 | `WorkspaceRail` | One button per `state.workspaces`; lock icon when `workspace.protected`, else `workspace.icon`; sets `--workspace-color` per button | none |
 | `Dashboard` | The home screen — welcome block, quick-link grid, 5 most recent history rows, 5 bookmarks, all filtered to the active workspace | none (derives from props) |
-| `SidebarNav` | The six mode buttons; red badge showing the count of downloads in `progressing` state | none |
+| `SidebarNav` | The seven mode buttons; red badge showing the count of downloads in `progressing` state | none |
 | `PanelHeader` | Icon + eyebrow + title, shared by every panel | none |
+| `DeveloperPanel` | Workspace gate, native DevTools launcher/position, inspection hint, built-in panel map and sanitized diagnostic report | `mode`, `report`, `loading` |
 | `AssistantPanel` | Provider strip, provider form, local preview card, cloud-permission card, question box, answer | `preview`, `approvalToken`, `loading`, `provider`, `showProviderForm`, `providerForm` (endpoint defaults to `https://openrouter.ai/api/v1`), `question`, `answer`; `summary` is a `useMemo` |
 | `VaultPanel` | Encryption-health banner, corrupt-vault recovery button, add form, credential cards | `items`, `available`, `unavailableReason`, `adding`, `form` |
 | `AutomationPanel` | The three hard-coded routines and the approval-boundary note | `running` (id of the routine in flight) |
@@ -113,13 +114,14 @@ turns either the success string or the thrown error message into a toast.
 
 ## Sidebar Modes and Their IPC
 
-`SidebarMode = 'assistant' | 'vault' | 'automations' | 'downloads' | 'privacy' |
-'settings'`. Exactly one panel is mounted at a time, so a panel's `useEffect`
+`SidebarMode = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' |
+'privacy' | 'settings'`. Exactly one panel is mounted at a time, so a panel's `useEffect`
 load runs each time the user switches to it.
 
 | Mode | `window.privateBrowser` methods called |
 | --- | --- |
 | `assistant` | `getAiProvider`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi` |
+| `developer` | `toggleDeveloperTools`, `captureDeveloperDiagnostics`, `clearDeveloperDiagnostics`, `copyText` |
 | `vault` | `listVault`, `addVaultItem`, `removeVaultItem`, `resetCorruptVault`, `copyPassword`, `copyTotp`, `autofill` |
 | `automations` | `newTab(workspaceId, url)` only |
 | `downloads` | `openDownload`, `showDownload` (the list itself comes from `state.downloads`) |
@@ -131,7 +133,8 @@ The always-mounted chrome (not a sidebar mode) calls `getState`, `setLayout`,
 `activateTab`, `switchWorkspace`, `toggleBookmark`, `openBookmark` and
 `toggleTrackerBlocking`.
 
-`copyText` is exposed on the preload bridge but never called from the renderer.
+`copyText` is used only to copy the main-process-formatted developer report; it
+does not receive raw page content or browser secrets.
 
 Nothing sensitive comes back: `configureAiProvider` and `configureUpdateService`
 return status objects (`configured`, `endpoint`, `model`, `error`), never the key
@@ -300,11 +303,12 @@ preprocessor, no CSS modules. What a future editor needs:
 
 - **Keyboard shortcuts are implemented twice.** `App.tsx` attaches a `window`
   `keydown` listener; `main.ts` attaches `before-input-event` to every tab's
-  `webContents`. Ctrl/Cmd + **L, T, W, R** exist in both, because the renderer
+  `webContents`. Ctrl/Cmd + **L, T, W, R** and F12/Ctrl+Shift+I exist in both, because the renderer
   listener is deaf while a web page has focus and the main-process listener is
   deaf while the React chrome has focus. They are not identical: `main.ts` also
   handles Alt+Left / Alt+Right, and the renderer copy guards Ctrl+W on an active
-  tab and Ctrl+R on `!isHome` where the main copy does not. Adding a shortcut in
+  tab and Ctrl+R on `!isHome` where the main copy does not. Both copies ignore
+  auto-repeat; the main copy also accepts only `keyDown`. Adding a shortcut in
   one place gives you a shortcut that works only half the time.
 - **The layout numbers in `App.tsx` and `main.ts` disagree.** The renderer sends
   `{ top: 128, left: 74, right: 366|0 }`; the `Layout` field in `main.ts` is

@@ -2,7 +2,8 @@
 system: browser-shell
 sources:
   - electron/main.ts
-verified_at: ef6ba2e8
+  - electron/developer-tools.ts
+verified_at: 017e88ff
 ---
 
 # Browser Shell
@@ -14,12 +15,13 @@ verified_at: ef6ba2e8
 **Scope.** [main.ts](../../electron/main.ts) is the Electron main process: one
 `BrowserWindow` holding the React chrome, and one `WebContentsView` per browsing
 tab layered over it. This doc covers the window, tab lifecycle, navigation and
-history, layout maths, keyboard shortcuts, downloads, tracker blocking, the
+history, layout maths, keyboard shortcuts, developer tooling, downloads, tracker blocking, the
 privacy-log writer, per-workspace sessions and permissions, popup downgrading,
 launch and single-instance handling, and the IPC registration wrapper.
 
-**This doc owns `electron/main.ts` for `sources` purposes, but not all of its
-content.** Roughly a third of the file is thin facades over modules other docs
+**This doc owns `electron/main.ts` and `electron/developer-tools.ts` for
+`sources` purposes, but not all of their content.** Roughly a third of the main
+process file is thin facades over modules other docs
 own. If you changed the AI approval methods, the vault methods, or the update
 methods, the doc to edit is [ai-consent.md](ai-consent.md), [vault.md](vault.md)
 or [release-and-updates.md](release-and-updates.md) — this doc covers only their
@@ -30,7 +32,7 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
 - **URL and text safety** → [security-boundary.md](security-boundary.md). Owns
   `normalizeNavigationInput`, `isAllowedRemoteUrl`, `isProtectedPage`, redaction.
 - **The channel surface** → [ipc-contract.md](ipc-contract.md). Owns the table of
-  the 37 channels this file registers and their payload types.
+  the 40 channels this file registers and their payload types.
 - **What survives a restart** → [workspaces-and-state.md](workspaces-and-state.md).
   Owns `WORKSPACES`, `PersistedState`, `sanitizeState`, the atomic save.
 - **The React chrome** → [renderer-ui.md](renderer-ui.md). Owns App.tsx, its own
@@ -88,7 +90,7 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
 `main.ts` is a single `BrowserController` class plus an app bootstrap block at the
 bottom. The controller holds all runtime browser state; the bootstrap owns the
 single-instance lock, the four store constructions, the one-shot update
-bootstrap, the 37 `handle()` registrations and the background update timers. There is no router, no event bus
+bootstrap, the 40 `handle()` registrations and the background update timers. There is no router, no event bus
 and no dependency injection beyond the stores passed into the constructor.
 
 ## Window and Chrome Renderer
@@ -115,9 +117,10 @@ why the chrome reserves that strip itself.
 
 A tab has two halves. The persisted half lives in `StateStore` (id, workspaceId,
 title, url, isHome). The runtime half lives in `runtimeTabs: Map<string, RuntimeTab>`
-and holds the `WebContentsView` plus `loading`, `canGoBack`, `canGoForward` and
-`favicon`. The constructor seeds one empty runtime entry per persisted tab, so
-nothing about loading state, navigation history or favicons survives a restart.
+and holds the `WebContentsView` plus `loading`, `canGoBack`, `canGoForward`,
+`favicon`, `developerToolsOpen`, and bounded developer diagnostic rings. The
+constructor seeds one empty runtime entry per persisted tab, so none of that
+runtime state survives a restart.
 `getSnapshot()` merges the two halves for the wire.
 
 **Views are lazy.** `ensureView(tabId)` builds the `WebContentsView` on first
@@ -206,15 +209,38 @@ inside a page.
 | Ctrl/Cmd+T | `newTab()` in the current workspace |
 | Ctrl/Cmd+W | `closeTab()` on the active tab |
 | Ctrl/Cmd+R | `reload()` |
+| F12 or Ctrl/Cmd+Shift+I | toggles Chromium DevTools for an allowed Development-workspace page |
 | Alt+Left | `goBack()` |
 | Alt+Right | `goForward()` |
 
-The chrome window has its own separate copy of Ctrl+L/T/W/R in App.tsx — see
+The chrome window has its own separate copy of Ctrl+L/T/W/R and the DevTools shortcut in App.tsx — see
 [renderer-ui.md](renderer-ui.md) and the Gotchas below.
 
-`handleShortcut` branches on `input.key` and the modifier flags only. It never
-inspects `input.type` (Electron emits this event for key release as well as key
-press) or `input.isAutoRepeat`.
+`handleShortcut` accepts only `keyDown` and ignores auto-repeat, so one physical
+shortcut produces one action.
+
+## Developer Cockpit
+
+`canUseDeveloperTools` is the shared main-process gate: the target must be a
+non-home page in the Development workspace and must not match
+`isProtectedPage`. `toggleDeveloperTools` applies that gate before opening
+Chromium DevTools docked right, docked bottom, or detached. Leaving a tab or
+workspace closes any open tools; committing a protected navigation does too.
+The page context menu exposes exact `inspectElement(x, y)` only after the same
+gate passes.
+
+Each Development tab keeps bounded, process-memory-only rings of 100 console
+warnings/errors and 100 failed or HTTP 4xx/5xx requests. Session web-request
+listeners associate an issue with a tab by `webContentsId`. No collection is
+performed in other workspaces or for protected targets.
+
+`captureDeveloperDiagnostics` reads only document metadata and aggregate counts
+(scripts, stylesheets, images, links, forms, iframes), then includes at most the
+newest 50 entries from each ring. `developer-tools.ts` strips URL credentials,
+queries and fragments, redacts high-entropy path segments and sensitive text,
+and formats a self-contained debugging prompt. Page text, form values, cookies,
+storage, headers and bodies are never read. `clearDeveloperDiagnostics` empties
+the active tab's rings.
 
 ## Downloads
 
@@ -400,7 +426,7 @@ not be destroyed, and `event.sender === window.webContents`.
 
 - Page views are created with no preload, so they have no `ipcRenderer` and cannot
   reach these channels at all. The sender check is the second layer, not the first.
-- All 37 channels are registered **before** `createWindow()`. The renderer calls
+- All 40 channels are registered **before** `createWindow()`. The renderer calls
   `getState()` on mount, so registration has to precede the page load.
 - The wrapper body is `async`, so a synchronous `throw` inside any controller
   method becomes a rejected `invoke` in the renderer, which App.tsx turns into a
@@ -473,13 +499,9 @@ explicit `updates:check` surfaces one.
   the others are silently wrong — nothing compares them.
 - **The shortcuts are implemented twice.** `handleShortcut` here fires when focus is
   in a page; the `window` keydown listener in App.tsx fires when focus is in the
-  chrome. Ctrl+L/T/W/R exist in both, Alt+Left/Right only here, and App.tsx
+  chrome. Ctrl+L/T/W/R and DevTools exist in both, Alt+Left/Right only here, and App.tsx
   additionally guards Ctrl+R on the tab not being home. Add a shortcut in one place
   and it works only when focus happens to be there.
-- **`handleShortcut` ignores `input.type`.** Electron emits `before-input-event` for
-  key release as well as key press, and the handler branches on the key alone, so a
-  handled combination runs its action on both edges of one keystroke. It also
-  ignores `isAutoRepeat`, so holding the combination repeats it.
 - **History rows carry the previous page's title.** `commitNavigation` runs on
   `did-navigate` and copies `tab.title`, which `page-title-updated` has not
   refreshed yet.

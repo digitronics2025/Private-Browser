@@ -18,6 +18,8 @@ export interface BrowserTab {
   canGoBack: boolean;
   canGoForward: boolean;
   isHome: boolean;
+  developerToolsAllowed: boolean;
+  developerToolsOpen: boolean;
 }
 
 export interface Bookmark {
@@ -103,6 +105,47 @@ export interface AiProviderInput {
   endpoint: string;
   model: string;
   apiKey: string;
+}
+
+export type DevToolsMode = 'right' | 'bottom' | 'detach';
+
+export interface DeveloperConsoleEntry {
+  at: string;
+  level: 'warning' | 'error';
+  message: string;
+  source: string;
+  line: number;
+}
+
+export interface DeveloperNetworkIssue {
+  at: string;
+  method: string;
+  resourceType: string;
+  url: string;
+  status?: number;
+  error?: string;
+}
+
+export interface DeveloperDiagnosticReport {
+  schemaVersion: 1;
+  capturedAt: string;
+  appVersion: string;
+  page: {
+    title: string;
+    url: string;
+    readyState: string;
+    language: string;
+    scripts: number;
+    stylesheets: number;
+    images: number;
+    links: number;
+    forms: number;
+    iframes: number;
+  };
+  console: DeveloperConsoleEntry[];
+  network: DeveloperNetworkIssue[];
+  redactions: number;
+  formatted: string;
 }
 
 export interface VaultItemInput {
