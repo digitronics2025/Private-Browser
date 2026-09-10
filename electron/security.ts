@@ -5,11 +5,17 @@ export function normalizeNavigationInput(value: string): string {
   if (!input) return 'private://home';
   if (input === 'private://home') return input;
 
+  let parsed: URL | undefined;
   try {
-    const parsed = new URL(input);
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.toString();
+    parsed = new URL(input);
   } catch {
     // Continue to host/search detection.
+  }
+  if (parsed) {
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      if (parsed.username || parsed.password) throw new Error('URLs containing credentials are not allowed');
+      return parsed.toString();
+    }
   }
 
   if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/.*)?$/i.test(input)) {
@@ -24,7 +30,7 @@ export function normalizeNavigationInput(value: string): string {
 export function isAllowedRemoteUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:';
+    return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password;
   } catch {
     return false;
   }
@@ -55,7 +61,31 @@ export function isProtectedPage(urlValue: string): boolean {
   try {
     const { hostname, pathname } = new URL(urlValue);
     return /(^|\.)(bank|paypal|wise|revolut)\./i.test(hostname) ||
-      /(banking|checkout|payment|wallet)/i.test(`${hostname}${pathname}`);
+      /(banking|checkout|payment|wallet|attijari|wafacash|cihbank|bankofafrica|bmce|chaabi|baridbank|cashplus)/i.test(`${hostname}${pathname}`);
+  } catch {
+    return false;
+  }
+}
+
+export function urlOriginForSharing(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return '';
+  }
+}
+
+export function isSafeAiEndpoint(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password) return false;
+    const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (host === 'localhost' || host === '0.0.0.0' || host === '::1' || host.endsWith('.local')) return false;
+    if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return false;
+    if (/^(fc|fd|fe8|fe9|fea|feb)[0-9a-f]*:/i.test(host)) return false;
+    const match = host.match(/^172\.(\d{1,3})\./);
+    if (match && Number(match[1]) >= 16 && Number(match[1]) <= 31) return false;
+    return true;
   } catch {
     return false;
   }

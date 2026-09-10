@@ -77,11 +77,30 @@ export interface PersistedState {
 }
 
 export interface AiPagePreview {
+  id: string;
   title: string;
   url: string;
   text: string;
   redactions: number;
   protectedPage: boolean;
+}
+
+export interface AiApproval {
+  token: string;
+  preview: AiPagePreview;
+}
+
+export interface AiProviderStatus {
+  configured: boolean;
+  endpoint?: string;
+  model?: string;
+  error?: 'provider-corrupt' | 'os-encryption-unavailable';
+}
+
+export interface AiProviderInput {
+  endpoint: string;
+  model: string;
+  apiKey: string;
 }
 
 export interface VaultItemInput {
@@ -99,4 +118,10 @@ export interface VaultItemMeta {
   username: string;
   hasTotp: boolean;
   updatedAt: string;
+}
+
+export interface VaultStatus {
+  available: boolean;
+  reason?: 'os-encryption-unavailable' | 'vault-corrupt';
+  items: VaultItemMeta[];
 }

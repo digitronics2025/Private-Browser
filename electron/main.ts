@@ -12,10 +12,13 @@ import {
   type IpcMainInvokeEvent,
   type Session,
 } from 'electron';
-import { isAllowedRemoteUrl, isProtectedPage, normalizeNavigationInput, redactSensitiveText } from './security.js';
+import { isAllowedRemoteUrl, isProtectedPage, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from './security.js';
+import { AiProviderStore } from './ai-provider.js';
 import { StateStore, WORKSPACES } from './state-store.js';
 import type {
+  AiApproval,
   AiPagePreview,
+  AiProviderInput,
   BrowserSnapshot,
   BrowserTab,
   DownloadEntry,
@@ -55,12 +58,15 @@ class BrowserController {
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
   private readonly downloads = new Map<string, DownloadEntry>();
   private readonly configuredSessions = new Set<string>();
+  private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
+  private readonly aiApprovals = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
   private layout: Layout = { top: 104, left: 78, right: 356, bottom: 0 };
   private window!: BrowserWindow;
 
   constructor(
     private readonly store: StateStore,
     private readonly vault: VaultStore,
+    private readonly aiProvider: AiProviderStore,
   ) {
     for (const tab of this.store.get().tabs) {
       this.runtimeTabs.set(tab.id, { loading: false, canGoBack: false, canGoForward: false });
@@ -88,17 +94,17 @@ class BrowserController {
     Menu.setApplicationMenu(null);
     this.window.on('resize', () => this.applyLayout());
     this.window.on('closed', () => {
-      for (const runtime of this.runtimeTabs.values()) runtime.view?.webContents.close();
+      for (const runtime of this.runtimeTabs.values()) {
+        runtime.view?.webContents.close();
+        runtime.view = undefined;
+      }
     });
 
     const devUrl = process.env.VITE_DEV_SERVER_URL;
     if (devUrl) await this.window.loadURL(devUrl);
     else await this.window.loadFile(join(import.meta.dirname, '../dist/index.html'));
 
-    this.window.webContents.setWindowOpenHandler(({ url }) => {
-      if (isAllowedRemoteUrl(url)) void shell.openExternal(url);
-      return { action: 'deny' };
-    });
+    this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     this.window.once('ready-to-show', () => this.window.show());
     await this.showActiveTab();
   }
@@ -130,6 +136,16 @@ class BrowserController {
 
   broadcast(): void {
     if (!this.window.isDestroyed()) this.window.webContents.send('browser:state', this.getSnapshot());
+  }
+
+  isTrustedSender(event: IpcMainInvokeEvent): boolean {
+    return !this.window.isDestroyed() && event.sender === this.window.webContents;
+  }
+
+  focus(): void {
+    if (this.window.isMinimized()) this.window.restore();
+    this.window.show();
+    this.window.focus();
   }
 
   setLayout(layout: Layout): void {
@@ -187,8 +203,11 @@ class BrowserController {
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
-    const siblings = state.tabs.filter((candidate) => candidate.workspaceId === tab.workspaceId && candidate.id !== tab.id);
-    const nextId = siblings.at(-1)?.id;
+    const workspaceTabs = state.tabs.filter((candidate) => candidate.workspaceId === tab.workspaceId);
+    const closedIndex = workspaceTabs.findIndex((candidate) => candidate.id === tabId);
+    const siblings = workspaceTabs.filter((candidate) => candidate.id !== tab.id);
+    const nextId = siblings[Math.min(closedIndex, siblings.length - 1)]?.id;
+    const wasActive = state.activeTabByWorkspace[tab.workspaceId] === tabId;
     const runtime = this.runtimeTabs.get(tabId);
     if (runtime?.view) {
       this.window.contentView.removeChildView(runtime.view);
@@ -197,10 +216,11 @@ class BrowserController {
     this.runtimeTabs.delete(tabId);
     this.store.update((next) => {
       next.tabs = next.tabs.filter((candidate) => candidate.id !== tabId);
-      if (nextId) next.activeTabByWorkspace[tab.workspaceId] = nextId;
+      if (wasActive && nextId) next.activeTabByWorkspace[tab.workspaceId] = nextId;
     });
     if (!nextId) await this.newTab(tab.workspaceId);
-    else await this.activateTab(nextId);
+    else if (wasActive) await this.activateTab(nextId);
+    else this.broadcast();
   }
 
   async activateTab(tabId: string): Promise<void> {
@@ -264,6 +284,7 @@ class BrowserController {
   }
 
   async prepareAiPreview(): Promise<AiPagePreview> {
+    this.pruneAiCapabilities();
     const state = this.store.get();
     const tab = this.activeTab(state);
     const workspace = WORKSPACES.find((item) => item.id === tab.workspaceId)!;
@@ -276,25 +297,63 @@ class BrowserController {
     const rawText = await contents.executeJavaScript(`document.body ? document.body.innerText.slice(0, 20000) : ''`, true) as string;
     const result = redactSensitiveText(rawText);
     this.addPrivacyEvent('local-read', 'Local page preview', `${tab.title} · ${result.redactions} redaction(s)`);
-    return { title: tab.title, url: tab.url, text: result.text.slice(0, 12000), redactions: result.redactions, protectedPage: false };
+    const safeTitle = redactSensitiveText(tab.title);
+    const preview: AiPagePreview = { id: randomUUID(), title: safeTitle.text, url: urlOriginForSharing(tab.url), text: result.text.slice(0, 12000), redactions: result.redactions + safeTitle.redactions, protectedPage: false };
+    this.pendingAiPreviews.set(preview.id, { preview, sourceUrl: tab.url, expiresAt: Date.now() + 5 * 60_000 });
+    return preview;
   }
 
-  approveAiPreview(preview: AiPagePreview): AiPagePreview {
+  approveAiPreview(previewId: string): AiApproval {
+    const pending = this.pendingAiPreviews.get(previewId);
+    this.pendingAiPreviews.delete(previewId);
+    if (!pending || pending.expiresAt < Date.now()) throw new Error('The page preview expired; read the page again');
+    const preview = pending.preview;
     const state = this.store.get();
     const tab = this.activeTab(state);
-    if (tab.url !== preview.url || isProtectedPage(preview.url)) throw new Error('The page changed or is protected');
-    const safe = redactSensitiveText(preview.text);
-    const approved = { ...preview, text: safe.text, redactions: preview.redactions + safe.redactions };
-    this.addPrivacyEvent('cloud-approved', 'Cloud context approved', `${preview.title} · ${approved.redactions} redaction(s)`);
-    return approved;
+    if (tab.url !== pending.sourceUrl || isProtectedPage(tab.url)) throw new Error('The page changed or is protected');
+    const token = randomUUID();
+    this.aiApprovals.set(token, { preview, sourceUrl: pending.sourceUrl, expiresAt: Date.now() + 5 * 60_000 });
+    this.addPrivacyEvent('cloud-approved', 'Cloud context approved', `${preview.title} · ${preview.redactions} redaction(s)`);
+    return { token, preview };
+  }
+
+  getAiProvider() {
+    return this.aiProvider.status();
+  }
+
+  configureAiProvider(input: AiProviderInput) {
+    const status = this.aiProvider.configure(input);
+    this.addPrivacyEvent('vault', 'AI provider configured', status.endpoint ?? 'Encrypted provider');
+    return status;
+  }
+
+  clearAiProvider() {
+    const status = this.aiProvider.clear();
+    this.addPrivacyEvent('vault', 'AI provider removed', 'Encrypted provider credentials cleared');
+    return status;
+  }
+
+  async askAi(token: string, questionValue: string): Promise<string> {
+    const approval = this.aiApprovals.get(token);
+    this.aiApprovals.delete(token);
+    const question = questionValue.trim();
+    if (!approval || approval.expiresAt < Date.now()) throw new Error('AI approval expired; approve the page again');
+    if (!question || question.length > 2000) throw new Error('Enter a question under 2,000 characters');
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    if (tab.url !== approval.sourceUrl || isProtectedPage(tab.url)) throw new Error('The page changed or is protected');
+    const answer = await this.aiProvider.ask(approval.preview, question);
+    this.addPrivacyEvent('cloud-approved', 'Cloud AI request completed', approval.preview.title);
+    return answer;
   }
 
   listVault() {
-    return { available: this.vault.isAvailable(), items: this.vault.list() };
+    return { available: this.vault.isAvailable(), reason: this.vault.reason(), items: this.vault.list() };
   }
 
   addVaultItem(input: VaultItemInput) {
     if (!input.label.trim() || !input.url.trim() || !input.username.trim() || !input.password) throw new Error('Complete all required fields');
+    if (input.label.length > 200 || input.url.length > 2000 || input.username.length > 500 || input.password.length > 5000 || (input.totpSecret?.length ?? 0) > 500) throw new Error('A vault field is too long');
     const normalizedUrl = normalizeNavigationInput(input.url);
     if (!isAllowedRemoteUrl(normalizedUrl)) throw new Error('Enter a valid website');
     const result = this.vault.add({ ...input, label: input.label.trim(), url: normalizedUrl, username: input.username.trim() });
@@ -308,14 +367,22 @@ class BrowserController {
     return removed;
   }
 
-  revealPassword(id: string): string {
-    this.addPrivacyEvent('vault', 'Password revealed', 'Explicit local reveal');
-    return this.vault.revealPassword(id);
+  resetCorruptVault(): boolean {
+    const reset = this.vault.resetCorrupt();
+    if (reset) this.addPrivacyEvent('vault', 'Corrupt vault reset', 'The unreadable encrypted file was preserved as a backup');
+    return reset;
   }
 
-  getTotp(id: string) {
-    this.addPrivacyEvent('vault', 'Authenticator code generated', 'Generated locally');
-    return this.vault.getTotp(id);
+  copyPassword(id: string): void {
+    this.copySensitiveValue(this.vault.getPassword(id));
+    this.addPrivacyEvent('vault', 'Password copied', 'Clipboard clears automatically after 30 seconds');
+  }
+
+  copyTotp(id: string): { secondsRemaining: number } {
+    const result = this.vault.getTotp(id);
+    this.copySensitiveValue(result.code);
+    this.addPrivacyEvent('vault', 'Authenticator code copied', 'Generated locally; clipboard auto-clear enabled');
+    return { secondsRemaining: result.secondsRemaining };
   }
 
   async autofill(id: string): Promise<void> {
@@ -351,6 +418,16 @@ class BrowserController {
   showDownload(id: string): void {
     const item = this.downloads.get(id);
     if (item?.savePath) shell.showItemInFolder(item.savePath);
+  }
+
+  isDefaultBrowser(): boolean {
+    return app.isDefaultProtocolClient('http') && app.isDefaultProtocolClient('https');
+  }
+
+  setDefaultBrowser(): boolean {
+    const http = app.setAsDefaultProtocolClient('http');
+    const https = app.setAsDefaultProtocolClient('https');
+    return http && https;
   }
 
   private activeTab(state: PersistedState) {
@@ -410,6 +487,7 @@ class BrowserController {
   private configureSession(ses: Session, partition: string): void {
     if (this.configuredSessions.has(partition)) return;
     this.configuredSessions.add(partition);
+    ses.setUserAgent(ses.getUserAgent().replace(/\sElectron\/\S+/g, '').replace(/\sPrivate Browser\/\S+/g, ''));
     ses.setPermissionRequestHandler((_webContents, permission, callback) => {
       callback(permission === 'fullscreen' || permission === 'clipboard-sanitized-write');
     });
@@ -418,7 +496,10 @@ class BrowserController {
       const blocking = this.store.get().trackerBlocking;
       let blocked = false;
       if (blocking) {
-        try { blocked = TRACKER_HOSTS.some((host) => new URL(details.url).hostname.endsWith(host)); } catch { blocked = false; }
+        try {
+          const hostname = new URL(details.url).hostname;
+          blocked = TRACKER_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
+        } catch { blocked = false; }
       }
       callback({ cancel: blocked });
     });
@@ -507,6 +588,23 @@ class BrowserController {
     this.broadcast();
   }
 
+  private copySensitiveValue(value: string): void {
+    void clipboard.writeText(value);
+    setTimeout(() => {
+      void clipboard.readText().then((current) => {
+        if (current === value) void clipboard.clear();
+      });
+    }, 30_000).unref();
+  }
+
+  private pruneAiCapabilities(): void {
+    const now = Date.now();
+    for (const [id, item] of this.pendingAiPreviews) if (item.expiresAt < now) this.pendingAiPreviews.delete(id);
+    for (const [id, item] of this.aiApprovals) if (item.expiresAt < now) this.aiApprovals.delete(id);
+    while (this.pendingAiPreviews.size > 20) this.pendingAiPreviews.delete(this.pendingAiPreviews.keys().next().value!);
+    while (this.aiApprovals.size > 20) this.aiApprovals.delete(this.aiApprovals.keys().next().value!);
+  }
+
   private handleShortcut(event: Electron.Event, input: Electron.Input): void {
     const command = input.control || input.meta;
     if (command && input.key.toLowerCase() === 'l') {
@@ -532,9 +630,28 @@ class BrowserController {
 }
 
 let controller: BrowserController | undefined;
+let pendingLaunchUrl = process.argv.find((argument) => isAllowedRemoteUrl(argument));
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, commandLine) => {
+    const url = commandLine.find((argument) => isAllowedRemoteUrl(argument));
+    if (url) void controller?.newTab(undefined, url);
+    controller?.focus();
+  });
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    if (isAllowedRemoteUrl(url)) {
+      if (controller) void controller.newTab(undefined, url);
+      else pendingLaunchUrl = url;
+    }
+  });
+}
 
 function assertTrusted(event: IpcMainInvokeEvent): void {
-  if (!controller || event.sender !== BrowserWindow.getAllWindows()[0]?.webContents) throw new Error('Untrusted IPC sender');
+  if (!controller?.isTrustedSender(event)) throw new Error('Untrusted IPC sender');
 }
 
 function handle(channel: string, callback: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
@@ -544,10 +661,11 @@ function handle(channel: string, callback: (event: IpcMainInvokeEvent, ...args: 
   });
 }
 
-app.whenReady().then(async () => {
+if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const store = new StateStore(join(app.getPath('userData'), 'browser-state.json'));
   const vault = new VaultStore(join(app.getPath('userData'), 'vault.enc'));
-  controller = new BrowserController(store, vault);
+  const aiProvider = new AiProviderStore(join(app.getPath('userData'), 'ai-provider.enc'));
+  controller = new BrowserController(store, vault, aiProvider);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -566,16 +684,28 @@ app.whenReady().then(async () => {
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
   handle('ai:prepare-preview', () => controller!.prepareAiPreview());
-  handle('ai:approve-preview', (_event, preview: AiPagePreview) => controller!.approveAiPreview(preview));
+  handle('ai:approve-preview', (_event, previewId: string) => controller!.approveAiPreview(previewId));
+  handle('ai:provider-status', () => controller!.getAiProvider());
+  handle('ai:configure-provider', (_event, input: AiProviderInput) => controller!.configureAiProvider(input));
+  handle('ai:clear-provider', () => controller!.clearAiProvider());
+  handle('ai:ask', (_event, token: string, question: string) => controller!.askAi(token, question));
   handle('vault:list', () => controller!.listVault());
   handle('vault:add', (_event, input: VaultItemInput) => controller!.addVaultItem(input));
   handle('vault:remove', (_event, id: string) => controller!.removeVaultItem(id));
-  handle('vault:reveal', (_event, id: string) => controller!.revealPassword(id));
-  handle('vault:totp', (_event, id: string) => controller!.getTotp(id));
+  handle('vault:reset-corrupt', () => controller!.resetCorruptVault());
+  handle('vault:copy-password', (_event, id: string) => controller!.copyPassword(id));
+  handle('vault:copy-totp', (_event, id: string) => controller!.copyTotp(id));
   handle('vault:autofill', (_event, id: string) => controller!.autofill(id));
   handle('system:copy', (_event, value: string) => clipboard.writeText(String(value).slice(0, 100_000)));
+  handle('system:is-default-browser', () => controller!.isDefaultBrowser());
+  handle('system:set-default-browser', () => controller!.setDefaultBrowser());
 
   await controller.createWindow();
+  if (pendingLaunchUrl) {
+    const url = pendingLaunchUrl;
+    pendingLaunchUrl = undefined;
+    await controller.newTab(undefined, url);
+  }
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await controller!.createWindow();
   });

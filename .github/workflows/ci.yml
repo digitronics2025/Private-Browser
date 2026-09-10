@@ -8,31 +8,47 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: private-browser-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm audit --audit-level=high
       - run: npm run check
 
   windows-installer:
     needs: verify
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run dist
+      - name: Generate SHA-256 checksum
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem release\*.exe | Select-Object -First 1
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($installer.Name)" | Set-Content release\SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: private-browser-windows
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/SHA256SUMS.txt
           if-no-files-found: error
+          retention-days: 30

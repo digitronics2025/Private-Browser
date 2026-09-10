@@ -52,6 +52,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .address-shell:focus-within { border-color: rgba(106,146,255,.7); box-shadow: 0 0 0 3px rgba(106,146,255,.11); }
 .address-icon { margin-left: 12px; flex: 0 0 auto; color: #738095; }
 .address-icon.safe { color: var(--green); }
+.address-icon.insecure { color: #f59e0b; }
 .address-shell input { border: 0; outline: 0; background: transparent; color: #e8ecf5; height: 100%; padding: 0 11px; min-width: 0; flex: 1; font-size: 12px; }
 .address-shell input::placeholder { color: #657084; }
 .address-domain { color: #697488; font-size: 10px; padding-right: 11px; white-space: nowrap; }
@@ -121,6 +122,17 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .local-banner strong, .vault-health strong { font-size: 9px; color: #cce8df; }
 .local-banner span, .vault-health span { font-size: 8px; color: #729a8e; line-height: 1.4; margin-top: 2px; }
 .vault-health.warning { background: rgba(255,107,122,.07); border-color: rgba(255,107,122,.16); color: var(--danger); }
+.recovery-button { width: 100%; margin: -8px 0 11px; min-height: 32px; border: 1px solid rgba(255,107,122,.24); border-radius: 8px; background: rgba(255,107,122,.07); color: #d98a96; font-size: 8px; cursor: pointer; }
+.recovery-button:hover { background: rgba(255,107,122,.12); color: #f2a0ad; }
+.provider-strip { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: #141821; border-radius: 9px; padding: 8px 9px; margin: -8px 0 14px; }
+.provider-strip > span { width: 7px; height: 7px; border-radius: 50%; background: #5f6879; flex: 0 0 7px; }
+.provider-strip > span.connected { background: var(--green); box-shadow: 0 0 8px rgba(79,209,165,.5); }
+.provider-strip > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.provider-strip strong { font-size: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-strip small { color: #677286; font-size: 7px; margin-top: 2px; }
+.provider-strip button, .settings-row button { border: 1px solid var(--line-bright); background: rgba(255,255,255,.035); border-radius: 6px; color: #9cabc7; padding: 5px 7px; font-size: 7px; cursor: pointer; }
+.provider-strip button:hover, .settings-row button:hover { color: white; border-color: rgba(106,146,255,.45); }
+.provider-form { margin-top: -7px; }
 .assistant-empty { min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 25px 14px; }
 .orb { width: 56px; height: 56px; display: grid; place-items: center; border-radius: 19px; color: #91aaff; background: radial-gradient(circle at 35% 25%,rgba(126,159,255,.28),rgba(87,87,190,.1)); border: 1px solid rgba(130,154,255,.2); box-shadow: 0 12px 45px rgba(75,87,190,.12); }
 .assistant-empty h3 { font-size: 13px; margin: 16px 0 7px; }
@@ -137,8 +149,15 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .permission-card > div:first-child { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; color: #95aaf0; font-size: 10px; }
 .permission-card .primary-button { margin-top: 11px; width: 100%; }
 .approved { color: var(--green)!important; background: rgba(79,209,165,.08); padding: 8px; border-radius: 7px; margin-top: 10px; }
+.ask-card, .answer-card { background: #151923; border: 1px solid var(--line); border-radius: 11px; padding: 10px; margin-bottom: 11px; }
+.ask-card textarea { width: 100%; min-height: 72px; resize: vertical; border: 1px solid var(--line-bright); border-radius: 8px; background: #0d1016; color: #dfe5ef; font-size: 9px; line-height: 1.5; padding: 9px; outline: 0; margin-bottom: 8px; }
+.ask-card textarea:focus { border-color: rgba(106,146,255,.65); }
+.ask-card .primary-button { margin: 0; }
+.answer-card > span { color: #8097dd; letter-spacing: .09em; font-size: 7px; font-weight: 750; }
+.answer-card p { color: #aab3c3; font-size: 9px; line-height: 1.65; white-space: pre-wrap; margin: 8px 0 0; }
 .text-button { border: 0; background: transparent; color: #7d89a0; font-size: 9px; width: 100%; padding: 8px; cursor: pointer; }
 .text-button:hover { color: white; }
+.danger-text { color: #b66c78; }
 
 .vault-form { display: flex; flex-direction: column; gap: 7px; margin-bottom: 13px; background: #151923; border: 1px solid var(--line); border-radius: 11px; padding: 10px; }
 .vault-form input { width: 100%; border-radius: 7px; border: 1px solid var(--line-bright); background: #0d1016; color: white; padding: 9px 10px; font-size: 9px; outline: 0; }
@@ -185,6 +204,18 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .privacy-event strong { font-size: 9px; }
 .privacy-event small { font-size: 8px; color: #697488; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .privacy-event time { font-size: 7px; color: #566074; white-space: nowrap; }
+.settings-card { background: #151923; border: 1px solid var(--line); border-radius: 11px; margin-bottom: 8px; padding: 10px; }
+.settings-row { display: flex; align-items: center; gap: 9px; }
+.settings-row > span { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; color: #90a9f7; background: var(--blue-soft); }
+.settings-row > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.settings-row strong { font-size: 9px; }
+.settings-row small { font-size: 8px; line-height: 1.45; color: #6d788c; margin-top: 3px; }
+.settings-row b { display: flex; align-items: center; gap: 3px; color: var(--green); font-size: 7px; white-space: nowrap; }
+.about-card { display: flex; align-items: center; gap: 10px; margin-top: 18px; padding: 12px; border-top: 1px solid var(--line); color: #91aaff; }
+.about-card > span { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: var(--blue-soft); }
+.about-card > div { display: flex; flex-direction: column; }
+.about-card strong { color: #cfd6e3; font-size: 10px; }
+.about-card small { color: #667186; font-size: 8px; margin-top: 3px; }
 .empty-state { min-height: 130px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; color: #545e70; font-size: 9px; text-align: center; padding: 20px; }
 
 .toast { position: fixed; z-index: 100; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; color: #dfe6f4; background: #252b38; border: 1px solid var(--line-bright); border-radius: 9px; padding: 10px 14px; font-size: 10px; box-shadow: 0 12px 35px rgba(0,0,0,.45); animation: toast-in .18s ease-out; }

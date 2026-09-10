@@ -27,6 +27,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Settings,
   Shield,
   ShieldCheck,
   Sparkles,
@@ -36,9 +37,9 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AiPagePreview, BrowserSnapshot, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
+import type { AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
 
-type SidebarMode = 'assistant' | 'vault' | 'automations' | 'downloads' | 'privacy';
+type SidebarMode = 'assistant' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
 
 const QUICK_LINKS: Record<WorkspaceId, Array<{ label: string; url: string; tone: string }>> = {
   digitronics: [
@@ -152,6 +153,29 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      const command = event.ctrlKey || event.metaKey;
+      if (!command) return;
+      if (event.key.toLowerCase() === 'l') {
+        event.preventDefault();
+        addressRef.current?.focus();
+        addressRef.current?.select();
+      } else if (event.key.toLowerCase() === 't') {
+        event.preventDefault();
+        void window.privateBrowser.newTab();
+      } else if (event.key.toLowerCase() === 'w' && activeTab) {
+        event.preventDefault();
+        void window.privateBrowser.closeTab(activeTab.id);
+      } else if (event.key.toLowerCase() === 'r' && activeTab && !activeTab.isHome) {
+        event.preventDefault();
+        void window.privateBrowser.reload();
+      }
+    };
+    window.addEventListener('keydown', listener);
+    return () => window.removeEventListener('keydown', listener);
+  }, [activeTab?.id, activeTab?.isHome]);
+
   const act = async (action: () => Promise<unknown> | unknown, success?: string) => {
     try {
       await action();
@@ -199,15 +223,15 @@ export default function App() {
         <button className="icon-button" onClick={() => void act(() => activeTab.loading ? window.privateBrowser.stop() : window.privateBrowser.reload())}>{activeTab.loading ? <X size={17} /> : <RefreshCw size={17} />}</button>
         <button className="icon-button" onClick={() => void act(() => window.privateBrowser.navigate('private://home'))}><Home size={17} /></button>
         <form className="address-shell" onSubmit={submitAddress}>
-          {activeTab.isHome ? <Search className="address-icon" size={16} /> : <ShieldCheck className="address-icon safe" size={16} />}
+          {activeTab.isHome ? <Search className="address-icon" size={16} /> : activeTab.url.startsWith('https://') ? <ShieldCheck className="address-icon safe" size={16} /> : <Globe2 className="address-icon insecure" size={16} />}
           <input ref={addressRef} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Search privately or enter address" spellCheck={false} />
           {!activeTab.isHome && <span className="address-domain">{domainFromUrl(activeTab.url)}</span>}
         </form>
         <button className={`icon-button ${bookmarked ? 'selected' : ''}`} title="Bookmark" onClick={() => void act(() => window.privateBrowser.toggleBookmark())}><Star size={17} fill={bookmarked ? 'currentColor' : 'none'} /></button>
         <button className={`icon-button shield-button ${state.trackerBlocking ? 'selected' : ''}`} title="Tracker blocking" onClick={() => void act(() => window.privateBrowser.toggleTrackerBlocking(), state.trackerBlocking ? 'Tracker blocking paused' : 'Tracker blocking enabled')}><Shield size={18} /></button>
         <button className="icon-button" onClick={() => setSidebarOpen((value) => !value)}>{sidebarOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}</button>
-        <button className="avatar">DR</button>
-        <button className="icon-button"><MoreHorizontal size={18} /></button>
+        <button className="avatar" title="Personal workspace" onClick={() => void act(() => window.privateBrowser.switchWorkspace('personal'))}>DR</button>
+        <button className="icon-button" title="Settings" onClick={() => { setSidebarMode('settings'); setSidebarOpen(true); }}><MoreHorizontal size={18} /></button>
       </nav>
 
       <WorkspaceRail state={state} onSwitch={(id) => void act(() => window.privateBrowser.switchWorkspace(id))} />
@@ -223,6 +247,7 @@ export default function App() {
             {sidebarMode === 'automations' && <AutomationPanel onToast={setToast} />}
             {sidebarMode === 'downloads' && <DownloadsPanel state={state} onToast={setToast} />}
             {sidebarMode === 'privacy' && <PrivacyPanel state={state} />}
+            {sidebarMode === 'settings' && <SettingsPanel onToast={setToast} />}
           </div>
         </aside>
       )}
@@ -310,6 +335,7 @@ function SidebarNav({ mode, setMode, counts }: { mode: SidebarMode; setMode: (mo
     { id: 'automations', icon: Zap, label: 'Flows' },
     { id: 'downloads', icon: Download, label: 'Files', count: counts.downloads },
     { id: 'privacy', icon: ShieldCheck, label: 'Privacy' },
+    { id: 'settings', icon: Settings, label: 'Settings' },
   ];
   return <div className="sidebar-nav">{items.map(({ id, icon: Icon, label, count }) => <button key={id} className={mode === id ? 'active' : ''} onClick={() => setMode(id)} title={label}><Icon size={17} />{count ? <b>{count}</b> : null}<span>{label}</span></button>)}</div>;
 }
@@ -320,15 +346,22 @@ function PanelHeader({ icon: Icon, eyebrow, title }: { icon: typeof Bot; eyebrow
 
 function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast: (message: string) => void }) {
   const [preview, setPreview] = useState<AiPagePreview | null>(null);
-  const [approved, setApproved] = useState(false);
+  const [approvalToken, setApprovalToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [provider, setProvider] = useState<AiProviderStatus>({ configured: false });
+  const [showProviderForm, setShowProviderForm] = useState(false);
+  const [providerForm, setProviderForm] = useState<AiProviderInput>({ endpoint: 'https://openrouter.ai/api/v1', model: '', apiKey: '' });
+  const [question, setQuestion] = useState('Summarize the important points on this page.');
+  const [answer, setAnswer] = useState('');
+  useEffect(() => { void window.privateBrowser.getAiProvider().then(setProvider).catch(() => undefined); }, []);
   const summary = useMemo(() => {
     if (!preview) return '';
     return preview.text.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/).filter((part) => part.length > 35).slice(0, 3).join(' ');
   }, [preview]);
   const prepare = async () => {
     setLoading(true);
-    setApproved(false);
+    setApprovalToken(null);
+    setAnswer('');
     try { setPreview(await window.privateBrowser.prepareAiPreview()); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
     finally { setLoading(false); }
@@ -337,9 +370,30 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
     if (!preview) return;
     setLoading(true);
     try {
-      setPreview(await window.privateBrowser.approveAiPreview(preview));
-      setApproved(true);
+      const approval = await window.privateBrowser.approveAiPreview(preview.id);
+      setPreview(approval.preview);
+      setApprovalToken(approval.token);
       onToast('Sanitized context approved');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    finally { setLoading(false); }
+  };
+  const configureProvider = async (event: FormEvent) => {
+    event.preventDefault();
+    setLoading(true);
+    try {
+      setProvider(await window.privateBrowser.configureAiProvider(providerForm));
+      setProviderForm((value) => ({ ...value, apiKey: '' }));
+      setShowProviderForm(false);
+      onToast('AI provider encrypted and saved');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    finally { setLoading(false); }
+  };
+  const ask = async () => {
+    if (!approvalToken) return;
+    setLoading(true);
+    try {
+      setAnswer(await window.privateBrowser.askAi(approvalToken, question));
+      setApprovalToken(null);
     } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
     finally { setLoading(false); }
   };
@@ -347,6 +401,18 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
     <div className="side-panel">
       <PanelHeader icon={Bot} eyebrow="Private assistant" title="Page intelligence" />
       <div className="local-banner"><LockKeyhole size={15} /><div><strong>Private by default</strong><span>Nothing leaves this device without approval.</span></div></div>
+      <div className="provider-strip">
+        <span className={provider.configured ? 'connected' : ''} />
+        <div><strong>{provider.configured ? provider.model : provider.error === 'provider-corrupt' ? 'Provider recovery required' : 'Cloud AI not connected'}</strong><small>{provider.configured ? domainFromUrl(provider.endpoint ?? '') : provider.error === 'provider-corrupt' ? 'Reset the unreadable configuration' : 'Local tools remain available'}</small></div>
+        <button onClick={() => setShowProviderForm((value) => !value)}>{provider.configured ? 'Change' : 'Connect'}</button>
+      </div>
+      {showProviderForm && <form className="vault-form provider-form" onSubmit={configureProvider}>
+        <input placeholder="OpenAI-compatible endpoint" required value={providerForm.endpoint} onChange={(event) => setProviderForm({ ...providerForm, endpoint: event.target.value })} />
+        <input placeholder="Model ID" required value={providerForm.model} onChange={(event) => setProviderForm({ ...providerForm, model: event.target.value })} />
+        <input placeholder="API key (encrypted)" type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} />
+        <button className="primary-button" type="submit" disabled={loading}><LockKeyhole size={15} /> Save encrypted provider</button>
+        {(provider.configured || provider.error === 'provider-corrupt') && <button className="text-button danger-text" type="button" onClick={() => { if (window.confirm('Remove the saved AI provider configuration?')) void window.privateBrowser.clearAiProvider().then((status) => { setProvider(status); setShowProviderForm(false); onToast('AI provider removed'); }); }}>{provider.error === 'provider-corrupt' ? 'Reset provider configuration' : 'Remove provider'}</button>}
+      </form>}
       {!preview ? (
         <div className="assistant-empty">
           <span className="orb"><Sparkles size={25} /></span>
@@ -364,9 +430,11 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
           <div className="permission-card">
             <div><Cloud size={17} /><strong>Cloud permission</strong></div>
             <p>Only the sanitized preview shown above can be passed to a connected AI provider.</p>
-            {approved ? <div className="approved"><Check size={15} /> Approved for this request only</div> : <button className="primary-button" onClick={approve} disabled={loading}><ShieldCheck size={16} /> Approve context</button>}
+            {approvalToken ? <div className="approved"><Check size={15} /> Approved for one request</div> : <button className="primary-button" onClick={approve} disabled={loading || !provider.configured}><ShieldCheck size={16} /> {provider.configured ? 'Approve context' : 'Connect provider first'}</button>}
           </div>
-          <button className="text-button" onClick={() => setPreview(null)}>Clear page context</button>
+          {approvalToken && <div className="ask-card"><textarea maxLength={2000} value={question} onChange={(event) => setQuestion(event.target.value)} /><button className="primary-button full" onClick={() => void ask()} disabled={loading || !question.trim()}>{loading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} Ask cloud AI once</button></div>}
+          {answer && <div className="answer-card"><span>AI ANSWER</span><p>{answer}</p></div>}
+          <button className="text-button" onClick={() => { setPreview(null); setApprovalToken(null); setAnswer(''); }}>Clear page context</button>
         </>
       )}
     </div>
@@ -376,10 +444,11 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
 function VaultPanel({ onToast }: { onToast: (message: string) => void }) {
   const [items, setItems] = useState<VaultItemMeta[]>([]);
   const [available, setAvailable] = useState(true);
+  const [unavailableReason, setUnavailableReason] = useState<string | undefined>();
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState<VaultItemInput>({ label: '', url: '', username: '', password: '', totpSecret: '' });
   const load = async () => {
-    try { const result = await window.privateBrowser.listVault(); setItems(result.items); setAvailable(result.available); }
+    try { const result = await window.privateBrowser.listVault(); setItems(result.items); setAvailable(result.available); setUnavailableReason(result.reason); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
   };
   useEffect(() => { void load(); }, []);
@@ -393,18 +462,19 @@ function VaultPanel({ onToast }: { onToast: (message: string) => void }) {
       onToast('Credential encrypted and saved');
     } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
   };
-  const reveal = async (id: string) => {
-    try { const password = await window.privateBrowser.revealPassword(id); await window.privateBrowser.copyText(password); onToast('Password copied; clipboard is not synced'); }
+  const copyPassword = async (id: string) => {
+    try { await window.privateBrowser.copyPassword(id); onToast('Password copied; clipboard clears in 30 seconds'); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
   };
   const copyTotp = async (id: string) => {
-    try { const { code } = await window.privateBrowser.getTotp(id); await window.privateBrowser.copyText(code); onToast(`Code ${code} copied`); }
+    try { const { secondsRemaining } = await window.privateBrowser.copyTotp(id); onToast(`Authenticator code copied · ${secondsRemaining}s remaining`); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
   };
   return (
     <div className="side-panel">
       <PanelHeader icon={KeyRound} eyebrow="OS encrypted" title="Private vault" />
-      <div className={`vault-health ${available ? '' : 'warning'}`}><ShieldCheck size={16} /><div><strong>{available ? 'Device encryption active' : 'Encryption unavailable'}</strong><span>Secrets never enter browser history or sync.</span></div></div>
+      <div className={`vault-health ${available ? '' : 'warning'}`}><ShieldCheck size={16} /><div><strong>{available ? 'Device encryption active' : unavailableReason === 'vault-corrupt' ? 'Vault recovery required' : 'Encryption unavailable'}</strong><span>{unavailableReason === 'vault-corrupt' ? 'The existing vault was preserved and writes are blocked.' : 'Secrets never enter browser history or sync.'}</span></div></div>
+      {unavailableReason === 'vault-corrupt' && <button className="recovery-button" onClick={() => { if (window.confirm('Reset the unreadable vault? The encrypted file will be preserved as a backup.')) void window.privateBrowser.resetCorruptVault().then(load); }}>Preserve backup and reset vault</button>}
       <button className="primary-button full" onClick={() => setAdding((value) => !value)} disabled={!available}><Plus size={16} /> Add credential</button>
       {adding && <form className="vault-form" onSubmit={submit}>
         <input placeholder="Name (e.g. Digitronics Admin)" required value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
@@ -419,9 +489,9 @@ function VaultPanel({ onToast }: { onToast: (message: string) => void }) {
           <div className="credential-top"><span className="site-badge">{item.label.slice(0, 1).toUpperCase()}</span><div><strong>{item.label}</strong><small>{domainFromUrl(item.url)} · {item.username}</small></div></div>
           <div className="credential-actions">
             <button onClick={() => void window.privateBrowser.autofill(item.id).then(() => onToast('Credential filled')).catch((error) => onToast(error.message))}><Zap size={14} /> Fill</button>
-            <button onClick={() => void reveal(item.id)}><Copy size={14} /> Password</button>
+            <button onClick={() => void copyPassword(item.id)}><Copy size={14} /> Password</button>
             {item.hasTotp && <button onClick={() => void copyTotp(item.id)}><Clock3 size={14} /> Code</button>}
-            <button className="danger" title="Delete" onClick={() => void window.privateBrowser.removeVaultItem(item.id).then(load)}><Trash2 size={14} /></button>
+            <button className="danger" title="Delete" onClick={() => { if (window.confirm(`Delete ${item.label}? This cannot be undone.`)) void window.privateBrowser.removeVaultItem(item.id).then(load); }}><Trash2 size={14} /></button>
           </div>
         </div>)}
         {!items.length && !adding && <EmptyState icon={KeyRound} text="No credentials saved on this device." />}
@@ -449,6 +519,24 @@ function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (
 
 function PrivacyPanel({ state }: { state: BrowserSnapshot }) {
   return <div className="side-panel"><PanelHeader icon={ShieldCheck} eyebrow="Transparent by design" title="Privacy log" /><div className="privacy-summary"><div><strong>{state.trackerBlocking ? 'On' : 'Off'}</strong><span>Tracker blocking</span></div><div><strong>5</strong><span>Isolated spaces</span></div><div><strong>{state.privacyLog.length}</strong><span>Logged events</span></div></div><div className="privacy-events">{state.privacyLog.map((event) => <div className="privacy-event" key={event.id}><span className={`event-dot ${event.kind}`} /><div><strong>{event.title}</strong><small>{event.detail}</small></div><time>{timeAgo(event.at)}</time></div>)}{!state.privacyLog.length && <EmptyState icon={ShieldCheck} text="Sensitive access events will be recorded here." />}</div></div>;
+}
+
+function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
+  const [isDefault, setIsDefault] = useState(false);
+  useEffect(() => { void window.privateBrowser.getDefaultBrowserStatus().then(setIsDefault).catch(() => undefined); }, []);
+  const makeDefault = async () => {
+    try {
+      const result = await window.privateBrowser.setDefaultBrowser();
+      setIsDefault(result);
+      onToast(result ? 'Private Browser is now your default' : 'Windows requires you to choose Private Browser in Default Apps');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+  };
+  return <div className="side-panel">
+    <PanelHeader icon={Settings} eyebrow="Application" title="Settings" />
+    <div className="settings-card"><div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Default browser</strong><small>{isDefault ? 'Private Browser opens web links.' : 'Use Private Browser for HTTP and HTTPS links.'}</small></div>{isDefault ? <b><Check size={14} /> Set</b> : <button onClick={() => void makeDefault()}>Set default</button>}</div></div>
+    <div className="settings-card"><div className="settings-row"><span><ShieldCheck size={17} /></span><div><strong>Security baseline</strong><small>Sandboxed pages, isolated sessions, strict IPC and encrypted secrets.</small></div><b><Check size={14} /> Active</b></div></div>
+    <div className="about-card"><span><ShieldCheck size={23} /></span><div><strong>Private Browser</strong><small>Version 0.2.0 · Digitronics</small></div></div>
+  </div>;
 }
 
 function EmptyState({ icon: Icon, text }: { icon: typeof Clock3; text: string }) {

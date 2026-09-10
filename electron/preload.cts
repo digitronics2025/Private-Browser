@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AiPagePreview, BrowserSnapshot, VaultItemInput, VaultItemMeta, WorkspaceId } from './types.js';
+import type { AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 
 const api = {
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
@@ -19,14 +19,21 @@ const api = {
   openDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-download', id),
   showDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:show-download', id),
   prepareAiPreview: (): Promise<AiPagePreview> => ipcRenderer.invoke('ai:prepare-preview'),
-  approveAiPreview: (preview: AiPagePreview): Promise<AiPagePreview> => ipcRenderer.invoke('ai:approve-preview', preview),
-  listVault: (): Promise<{ available: boolean; items: VaultItemMeta[] }> => ipcRenderer.invoke('vault:list'),
+  approveAiPreview: (previewId: string): Promise<AiApproval> => ipcRenderer.invoke('ai:approve-preview', previewId),
+  getAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:provider-status'),
+  configureAiProvider: (input: AiProviderInput): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:configure-provider', input),
+  clearAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:clear-provider'),
+  askAi: (token: string, question: string): Promise<string> => ipcRenderer.invoke('ai:ask', token, question),
+  listVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:list'),
   addVaultItem: (input: VaultItemInput): Promise<VaultItemMeta> => ipcRenderer.invoke('vault:add', input),
   removeVaultItem: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:remove', id),
-  revealPassword: (id: string): Promise<string> => ipcRenderer.invoke('vault:reveal', id),
-  getTotp: (id: string): Promise<{ code: string; secondsRemaining: number }> => ipcRenderer.invoke('vault:totp', id),
+  resetCorruptVault: (): Promise<boolean> => ipcRenderer.invoke('vault:reset-corrupt'),
+  copyPassword: (id: string): Promise<void> => ipcRenderer.invoke('vault:copy-password', id),
+  copyTotp: (id: string): Promise<{ secondsRemaining: number }> => ipcRenderer.invoke('vault:copy-totp', id),
   autofill: (id: string): Promise<void> => ipcRenderer.invoke('vault:autofill', id),
   copyText: (value: string): Promise<void> => ipcRenderer.invoke('system:copy', value),
+  getDefaultBrowserStatus: (): Promise<boolean> => ipcRenderer.invoke('system:is-default-browser'),
+  setDefaultBrowser: (): Promise<boolean> => ipcRenderer.invoke('system:set-default-browser'),
   onState: (callback: (state: BrowserSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: BrowserSnapshot) => callback(state);
     ipcRenderer.on('browser:state', listener);

@@ -1,5 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { safeStorage } from 'electron';
 import type { VaultItemInput, VaultItemMeta } from './types.js';
@@ -35,13 +35,20 @@ export function generateTotp(secret: string, epochSeconds = Math.floor(Date.now(
 
 export class VaultStore {
   private items: StoredVaultItem[] = [];
+  private corrupt = false;
 
   constructor(private readonly filePath: string) {
     this.items = this.load();
   }
 
   isAvailable(): boolean {
-    return safeStorage.isEncryptionAvailable();
+    return safeStorage.isEncryptionAvailable() && !this.corrupt;
+  }
+
+  reason(): 'os-encryption-unavailable' | 'vault-corrupt' | undefined {
+    if (this.corrupt) return 'vault-corrupt';
+    if (!safeStorage.isEncryptionAvailable()) return 'os-encryption-unavailable';
+    return undefined;
   }
 
   list(): VaultItemMeta[] {
@@ -57,6 +64,7 @@ export class VaultStore {
 
   add(input: VaultItemInput): VaultItemMeta {
     if (!this.isAvailable()) throw new Error('OS encryption is not available');
+    if (input.totpSecret) generateTotp(input.totpSecret);
     const item: StoredVaultItem = { ...input, id: randomUUID(), updatedAt: new Date().toISOString() };
     this.items.unshift(item);
     this.save();
@@ -70,7 +78,15 @@ export class VaultStore {
     return this.items.length !== originalLength;
   }
 
-  revealPassword(id: string): string {
+  resetCorrupt(): boolean {
+    if (!this.corrupt) return false;
+    if (existsSync(this.filePath)) renameSync(this.filePath, `${this.filePath}.corrupt-${Date.now()}`);
+    this.items = [];
+    this.corrupt = false;
+    return true;
+  }
+
+  getPassword(id: string): string {
     const item = this.requireItem(id);
     return item.password;
   }
@@ -96,9 +112,13 @@ export class VaultStore {
   private load(): StoredVaultItem[] {
     try {
       if (!this.isAvailable()) return [];
+      if (!existsSync(this.filePath)) return [];
       const encrypted = Buffer.from(readFileSync(this.filePath, 'utf8'), 'base64');
-      return JSON.parse(safeStorage.decryptString(encrypted)) as StoredVaultItem[];
+      const parsed = JSON.parse(safeStorage.decryptString(encrypted)) as StoredVaultItem[];
+      if (!Array.isArray(parsed)) throw new Error('Invalid vault structure');
+      return parsed;
     } catch {
+      this.corrupt = true;
       return [];
     }
   }
