@@ -588,14 +588,14 @@ function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
       </form>}
       {updateStatus?.configured && <div className="update-actions">
         <button onClick={() => void checkUpdates()} disabled={checking}>{checking ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} Check now</button>
-        {updateResult?.state === 'available' && <button className="download-update" onClick={() => void window.privateBrowser.openUpdatePage().catch((error) => onToast(error.message))}><Download size={14} /> Download {updateResult.latest.version}</button>}
+        <button className="download-update" onClick={() => void window.privateBrowser.openUpdatePage().catch((error) => onToast(error.message))}><Download size={14} /> {updateResult?.state === 'available' ? `Download ${updateResult.latest.version}` : 'Download page'}</button>
         <button onClick={() => setEditingUpdates((value) => !value)}>Change</button>
         <button className="danger" onClick={() => void disconnectUpdates()}>Disconnect</button>
       </div>}
       {updateResult && <div className={`update-result ${updateResult.state}`}><strong>{updateResult.state === 'available' ? `Version ${updateResult.latest.version} available` : `Up to date · ${updateResult.currentVersion}`}</strong><small>{updateResult.state === 'available' ? `${humanBytes(updateResult.latest.sizeBytes)} · SHA-256 verified in release metadata` : `Checked ${timeAgo(updateResult.checkedAt)}`}</small></div>}
     </div>
     <div className="settings-card"><div className="settings-row"><span><ShieldCheck size={17} /></span><div><strong>Security baseline</strong><small>Sandboxed pages, isolated sessions, strict IPC and encrypted secrets.</small></div><b><Check size={14} /> Active</b></div></div>
-    <div className="about-card"><span><ShieldCheck size={23} /></span><div><strong>Private Browser</strong><small>Version {updateStatus?.currentVersion ?? '0.3.0'} · Digitronics</small></div></div>
+    <div className="about-card"><span><ShieldCheck size={23} /></span><div><strong>Private Browser</strong><small>Version {updateStatus?.currentVersion ?? '0.3.1'} · Digitronics</small></div></div>
   </div>;
 }
 

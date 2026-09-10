@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-09-10
+
+- Added an optional CI-generated test bootstrap so packaged Windows builds connect to the private Cloudflare download service on first launch.
+- Imported bootstrap credentials into OS-encrypted storage, retained Settings-based rotation, and made Disconnect persistent.
+- Made the signed download page directly available from Settings even when the installed version is current.
+- Added post-publication live verification for authenticated manifests, signed pages, full downloads, range requests, resumed downloads and checksum integrity.
+
 ## 0.3.0 — 2026-09-10
 
 - Added a Cloudflare Worker release service with separate client and administrator authentication.

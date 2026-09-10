@@ -30,6 +30,7 @@ import type {
 } from './types.js';
 import { VaultStore } from './vault.js';
 import { UpdateServiceStore } from './update-service.js';
+import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -704,6 +705,13 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const vault = new VaultStore(join(app.getPath('userData'), 'vault.enc'));
   const aiProvider = new AiProviderStore(join(app.getPath('userData'), 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(app.getPath('userData'), 'update-service.enc'));
+  const updateBootstrapPath = join(process.resourcesPath, 'private-browser-update.json');
+  try {
+    const updateBootstrap = readUpdateBootstrap(updateBootstrapPath);
+    if (updateBootstrap && updates.bootstrap(updateBootstrap, app.getVersion())) removeUpdateBootstrap(updateBootstrapPath);
+  } catch {
+    console.error('update_bootstrap_invalid');
+  }
   controller = new BrowserController(store, vault, aiProvider, updates);
 
   handle('browser:get-state', () => controller!.getSnapshot());

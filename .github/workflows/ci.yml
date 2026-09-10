@@ -30,6 +30,9 @@ jobs:
     needs: verify
     runs-on: windows-latest
     timeout-minutes: 25
+    env:
+      PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
+      PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -37,6 +40,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Prepare private update bootstrap
+        run: node cloudflare/scripts/write-update-bootstrap.mjs
       - run: npm run dist
       - name: Generate SHA-256 checksum
         shell: pwsh
@@ -63,6 +68,7 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
       PRIVATE_BROWSER_ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
+      PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -78,7 +84,7 @@ jobs:
         id: configured
         shell: bash
         run: |
-          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" ]]; then
+          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" && ${#PRIVATE_BROWSER_DOWNLOAD_TOKEN} -ge 32 ]]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -99,3 +105,6 @@ jobs:
       - name: Publish D1 release metadata
         if: steps.configured.outputs.ready == 'true'
         run: node cloudflare/scripts/publish-release.mjs "${{ steps.upload.outputs.installer }}" "${{ steps.upload.outputs.object_key }}"
+      - name: Verify authenticated download end to end
+        if: steps.configured.outputs.ready == 'true'
+        run: node cloudflare/scripts/verify-live-release.mjs "${{ steps.upload.outputs.installer }}"

@@ -11,8 +11,10 @@ interface StoredUpdateService extends UpdateServiceInput {
 export class UpdateServiceStore {
   private config?: StoredUpdateService;
   private corrupt = false;
+  private readonly disabledPath: string;
 
   constructor(private readonly filePath: string) {
+    this.disabledPath = `${filePath}.disabled`;
     this.config = this.load();
   }
 
@@ -32,14 +34,24 @@ export class UpdateServiceStore {
     if (accessToken.length < 32 || accessToken.length > 1000) throw new Error('The download access token must be at least 32 characters');
     this.config = { version: 1, endpoint, accessToken };
     this.corrupt = false;
+    if (existsSync(this.disabledPath)) unlinkSync(this.disabledPath);
     this.save();
     return this.status(currentVersion);
+  }
+
+  bootstrap(input: UpdateServiceInput, currentVersion: string): boolean {
+    if (this.config || this.corrupt || existsSync(this.disabledPath)) return true;
+    if (!safeStorage.isEncryptionAvailable()) return false;
+    this.configure(input, currentVersion);
+    return true;
   }
 
   clear(currentVersion: string): UpdateServiceStatus {
     this.config = undefined;
     this.corrupt = false;
     if (existsSync(this.filePath)) unlinkSync(this.filePath);
+    mkdirSync(dirname(this.disabledPath), { recursive: true });
+    writeFileSync(this.disabledPath, 'disabled\n', { mode: 0o600 });
     return this.status(currentVersion);
   }
 

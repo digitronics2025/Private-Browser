@@ -42,13 +42,15 @@ Create the Windows installer on a Windows machine:
 npm run dist
 ```
 
-The installer is written to `release/Private-Browser-0.3.0-Setup.exe`. GitHub Actions also creates a downloadable Windows artifact for every push to `main`.
+The installer is written to `release/Private-Browser-0.3.1-Setup.exe`. GitHub Actions also creates a downloadable Windows artifact for every push to `main`.
 
 The installer is not code-signed yet, so Windows SmartScreen may show an unknown-publisher warning. Production distribution requires a trusted code-signing certificate.
 
 ## Cloudflare download service
 
 The `cloudflare/` project contains the Worker, D1 migrations, private R2 release flow, protected download page and automated deployment/publishing workflows. Cloudflare account identifiers and credentials must be configured privately in the repository settings before running **Deploy download service**; they are intentionally not included in source documentation.
+
+Main-branch Windows artifacts can receive a temporary test bootstrap from the PRIVATE_BROWSER_DOWNLOAD_URL repository variable and PRIVATE_BROWSER_DOWNLOAD_TOKEN Actions secret. On first launch the app imports that connection into Electron safeStorage, respects a later Disconnect action, and removes the bootstrap resource when Windows permissions allow. Settings always allows the endpoint and token to be rotated. Treat the bundled client token as distributable test configuration rather than a production-grade secret.
 
 After deployment, open **Settings → Private downloads** in the desktop app to connect the Worker and check for releases. The connection is encrypted with Windows credential protection and is never returned to the renderer after it is saved.
 

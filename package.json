@@ -1,6 +1,6 @@
 {
   "name": "private-work-browser",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A private, workspace-first Chromium browser for daily business operations.",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -56,6 +56,15 @@
       "dist/**",
       "dist-electron/**",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build",
+        "to": ".",
+        "filter": [
+          "private-browser-update.json"
+        ]
+      }
     ],
     "win": {
       "target": "nsis",
