@@ -8,7 +8,7 @@ sources:
   - .github/workflows/**
   - electron/update-service.ts
   - electron/update-bootstrap.ts
-verified_at: 5fcb148
+verified_at: b7407463
 ---
 
 # Release and Updates
@@ -124,7 +124,10 @@ unless `content-type` starts with `application/json` → 400 `invalid_release` i
 `validateReleaseInput` throws → 409 `r2_object_missing_or_size_mismatch` if
 `RELEASES.head(objectKey)` is absent or its size differs from `sizeBytes` → 409
 `release_downgrade_rejected` if the current active row has a higher build number,
-or the same build number under a different id or version → otherwise a D1 `batch`
+or the same build number under a different id or version → 409
+`release_version_not_bumped` if a *different* release is being published at a
+version that is not higher than the active one (`compareSemver(input.version,
+current.version) <= 0`) → otherwise a D1 `batch`
 that upserts the row (`ON CONFLICT(id) DO UPDATE`) and flips every other row of
 that `app_id` + `channel` to `is_active = 0`, then 201.
 
@@ -326,7 +329,7 @@ request. `permissions: contents: read`; concurrency per ref with
 | --- | --- | --- |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
 | `windows-installer` | windows, 25 min, needs `verify` | Writes the bundled update bootstrap (see **Bundled Bootstrap**), then `npm run dist`, then a pwsh step that hashes the first `release\*.exe` and writes `release\SHA256SUMS.txt`, then uploads artifact `private-browser-windows` (`if-no-files-found: error`, 30-day retention) |
-| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Downloads the artifact, uploads the exe to R2, registers metadata in D1, then re-downloads it through the live authenticated route to prove the whole path works ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)) |
+| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Skips entirely when the push changed nothing outside `docs/` and top-level `*.md` (checked out at `fetch-depth: 0` and diffed against `github.event.before`), so documentation commits no longer mint a release. Otherwise downloads the artifact, uploads the exe to R2, registers metadata in D1, then re-downloads it through the live authenticated route to prove the whole path works ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)) |
 
 The publish job uploads with
 `wrangler r2 object put private-browser-releases/releases/<version>/<run-number>/<basename> --file <exe> --content-type application/vnd.microsoft.portable-executable --remote`,
@@ -472,7 +475,13 @@ committed.
 5. `JSON.parse` failure → "The download service returned invalid JSON".
 6. `validateManifest(value, endpoint)`, then
    `compareVersions(manifest.version, currentVersion) > 0` decides
-   `available` vs `up-to-date`.
+   `available` vs `up-to-date`. **`buildNumber` is deliberately not consulted**:
+   the client cannot know its own build number, so the invariant is enforced on
+   the publishing side instead — `handlePublish` refuses a release whose version
+   is not higher than the active one (`release_version_not_bumped`). Every
+   published release therefore has a distinct, increasing version, which is
+   exactly what this comparison assumes. Weaken that guard and the service can
+   publish builds no client will ever be offered.
 7. Returns `{ state, currentVersion, latest, checkedAt }`.
 
 ## Manifest Validation

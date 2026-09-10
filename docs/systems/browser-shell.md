@@ -2,7 +2,7 @@
 system: browser-shell
 sources:
   - electron/main.ts
-verified_at: 5fcb148
+verified_at: b7407463
 ---
 
 # Browser Shell
@@ -325,6 +325,10 @@ there is not reported anywhere.
   timers are `.unref()`ed so neither keeps the process alive.
 - `window-all-closed` quits everywhere except darwin; `activate` rebuilds the
   window when none are left.
+- `before-quit` calls `controller.flushClipboard()`, which clears a still-pending
+  copied secret. Without it, quitting inside the 30-second window left a password
+  on the clipboard — the auto-clear timer is `unref()`ed and so never fired. See
+  [vault.md](vault.md#autofill-and-clipboard).
 
 ## IPC Registration and the Trusted-Sender Check
 
