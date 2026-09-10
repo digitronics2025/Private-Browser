@@ -12,11 +12,14 @@ Credentials and TOTP secrets are encrypted using Electron `safeStorage` before b
 
 If the vault cannot be decrypted, writes are disabled to prevent silent data loss. The recovery action preserves the unreadable encrypted file as a timestamped backup before creating a new vault.
 
-Autofill is deliberately manual and restricted to an exact hostname match. A website can still observe credentials entered into its own form, just as it can in any password manager; users must verify the domain before filling.
+Autofill is deliberately manual and restricted to an exact hostname and port match. The scheme is checked asymmetrically: a credential saved for `https` is never filled into an `http` page, while a page served over `https` is always acceptable. A website can still observe credentials entered into its own form, just as it can in any password manager; users must verify the domain before filling.
 
 ## AI data controls
 
-- Banking workspace and detected banking/payment pages reject page extraction.
+- The Banking workspace rejects page extraction outright. Detected banking and
+  payment pages are also rejected, but that detection is a best-effort keyword
+  match and cannot cover every institution — the workspace is the guarantee, the
+  keyword list is a safety net. It errs towards refusing.
 - Page extraction reads rendered text only and never reads input values, cookies, local storage or authentication headers.
 - Sensitive-pattern redaction runs locally before preview.
 - Query parameters, URL paths and fragments are never shared; only the page origin is included.
@@ -35,7 +38,9 @@ Installer binaries are private R2 objects. D1 contains only release metadata and
 
 Download-page and binary URLs are HMAC-signed, purpose-bound and expire after 15 minutes. Signatures bind binary access to the active D1 release ID, so replacing the active release invalidates prior installer links. Invalid or expired credentials return a generic `404`. Responses disable caching and referrers, and the page uses a restrictive Content Security Policy and `noindex` controls.
 
-Test installers may contain a CI-generated bootstrap holding the shared client download token so a private single-user build connects on first launch. The app immediately copies it into OS-encrypted storage and attempts to remove the bootstrap file. Because a credential distributed inside a desktop installer can be extracted, this test token is not considered confidential and must be rotated before broader distribution. Production enrollment should issue revocable device-specific credentials instead of bundling a shared bearer token.
+Installers ship **without** an embedded download credential by default. A private single-user build may opt in by setting the repository variable `PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN` to `true`, which bundles a CI-generated bootstrap holding the shared client download token so the build connects on first launch. The app copies it into OS-encrypted storage and removes the bootstrap file.
+
+That opt-in is deliberately awkward, because a credential distributed inside a desktop installer can be extracted by anyone holding the file, and this one is shared by every client rather than issued per device. Any installer built with it must be treated as carrying a public token: rotate `PRIVATE_BROWSER_DOWNLOAD_TOKEN` before the file goes anywhere beyond the machine it was built for. Production enrollment should issue revocable device-specific credentials instead.
 
 The Worker checks R2 object size against D1 before publication and again before serving. The release workflow calculates SHA-256 from the exact installer uploaded to R2. Resumable downloads are restricted to one validated byte range per request.
 

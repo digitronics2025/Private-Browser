@@ -33,6 +33,10 @@ jobs:
     env:
       PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
       PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
+      # Opt-in only. Unset (the default) builds an installer with no embedded
+      # credential; set the repository variable to "true" for a private
+      # single-user build, and rotate the token before distributing it.
+      PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN: ${{ vars.PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

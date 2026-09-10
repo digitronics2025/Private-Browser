@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -122,7 +122,10 @@ export default function App() {
   const [address, setAddress] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('assistant');
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
+  // Refusals are the moments the app is protecting a secret; they must not
+  // look identical to a success. Default 'ok', explicit 'error' on every catch.
+  const showToast = (text: string, kind: 'ok' | 'error' = 'ok') => setToast({ text, kind });
   const addressRef = useRef<HTMLInputElement>(null);
 
   const activeTab = state?.tabs.find((tab) => tab.id === state.activeTabId);
@@ -140,7 +143,7 @@ export default function App() {
   }), []);
 
   useEffect(() => window.privateBrowser.onUpdateAvailable((result) => {
-    setToast(`Private Browser ${result.latest.version} is ready to download`);
+    showToast(`Private Browser ${result.latest.version} is ready to download`);
   }), []);
 
   useEffect(() => {
@@ -183,9 +186,9 @@ export default function App() {
   const act = async (action: () => Promise<unknown> | unknown, success?: string) => {
     try {
       await action();
-      if (success) setToast(success);
+      if (success) showToast(success);
     } catch (error) {
-      setToast(error instanceof Error ? error.message : String(error));
+      showToast(error instanceof Error ? error.message : String(error), 'error');
     }
   };
 
@@ -246,17 +249,17 @@ export default function App() {
         <aside className="sidebar">
           <SidebarNav mode={sidebarMode} setMode={setSidebarMode} counts={{ downloads: state.downloads.filter((item) => item.state === 'progressing').length }} />
           <div className="sidebar-content">
-            {sidebarMode === 'assistant' && <AssistantPanel activeTitle={activeTab.title} onToast={setToast} />}
-            {sidebarMode === 'vault' && <VaultPanel onToast={setToast} />}
-            {sidebarMode === 'automations' && <AutomationPanel onToast={setToast} />}
-            {sidebarMode === 'downloads' && <DownloadsPanel state={state} onToast={setToast} />}
+            {sidebarMode === 'assistant' && <AssistantPanel onToast={showToast} />}
+            {sidebarMode === 'vault' && <VaultPanel onToast={showToast} />}
+            {sidebarMode === 'automations' && <AutomationPanel onToast={showToast} />}
+            {sidebarMode === 'downloads' && <DownloadsPanel state={state} onToast={showToast} />}
             {sidebarMode === 'privacy' && <PrivacyPanel state={state} />}
-            {sidebarMode === 'settings' && <SettingsPanel onToast={setToast} />}
+            {sidebarMode === 'settings' && <SettingsPanel onToast={showToast} />}
           </div>
         </aside>
       )}
 
-      {toast && <div className="toast"><Check size={15} /> {toast}</div>}
+      {toast && <div className={`toast ${toast.kind}`}>{toast.kind === 'error' ? <X size={15} /> : <Check size={15} />} {toast.text}</div>}
     </div>
   );
 }
@@ -348,7 +351,7 @@ function PanelHeader({ icon: Icon, eyebrow, title }: { icon: typeof Bot; eyebrow
   return <div className="panel-header"><span className="panel-icon"><Icon size={18} /></span><div><small>{eyebrow}</small><h2>{title}</h2></div></div>;
 }
 
-function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast: (message: string) => void }) {
+function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [preview, setPreview] = useState<AiPagePreview | null>(null);
   const [approvalToken, setApprovalToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -358,16 +361,12 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
   const [question, setQuestion] = useState('Summarize the important points on this page.');
   const [answer, setAnswer] = useState('');
   useEffect(() => { void window.privateBrowser.getAiProvider().then(setProvider).catch(() => undefined); }, []);
-  const summary = useMemo(() => {
-    if (!preview) return '';
-    return preview.text.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/).filter((part) => part.length > 35).slice(0, 3).join(' ');
-  }, [preview]);
   const prepare = async () => {
     setLoading(true);
     setApprovalToken(null);
     setAnswer('');
     try { setPreview(await window.privateBrowser.prepareAiPreview()); }
-    catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
   };
   const approve = async () => {
@@ -378,7 +377,7 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
       setPreview(approval.preview);
       setApprovalToken(approval.token);
       onToast('Sanitized context approved');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
   };
   const configureProvider = async (event: FormEvent) => {
@@ -389,7 +388,7 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
       setProviderForm((value) => ({ ...value, apiKey: '' }));
       setShowProviderForm(false);
       onToast('AI provider encrypted and saved');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
   };
   const ask = async () => {
@@ -398,7 +397,7 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
     try {
       setAnswer(await window.privateBrowser.askAi(approvalToken, question));
       setApprovalToken(null);
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
   };
   return (
@@ -427,13 +426,16 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
       ) : (
         <>
           <div className="context-card">
-            <div className="context-heading"><span>LOCAL SUMMARY</span><b>{preview.redactions} redacted</b></div>
-            <h3>{activeTitle}</h3>
-            <p>{summary || 'No readable page text was found.'}</p>
+            <div className="context-heading"><span>EXACTLY WHAT WOULD BE SENT</span><b>{preview.redactions} redacted</b></div>
+            <h3>{preview.title || 'Untitled page'}</h3>
+            <small className="context-origin">{preview.url}</small>
+            {preview.text
+              ? <><pre className="context-text">{preview.text}</pre><small className="context-size">{preview.text.length.toLocaleString()} characters — scroll the box to read all of it</small></>
+              : <p>No readable text was found. Only the title and address above would be sent.</p>}
           </div>
           <div className="permission-card">
             <div><Cloud size={17} /><strong>Cloud permission</strong></div>
-            <p>Only the sanitized preview shown above can be passed to a connected AI provider.</p>
+            <p>The title, address and text shown above are the whole of what leaves this machine. Nothing else from the page is sent, and only for the one request you approve.</p>
             {approvalToken ? <div className="approved"><Check size={15} /> Approved for one request</div> : <button className="primary-button" onClick={approve} disabled={loading || !provider.configured}><ShieldCheck size={16} /> {provider.configured ? 'Approve context' : 'Connect provider first'}</button>}
           </div>
           {approvalToken && <div className="ask-card"><textarea maxLength={2000} value={question} onChange={(event) => setQuestion(event.target.value)} /><button className="primary-button full" onClick={() => void ask()} disabled={loading || !question.trim()}>{loading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} Ask cloud AI once</button></div>}
@@ -445,7 +447,7 @@ function AssistantPanel({ activeTitle, onToast }: { activeTitle: string; onToast
   );
 }
 
-function VaultPanel({ onToast }: { onToast: (message: string) => void }) {
+function VaultPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [items, setItems] = useState<VaultItemMeta[]>([]);
   const [available, setAvailable] = useState(true);
   const [unavailableReason, setUnavailableReason] = useState<string | undefined>();
@@ -453,7 +455,7 @@ function VaultPanel({ onToast }: { onToast: (message: string) => void }) {
   const [form, setForm] = useState<VaultItemInput>({ label: '', url: '', username: '', password: '', totpSecret: '' });
   const load = async () => {
     try { const result = await window.privateBrowser.listVault(); setItems(result.items); setAvailable(result.available); setUnavailableReason(result.reason); }
-    catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   useEffect(() => { void load(); }, []);
   const submit = async (event: FormEvent) => {
@@ -464,15 +466,15 @@ function VaultPanel({ onToast }: { onToast: (message: string) => void }) {
       setAdding(false);
       await load();
       onToast('Credential encrypted and saved');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   const copyPassword = async (id: string) => {
     try { await window.privateBrowser.copyPassword(id); onToast('Password copied; clipboard clears in 30 seconds'); }
-    catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   const copyTotp = async (id: string) => {
     try { const { secondsRemaining } = await window.privateBrowser.copyTotp(id); onToast(`Authenticator code copied · ${secondsRemaining}s remaining`); }
-    catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   return (
     <div className="side-panel">
@@ -484,15 +486,15 @@ function VaultPanel({ onToast }: { onToast: (message: string) => void }) {
         <input placeholder="Name (e.g. Digitronics Admin)" required value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
         <input placeholder="Website" required value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
         <input placeholder="Username or email" required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-        <input placeholder="Password" type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-        <input placeholder="Authenticator secret (optional)" value={form.totpSecret} onChange={(e) => setForm({ ...form, totpSecret: e.target.value })} />
+        <input placeholder="Password" type="password" required spellCheck={false} autoComplete="off" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+        <input placeholder="Authenticator secret (optional)" type="password" spellCheck={false} autoComplete="off" value={form.totpSecret} onChange={(e) => setForm({ ...form, totpSecret: e.target.value })} />
         <button className="primary-button" type="submit"><LockKeyhole size={15} /> Encrypt and save</button>
       </form>}
       <div className="credential-list">
         {items.map((item) => <div className="credential-card" key={item.id}>
           <div className="credential-top"><span className="site-badge">{item.label.slice(0, 1).toUpperCase()}</span><div><strong>{item.label}</strong><small>{domainFromUrl(item.url)} · {item.username}</small></div></div>
           <div className="credential-actions">
-            <button onClick={() => void window.privateBrowser.autofill(item.id).then(() => onToast('Credential filled')).catch((error) => onToast(error.message))}><Zap size={14} /> Fill</button>
+            <button onClick={() => void window.privateBrowser.autofill(item.id).then(() => onToast('Credential filled')).catch((error) => onToast(error.message, 'error'))}><Zap size={14} /> Fill</button>
             <button onClick={() => void copyPassword(item.id)}><Copy size={14} /> Password</button>
             {item.hasTotp && <button onClick={() => void copyTotp(item.id)}><Clock3 size={14} /> Code</button>}
             <button className="danger" title="Delete" onClick={() => { if (window.confirm(`Delete ${item.label}? This cannot be undone.`)) void window.privateBrowser.removeVaultItem(item.id).then(load); }}><Trash2 size={14} /></button>
@@ -504,28 +506,28 @@ function VaultPanel({ onToast }: { onToast: (message: string) => void }) {
   );
 }
 
-function AutomationPanel({ onToast }: { onToast: (message: string) => void }) {
+function AutomationPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [running, setRunning] = useState<string | null>(null);
   const run = async (automation: typeof AUTOMATIONS[number]) => {
     setRunning(automation.id);
     try {
       for (const url of automation.urls) await window.privateBrowser.newTab(automation.workspaceId, url);
       onToast(`${automation.name} opened`);
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setRunning(null); }
   };
   return <div className="side-panel"><PanelHeader icon={Zap} eyebrow="Safe routines" title="Automations" /><p className="panel-intro">Open complete work setups in isolated sessions. Publishing, payments and destructive actions are never automated.</p><div className="automation-list">{AUTOMATIONS.map((automation) => { const Icon = automation.icon; return <button className="automation-card" key={automation.id} onClick={() => void run(automation)}><span><Icon size={18} /></span><div><strong>{automation.name}</strong><small>{automation.description}</small></div>{running === automation.id ? <LoaderCircle className="spin" size={17} /> : <Play size={17} />}</button>; })}</div><div className="safety-note"><Shield size={16} /><p><strong>Approval boundary</strong><br />Messages, purchases, ads, deletion and account changes always require you.</p></div></div>;
 }
 
-function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (message: string) => void }) {
-  return <div className="side-panel"><PanelHeader icon={FileDown} eyebrow="This session" title="Downloads" /><div className="download-list">{state.downloads.map((item) => { const progress = item.totalBytes ? Math.round(item.receivedBytes / item.totalBytes * 100) : 0; return <div className="download-card" key={item.id}><div className="download-icon"><FileDown size={18} /></div><div className="download-body"><strong>{item.filename}</strong><small>{item.state === 'progressing' ? `${humanBytes(item.receivedBytes)} of ${humanBytes(item.totalBytes)}` : item.state}</small>{item.state === 'progressing' && <div className="progress"><span style={{ width: `${progress}%` }} /></div>}<div className="download-actions"><button onClick={() => void window.privateBrowser.openDownload(item.id).catch((error) => onToast(error.message))}>Open</button><button onClick={() => void window.privateBrowser.showDownload(item.id)}>Show folder</button></div></div></div>; })}{!state.downloads.length && <EmptyState icon={Download} text="Downloaded files will appear here." />}</div></div>;
+function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+  return <div className="side-panel"><PanelHeader icon={FileDown} eyebrow="This session" title="Downloads" /><div className="download-list">{state.downloads.map((item) => { const progress = item.totalBytes ? Math.round(item.receivedBytes / item.totalBytes * 100) : 0; return <div className="download-card" key={item.id}><div className="download-icon"><FileDown size={18} /></div><div className="download-body"><strong>{item.filename}</strong><small>{item.state === 'progressing' ? `${humanBytes(item.receivedBytes)} of ${humanBytes(item.totalBytes)}` : item.state}</small>{item.state === 'progressing' && <div className="progress"><span style={{ width: `${progress}%` }} /></div>}<div className="download-actions"><button onClick={() => void window.privateBrowser.openDownload(item.id).catch((error) => onToast(error.message, 'error'))}>Open</button><button onClick={() => void window.privateBrowser.showDownload(item.id)}>Show folder</button></div></div></div>; })}{!state.downloads.length && <EmptyState icon={Download} text="Downloaded files will appear here." />}</div></div>;
 }
 
 function PrivacyPanel({ state }: { state: BrowserSnapshot }) {
   return <div className="side-panel"><PanelHeader icon={ShieldCheck} eyebrow="Transparent by design" title="Privacy log" /><div className="privacy-summary"><div><strong>{state.trackerBlocking ? 'On' : 'Off'}</strong><span>Tracker blocking</span></div><div><strong>5</strong><span>Isolated spaces</span></div><div><strong>{state.privacyLog.length}</strong><span>Logged events</span></div></div><div className="privacy-events">{state.privacyLog.map((event) => <div className="privacy-event" key={event.id}><span className={`event-dot ${event.kind}`} /><div><strong>{event.title}</strong><small>{event.detail}</small></div><time>{timeAgo(event.at)}</time></div>)}{!state.privacyLog.length && <EmptyState icon={ShieldCheck} text="Sensitive access events will be recorded here." />}</div></div>;
 }
 
-function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
+function SettingsPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [isDefault, setIsDefault] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
@@ -537,14 +539,14 @@ function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
     void window.privateBrowser.getUpdateService().then((status) => {
       setUpdateStatus(status);
       setUpdateForm((value) => ({ ...value, endpoint: status.endpoint ?? '' }));
-    }).catch((error) => onToast(error instanceof Error ? error.message : String(error)));
+    }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'));
   }, []);
   const makeDefault = async () => {
     try {
       const result = await window.privateBrowser.setDefaultBrowser();
       setIsDefault(result);
       onToast(result ? 'Private Browser is now your default' : 'Windows requires you to choose Private Browser in Default Apps');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   const configureUpdates = async (event: FormEvent) => {
     event.preventDefault();
@@ -554,7 +556,7 @@ function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
       setUpdateForm({ endpoint: status.endpoint ?? '', accessToken: '' });
       setEditingUpdates(false);
       onToast('Private download service connected');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   const checkUpdates = async () => {
     setChecking(true);
@@ -562,7 +564,7 @@ function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
       const result = await window.privateBrowser.checkForUpdates();
       setUpdateResult(result);
       onToast(result.state === 'available' ? `Version ${result.latest.version} is available` : 'Private Browser is up to date');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setChecking(false); }
   };
   const disconnectUpdates = async () => {
@@ -573,7 +575,7 @@ function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
       setUpdateForm({ endpoint: '', accessToken: '' });
       setEditingUpdates(false);
       onToast('Private download service disconnected');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   return <div className="side-panel">
     <PanelHeader icon={Settings} eyebrow="Application" title="Settings" />
@@ -588,7 +590,7 @@ function SettingsPanel({ onToast }: { onToast: (message: string) => void }) {
       </form>}
       {updateStatus?.configured && <div className="update-actions">
         <button onClick={() => void checkUpdates()} disabled={checking}>{checking ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} Check now</button>
-        <button className="download-update" onClick={() => void window.privateBrowser.openUpdatePage().catch((error) => onToast(error.message))}><Download size={14} /> {updateResult?.state === 'available' ? `Download ${updateResult.latest.version}` : 'Download page'}</button>
+        <button className="download-update" onClick={() => void window.privateBrowser.openUpdatePage().catch((error) => onToast(error.message, 'error'))}><Download size={14} /> {updateResult?.state === 'available' ? `Download ${updateResult.latest.version}` : 'Download page'}</button>
         <button onClick={() => setEditingUpdates((value) => !value)}>Change</button>
         <button className="danger" onClick={() => void disconnectUpdates()}>Disconnect</button>
       </div>}

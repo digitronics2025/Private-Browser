@@ -57,11 +57,66 @@ export function redactSensitiveText(value: string): { text: string; redactions: 
   return { text, redactions };
 }
 
+/**
+ * Distinctive enough to match anywhere in a hostname without catching ordinary
+ * words — `cfgbank.com`, `attijariwafabank.com`, `sgmaroc.com`.
+ */
+const PROTECTED_HOST_FRAGMENTS = [
+  'bank', 'banque', 'bancaire', 'bankofafrica', 'creditagricole', 'creditdumaroc',
+  'attijari', 'wafacash', 'wafasalaf', 'cihbank', 'bmce', 'bmci', 'sgmaroc',
+  'chaabi', 'baridbank', 'cashplus', 'paypal', 'revolut', 'mastercard', 'visa-',
+];
+
+/**
+ * Too short or too common for a substring match — `credit` would otherwise hit
+ * `credits.example.com` and `wise` would hit `otherwise.org`. These must be a
+ * whole dot- or hyphen-separated label.
+ */
+const PROTECTED_HOST_LABELS = new Set([
+  'credit', 'caisse', 'wise', 'stripe', 'cih', 'cdm', 'barid', 'pay', 'payments', 'billing',
+]);
+
+const PROTECTED_PATH_FRAGMENTS = /(banking|checkout|payment|paiement|wallet|billing|invoice|virement|transfer|carte-bancaire)/i;
+
+/**
+ * Whether a page is treated as too sensitive to extract text from.
+ *
+ * This is **best effort and deliberately over-inclusive**: a false positive only
+ * refuses an AI read, while a false negative would let a banking page's text be
+ * offered for upload. It cannot be complete — no keyword list covers every bank
+ * in the world — so the guarantee the product actually rests on is the Banking
+ * workspace, which is protected by configuration rather than by guesswork.
+ */
 export function isProtectedPage(urlValue: string): boolean {
   try {
     const { hostname, pathname } = new URL(urlValue);
-    return /(^|\.)(bank|paypal|wise|revolut)\./i.test(hostname) ||
-      /(banking|checkout|payment|wallet|attijari|wafacash|cihbank|bankofafrica|bmce|chaabi|baridbank|cashplus)/i.test(`${hostname}${pathname}`);
+    const host = hostname.toLowerCase();
+    if (PROTECTED_HOST_FRAGMENTS.some((fragment) => host.includes(fragment))) return true;
+    if (host.split(/[.-]/).some((label) => PROTECTED_HOST_LABELS.has(label))) return true;
+    return PROTECTED_PATH_FRAGMENTS.test(`${host}${pathname}`);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a saved credential may be filled into the page currently open.
+ *
+ * Hostname and port must match exactly — no subdomain or suffix matching. The
+ * scheme is checked separately and asymmetrically: filling an `https` page is
+ * always allowed, because that is the same or better protection than the
+ * credential was saved under, but a credential saved for `https` is never filled
+ * into `http`. Without that rule a password saved for a real site could be typed
+ * into a plaintext page of the same name on a hostile network.
+ */
+export function isAutofillTarget(credentialUrl: string, pageUrl: string): boolean {
+  try {
+    const credential = new URL(credentialUrl);
+    const page = new URL(pageUrl);
+    if (!isAllowedRemoteUrl(credentialUrl) || !isAllowedRemoteUrl(pageUrl)) return false;
+    if (credential.hostname !== page.hostname || credential.port !== page.port) return false;
+    if (page.protocol === 'https:') return true;
+    return credential.protocol === page.protocol;
   } catch {
     return false;
   }

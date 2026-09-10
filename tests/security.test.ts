@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowedRemoteUrl, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from '../electron/security';
+import { isAllowedRemoteUrl, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from '../electron/security';
 import { createDefaultState, sanitizeState } from '../electron/state-store';
 import { generateTotp } from '../electron/vault';
 
@@ -27,6 +27,24 @@ describe('navigation security', () => {
     expect(isProtectedPage('https://secure.bank.example/login')).toBe(true);
     expect(isProtectedPage('https://shop.example/checkout')).toBe(true);
     expect(isProtectedPage('https://digitronics.ma')).toBe(false);
+  });
+
+  it('protects Moroccan banks that the first keyword list missed', () => {
+    // Each of these was reported unprotected in the 2026-09-10 audit (F-08).
+    expect(isProtectedPage('https://cfgbank.com/login')).toBe(true);
+    expect(isProtectedPage('https://www.sgmaroc.com/particuliers')).toBe(true);
+    expect(isProtectedPage('https://www.creditagricole.ma')).toBe(true);
+    expect(isProtectedPage('https://www.attijariwafabank.com/fr')).toBe(true);
+    expect(isProtectedPage('https://www.bankofafrica.ma')).toBe(true);
+    expect(isProtectedPage('https://cih.ma/espace-client')).toBe(true);
+  });
+
+  it('does not treat ordinary words as banking', () => {
+    // Over-protection is the safe direction, but not so broad it refuses everything.
+    expect(isProtectedPage('https://otherwise.org/article')).toBe(false);
+    expect(isProtectedPage('https://credits.example.com/roll')).toBe(false);
+    expect(isProtectedPage('https://architecture.example/gallery')).toBe(false);
+    expect(isProtectedPage('https://digitronics.ma/televisions')).toBe(false);
   });
 
   it('allows only public HTTPS AI endpoints', () => {
@@ -80,5 +98,28 @@ describe('local data', () => {
 
   it('generates RFC 6238-compatible TOTP values', () => {
     expect(generateTotp('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 59)).toBe('287082');
+  });
+});
+
+describe('autofill targeting', () => {
+  it('fills only an exact hostname and port match', () => {
+    expect(isAutofillTarget('https://bank.example/login', 'https://bank.example/account')).toBe(true);
+    expect(isAutofillTarget('https://bank.example/', 'https://evil.example/')).toBe(false);
+    expect(isAutofillTarget('https://bank.example/', 'https://login.bank.example/')).toBe(false);
+    expect(isAutofillTarget('https://bank.example/', 'https://bank.example:8443/')).toBe(false);
+  });
+
+  it('never fills an https credential into an http page', () => {
+    expect(isAutofillTarget('https://bank.example/', 'http://bank.example/')).toBe(false);
+  });
+
+  it('allows filling a page that is more secure than the saved credential', () => {
+    expect(isAutofillTarget('http://tool.example/', 'https://tool.example/')).toBe(true);
+    expect(isAutofillTarget('http://tool.example/', 'http://tool.example/')).toBe(true);
+  });
+
+  it('refuses anything that is not an ordinary web page', () => {
+    expect(isAutofillTarget('file:///etc/passwd', 'file:///etc/passwd')).toBe(false);
+    expect(isAutofillTarget('https://bank.example/', 'not a url')).toBe(false);
   });
 });

@@ -247,3 +247,14 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
   .dashboard-columns { grid-template-columns: 1fr; }
   .dashboard-inner { padding: 38px 28px; }
 }
+
+/* A refusal must not read as a confirmation: the icon and border change too, not
+   just the words, because that is what a glancing user actually sees. */
+.toast.error { border-color: rgba(255,107,122,.45); }
+.toast.error svg { color: var(--danger); }
+
+/* The approval card shows the whole payload rather than a three-sentence taste of
+   it, so it needs to be scrollable and obviously verbatim. */
+.context-origin { display: block; color: var(--muted); font-size: 11px; margin-top: -4px; overflow-wrap: anywhere; }
+.context-text { max-height: 220px; overflow: auto; margin: 10px 0 6px; padding: 10px; background: #0b1018; border: 1px solid #252e40; border-radius: 10px; color: #aab7cd; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.context-size { display: block; color: var(--muted); font-size: 10.5px; }

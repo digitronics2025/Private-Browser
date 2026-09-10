@@ -10,7 +10,7 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - Tracker blocking for common analytics and advertising hosts.
 - Crash/session restoration without storing form values or page content.
 - Local page extraction, sensitive-data redaction and single-use cloud approval tokens.
-- AI access disabled entirely in the Banking workspace and on detected banking/payment pages.
+- AI access disabled entirely in the Banking workspace, and on banking or payment pages the app recognises. Recognition is best-effort and errs towards refusing; put a bank in the Banking workspace to be certain.
 - OS-encrypted local credential vault, explicit same-domain autofill, RFC 6238 TOTP codes and automatic clipboard clearing.
 - Encrypted, user-configurable OpenAI-compatible cloud AI provider with one approval required per request.
 - Windows default-browser registration and single-instance external-link handling.

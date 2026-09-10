@@ -12,7 +12,7 @@ import {
   type IpcMainInvokeEvent,
   type Session,
 } from 'electron';
-import { isAllowedRemoteUrl, isProtectedPage, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from './security.js';
+import { isAllowedRemoteUrl, isAutofillTarget, isProtectedPage, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from './security.js';
 import { ClipboardGuard } from './clipboard-guard.js';
 import { AiProviderStore } from './ai-provider.js';
 import { StateStore, WORKSPACES } from './state-store.js';
@@ -48,6 +48,9 @@ interface Layout {
   bottom: number;
 }
 
+const FAVICON_TYPES = new Set(['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml', 'image/jpeg', 'image/gif', 'image/webp']);
+const MAX_FAVICON_BYTES = 32 * 1024;
+
 const TRACKER_HOSTS = [
   'doubleclick.net',
   'googlesyndication.com',
@@ -65,6 +68,7 @@ class BrowserController {
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
   private readonly clipboardGuard = new ClipboardGuard(clipboard);
+  private readonly faviconCache = new Map<string, string>();
   private layout: Layout = { top: 104, left: 78, right: 356, bottom: 0 };
   private window!: BrowserWindow;
 
@@ -403,7 +407,7 @@ class BrowserController {
     const tab = this.activeTab(state);
     if (!contents || tab.isHome) throw new Error('Open the saved website first');
     const credential = this.vault.getForAutofill(id);
-    if (new URL(credential.url).hostname !== new URL(tab.url).hostname) throw new Error('This credential belongs to another website');
+    if (!isAutofillTarget(credential.url, tab.url)) throw new Error('This credential belongs to another website, or this page is not secure');
     const payload = JSON.stringify({ username: credential.username, password: credential.password });
     await contents.executeJavaScript(`(() => {
       const credential = ${payload};
@@ -525,7 +529,7 @@ class BrowserController {
       });
       this.broadcast();
     });
-    view.webContents.on('page-favicon-updated', (_event, favicons) => this.updateRuntime(tabId, { favicon: favicons[0] }));
+    view.webContents.on('page-favicon-updated', (_event, favicons) => void this.updateFavicon(tabId, ses, favicons[0]));
     view.webContents.on('before-input-event', (event, input) => this.handleShortcut(event, input));
     view.webContents.on('render-process-gone', () => this.updateRuntime(tabId, { loading: false }));
     return view;
@@ -599,6 +603,46 @@ class BrowserController {
       width: Math.max(100, width - this.layout.left - this.layout.right),
       height: Math.max(100, height - this.layout.top - this.layout.bottom),
     });
+  }
+
+  /**
+   * Fetch a page's favicon inside that page's OWN session partition and hand the
+   * renderer an inert `data:` URL.
+   *
+   * The chrome window has no partition of its own, so rendering the page-chosen
+   * URL directly in an `<img>` made the trusted window fetch it on the default
+   * session: outside tracker blocking, and shared by all five workspaces, which
+   * let a site correlate activity across them — including Banking. Doing the
+   * fetch here keeps it inside the workspace's cookie jar and behind the same
+   * request filter as the page itself, and lets the renderer CSP drop `https:`
+   * from `img-src` entirely.
+   */
+  private async updateFavicon(tabId: string, ses: Session, url?: string): Promise<void> {
+    if (!url) {
+      this.updateRuntime(tabId, { favicon: undefined });
+      return;
+    }
+    const cached = this.faviconCache.get(url);
+    if (cached) {
+      this.updateRuntime(tabId, { favicon: cached });
+      return;
+    }
+    if (!isAllowedRemoteUrl(url)) return;
+    try {
+      const response = await ses.fetch(url, { signal: AbortSignal.timeout(5_000), redirect: 'follow' });
+      if (!response.ok) return;
+      const type = (response.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
+      if (!FAVICON_TYPES.has(type)) return;
+      const bytes = Buffer.from(await response.arrayBuffer());
+      // The icon rides along in every state broadcast, so keep it small.
+      if (!bytes.byteLength || bytes.byteLength > MAX_FAVICON_BYTES) return;
+      const dataUrl = `data:${type};base64,${bytes.toString('base64')}`;
+      if (this.faviconCache.size >= 200) this.faviconCache.delete(this.faviconCache.keys().next().value!);
+      this.faviconCache.set(url, dataUrl);
+      this.updateRuntime(tabId, { favicon: dataUrl });
+    } catch {
+      // A site without a reachable icon is ordinary, not an error worth showing.
+    }
   }
 
   private updateRuntime(tabId: string, patch: Partial<RuntimeTab>): void {
