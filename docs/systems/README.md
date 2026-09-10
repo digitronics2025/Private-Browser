@@ -76,6 +76,12 @@ node scripts/docs-guard.mjs ratchet --write # tighten allowances that gained sla
   to an installed update: the Cloudflare Worker, its data and signed download
   links, the two workflows, and the desktop client that polls it.
 
+## Audits
+
+- [../security/prerelease-audit-2026-09-10.md](../security/prerelease-audit-2026-09-10.md)
+  — pre-release audit of `63e5ee8` (v0.3.1): 26 numbered, line-cited findings with
+  a must-fix table and an order of work. Read it before the next release.
+
 ## Creating a new doc
 
 Follow the template the skill ships (`/docs-systems bootstrap`, or copy an
