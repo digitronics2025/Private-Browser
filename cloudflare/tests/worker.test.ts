@@ -138,10 +138,34 @@ describe('download Worker', () => {
     expect(page.status).toBe(200);
     expect(page.headers.get('x-robots-tag')).toContain('noindex');
     const html = await page.text();
-    // Assert the page carries THIS release's details, not a hard-coded template string.
-    expect(html).toContain('Version 0.3.0');
-    expect(html).toContain('a'.repeat(64));
-    expect(html).toContain('abcdef123456');
+    expect(html).toContain('Download and install');
+    // This release's own details, not a hard-coded template string: the assertion
+    // these replaced was `'X'.replace('X','Y')` and could not fail (F-09).
+    expect(html).toContain(release.version);
+    expect(html).toContain(release.sha256);
+    expect(html).toContain(release.commit_sha.slice(0, 12));
+  });
+
+  it('serves a stable tokenized install page without exposing the token', async () => {
+    const page = await request(`/download/${accessToken}`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('cache-control')).toContain('no-store');
+    expect(page.headers.get('x-robots-tag')).toContain('noindex');
+    const html = await page.text();
+    expect(html).toContain('Download and install');
+    expect(html).toContain('Build number');
+    expect(html).toContain('Stable release');
+    expect(html).toMatch(/\/download\/latest\.exe\?expires=\d+&amp;signature=/);
+    expect(html).not.toContain(accessToken);
+
+    const head = await request(`/download/${accessToken}`, { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe('');
+  });
+
+  it('hides stable install pages with missing or incorrect tokens', async () => {
+    expect((await request('/download/wrong-token-that-is-long-enough-000000')).status).toBe(404);
+    expect((await request('/download/')).status).toBe(404);
   });
 
   it('serves full, HEAD, open, closed and suffix byte ranges', async () => {

@@ -105,6 +105,21 @@ async function handleDownloadPage(request: Request, env: Env, url: URL): Promise
   if (!release) return notFound();
   const downloadSignature = await signValue(env.SIGNING_SECRET, `binary\n${release.id}\n${expires}`);
   const downloadUrl = `/download/latest.exe?expires=${expires}&signature=${downloadSignature}`;
+  return downloadPageResponse(request, release, downloadUrl);
+}
+
+async function handleStableDownloadPage(request: Request, env: Env, token: string): Promise<Response> {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
+  if (!secretsReady(env) || token.length > 1_000 || !(await constantTimeEqual(token, env.DOWNLOAD_ACCESS_TOKEN))) return notFound();
+  const release = await latestRelease(env);
+  if (!release) return notFound();
+  const expires = futureExpiry(Date.now() / 1000, normalizeTtl(env.LINK_TTL_SECONDS));
+  const downloadSignature = await signValue(env.SIGNING_SECRET, `binary\n${release.id}\n${expires}`);
+  const downloadUrl = `/download/latest.exe?expires=${expires}&signature=${downloadSignature}`;
+  return downloadPageResponse(request, release, downloadUrl);
+}
+
+function downloadPageResponse(request: Request, release: ReleaseRecord, downloadUrl: string): Response {
   const html = renderDownloadPage(release, downloadUrl);
   const headers = responseHeaders({
     'content-type': 'text/html; charset=utf-8',
@@ -114,6 +129,11 @@ async function handleDownloadPage(request: Request, env: Env, url: URL): Promise
   });
   headers.set('content-length', String(new TextEncoder().encode(html).byteLength));
   return new Response(request.method === 'HEAD' ? null : html, { headers });
+}
+
+function stableDownloadToken(pathname: string): string | null {
+  const match = /^\/download\/([A-Za-z0-9_-]{32,1000})$/.exec(pathname);
+  return match?.[1] ?? null;
 }
 
 async function handleBinary(request: Request, env: Env, url: URL): Promise<Response> {
@@ -221,6 +241,8 @@ export default {
       if (url.pathname === '/api/v1/admin/releases') return handlePublish(request, env);
       if (url.pathname === '/download') return handleDownloadPage(request, env, url);
       if (url.pathname === '/download/latest.exe') return handleBinary(request, env, url);
+      const pageToken = stableDownloadToken(url.pathname);
+      if (pageToken) return handleStableDownloadPage(request, env, pageToken);
       return notFound();
     } catch (error) {
       console.error('request_failed', { path: url.pathname, message: error instanceof Error ? error.message : 'unknown' });
