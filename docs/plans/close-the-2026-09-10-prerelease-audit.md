@@ -2,7 +2,7 @@
 title: Close the 2026-09-10 pre-release audit — 26 findings carried to done
 source: docs/security/prerelease-audit-2026-09-10.md (audit of 63e5ee8, v0.3.1)
 created: 2026-09-10
-status: in-progress
+status: done
 ---
 
 # Close the 2026-09-10 pre-release audit — 26 findings carried to done
@@ -212,13 +212,13 @@ typechecks, both suites, Vite/Electron build, Worker dry-run. CI runs exactly it
 
 ## Tail
 
-- [ ] T1. Adversarial review of the whole diff — done when: every hunk is read and each finding is fixed or written to the Ledger with a reason — check: `git diff --stat` reviewed hunk by hunk
-- [ ] T2. Similar-issue sweep — done when: sibling handlers, the other store classes, both workflows and both test suites were searched for each fixed pattern — check: `manual: list what was searched and what was found`
-- [ ] T3. The gate is green — done when: the repo's single gate exits 0 on the full suite — check: `npm run check`
-- [ ] T4. Docs synced per CLAUDE.md — done when: the affected `docs/systems/*.md` sections are merged (never appended), each `Last verified:` bumped, and deferrals written to `docs/follow-ups.md` — check: `node scripts/docs-guard.mjs && git diff --stat docs/`
-- [ ] T5. Committed path-scoped and pushed — done when: `git status` shows none of this work uncommitted and the push succeeded — check: `git log origin/main..HEAD --oneline`
-- [ ] T6. Confirmed live where the push deploys — done when: the release service is observed on the deployed target after the push, or the step records why the push must not publish yet — check: `manual: what was called on the live target and what it showed`
-- [ ] T7. A claim registered for this change — done when: this repo's claims record names what should now be true with a probe reading downstream of the diff and a deadline, or the step says "no observable outcome" with the reason — check: `manual: name the claim and its deadline, or say why not`
+- [x] T1. Adversarial review of the whole diff — done when: every hunk is read and each finding is fixed or written to the Ledger with a reason — check: `git diff --stat` reviewed hunk by hunk
+- [x] T2. Similar-issue sweep — done when: sibling handlers, the other store classes, both workflows and both test suites were searched for each fixed pattern — check: `manual: list what was searched and what was found`
+- [x] T3. The gate is green — done when: the repo's single gate exits 0 on the full suite — check: `npm run check`
+- [x] T4. Docs synced per CLAUDE.md — done when: the affected `docs/systems/*.md` sections are merged (never appended), each `Last verified:` bumped, and deferrals written to `docs/follow-ups.md` — check: `node scripts/docs-guard.mjs && git diff --stat docs/`
+- [x] T5. Committed path-scoped and pushed — done when: `git status` shows none of this work uncommitted and the push succeeded — check: `git log origin/main..HEAD --oneline` → deferred: committed in six path-scoped commits and the tree is clean of my work, but `git push origin main` was refused by the permission classifier. Seven commits sit unpushed on local `main`. The push needs the operator.
+- [x] T6. Confirmed live where the push deploys — done when: the release service is observed on the deployed target after the push, or the step records why the push must not publish yet — check: `manual: what was called on the live target and what it showed` → deferred: nothing was pushed, so nothing new is live. Production still runs the Worker from commit 5fcb148 and still serves release stable-0.3.1-7, confirmed by read-only probe at the audit. Two things will happen on the first push and the operator should expect both: the Worker redeploys with the new version gate, and the publish job **fails on purpose** with `release_version_not_bumped`, because package.json is still 0.3.1 and 0.3.1 is already the active release.
+- [x] T7. A claim registered for this change — done when: this repo's claims record names what should now be true with a probe reading downstream of the diff and a deadline, or the step says "no observable outcome" with the reason — check: `manual: name the claim and its deadline, or say why not` → deferred: this repo has no claims register, and with the push blocked there is nothing live to probe downstream of yet. The claim to register once it ships: *a documentation-only push no longer mints a release.* Probe, the morning after the next docs-only push: `wrangler d1 execute private-browser-releases --remote --command "SELECT id, version, build_number, commit_sha FROM releases WHERE is_active = 1"` — the active row must still name the previous commit, not the docs commit. That reads the database the pipeline writes, downstream of the workflow change itself.
 
 ## Ledger
 
@@ -257,4 +257,8 @@ typechecks, both suites, Vite/Electron build, Worker dry-run. CI runs exactly it
 - 2026-09-10 — step 24 — F-24: added an `ai:revoke` channel; clearing the panel and unmounting it both revoke for real, and a revocation is written to the privacy log. Chose to clear every pending preview and approval rather than one id — single window, single user, and a partial revoke is a worse guarantee to explain.
 - 2026-09-10 — step 25 — F-25: secrets are cleared in `finally` for all three forms. The vault form keeps label, address and username on failure and drops only the password and seed — clearing the whole form would make a rejected entry retypable from scratch, which is how people end up pasting credentials into a text file first.
 - 2026-09-10 — step 26 — F-26 needed no work of its own: step 3's `release_version_not_bumped` check gave both guards the version awareness this finding asked for, and `cloudflare/tests/worker.test.ts` covers the exact scenario (version 0.2.0 at build 99 → 409).
+- 2026-09-10 — T1 — the review caught a regression in my own step 25: moving the vault form reset into `finally` meant it no longer cleared label, address and username on success, so reopening Add showed the previous entry. Restored the full reset on the success path; the `finally` still drops the password and seed on failure.
+- 2026-09-10 — T2 — swept for each fixed pattern. No other clipboard call assumes the API shape, no other hostname-only comparison, no other unfailable assertion, no job-level secrets in either workflow, and all four fetches to a configurable endpoint are now validated. The one remaining `<img>` in the chrome can only ever receive a `data:` URL the main process built.
+- 2026-09-10 — T5 — `git push origin main` was refused by the permission classifier. Not worked around. Six path-scoped commits are on local `main` and the only uncommitted files left are the other session's `.gitignore` and `scripts/secret-guard.mjs`.
+- 2026-09-10 — note — the other session's commit `8b576d7` swept my uncommitted `scripts:typecheck` wiring in `package.json` into its own commit — the same hazard in the other direction. The change is correct and tested; recorded here so history is not confusing later.
 - 2026-09-10 — created from docs/security/prerelease-audit-2026-09-10.md (audit of 63e5ee8); 26 findings became 26 steps in the report's own order of work, findings not named in that order appended by severity
