@@ -3,7 +3,7 @@ system: ipc-contract
 sources:
   - electron/preload.cts
   - electron/types.ts
-verified_at: 8b576d74
+verified_at: ef6ba2e8
 ---
 
 # IPC Contract
