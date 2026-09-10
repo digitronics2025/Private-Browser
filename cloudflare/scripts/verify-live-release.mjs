@@ -102,6 +102,11 @@ async function expectStatus(url, status, headers = {}) {
   assert(response.status === status, `${new URL(url).pathname} returned ${response.status}, expected ${status}`);
 }
 
+/**
+ * @param {unknown} condition
+ * @param {string} message
+ * @returns {asserts condition}
+ */
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }

@@ -359,6 +359,21 @@ class BrowserController {
     return answer;
   }
 
+  /**
+   * Drop every pending preview and live approval.
+   *
+   * Clearing the panel used to only make the renderer forget the token, leaving
+   * the captured page text and the capability itself alive in this process for
+   * the full five minutes. There was no way for the UI to undo an approval it
+   * had just offered.
+   */
+  revokeAiContext(): void {
+    const had = this.pendingAiPreviews.size + this.aiApprovals.size;
+    this.pendingAiPreviews.clear();
+    this.aiApprovals.clear();
+    if (had) this.addPrivacyEvent('blocked', 'Cloud context revoked', 'The approved page text was discarded before it was used');
+  }
+
   listVault() {
     return { available: this.vault.isAvailable(), reason: this.vault.reason(), items: this.vault.list() };
   }
@@ -811,6 +826,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:configure-provider', (_event, input: AiProviderInput) => controller!.configureAiProvider(input));
   handle('ai:clear-provider', () => controller!.clearAiProvider());
   handle('ai:ask', (_event, token: string, question: string) => controller!.askAi(token, question));
+  handle('ai:revoke', () => controller!.revokeAiContext());
   handle('vault:list', () => controller!.listVault());
   handle('vault:add', (_event, input: VaultItemInput) => controller!.addVaultItem(input));
   handle('vault:remove', (_event, id: string) => controller!.removeVaultItem(id));

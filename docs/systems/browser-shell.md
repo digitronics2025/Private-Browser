@@ -2,7 +2,7 @@
 system: browser-shell
 sources:
   - electron/main.ts
-verified_at: b7407463
+verified_at: 8b576d74
 ---
 
 # Browser Shell
@@ -229,6 +229,49 @@ becomes a `DownloadEntry` in an in-memory `Map` keyed by a fresh `randomUUID()`:
   `showDownload(id)` only requires a `savePath`.
 - The map is never persisted and never pruned.
 
+## Downloads — checksum verification
+
+When a download completes, `verifyDownload` (
+[download-verify.ts](../../electron/download-verify.ts)) compares it against the
+manifest returned by the last `checkForUpdates`, remembered in
+`expectedInstaller`.
+
+- Only a download whose filename matches the expected installer is checked.
+  Anything else returns `unchecked` — an unrelated file must never be reported as
+  a failed verification.
+- Size is compared before hashing, then SHA-256 over the file.
+- `verified` and `mismatch` are written to `DownloadEntry.checksum`, surfaced in
+  the downloads list, and logged to the privacy timeline.
+- **`openDownload` throws on `mismatch`** rather than opening the file.
+
+Before this, the service published a checksum and the download page printed it,
+but nothing on this side ever compared it to the bytes that arrived — audit
+finding F-13. The installer is unsigned, so this is the only tamper check between
+the release service and the file the user runs.
+
+## Favicons
+
+`page-favicon-updated` does **not** hand the page's icon URL to the renderer.
+`updateFavicon(tabId, ses, url)` fetches it with `ses.fetch` — the tab's *own*
+session partition — and passes the renderer a `data:` URL it built itself.
+
+- Only `http`/`https` URLs are fetched (`isAllowedRemoteUrl`); a `data:` favicon
+  declared by the page is dropped rather than forwarded.
+- Content type must be in `FAVICON_TYPES`; body must be non-empty and at most
+  `MAX_FAVICON_BYTES` (32 KB). The icon travels inside every state broadcast, so
+  the cap is about payload size as much as safety.
+- A 5-second timeout, and a 200-entry URL cache so repeated navigations do not
+  refetch.
+- Failures are silent: a site without a reachable icon is ordinary.
+
+**Why it is not just `<img src={page-chosen-url}>`.** The chrome `BrowserWindow`
+declares no `session`, so it uses the default one — outside the tracker filter
+and shared by all five workspaces. Rendering the page's URL directly let a site
+hand out a per-visit icon URL and correlate activity across every workspace,
+including Banking, with no approval and no privacy-log entry, while the toolbar
+claimed tracker blocking was on. Audit finding F-07. Because the renderer now
+only ever receives a `data:` URL, `img-src` in index.html no longer needs `https:`.
+
 ## Tracker Blocking
 
 `TRACKER_HOSTS` is a seven-entry hostname denylist (doubleclick.net,
@@ -329,6 +372,16 @@ there is not reported anywhere.
   copied secret. Without it, quitting inside the 30-second window left a password
   on the clipboard — the auto-clear timer is `unref()`ed and so never fired. See
   [vault.md](vault.md#autofill-and-clipboard).
+
+### The update bootstrap
+
+`readUpdateBootstrap` runs once at startup against
+`process.resourcesPath/private-browser-update.json`. Whatever happens — stored
+successfully, rejected as invalid, or refused because `safeStorage` is
+unavailable — `removeUpdateBootstrap` runs in a `finally`. Previously the file
+was deleted only on success, so a machine without OS encryption kept a shared
+download token readable in the install directory indefinitely (audit finding
+F-15). Losing first-launch enrolment is the cheaper failure.
 
 ## IPC Registration and the Trusted-Sender Check
 

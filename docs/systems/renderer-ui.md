@@ -4,7 +4,7 @@ sources:
   - src/App.tsx
   - src/styles.css
   - index.html
-verified_at: 5fcb148
+verified_at: 8b576d74
 ---
 
 # Renderer UI
@@ -178,6 +178,39 @@ paint does not wait for a push. Two further effects are pure renderer bookkeepin
 `address` is re-synced whenever the active tab's id, url or `isHome` changes (home
 tabs show an empty box), and a toast clears itself after 3200 ms.
 
+**Toasts carry a kind.** State is `{ text, kind: 'ok' | 'error' }`, set through
+`showToast(text, kind = 'ok')`; every `catch` passes `'error'`. A failure renders
+an `X` in `--danger` with a tinted border, a success a green `Check`. Before this
+there was one toast style and every security refusal — "AI access is disabled for
+protected and banking pages", "This credential belongs to another website" —
+appeared with the same green tick as a success (audit finding F-16). Both the
+icon and the border change, not only the colour.
+
+**Secret fields are cleared in `finally`, not on success.** The provider API key,
+the vault password and authenticator seed, and the download access token are all
+dropped whether or not the submit was accepted; a rejected submit used to leave
+them in renderer state and in the input's DOM value (F-25). The vault form keeps
+label, address and username on failure so a rejected entry need not be retyped
+whole.
+
+**The AI approval card shows the payload, not a taste of it.** It renders
+`preview.text` verbatim in a scrollable box with its character count, plus
+`preview.title` (the *redacted* title) and `preview.url` (the bare origin). It
+previously showed at most three sentences longer than 35 characters — nothing at
+all on a page of short lines — above the claim that only "the preview shown
+above" would be sent, while up to 12,000 characters went to the provider (F-06).
+It also showed the live tab title, which a page can rewrite at any moment, rather
+than the redacted one actually sent.
+
+**Clearing the panel revokes for real.** "Clear page context" and unmounting the
+panel both call `revokeAiContext()`, so the captured text and the live capability
+are dropped in the main process instead of merely being forgotten here (F-24).
+
+**The security badge is derived, not asserted.** Settings shows "Checking…" until
+the first status arrives, then "Active" or "Encryption unavailable" based on
+`updateStatus.error`. It used to be a hardcoded green "Active" that contradicted
+the Vault panel whenever encryption was unavailable (F-18).
+
 ## The Layout Handshake
 
 Web pages are not in this React tree. The renderer measures its own chrome and
@@ -212,10 +245,14 @@ minimum 0, all rounded) and computes the view bounds as
 
 - **CSP meta tag** — `default-src 'self'`; `script-src 'self'`; `style-src 'self'
   'unsafe-inline'` (required: the app sets inline `style` attributes for workspace
-  colour, quick-link tone and download progress); `img-src 'self' data: https:`
-  (required: tab favicons are remote `<img>` elements); `connect-src 'self'
-  ws://127.0.0.1:* http://127.0.0.1:*` (the Vite dev server and its HMR socket —
-  no other network origin can be reached from the renderer); `object-src 'none'`;
+  colour, quick-link tone and download progress); `img-src 'self' data:`
+  (tab favicons arrive as `data:` URLs built by the main process, see
+  [browser-shell.md](browser-shell.md#favicons)); `connect-src 'self'`
+  — **no localhost exceptions ship**. The Vite dev server and its HMR socket
+  need `ws://127.0.0.1:* http://127.0.0.1:*`, injected by a `transformIndexHtml`
+  plugin in [vite.config.ts](../../vite.config.ts) with `apply: 'serve'`, so they
+  exist in dev only. They used to be written into this file and therefore shipped
+  inside the installer (audit finding F-17); `object-src 'none'`;
   `form-action 'none'`.
 - **Root element** — `<div id="root">`, the only body content.
 - **Module entry** — `<script type="module" src="/src/main.tsx">`.

@@ -24,6 +24,7 @@ const api = {
   configureAiProvider: (input: AiProviderInput): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:configure-provider', input),
   clearAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:clear-provider'),
   askAi: (token: string, question: string): Promise<string> => ipcRenderer.invoke('ai:ask', token, question),
+  revokeAiContext: (): Promise<void> => ipcRenderer.invoke('ai:revoke'),
   listVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:list'),
   addVaultItem: (input: VaultItemInput): Promise<VaultItemMeta> => ipcRenderer.invoke('vault:add', input),
   removeVaultItem: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:remove', id),

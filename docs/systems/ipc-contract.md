@@ -3,7 +3,7 @@ system: ipc-contract
 sources:
   - electron/preload.cts
   - electron/types.ts
-verified_at: d0102bf
+verified_at: 8b576d74
 ---
 
 # IPC Contract
@@ -133,6 +133,7 @@ same four fields, and neither file imports the other.
 | `ai:configure-provider` | `configureAiProvider(input)` | `input: AiProviderInput` | `AiProviderStatus` |
 | `ai:clear-provider` | `clearAiProvider()` | — | `AiProviderStatus` |
 | `ai:ask` | `askAi(token, question)` | `token: string`, `question: string` | `string` |
+| `ai:revoke` | `revokeAiContext()` | — | `void` |
 
 The two-step preview-then-approve shape and the token are the consent mechanism,
 not a caching optimisation — see [ai-consent.md](ai-consent.md).
@@ -217,6 +218,9 @@ preload and the renderer.
   `canGoBack`, `canGoForward`, `isHome`.
 - `Bookmark` — `id`, `title`, `url`, `workspaceId`, `createdAt`.
 - `HistoryEntry` — same, with `visitedAt` instead of `createdAt`.
+- `DownloadEntry` — now also carries `checksum?: 'verified' | 'mismatch' | 'unchecked'`,
+  set once a completed download has been compared with the release manifest
+  ([browser-shell.md](browser-shell.md#downloads--checksum-verification)).
 - `DownloadEntry` — `id`, `filename`, `receivedBytes`, `totalBytes`,
   `state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'`, `savePath?`.
   The union is hand-written to mirror Electron's download states, and the main

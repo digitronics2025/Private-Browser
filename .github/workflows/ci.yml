@@ -67,6 +67,12 @@ jobs:
   publish-cloudflare-release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: windows-installer
+    # Its own group, and never cancelled: the workflow-level group cancels in
+    # progress, which could kill this job between the R2 upload and the D1
+    # registration and leave an orphaned ~114 MB object nothing references.
+    concurrency:
+      group: private-browser-publish-release
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Secrets are attached per step below, never to the job, so `npm ci` runs

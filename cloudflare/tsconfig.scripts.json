@@ -1,0 +1,20 @@
+{
+  // The release scripts run only against production, on a push to main, and were
+  // covered by no tsconfig and no test — a typo in them was discovered live.
+  // checkJs gives them the same compiler that guards the rest of the repo.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    // Annotating every internal helper parameter in a build script is noise;
+    // strictNullChecks is the part that catches real crashes, and it stays on.
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["scripts/**/*.mjs"]
+}

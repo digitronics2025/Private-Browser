@@ -25,6 +25,24 @@ node scripts/docs-find.mjs --history "<term from the entry>"
 
 ---
 
+## Local data at rest
+
+- **`browser-state.json` (history, bookmarks, tab URLs, privacy log) is written
+  as plaintext JSON, not encrypted.** Recorded 2026-09-10 against
+  `StateStore.save` — audit finding F-20. The vault and the two credential
+  stores use `safeStorage`; this file deliberately does not, because the app must
+  still start when the OS keychain is unavailable, and a vault that refuses to
+  open is an inconvenience while a browser that refuses to start is a broken
+  product. `{ mode: 0o600 }` is applied on the temp file, but on Windows — the
+  only supported platform — the POSIX mode is largely advisory, so it is not the
+  protection it looks like.
+  The obvious fix (encrypt-if-available, plaintext fallback) is not obviously
+  right: it would silently lose every bookmark and all history the first time the
+  keychain changed identity, which is a worse failure than the one it prevents.
+  Doing it properly needs the same corrupt-detection and preserve-the-file
+  recovery that `VaultStore` has. Until then the limitation is stated in
+  [SECURITY.md](../SECURITY.md) so nobody has to read the code to find it out.
+
 ## Main-process structure
 
 - **The three IPC facades were left inside `electron/main.ts` rather than

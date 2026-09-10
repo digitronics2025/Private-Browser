@@ -361,6 +361,17 @@ function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 
   const [question, setQuestion] = useState('Summarize the important points on this page.');
   const [answer, setAnswer] = useState('');
   useEffect(() => { void window.privateBrowser.getAiProvider().then(setProvider).catch(() => undefined); }, []);
+  const clearContext = async () => {
+    setPreview(null);
+    setApprovalToken(null);
+    setAnswer('');
+    // Forgetting the token in the renderer did not invalidate it: the captured
+    // page text and the live capability stayed in the main process for the full
+    // five minutes. Revoke it for real.
+    try { await window.privateBrowser.revokeAiContext(); } catch { /* nothing to revoke */ }
+  };
+  // Leaving the panel is the same intent as pressing Clear.
+  useEffect(() => () => { void window.privateBrowser.revokeAiContext().catch(() => undefined); }, []);
   const prepare = async () => {
     setLoading(true);
     setApprovalToken(null);
@@ -385,11 +396,15 @@ function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 
     setLoading(true);
     try {
       setProvider(await window.privateBrowser.configureAiProvider(providerForm));
-      setProviderForm((value) => ({ ...value, apiKey: '' }));
       setShowProviderForm(false);
       onToast('AI provider encrypted and saved');
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
-    finally { setLoading(false); }
+    finally {
+      setLoading(false);
+      // Clear the key whether or not it was accepted: a rejected submit used to
+      // leave it in renderer state and in the input's DOM value.
+      setProviderForm((value) => ({ ...value, apiKey: '' }));
+    }
   };
   const ask = async () => {
     if (!approvalToken) return;
@@ -440,7 +455,7 @@ function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 
           </div>
           {approvalToken && <div className="ask-card"><textarea maxLength={2000} value={question} onChange={(event) => setQuestion(event.target.value)} /><button className="primary-button full" onClick={() => void ask()} disabled={loading || !question.trim()}>{loading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} Ask cloud AI once</button></div>}
           {answer && <div className="answer-card"><span>AI ANSWER</span><p>{answer}</p></div>}
-          <button className="text-button" onClick={() => { setPreview(null); setApprovalToken(null); setAnswer(''); }}>Clear page context</button>
+          <button className="text-button" onClick={() => void clearContext()}>Clear page context</button>
         </>
       )}
     </div>
@@ -467,6 +482,11 @@ function VaultPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'err
       await load();
       onToast('Credential encrypted and saved');
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally {
+      // The password and authenticator seed go, pass or fail. Label, address and
+      // username are kept so a rejected entry does not have to be retyped whole.
+      setForm((value) => ({ ...value, password: '', totpSecret: '' }));
+    }
   };
   const copyPassword = async (id: string) => {
     try { await window.privateBrowser.copyPassword(id); onToast('Password copied; clipboard clears in 30 seconds'); }
@@ -560,6 +580,7 @@ function SettingsPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | '
       setEditingUpdates(false);
       onToast('Private download service connected');
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setUpdateForm((value) => ({ ...value, accessToken: '' })); }
   };
   const checkUpdates = async () => {
     setChecking(true);

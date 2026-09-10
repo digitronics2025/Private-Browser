@@ -8,7 +8,7 @@ sources:
   - .github/workflows/**
   - electron/update-service.ts
   - electron/update-bootstrap.ts
-verified_at: b7407463
+verified_at: 8b576d74
 ---
 
 # Release and Updates
@@ -325,6 +325,20 @@ tracked file or into this doc.
 request. `permissions: contents: read`; concurrency per ref with
 `cancel-in-progress: true`. Node 22 with npm cache in all three jobs.
 
+**No job declares secrets.** Every credential is attached to the one step that
+uses it, so `npm ci` and the test suite never run with production values in their
+environment where a dependency's install script could read them (audit finding
+F-11). `publish-cloudflare-release` overrides the workflow concurrency with its
+own group and `cancel-in-progress: false`: the ref-level group could otherwise
+kill it between the R2 upload and the D1 registration and strand a ~114 MB object
+nothing references (F-21).
+
+**A documentation-only push publishes nothing.** The publish job checks out at
+`fetch-depth: 0`, diffs against `github.event.before` (falling back to `HEAD~1`
+when that ref is absent or all-zeros), and skips when every changed path is under
+`docs/` or a top-level `.md`. Before this, every push to `main` minted a new
+active release — including docs commits (F-04).
+
 | Job | Runs on | Does |
 | --- | --- | --- |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
@@ -357,6 +371,12 @@ and a downloadable installer, not a wall of failures.
 group `private-browser-cloudflare-production` with **`cancel-in-progress:
 false`** — a production deploy is never cancelled mid-flight by a following push.
 
+**It runs the whole gate before touching production.** `npm run check` runs
+before the migration and deploy steps. It previously ran `worker:typecheck`
+alone, while the tests lived in a separate workflow with no dependency between
+them, so a push touching `cloudflare/**` could deploy with failing tests and
+`workflow_dispatch` was gated by nothing at all (F-10).
+
 Its gate is stricter than the publish job's: ready only when the API token,
 account id and D1 database id are all non-empty **and** all three Worker secrets
 are at least 32 characters — the same threshold `secretsReady` enforces at
@@ -371,6 +391,27 @@ Steps, in order, all gated:
 5. `wrangler secret bulk` fed a JSON object of the three secrets on stdin
 
 Migrations run before the deploy; secrets are installed after it.
+
+### The release scripts
+
+`cloudflare/scripts/*.mjs` run only against production, on a push to `main`, so a
+mistake in them used to surface live. They are now type-checked by
+`npm run scripts:typecheck`
+([tsconfig.scripts.json](../../cloudflare/tsconfig.scripts.json), `checkJs` with
+`strictNullChecks` on and `noImplicitAny` off) inside the gate — F-22.
+
+Both scripts that carry a credential call `requireHttpsEndpoint`
+([require-https-endpoint.mjs](../../cloudflare/scripts/require-https-endpoint.mjs))
+before their first request: a bare public HTTPS origin, no embedded credentials,
+no path, no query, no private host. `PRIVATE_BROWSER_DOWNLOAD_URL` is a GitHub
+*variable*, not a secret — unmasked in logs, edited through a weaker part of the
+settings UI than the admin key it addresses — and was used unvalidated, so
+editing one field could redirect that key to another host or downgrade it to
+plain HTTP (F-12).
+
+`render-config.mjs` replaces every occurrence of the database-id placeholder and
+throws unless there is exactly one; a string-pattern `replace` substitutes only
+the first, so a second binding added later would silently keep the placeholder.
 
 ## The Windows Installer
 
@@ -438,6 +479,19 @@ A packaged installer can arrive already knowing where its update service is.
 electron-builder's `extraResources` filter, written during CI by
 [write-update-bootstrap.mjs](../../cloudflare/scripts/write-update-bootstrap.mjs)
 from `PRIVATE_BROWSER_DOWNLOAD_URL` and `PRIVATE_BROWSER_DOWNLOAD_TOKEN`.
+
+**Bundling is opt-in and off by default.** The script writes nothing unless
+`PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN` is exactly `true`, so the default installer
+carries no credential and the `extraResources` filter finds nothing to copy. When
+it is set, the build prints a warning: the token is shared by every client, not
+issued per device, and anyone holding the installer can extract it (F-02). Rotate
+`PRIVATE_BROWSER_DOWNLOAD_TOKEN` before such an installer leaves the machine it
+was built for.
+
+Whatever the outcome — stored, invalid, or refused because `safeStorage` is
+unavailable — the file is deleted in a `finally`. It used to be removed only on
+success, leaving the shared token readable on exactly the machines least able to
+protect it (F-15).
 
 `readUpdateBootstrap` refuses a file over **4,096 bytes**, refuses invalid JSON,
 and requires `version === 1` plus string `endpoint` and `accessToken`. It does

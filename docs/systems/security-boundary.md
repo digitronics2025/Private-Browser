@@ -2,7 +2,7 @@
 system: security-boundary
 sources:
   - electron/security.ts
-verified_at: d0102bf
+verified_at: 8b576d74
 ---
 
 # Security Boundary
@@ -176,24 +176,58 @@ that redacts correctly but stops counting has removed a consent signal.
 false when the URL does not parse.
 ([security.ts:60](../../electron/security.ts))
 
-- **Generic hostname test** — `/(^|\.)(bank|paypal|wise|revolut)\./i` against
-  `hostname` alone. It matches a whole label at the start of the host or after a
-  dot, and requires a dot after it: `secure.bank.example`, `paypal.com`,
-  `wise.com`, `revolut.com`.
-- **Substring test** —
-  `/(banking|checkout|payment|wallet|attijari|wafacash|cihbank|bankofafrica|bmce|chaabi|baridbank|cashplus)/i`
-  against `hostname` and `pathname` **concatenated**. So `shop.example/checkout`
-  is protected by its path, and the Moroccan bank and cash-transfer names
-  (Attijariwafa, Wafacash, CIH Bank, Bank of Africa, BMCE, Chaabi, Al Barid Bank,
-  Cash Plus) are protected wherever they appear in host or path.
+Three tests, in order, against a lowercased hostname:
 
-Testing host and path together is the point: neither half alone covers both
-`bankofafrica.ma` and `example.com/banking/login`.
+- **`PROTECTED_HOST_FRAGMENTS` — substring anywhere in the hostname.** Terms
+  distinctive enough that a substring match will not catch ordinary words:
+  `bank`, `banque`, `bancaire`, `bankofafrica`, `creditagricole`, `creditdumaroc`,
+  `attijari`, `wafacash`, `wafasalaf`, `cihbank`, `bmce`, `bmci`, `sgmaroc`,
+  `chaabi`, `baridbank`, `cashplus`, `paypal`, `revolut`, `mastercard`, `visa-`.
+- **`PROTECTED_HOST_LABELS` — whole dot- or hyphen-separated label only.** Terms
+  too short or common for a substring match: `credit`, `caisse`, `wise`,
+  `stripe`, `cih`, `cdm`, `barid`, `pay`, `payments`, `billing`. Bounding these
+  is what keeps `otherwise.org` and `credits.example.com` usable.
+- **`PROTECTED_PATH_FRAGMENTS` — against host and path concatenated.**
+  `banking|checkout|payment|paiement|wallet|billing|invoice|virement|transfer|carte-bancaire`,
+  so `shop.example/checkout` is protected by its path alone.
+
+The earlier version required a literal `bank.`/`paypal.`/`wise.`/`revolut.`
+*label*, which meant `cfgbank.com`, `sgmaroc.com` and `creditagricole.ma` were
+**not** protected — audit finding F-08. Both directions are now pinned by tests.
+
+**This list can never be complete, and is not the guarantee.** No keyword set
+covers every bank in the world. It errs towards refusing, because a false
+positive costs one refused AI read while a false negative offers a banking page's
+text for upload. The guarantee the product actually rests on is the Banking
+workspace, which is protected by configuration rather than guesswork.
 
 **What breaks if weakened.** This is the refusal that keeps banking pages out of
 the AI path, and it is checked three separate times — before extraction, again at
 approval, and again immediately before the request leaves. Shortening the list
 makes a bank page extractable.
+
+## isAutofillTarget
+
+`isAutofillTarget(credentialUrl: string, pageUrl: string): boolean` — whether a
+saved credential may be filled into the page currently open.
+([security.ts:112](../../electron/security.ts))
+
+Both URLs must be ordinary web pages (`isAllowedRemoteUrl`), and `hostname` and
+`port` must match exactly — no subdomain matching, no suffix matching. The scheme
+is checked **asymmetrically**:
+
+| Credential saved for | Page open | Fills? |
+| --- | --- | --- |
+| `https` | `https` | yes |
+| `https` | `http` | **no** — never a downgrade |
+| `http` | `https` | yes — the page is safer than the credential |
+| `http` | `http` | yes |
+
+The downgrade rule is the point. `isAllowedRemoteUrl` permits `http:`, so before
+this existed a password saved for a real site would fill into a plaintext page of
+the same name on a hostile network — audit finding F-05. Refusing the upgrade
+case instead would break anyone who saved a bare hostname, which normalises to
+`https` only for public-looking names.
 
 ## urlOriginForSharing
 
@@ -216,12 +250,21 @@ page text, not on the URL.
    no `password`.
 2. `hostname` is lowercased and the surrounding `[` `]` of an IPv6 literal are
    stripped.
-3. Rejected by name: exactly `localhost`, `0.0.0.0`, `::1`, or any host ending
-   `.local`.
-4. Rejected by IPv4 prefix: `127.` (loopback), `10.` (private class A),
+3. A single trailing dot is stripped first (`localhost.` is the fully-qualified
+   spelling of `localhost`), and every check below runs against that bare form.
+4. Rejected by name: exactly `localhost`, `0.0.0.0`, `::1`, `::` (the all-zeros
+   address, which routes to loopback on most stacks), any host ending `.local`,
+   and anything starting `::ffff:` (the IPv4-mapped form — Node renders
+   `::ffff:127.0.0.1` as `::ffff:7f00:1`, so matching the prefix is the only
+   reliable test). The last three were all reachable before audit finding F-19.
+
+   Decimal and hexadecimal IPv4 spellings (`https://2130706433/`,
+   `https://0x7f000001/`) need no rule: the WHATWG URL parser normalises both to
+   `127.0.0.1` before this function sees them. Verified, not assumed.
+5. Rejected by IPv4 prefix: `127.` (loopback), `10.` (private class A),
    `192.168.` (private class C), `169.254.` (link-local — this is the cloud
    metadata range, `169.254.169.254`).
-5. Rejected by IPv6 prefix: `/^(fc|fd|fe8|fe9|fea|feb)[0-9a-f]*:/i` — unique-local
+6. Rejected by IPv6 prefix: `/^(fc|fd|fe8|fe9|fea|feb)[0-9a-f]*:/i` — unique-local
    `fc00::/7` and link-local `fe80::/10`.
 6. `172.16.0.0/12` is arithmetic, not a prefix string: the second octet is
    captured and range-checked `>= 16 && <= 31`, so `172.15.x` and `172.32.x`
