@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Bot,
   Bookmark,
+  Bug,
   Check,
   ChevronDown,
   ChevronRight,
@@ -15,18 +16,24 @@ import {
   ExternalLink,
   Eye,
   FileDown,
+  FileCode2,
   Globe2,
+  Gauge,
   Home,
   KeyRound,
   LoaderCircle,
   LockKeyhole,
   MoreHorizontal,
+  Network,
+  PanelBottom,
   PanelRightClose,
   PanelRightOpen,
+  PictureInPicture2,
   Play,
   Plus,
   RefreshCw,
   Search,
+  ScanSearch,
   Settings,
   Shield,
   ShieldCheck,
@@ -37,9 +44,9 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
+import type { AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, BrowserTab, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
 
-type SidebarMode = 'assistant' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
+type SidebarMode = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
 
 const QUICK_LINKS: Record<WorkspaceId, Array<{ label: string; url: string; tone: string }>> = {
   digitronics: [
@@ -162,19 +169,24 @@ export default function App() {
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
+      if (event.repeat) return;
       const command = event.ctrlKey || event.metaKey;
-      if (!command) return;
-      if (event.key.toLowerCase() === 'l') {
+      const key = event.key.toLowerCase();
+      if (event.key === 'F12' || (command && event.shiftKey && key === 'i')) {
+        event.preventDefault();
+        void act(() => window.privateBrowser.toggleDeveloperTools('right'));
+      } else if (!command) return;
+      else if (key === 'l') {
         event.preventDefault();
         addressRef.current?.focus();
         addressRef.current?.select();
-      } else if (event.key.toLowerCase() === 't') {
+      } else if (key === 't') {
         event.preventDefault();
         void window.privateBrowser.newTab();
-      } else if (event.key.toLowerCase() === 'w' && activeTab) {
+      } else if (key === 'w' && activeTab) {
         event.preventDefault();
         void window.privateBrowser.closeTab(activeTab.id);
-      } else if (event.key.toLowerCase() === 'r' && activeTab && !activeTab.isHome) {
+      } else if (key === 'r' && activeTab && !activeTab.isHome) {
         event.preventDefault();
         void window.privateBrowser.reload();
       }
@@ -236,6 +248,7 @@ export default function App() {
         </form>
         <button className={`icon-button ${bookmarked ? 'selected' : ''}`} title="Bookmark" onClick={() => void act(() => window.privateBrowser.toggleBookmark())}><Star size={17} fill={bookmarked ? 'currentColor' : 'none'} /></button>
         <button className={`icon-button shield-button ${state.trackerBlocking ? 'selected' : ''}`} title="Tracker blocking" onClick={() => void act(() => window.privateBrowser.toggleTrackerBlocking(), state.trackerBlocking ? 'Tracker blocking paused' : 'Tracker blocking enabled')}><Shield size={18} /></button>
+        <button className={`icon-button ${sidebarMode === 'developer' && sidebarOpen ? 'selected' : ''}`} title="Developer cockpit" onClick={() => { setSidebarMode('developer'); setSidebarOpen(true); }}><Code2 size={18} /></button>
         <button className="icon-button" onClick={() => setSidebarOpen((value) => !value)}>{sidebarOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}</button>
         <button className="avatar" title="Personal workspace" onClick={() => void act(() => window.privateBrowser.switchWorkspace('personal'))}>DR</button>
         <button className="icon-button" title="Settings" onClick={() => { setSidebarMode('settings'); setSidebarOpen(true); }}><MoreHorizontal size={18} /></button>
@@ -250,6 +263,7 @@ export default function App() {
           <SidebarNav mode={sidebarMode} setMode={setSidebarMode} counts={{ downloads: state.downloads.filter((item) => item.state === 'progressing').length }} />
           <div className="sidebar-content">
             {sidebarMode === 'assistant' && <AssistantPanel onToast={showToast} />}
+            {sidebarMode === 'developer' && <DeveloperPanel activeTab={activeTab} onToast={showToast} />}
             {sidebarMode === 'vault' && <VaultPanel onToast={showToast} />}
             {sidebarMode === 'automations' && <AutomationPanel onToast={showToast} />}
             {sidebarMode === 'downloads' && <DownloadsPanel state={state} onToast={showToast} />}
@@ -338,6 +352,7 @@ function Dashboard({ state, open, openBookmark }: { state: BrowserSnapshot; open
 function SidebarNav({ mode, setMode, counts }: { mode: SidebarMode; setMode: (mode: SidebarMode) => void; counts: { downloads: number } }) {
   const items: Array<{ id: SidebarMode; icon: typeof Bot; label: string; count?: number }> = [
     { id: 'assistant', icon: Sparkles, label: 'AI' },
+    { id: 'developer', icon: Code2, label: 'Dev' },
     { id: 'vault', icon: KeyRound, label: 'Vault' },
     { id: 'automations', icon: Zap, label: 'Flows' },
     { id: 'downloads', icon: Download, label: 'Files', count: counts.downloads },
@@ -349,6 +364,93 @@ function SidebarNav({ mode, setMode, counts }: { mode: SidebarMode; setMode: (mo
 
 function PanelHeader({ icon: Icon, eyebrow, title }: { icon: typeof Bot; eyebrow: string; title: string }) {
   return <div className="panel-header"><span className="panel-icon"><Icon size={18} /></span><div><small>{eyebrow}</small><h2>{title}</h2></div></div>;
+}
+
+function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+  const [mode, setMode] = useState<DevToolsMode>('right');
+  const [report, setReport] = useState<DeveloperDiagnosticReport | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => setReport(null), [activeTab.id, activeTab.url]);
+
+  const run = async (action: () => Promise<unknown>, success?: string) => {
+    setLoading(true);
+    try {
+      await action();
+      if (success) onToast(success);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : String(error), 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const capture = () => run(async () => {
+    const next = await window.privateBrowser.captureDeveloperDiagnostics();
+    setReport(next);
+  }, 'Sanitized diagnostics captured locally');
+
+  const clear = () => run(async () => {
+    await window.privateBrowser.clearDeveloperDiagnostics();
+    setReport(null);
+  }, 'Developer diagnostics cleared');
+
+  return (
+    <div className="side-panel developer-panel">
+      <PanelHeader icon={Code2} eyebrow="Development workspace" title="Developer cockpit" />
+
+      {!activeTab.developerToolsAllowed ? (
+        <div className="developer-locked">
+          <LockKeyhole size={24} />
+          <h3>Protected by workspace policy</h3>
+          <p>Open a non-banking webpage in the Development workspace. Developer tools never attach to Home, Banking, or detected payment pages.</p>
+        </div>
+      ) : (
+        <>
+          <div className="developer-status">
+            <span className={activeTab.developerToolsOpen ? 'live' : ''} />
+            <div><strong>{activeTab.developerToolsOpen ? 'Chromium DevTools open' : 'Ready to inspect'}</strong><small>{domainFromUrl(activeTab.url)} · F12 or Ctrl+Shift+I</small></div>
+          </div>
+
+          <div className="developer-launch">
+            <select value={mode} onChange={(event) => setMode(event.target.value as DevToolsMode)} aria-label="DevTools position">
+              <option value="right">Dock right</option>
+              <option value="bottom">Dock bottom</option>
+              <option value="detach">Separate window</option>
+            </select>
+            <button className="primary-button" disabled={loading} onClick={() => void run(() => window.privateBrowser.toggleDeveloperTools(mode))}>
+              {activeTab.developerToolsOpen ? <PanelRightClose size={14} /> : mode === 'bottom' ? <PanelBottom size={14} /> : mode === 'detach' ? <PictureInPicture2 size={14} /> : <PanelRightOpen size={14} />}
+              {activeTab.developerToolsOpen ? 'Close tools' : 'Open tools'}
+            </button>
+          </div>
+
+          <div className="developer-tip"><ScanSearch size={16} /><p><strong>Inspect exact UI.</strong> Right-click anything in the page and choose <em>Inspect element</em>.</p></div>
+
+          <div className="tool-grid">
+            <div><ScanSearch size={15} /><strong>Elements</strong><small>DOM & CSS</small></div>
+            <div><Bug size={15} /><strong>Console</strong><small>Errors & JS</small></div>
+            <div><Network size={15} /><strong>Network</strong><small>APIs & timing</small></div>
+            <div><FileCode2 size={15} /><strong>Sources</strong><small>Breakpoints</small></div>
+            <div><Gauge size={15} /><strong>Performance</strong><small>CPU & layout</small></div>
+            <div><Play size={15} /><strong>Recorder</strong><small>User flows</small></div>
+          </div>
+
+          <section className="diagnostic-card">
+            <div><div><small>AI-READY REPORT</small><strong>Safe debugging context</strong></div>{report && <b>{report.console.length + report.network.length} issues</b>}</div>
+            <p>Captures document counts, console warnings/errors, and failed requests. It excludes page text, inputs, cookies, storage, headers, request bodies, query strings, and fragments.</p>
+            <button className="primary-button full" disabled={loading} onClick={capture}><Bug size={14} /> Capture diagnostics</button>
+            {report && (
+              <div className="diagnostic-result">
+                <div><span><strong>{report.console.length}</strong> console</span><span><strong>{report.network.length}</strong> network</span><span><strong>{report.redactions}</strong> redacted</span></div>
+                <button onClick={() => void run(() => window.privateBrowser.copyText(report.formatted), 'Report copied for Codex or Claude')}><Copy size={13} /> Copy for AI</button>
+                <button className="quiet" onClick={clear}>Clear captured data</button>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+    </div>
+  );
 }
 
 function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {

@@ -18,6 +18,7 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - An auditable privacy activity log.
 - A Cloudflare-native private release service with D1 metadata, R2 installers, a protected download page and resumable downloads.
 - OS-encrypted update-service configuration with startup and daily release checks.
+- A Development-workspace cockpit with native Chromium Elements, Console, Sources, Network, Performance, Application and Recorder tools; F12/Ctrl+Shift+I shortcuts; right-click element inspection; and sanitized AI-ready diagnostic reports.
 
 ## Run locally
 
@@ -29,6 +30,8 @@ npm run dev
 ```
 
 The development command launches Vite on localhost and opens the Electron application.
+
+Open a webpage in the **Development** workspace, then select **Dev** in the right sidebar or press **F12** / **Ctrl+Shift+I**. Right-click a page element for exact inspection. The diagnostic report deliberately excludes page text, form values, cookies, storage, headers, request bodies, query strings and fragments, and developer access is blocked for Banking and detected payment pages.
 
 ## Verify and build
 

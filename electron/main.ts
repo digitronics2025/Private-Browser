@@ -23,6 +23,9 @@ import type {
   AiProviderInput,
   BrowserSnapshot,
   BrowserTab,
+  DeveloperConsoleEntry,
+  DeveloperNetworkIssue,
+  DevToolsMode,
   DownloadEntry,
   PersistedState,
   PrivacyEvent,
@@ -33,6 +36,7 @@ import type {
 import { VaultStore } from './vault.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
+import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -40,6 +44,9 @@ interface RuntimeTab {
   canGoBack: boolean;
   canGoForward: boolean;
   favicon?: string;
+  developerToolsOpen: boolean;
+  console: Array<DeveloperConsoleEntry & { redactions: number }>;
+  network: Array<DeveloperNetworkIssue & { redactions: number }>;
 }
 
 interface Layout {
@@ -81,7 +88,7 @@ class BrowserController {
     private readonly updates: UpdateServiceStore,
   ) {
     for (const tab of this.store.get().tabs) {
-      this.runtimeTabs.set(tab.id, { loading: false, canGoBack: false, canGoForward: false });
+      this.runtimeTabs.set(tab.id, this.newRuntimeTab());
     }
   }
 
@@ -131,6 +138,8 @@ class BrowserController {
         canGoBack: runtime?.canGoBack ?? false,
         canGoForward: runtime?.canGoForward ?? false,
         favicon: runtime?.favicon,
+        developerToolsAllowed: canUseDeveloperTools(tab.workspaceId, tab.isHome, tab.url),
+        developerToolsOpen: runtime?.developerToolsOpen ?? false,
       };
     });
     return {
@@ -180,6 +189,7 @@ class BrowserController {
         if (target) Object.assign(target, { url, title: 'New tab', isHome: true });
       });
       const runtime = this.runtimeTabs.get(tab.id);
+      runtime?.view?.webContents.closeDevTools();
       runtime?.view?.setVisible(false);
       this.broadcast();
       return;
@@ -206,7 +216,7 @@ class BrowserController {
       next.tabs.push({ id, workspaceId: targetWorkspace, title: 'New tab', url: 'private://home', isHome: true });
       next.activeTabByWorkspace[targetWorkspace] = id;
     });
-    this.runtimeTabs.set(id, { loading: false, canGoBack: false, canGoForward: false });
+    this.runtimeTabs.set(id, this.newRuntimeTab());
     this.broadcast();
     if (url !== 'private://home') await this.navigate(url);
   }
@@ -292,6 +302,79 @@ class BrowserController {
 
   toggleTrackerBlocking(): void {
     this.store.update((state) => { state.trackerBlocking = !state.trackerBlocking; });
+    this.broadcast();
+  }
+
+  toggleDeveloperTools(mode: DevToolsMode): void {
+    if (!['right', 'bottom', 'detach'].includes(mode)) throw new Error('Unsupported DevTools position');
+    const target = this.requireDeveloperTarget();
+    if (target.contents.isDevToolsOpened()) target.contents.closeDevTools();
+    else target.contents.openDevTools({ mode, activate: true, title: `Private Browser DevTools — ${target.tab.title}` });
+  }
+
+  async captureDeveloperDiagnostics() {
+    const target = this.requireDeveloperTarget();
+    const sourceUrl = target.tab.url;
+    const rawPage = await target.contents.executeJavaScript(`(() => ({
+      title: document.title || '',
+      readyState: document.readyState,
+      language: document.documentElement.lang || '',
+      scripts: document.scripts.length,
+      stylesheets: document.styleSheets.length,
+      images: document.images.length,
+      links: document.links.length,
+      forms: document.forms.length,
+      iframes: document.querySelectorAll('iframe').length
+    }))()`, true) as {
+      title: string;
+      readyState: string;
+      language: string;
+      scripts: number;
+      stylesheets: number;
+      images: number;
+      links: number;
+      forms: number;
+      iframes: number;
+    };
+
+    const current = this.requireDeveloperTarget();
+    if (current.tab.id !== target.tab.id || current.tab.url !== sourceUrl) throw new Error('The page changed; capture diagnostics again');
+    const title = sanitizeDiagnosticText(rawPage.title, 300);
+    const language = sanitizeDiagnosticText(String(rawPage.language ?? ''), 50);
+    const url = sanitizeDiagnosticUrl(sourceUrl);
+    const count = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0 ? Math.min(Number(value), 1_000_000) : 0;
+    const console = current.runtime.console.slice(-50).map(({ redactions: _redactions, ...entry }) => entry);
+    const network = current.runtime.network.slice(-50).map(({ redactions: _redactions, ...entry }) => entry);
+    const redactions = title.redactions + language.redactions + url.redactions
+      + current.runtime.console.slice(-50).reduce((sum, entry) => sum + entry.redactions, 0)
+      + current.runtime.network.slice(-50).reduce((sum, entry) => sum + entry.redactions, 0);
+    const report = makeDeveloperReport({
+      capturedAt: new Date().toISOString(),
+      appVersion: app.getVersion(),
+      page: {
+        title: title.text,
+        url: url.text,
+        readyState: ['loading', 'interactive', 'complete'].includes(rawPage.readyState) ? rawPage.readyState : 'unknown',
+        language: language.text,
+        scripts: count(rawPage.scripts),
+        stylesheets: count(rawPage.stylesheets),
+        images: count(rawPage.images),
+        links: count(rawPage.links),
+        forms: count(rawPage.forms),
+        iframes: count(rawPage.iframes),
+      },
+      console,
+      network,
+      redactions,
+    });
+    this.addPrivacyEvent('local-read', 'Developer diagnostics captured', `${title.text || 'Untitled'} · ${redactions} redaction(s)`);
+    return report;
+  }
+
+  clearDeveloperDiagnostics(): void {
+    const target = this.requireDeveloperTarget();
+    target.runtime.console.length = 0;
+    target.runtime.network.length = 0;
     this.broadcast();
   }
 
@@ -509,6 +592,61 @@ class BrowserController {
     return state.tabs.find((tab) => tab.id === id) ?? state.tabs.find((tab) => tab.workspaceId === state.activeWorkspaceId) ?? state.tabs[0];
   }
 
+  private newRuntimeTab(): RuntimeTab {
+    return { loading: false, canGoBack: false, canGoForward: false, developerToolsOpen: false, console: [], network: [] };
+  }
+
+  private developerTarget(tabId = this.activeTab(this.store.get()).id) {
+    const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+    const runtime = this.runtimeTabs.get(tabId);
+    const contents = runtime?.view?.webContents;
+    if (!tab || !runtime || !contents || !canUseDeveloperTools(tab.workspaceId, tab.isHome, tab.url)) return undefined;
+    return { tab, runtime, contents };
+  }
+
+  private requireDeveloperTarget() {
+    const target = this.developerTarget();
+    if (!target) throw new Error('Developer tools are available only for non-protected pages in the Development workspace');
+    return target;
+  }
+
+  private recordConsoleMessage(tabId: string, details: Electron.Event<Electron.WebContentsConsoleMessageEventParams>): void {
+    if (details.level !== 'warning' && details.level !== 'error') return;
+    const target = this.developerTarget(tabId);
+    if (!target || (details.sourceId && isProtectedPage(details.sourceId))) return;
+    const message = sanitizeDiagnosticText(details.message);
+    const source = sanitizeDiagnosticUrl(details.sourceId);
+    target.runtime.console.push({
+      at: new Date().toISOString(),
+      level: details.level,
+      message: message.text,
+      source: source.text,
+      line: Math.max(0, details.lineNumber || 0),
+      redactions: message.redactions + source.redactions,
+    });
+    if (target.runtime.console.length > 100) target.runtime.console.splice(0, target.runtime.console.length - 100);
+  }
+
+  private recordNetworkIssue(details: Electron.OnCompletedListenerDetails | Electron.OnErrorOccurredListenerDetails): void {
+    if (!details.webContentsId || isProtectedPage(details.url)) return;
+    const match = [...this.runtimeTabs.entries()].find(([, runtime]) => runtime.view?.webContents.id === details.webContentsId);
+    if (!match) return;
+    const target = this.developerTarget(match[0]);
+    if (!target) return;
+    const url = sanitizeDiagnosticUrl(details.url);
+    const error = sanitizeDiagnosticText(details.error || '', 300);
+    target.runtime.network.push({
+      at: new Date().toISOString(),
+      method: details.method.slice(0, 16),
+      resourceType: details.resourceType,
+      url: url.text,
+      ...('statusCode' in details ? { status: details.statusCode } : {}),
+      ...(error.text ? { error: error.text } : {}),
+      redactions: url.redactions + error.redactions,
+    });
+    if (target.runtime.network.length > 100) target.runtime.network.splice(0, target.runtime.network.length - 100);
+  }
+
   private activeContents() {
     const tab = this.activeTab(this.store.get());
     return this.runtimeTabs.get(tab.id)?.view?.webContents;
@@ -553,6 +691,20 @@ class BrowserController {
       this.broadcast();
     });
     view.webContents.on('page-favicon-updated', (_event, favicons) => void this.updateFavicon(tabId, ses, favicons[0]));
+    view.webContents.on('devtools-opened', () => this.updateRuntime(tabId, { developerToolsOpen: true }));
+    view.webContents.on('devtools-closed', () => this.updateRuntime(tabId, { developerToolsOpen: false }));
+    view.webContents.on('console-message', (details) => this.recordConsoleMessage(tabId, details));
+    view.webContents.on('context-menu', (_event, params) => {
+      if (!this.developerTarget(tabId)) return;
+      Menu.buildFromTemplate([
+        { label: 'Inspect element', click: () => {
+          view.webContents.inspectElement(params.x, params.y);
+          if (!view.webContents.isDevToolsOpened()) view.webContents.openDevTools({ mode: 'right', activate: true });
+        } },
+        { type: 'separator' },
+        { label: 'Reload', click: () => view.webContents.reload() },
+      ]).popup({ window: this.window });
+    });
     view.webContents.on('before-input-event', (event, input) => this.handleShortcut(event, input));
     view.webContents.on('render-process-gone', () => this.updateRuntime(tabId, { loading: false }));
     return view;
@@ -577,6 +729,10 @@ class BrowserController {
       }
       callback({ cancel: blocked });
     });
+    ses.webRequest.onCompleted((details) => {
+      if (details.statusCode >= 400) this.recordNetworkIssue(details);
+    });
+    ses.webRequest.onErrorOccurred((details) => this.recordNetworkIssue(details));
     ses.on('will-download', (_event, item) => {
       const id = randomUUID();
       const entry: DownloadEntry = {
@@ -624,7 +780,10 @@ class BrowserController {
   }
 
   private hideAllViews(): void {
-    for (const runtime of this.runtimeTabs.values()) runtime.view?.setVisible(false);
+    for (const runtime of this.runtimeTabs.values()) {
+      runtime.view?.webContents.closeDevTools();
+      runtime.view?.setVisible(false);
+    }
   }
 
   private applyLayout(): void {
@@ -694,6 +853,7 @@ class BrowserController {
 
   private commitNavigation(tabId: string, url: string, addHistory = true): void {
     if (!isAllowedRemoteUrl(url)) return;
+    if (isProtectedPage(url)) this.runtimeTabs.get(tabId)?.view?.webContents.closeDevTools();
     this.store.update((state) => {
       const tab = state.tabs.find((candidate) => candidate.id === tabId);
       if (!tab) return;
@@ -728,17 +888,22 @@ class BrowserController {
   }
 
   private handleShortcut(event: Electron.Event, input: Electron.Input): void {
+    if (input.type !== 'keyDown' || input.isAutoRepeat) return;
     const command = input.control || input.meta;
-    if (command && input.key.toLowerCase() === 'l') {
+    const key = input.key.toLowerCase();
+    if (input.key === 'F12' || (command && input.shift && key === 'i')) {
+      event.preventDefault();
+      void Promise.resolve().then(() => this.toggleDeveloperTools('right')).catch(() => undefined);
+    } else if (command && key === 'l') {
       event.preventDefault();
       this.window.webContents.send('browser:focus-address');
-    } else if (command && input.key.toLowerCase() === 't') {
+    } else if (command && key === 't') {
       event.preventDefault();
       void this.newTab();
-    } else if (command && input.key.toLowerCase() === 'w') {
+    } else if (command && key === 'w') {
       event.preventDefault();
       void this.closeTab(this.activeTab(this.store.get()).id);
-    } else if (command && input.key.toLowerCase() === 'r') {
+    } else if (command && key === 'r') {
       event.preventDefault();
       this.reload();
     } else if (input.alt && input.key === 'Left') {
@@ -820,6 +985,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
+  handle('developer:toggle-tools', (_event, mode: DevToolsMode) => controller!.toggleDeveloperTools(mode));
+  handle('developer:capture-diagnostics', () => controller!.captureDeveloperDiagnostics());
+  handle('developer:clear-diagnostics', () => controller!.clearDeveloperDiagnostics());
   handle('ai:prepare-preview', () => controller!.prepareAiPreview());
   handle('ai:approve-preview', (_event, previewId: string) => controller!.approveAiPreview(previewId));
   handle('ai:provider-status', () => controller!.getAiProvider());
