@@ -7,7 +7,8 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - Real Chromium browsing in native Electron `WebContentsView` tabs.
 - Five persistent, cookie-isolated workspaces: Digitronics, TenTen, Development, Personal and Banking.
 - Chrome-style tabs, address/search bar, navigation, bookmarks, history and download management.
-- Tracker blocking for common analytics and advertising hosts.
+- Tracker blocking for common analytics, advertising and session-replay hosts,
+  tracking-parameter removal, DNT/GPC, and WebRTC private-address protection.
 - Crash/session restoration without storing form values or page content.
 - Local page extraction, sensitive-data redaction and single-use cloud approval tokens.
 - AI access disabled entirely in the Banking workspace, and on banking or payment pages the app recognises. Recognition is best-effort and errs towards refusing; put a bank in the Banking workspace to be certain.
@@ -19,6 +20,8 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - A Cloudflare-native private release service with D1 metadata, R2 installers, a protected download page and resumable downloads.
 - OS-encrypted update-service configuration with startup and daily release checks.
 - A Development-workspace cockpit with native Chromium Elements, Console, Sources, Network, Performance, Application and Recorder tools; F12/Ctrl+Shift+I shortcuts; right-click element inspection; and sanitized AI-ready diagnostic reports.
+- Hardened Electron fuses, explicit certificate/webview denial, bounded IPC,
+  strict site permissions, risky-download blocking and a locked-down Banking workspace.
 
 ## Run locally
 
@@ -45,9 +48,11 @@ Create the Windows installer on a Windows machine:
 npm run dist
 ```
 
-The installer is written to `release/Private-Browser-0.3.1-Setup.exe`. GitHub Actions also creates a downloadable Windows artifact for every push to `main`.
+The installer is written to `release/Private-Browser-<version>-Setup.exe`. GitHub Actions also creates a downloadable Windows artifact and CycloneDX SBOM for every push to `main`.
 
-The installer is not code-signed yet, so Windows SmartScreen may show an unknown-publisher warning. Production distribution requires a trusted code-signing certificate.
+The release workflow automatically code-signs when the two Windows signing
+secrets documented in `SECURITY.md` are configured. Until then, Windows
+SmartScreen may show an unknown-publisher warning.
 
 ## Cloudflare download service
 

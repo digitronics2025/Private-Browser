@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   app,
   BrowserWindow,
@@ -12,7 +13,7 @@ import {
   type IpcMainInvokeEvent,
   type Session,
 } from 'electron';
-import { isAllowedRemoteUrl, isAutofillTarget, isProtectedPage, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from './security.js';
+import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, normalizeNavigationInput, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from './security.js';
 import { ClipboardGuard } from './clipboard-guard.js';
 import { verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { AiProviderStore } from './ai-provider.js';
@@ -37,6 +38,7 @@ import { VaultStore } from './vault.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
+import { IpcGuard } from './ipc-guard.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -60,13 +62,32 @@ const FAVICON_TYPES = new Set(['image/png', 'image/x-icon', 'image/vnd.microsoft
 const MAX_FAVICON_BYTES = 32 * 1024;
 
 const TRACKER_HOSTS = [
+  '2mdn.net',
+  'adnxs.com',
+  'adsrvr.org',
+  'amazon-adsystem.com',
+  'app-measurement.com',
+  'clarity.ms',
+  'criteo.com',
+  'criteo.net',
   'doubleclick.net',
   'googlesyndication.com',
   'google-analytics.com',
+  'googleadservices.com',
+  'googletagmanager.com',
   'connect.facebook.net',
+  'fullstory.com',
   'analytics.twitter.com',
   'hotjar.com',
+  'mixpanel.com',
+  'newrelic.com',
+  'optimizely.com',
+  'segment.io',
   'scorecardresearch.com',
+  'sentry.io',
+  'taboola.com',
+  'quantserve.com',
+  'mc.yandex.ru',
 ];
 
 class BrowserController {
@@ -120,10 +141,17 @@ class BrowserController {
     });
 
     const devUrl = process.env.VITE_DEV_SERVER_URL;
-    if (devUrl) await this.window.loadURL(devUrl);
-    else await this.window.loadFile(join(import.meta.dirname, '../dist/index.html'));
-
+    const productionUrl = pathToFileURL(join(import.meta.dirname, '../dist/index.html')).toString();
+    const trustedDevelopmentOrigin = devUrl ? new URL(devUrl).origin : undefined;
     this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    this.window.webContents.on('will-attach-webview', (event) => event.preventDefault());
+    this.window.webContents.on('will-navigate', (event, url) => {
+      let allowed = url === productionUrl;
+      try { allowed ||= Boolean(trustedDevelopmentOrigin && new URL(url).origin === trustedDevelopmentOrigin); } catch { allowed = false; }
+      if (!allowed) event.preventDefault();
+    });
+    await this.window.loadURL(devUrl ?? productionUrl);
+
     this.window.once('ready-to-show', () => this.window.show());
     await this.showActiveTab();
   }
@@ -140,6 +168,7 @@ class BrowserController {
         favicon: runtime?.favicon,
         developerToolsAllowed: canUseDeveloperTools(tab.workspaceId, tab.isHome, tab.url),
         developerToolsOpen: runtime?.developerToolsOpen ?? false,
+        securityWarning: tab.isHome ? undefined : navigationWarning(tab.url),
       };
     });
     return {
@@ -160,7 +189,9 @@ class BrowserController {
   }
 
   isTrustedSender(event: IpcMainInvokeEvent): boolean {
-    return !this.window.isDestroyed() && event.sender === this.window.webContents;
+    return !this.window.isDestroyed()
+      && event.sender === this.window.webContents
+      && event.senderFrame === this.window.webContents.mainFrame;
   }
 
   focus(): void {
@@ -532,6 +563,9 @@ class BrowserController {
     // A file whose checksum did not match the manifest is the one case where the
     // app knows something is wrong; opening it anyway would waste the check.
     if (item.checksum === 'mismatch') throw new Error('This download does not match the published checksum and will not be opened. Delete it and download again.');
+    if (item.risk !== 'ordinary' && item.checksum !== 'verified') {
+      throw new Error('Private Browser will not open executable or deceptive downloads unless they match a verified Private Browser release. Review the file in its folder and scan it first.');
+    }
     void shell.openPath(item.savePath);
   }
 
@@ -658,7 +692,7 @@ class BrowserController {
     const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId)!;
     const partition = `persist:private-browser-${tab.workspaceId}`;
     const ses = session.fromPartition(partition);
-    this.configureSession(ses, partition);
+    this.configureSession(ses, partition, tab.workspaceId);
     const view = new WebContentsView({
       webPreferences: {
         session: ses,
@@ -672,12 +706,36 @@ class BrowserController {
     runtime.view = view;
     this.window.contentView.addChildView(view);
     view.webContents.setWindowOpenHandler(({ url }) => {
-      if (isAllowedRemoteUrl(url)) void this.newTab(tab.workspaceId, url);
+      if (tab.workspaceId === 'banking') {
+        this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
+      } else if (isAllowedRemoteUrl(url)) {
+        void this.newTab(tab.workspaceId, stripTrackingParameters(url));
+      }
       return { action: 'deny' };
     });
     view.webContents.on('will-navigate', (event, url) => {
-      if (!isAllowedRemoteUrl(url)) event.preventDefault();
+      if (!isAllowedRemoteUrl(url)) {
+        event.preventDefault();
+        return;
+      }
+      const sanitized = stripTrackingParameters(url);
+      if (sanitized !== url) {
+        event.preventDefault();
+        void view.webContents.loadURL(sanitized);
+      }
     });
+    view.webContents.on('will-redirect', (event, url) => {
+      if (!isAllowedRemoteUrl(url)) {
+        event.preventDefault();
+        return;
+      }
+      const sanitized = stripTrackingParameters(url);
+      if (sanitized !== url) {
+        event.preventDefault();
+        void view.webContents.loadURL(sanitized);
+      }
+    });
+    view.webContents.on('will-attach-webview', (event) => event.preventDefault());
     view.webContents.on('did-start-loading', () => this.updateRuntime(tabId, { loading: true }));
     view.webContents.on('did-stop-loading', () => this.updateRuntime(tabId, { loading: false }));
     view.webContents.on('did-navigate', (_event, url) => this.commitNavigation(tabId, url));
@@ -710,14 +768,17 @@ class BrowserController {
     return view;
   }
 
-  private configureSession(ses: Session, partition: string): void {
+  private configureSession(ses: Session, partition: string, workspaceId: WorkspaceId): void {
     if (this.configuredSessions.has(partition)) return;
     this.configuredSessions.add(partition);
     ses.setUserAgent(ses.getUserAgent().replace(/\sElectron\/\S+/g, '').replace(/\sPrivate Browser\/\S+/g, ''));
-    ses.setPermissionRequestHandler((_webContents, permission, callback) => {
-      callback(permission === 'fullscreen' || permission === 'clipboard-sanitized-write');
+    const protectedWorkspace = WORKSPACES.find((workspace) => workspace.id === workspaceId)!.protected;
+    ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+      callback(isAllowedSitePermission(permission, details.requestingUrl, protectedWorkspace, details.isMainFrame));
     });
-    ses.setPermissionCheckHandler((_webContents, permission) => permission === 'fullscreen' || permission === 'clipboard-sanitized-write');
+    ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => (
+      isAllowedSitePermission(permission, details.requestingUrl ?? requestingOrigin, protectedWorkspace, details.isMainFrame)
+    ));
     ses.webRequest.onBeforeRequest((details, callback) => {
       const blocking = this.store.get().trackerBlocking;
       let blocked = false;
@@ -729,11 +790,19 @@ class BrowserController {
       }
       callback({ cancel: blocked });
     });
+    ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
+    });
     ses.webRequest.onCompleted((details) => {
       if (details.statusCode >= 400) this.recordNetworkIssue(details);
     });
     ses.webRequest.onErrorOccurred((details) => this.recordNetworkIssue(details));
-    ses.on('will-download', (_event, item) => {
+    ses.on('will-download', (event, item) => {
+      if (protectedWorkspace) {
+        event.preventDefault();
+        this.addPrivacyEvent('blocked', 'Download blocked in Banking', item.getFilename().slice(0, 300));
+        return;
+      }
       const id = randomUUID();
       const entry: DownloadEntry = {
         id,
@@ -741,6 +810,7 @@ class BrowserController {
         receivedBytes: 0,
         totalBytes: item.getTotalBytes(),
         state: 'progressing',
+        risk: downloadRisk(item.getFilename()),
       };
       this.downloads.set(id, entry);
       item.on('updated', (_downloadEvent, state) => {
@@ -853,14 +923,15 @@ class BrowserController {
 
   private commitNavigation(tabId: string, url: string, addHistory = true): void {
     if (!isAllowedRemoteUrl(url)) return;
-    if (isProtectedPage(url)) this.runtimeTabs.get(tabId)?.view?.webContents.closeDevTools();
+    const sanitizedUrl = stripTrackingParameters(url);
+    if (isProtectedPage(sanitizedUrl)) this.runtimeTabs.get(tabId)?.view?.webContents.closeDevTools();
     this.store.update((state) => {
       const tab = state.tabs.find((candidate) => candidate.id === tabId);
       if (!tab) return;
-      tab.url = url;
+      tab.url = sanitizedUrl;
       tab.isHome = false;
-      if (addHistory) {
-        state.history.unshift({ id: randomUUID(), title: tab.title, url, workspaceId: tab.workspaceId, visitedAt: new Date().toISOString() });
+      if (addHistory && tab.workspaceId !== 'banking') {
+        state.history.unshift({ id: randomUUID(), title: tab.title, url: sanitizedUrl, workspaceId: tab.workspaceId, visitedAt: new Date().toISOString() });
         state.history = state.history.slice(0, 500);
       }
     });
@@ -918,6 +989,12 @@ class BrowserController {
 
 let controller: BrowserController | undefined;
 let pendingLaunchUrl = process.argv.find((argument) => isAllowedRemoteUrl(argument));
+app.enableSandbox();
+app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'default_public_interface_only');
+app.on('certificate-error', (event, _webContents, _url, _error, _certificate, callback) => {
+  event.preventDefault();
+  callback(false);
+});
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!hasSingleInstanceLock) {
@@ -941,9 +1018,12 @@ function assertTrusted(event: IpcMainInvokeEvent): void {
   if (!controller?.isTrustedSender(event)) throw new Error('Untrusted IPC sender');
 }
 
+const ipcGuard = new IpcGuard();
+
 function handle(channel: string, callback: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrusted(event);
+    ipcGuard.check(event.sender.id, args);
     return callback(event, ...args);
   });
 }

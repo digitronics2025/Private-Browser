@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.4 — 2026-09-10
+
+- Hardened packaged Electron executables with sandbox, cookie-encryption,
+  Node/inspection-disable, ASAR-integrity and ASAR-only fuses.
+- Added explicit certificate and webview denial, WebRTC private-address
+  protection, IPC payload/rate limits, and CodeQL/dependency-update automation.
+- Added DNT/GPC headers, broader tracker blocking, campaign-id removal, and
+  visible warnings for cleartext and internationalized domains.
+- Locked Banking down further by denying site permissions, popups, downloads
+  and history, and blocked unverified executable or deceptive downloads.
+- Added CycloneDX SBOM artifacts and optional Windows code signing in CI.
+
 ## 0.3.1 — 2026-09-10
 
 - Added an optional CI-generated test bootstrap so packaged Windows builds connect to the private Cloudflare download service on first launch.

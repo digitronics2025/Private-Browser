@@ -20,6 +20,7 @@ export interface BrowserTab {
   isHome: boolean;
   developerToolsAllowed: boolean;
   developerToolsOpen: boolean;
+  securityWarning?: 'insecure' | 'idn';
 }
 
 export interface Bookmark {
@@ -47,6 +48,7 @@ export interface DownloadEntry {
   savePath?: string;
   /** Set once a completed download has been compared against the release manifest. */
   checksum?: 'verified' | 'mismatch' | 'unchecked';
+  risk: 'ordinary' | 'dangerous' | 'deceptive';
 }
 
 export interface PrivacyEvent {
