@@ -1,0 +1,102 @@
+export type WorkspaceId = 'digitronics' | 'tenten' | 'development' | 'personal' | 'banking';
+
+export interface Workspace {
+  id: WorkspaceId;
+  name: string;
+  color: string;
+  icon: string;
+  protected: boolean;
+}
+
+export interface BrowserTab {
+  id: string;
+  workspaceId: WorkspaceId;
+  title: string;
+  url: string;
+  favicon?: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  isHome: boolean;
+}
+
+export interface Bookmark {
+  id: string;
+  title: string;
+  url: string;
+  workspaceId: WorkspaceId;
+  createdAt: string;
+}
+
+export interface HistoryEntry {
+  id: string;
+  title: string;
+  url: string;
+  workspaceId: WorkspaceId;
+  visitedAt: string;
+}
+
+export interface DownloadEntry {
+  id: string;
+  filename: string;
+  receivedBytes: number;
+  totalBytes: number;
+  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
+  savePath?: string;
+}
+
+export interface PrivacyEvent {
+  id: string;
+  at: string;
+  kind: 'local-read' | 'cloud-approved' | 'blocked' | 'vault';
+  title: string;
+  detail: string;
+}
+
+export interface BrowserSnapshot {
+  workspaces: Workspace[];
+  activeWorkspaceId: WorkspaceId;
+  activeTabId: string;
+  tabs: BrowserTab[];
+  bookmarks: Bookmark[];
+  history: HistoryEntry[];
+  downloads: DownloadEntry[];
+  privacyLog: PrivacyEvent[];
+  trackerBlocking: boolean;
+}
+
+export interface PersistedState {
+  version: 1;
+  activeWorkspaceId: WorkspaceId;
+  tabs: Array<Pick<BrowserTab, 'id' | 'workspaceId' | 'title' | 'url' | 'isHome'>>;
+  activeTabByWorkspace: Partial<Record<WorkspaceId, string>>;
+  bookmarks: Bookmark[];
+  history: HistoryEntry[];
+  privacyLog: PrivacyEvent[];
+  trackerBlocking: boolean;
+}
+
+export interface AiPagePreview {
+  title: string;
+  url: string;
+  text: string;
+  redactions: number;
+  protectedPage: boolean;
+}
+
+export interface VaultItemInput {
+  label: string;
+  url: string;
+  username: string;
+  password: string;
+  totpSecret?: string;
+}
+
+export interface VaultItemMeta {
+  id: string;
+  label: string;
+  url: string;
+  username: string;
+  hasTotp: boolean;
+  updatedAt: string;
+}
