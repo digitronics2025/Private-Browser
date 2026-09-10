@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { constantTimeEqual, futureExpiry, isLiveExpiry, signValue, verifySignedValue } from './auth';
-import { APP_ID, normalizeTtl, parseSingleRange, validateReleaseInput, type ReleaseManifest, type ReleaseRecord } from './protocol';
+import { APP_ID, compareSemver, normalizeTtl, parseSingleRange, validateReleaseInput, type ReleaseManifest, type ReleaseRecord } from './protocol';
 import { renderDownloadPage } from './page';
 
 export interface Env {
@@ -175,6 +175,15 @@ async function handlePublish(request: Request, env: Env): Promise<Response> {
   const current = await env.DB.prepare('SELECT id, version, build_number FROM releases WHERE app_id = ?1 AND channel = ?2 AND is_active = 1 ORDER BY build_number DESC LIMIT 1').bind(APP_ID, input.channel).first<{ id: string; version: string; build_number: number }>();
   if (current && (current.build_number > input.buildNumber || (current.build_number === input.buildNumber && (current.id !== id || current.version !== input.version)))) {
     return json({ error: 'release_downgrade_rejected' }, 409, { 'cache-control': PRIVATE_CACHE });
+  }
+  // The desktop client decides whether an update exists on the version alone, so
+  // a new release at an equal or lower version would sit in R2 and D1 and be
+  // offered to nobody. Refuse it here rather than publish something unreachable.
+  if (current && current.id !== id && compareSemver(input.version, current.version) <= 0) {
+    return json({
+      error: 'release_version_not_bumped',
+      detail: `active release is ${current.version}; bump the version before publishing`,
+    }, 409, { 'cache-control': PRIVATE_CACHE });
   }
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO releases (id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, is_active)

@@ -84,7 +84,25 @@ vulnerability, and conflating the two teaches people to ignore both.
 
 ### High
 
-#### F-01 — The clipboard auto-clear cannot run, and three documents promise it does
+#### F-01 — The clipboard auto-clear is abandoned when the app quits early
+
+> **Correction, 2026-09-10, made while fixing this finding.** As first published,
+> F-01 claimed `clipboard.readText()` is synchronous, so `.then(...)` throws and
+> the clipboard is **never** cleared, and rated it High. **That claim was wrong.**
+> Electron 44 — the version this repo pins — moved the clipboard module to the
+> W3C-modelled asynchronous API: `node_modules/electron/electron.d.ts` declares
+> `interface Clipboard { readText(): Promise<string>; writeText(text: string):
+> Promise<void>; clear(): void }`. The `.then(...)` call was correct, and the
+> 30-second clear worked in the ordinary case. The finding was written from
+> Electron's older synchronous signature without opening the installed types.
+>
+> What survives is the second half, which was always real and which the vault
+> system doc had already flagged as a gotcha: the timer is `unref()`ed, so
+> **quitting inside the 30-second window abandoned the clear**. Re-rated
+> **Medium** — the promise was kept in the common case and broken on early quit,
+> not broken on every use. Fixed; see the plan's step 1.
+>
+> The original text is kept below so the correction is auditable.
 
 `Verified: code + run` · [electron/main.ts:629-636](../../electron/main.ts#L629-L636)
 
@@ -485,7 +503,7 @@ An audit that drops nothing did not verify.
 
 | # | Finding | Why it blocks |
 |---|---|---|
-| **F-01** | Clipboard never clears, three docs say it does | A password sits in the clipboard forever while the product promises otherwise. Highest ratio of harm to effort — the fix is two lines. |
+| ~~**F-01**~~ | ~~Clipboard never clears, three docs say it does~~ | **Corrected and downgraded to Medium — see the correction note on F-01. The `.then` claim was wrong; Electron 44's clipboard is asynchronous. The surviving defect (quitting abandoned the clear) is fixed.** |
 | **F-02** | Shared download token inside every installer | The release cannot go past one trusted machine until this is rotated and removed. Nothing enforces the precondition the security document states. |
 | **F-03** | No negative test on publish authorization | The single gate protecting "latest stable" is unverified. Two tests close it. |
 | **F-04** | Version-only comparison + publish-on-every-push | A security fix can ship to storage and reach nobody. Also makes "0.3.1" stop identifying a build. |
@@ -521,15 +539,22 @@ with the previous one correctly retired. Dependencies are clean in both producti
 and dev, and no test is skipped anywhere.
 
 What holds it back is a specific and fixable pattern: **the documents and the
-interface describe a product slightly safer than the code delivers.** The clipboard
-promise is the clearest case — three documents assert a behaviour that a `TypeError`
-prevents on every single use. The AI approval card, the "detected banking pages"
-claim and the "Active" security badge are the same shape. In a product whose entire
+interface describe a product slightly safer than the code delivers.** The AI
+approval card that says "shown above" while hiding 12,000 characters, the
+"detected banking pages" claim that misses most Moroccan banks, and the hardcoded
+green "Active" security badge are all the same shape. In a product whose entire
 value proposition is a privacy guarantee, that gap is the thing to close first,
 because a user who trusts a promise the code does not keep takes risks they would
 otherwise have avoided.
 
-Four must-fixes, none of them architectural. The heaviest is a policy decision
+**F-01 was itself an instance of the pattern, from the auditor's side.** It was
+published as a High finding asserting the clipboard never clears, and that was
+wrong — the claim came from Electron's older synchronous signature rather than
+from the installed types. The real defect was narrower. It is corrected in place
+above rather than quietly deleted, because an audit that edits away its own
+mistakes is worth less than one that shows them.
+
+Three must-fixes, none of them architectural. The heaviest is a policy decision
 about the bundled token, not a rewrite.
 
 ---

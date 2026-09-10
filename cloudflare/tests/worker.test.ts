@@ -142,6 +142,80 @@ describe('download Worker', () => {
     expect(database.batches).toBe(1);
   });
 
+  it('refuses to publish for any credential that is not the administrator key', async () => {
+    const input = {
+      version: '9.9.9', buildNumber: 999, channel: 'stable', objectKey: release.object_key,
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    const rejected: Record<string, string>[] = [
+      { 'content-type': 'application/json' },
+      { 'content-type': 'application/json', 'x-api-key': '' },
+      { 'content-type': 'application/json', 'x-api-key': `${adminKey}x` },
+      { 'content-type': 'application/json', 'x-api-key': adminKey.slice(0, -1) },
+      // The client download token must not be accepted for publishing.
+      { 'content-type': 'application/json', 'x-api-key': accessToken },
+      // Nor an administrator key presented as a bearer token.
+      { 'content-type': 'application/json', authorization: `Bearer ${adminKey}` },
+    ];
+    const unknownRoute = await request('/no-such-route');
+    for (const headers of rejected) {
+      const response = await request('/api/v1/admin/releases', { method: 'POST', headers, body: JSON.stringify(input) });
+      expect(response.status).toBe(404);
+      // Indistinguishable from an unknown route: no oracle for a guessing caller.
+      expect(await response.text()).toBe(await unknownRoute.clone().text());
+      // Nothing was written.
+      expect(database.batches).toBe(0);
+    }
+  });
+
+  it('refuses to publish when the administrator key is too weak to be real', async () => {
+    env.ADMIN_API_KEY = 'short';
+    const input = {
+      version: '9.9.9', buildNumber: 999, channel: 'stable', objectKey: release.object_key,
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': 'short' }, body: JSON.stringify(input) });
+    expect(response.status).toBe(404);
+    expect(database.batches).toBe(0);
+  });
+
+  it('refuses a new build at a version the client would never be offered', async () => {
+    // The active release is 0.3.0. A fresh build at the same version gets a new
+    // id but no client would ever see it, because the desktop check compares
+    // versions only. Publishing it would put bytes in R2 that reach nobody.
+    const input = {
+      version: '0.3.0', buildNumber: 8, channel: 'stable', objectKey: release.object_key,
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'release_version_not_bumped' });
+    expect(database.batches).toBe(0);
+  });
+
+  it('refuses a lower version even when the build number climbs', async () => {
+    // build_number is a CI run counter, so it always rises. Version must be
+    // checked separately or a revert would publish an older app as latest.
+    const input = {
+      version: '0.2.0', buildNumber: 99, channel: 'stable', objectKey: release.object_key,
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'release_version_not_bumped' });
+    expect(database.batches).toBe(0);
+  });
+
+  it('accepts a genuine version bump', async () => {
+    const input = {
+      version: '0.3.1', buildNumber: 8, channel: 'stable', objectKey: release.object_key,
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    expect(response.status).toBe(201);
+    expect(database.batches).toBe(1);
+  });
+
   it('rejects a release build-number downgrade', async () => {
     const input = {
       version: '0.2.9', buildNumber: 2, channel: 'stable', objectKey: release.object_key,

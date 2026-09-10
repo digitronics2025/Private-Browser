@@ -76,6 +76,25 @@ export function parseSingleRange(value: string | null, size: number): ByteRange 
   return { offset: start, length: end - start + 1, start, end };
 }
 
+/**
+ * Compare two semantic versions: negative when `left` is older, 0 when equal,
+ * positive when newer. A prerelease sorts before its own release (0.3.0-beta.1
+ * is older than 0.3.0). Mirrors `compareVersions` in electron/update-service.ts,
+ * which is what the desktop client uses to decide whether an update exists —
+ * the two must agree or the service can publish something no client will take.
+ */
+export function compareSemver(left: string, right: string): number {
+  const parse = (value: string) => value.split('-', 1)[0].split('.').map((part) => Number(part));
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference !== 0) return Math.sign(difference);
+  }
+  if (left.includes('-') === right.includes('-')) return 0;
+  return left.includes('-') ? -1 : 1;
+}
+
 export function normalizeTtl(value: string | undefined): number {
   const parsed = Number(value ?? DEFAULT_LINK_TTL_SECONDS);
   if (!Number.isSafeInteger(parsed)) return DEFAULT_LINK_TTL_SECONDS;

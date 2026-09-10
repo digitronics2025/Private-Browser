@@ -2,7 +2,8 @@
 system: vault
 sources:
   - electron/vault.ts
-verified_at: d0102bf
+  - electron/clipboard-guard.ts
+verified_at: 2f7b104
 ---
 
 # Vault
@@ -56,7 +57,8 @@ is meaningless apart from the vault. The IPC channel shapes belong to
    load. → **Autofill and Clipboard**
 6. **A copied secret is cleared after 30 seconds only if the clipboard still
    holds it.** The check exists so the auto-clear cannot destroy something the
-   user copied in the meantime. → **Autofill and Clipboard**
+   user copied in the meantime. Quitting inside that window flushes the clear
+   early rather than skipping it. → **Autofill and Clipboard**
 
 ### Where to look
 
@@ -215,11 +217,24 @@ consumers of the three secret-returning methods.
 `{ secondsRemaining }` so the UI can run the countdown. The code is generated
 locally; nothing leaves the device.
 
-**`copySensitiveValue(value)`** (`main.ts:629`) writes the value to the clipboard,
-then schedules a 30-second timer that reads the clipboard back and calls
-`clipboard.clear()` **only when it still holds the same value** — so an auto-clear
-can never destroy something the user copied afterwards. The timer is `unref()`ed,
-which means it does not keep the process alive (see **Gotchas**).
+**`copySensitiveValue(value)`** delegates to `ClipboardGuard`
+([electron/clipboard-guard.ts](../../electron/clipboard-guard.ts)), which writes
+the value, then schedules a 30-second timer that reads the clipboard back and
+calls `clipboard.clear()` **only when it still holds the same value** — so an
+auto-clear can never destroy something the user copied afterwards. A second copy
+replaces the first rather than stacking timers.
+
+The timer is still `unref()`ed, so a pending clear never keeps the process alive.
+The gap that used to leave is closed by `app.on('before-quit')`, which calls
+`controller.flushClipboard()` → `ClipboardGuard.flush()`: quitting inside the
+window clears the secret immediately instead of abandoning it.
+
+`ClipboardGuard` accepts both a synchronous and a promise-returning clipboard.
+Electron's `clipboard.readText()`/`writeText()` were synchronous in older majors
+and are promise-returning from the W3C-modelled API in Electron 44 — which the
+repo is on. Accepting both means the guard does not silently stop clearing the
+next time that shape changes. A `readText()` that rejects leaves the clipboard
+untouched rather than throwing inside the timer.
 
 **`autofill(id)`** (`main.ts:391`) is manual, per entry, per page:
 
@@ -264,8 +279,12 @@ trigger are the whole of the protection here.
   key succeeds. `generateTotp('!!!!')` returns a six-digit code rather than
   throwing. A mistyped secret is therefore stored happily and produces codes that
   never match. Verified against Node at this SHA.
-- **Quitting within 30 seconds leaves a copied secret on the clipboard.** The
-  auto-clear timer is `unref()`ed, so it does not hold the process open.
+- **Quitting within 30 seconds no longer leaves a copied secret on the
+  clipboard.** The auto-clear timer is still `unref()`ed so it does not hold the
+  process open, but `before-quit` flushes it. What remains uncovered is a hard
+  kill — a crash or Task Manager — which runs no handler and so leaves the value
+  in place until something overwrites it. Windows Clipboard History, if the user
+  has it enabled, keeps its own copy that this clear does not reach.
 - **`0o600` is applied on creation of the temp file.** A stale `.tmp` left by an
   earlier crash keeps whatever permissions it already had, and on Windows the
   POSIX mode is largely advisory — which is why

@@ -13,6 +13,7 @@ import {
   type Session,
 } from 'electron';
 import { isAllowedRemoteUrl, isProtectedPage, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from './security.js';
+import { ClipboardGuard } from './clipboard-guard.js';
 import { AiProviderStore } from './ai-provider.js';
 import { StateStore, WORKSPACES } from './state-store.js';
 import type {
@@ -63,6 +64,7 @@ class BrowserController {
   private readonly configuredSessions = new Set<string>();
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
+  private readonly clipboardGuard = new ClipboardGuard(clipboard);
   private layout: Layout = { top: 104, left: 78, right: 356, bottom: 0 };
   private window!: BrowserWindow;
 
@@ -389,6 +391,12 @@ class BrowserController {
     return { secondsRemaining: result.secondsRemaining };
   }
 
+  /** Clear a still-pending copied secret now — used on quit, so exiting inside
+   *  the 30-second window does not leave a password on the clipboard. */
+  async flushClipboard(): Promise<void> {
+    await this.clipboardGuard.flush();
+  }
+
   async autofill(id: string): Promise<void> {
     const contents = this.activeContents();
     const state = this.store.get();
@@ -628,12 +636,7 @@ class BrowserController {
   }
 
   private copySensitiveValue(value: string): void {
-    void clipboard.writeText(value);
-    setTimeout(() => {
-      void clipboard.readText().then((current) => {
-        if (current === value) void clipboard.clear();
-      });
-    }, 30_000).unref();
+    this.clipboardGuard.copy(value);
   }
 
   private pruneAiCapabilities(): void {
@@ -763,6 +766,10 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await controller!.createWindow();
   });
+});
+
+app.on('before-quit', () => {
+  void controller?.flushClipboard();
 });
 
 app.on('window-all-closed', () => {

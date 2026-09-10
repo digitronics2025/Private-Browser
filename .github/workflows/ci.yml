@@ -71,6 +71,9 @@ jobs:
       PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Needed to diff this push against its predecessor below.
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -80,12 +83,30 @@ jobs:
         with:
           name: private-browser-windows
           path: release
+      - name: Detect whether this push changes the application
+        id: changes
+        shell: bash
+        run: |
+          before="${{ github.event.before }}"
+          if [[ -z "$before" || "$before" =~ ^0+$ ]] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+            before="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          fi
+          changed="$(git diff --name-only "$before" "${{ github.sha }}" || true)"
+          echo "Changed paths:"; echo "${changed:-<none>}"
+          if [[ -z "$changed" ]] || echo "$changed" | grep -qvE '^(docs/.*|[^/]*\.md)$'; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app=false" >> "$GITHUB_OUTPUT"
+            echo "Documentation-only push: not publishing a release. The active release is unchanged."
+          fi
       - name: Detect publishing configuration
         id: configured
         shell: bash
         run: |
-          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" && ${#PRIVATE_BROWSER_DOWNLOAD_TOKEN} -ge 32 ]]; then
+          if [[ "${{ steps.changes.outputs.app }}" == "true" && -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" && ${#PRIVATE_BROWSER_DOWNLOAD_TOKEN} -ge 32 ]]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.changes.outputs.app }}" != "true" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "Cloudflare release publishing is not configured; the verified GitHub artifact remains available."
