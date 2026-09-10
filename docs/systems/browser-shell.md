@@ -2,7 +2,7 @@
 system: browser-shell
 sources:
   - electron/main.ts
-verified_at: e18416d
+verified_at: 5fcb148
 ---
 
 # Browser Shell
