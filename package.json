@@ -20,7 +20,10 @@
     "worker:typecheck": "tsc -p cloudflare/tsconfig.json",
     "worker:build": "wrangler deploy --dry-run --config cloudflare/wrangler.jsonc --outdir .wrangler-dist",
     "worker:dev": "wrangler dev --config cloudflare/wrangler.jsonc",
-    "check": "npm run typecheck && npm run worker:typecheck && npm run test && npm run build && npm run worker:build",
+    "docs:check": "node scripts/docs-guard.mjs",
+    "docs:find": "node scripts/docs-find.mjs",
+    "docs:stale": "node scripts/docs-guard.mjs stale",
+    "check": "npm run docs:check && npm run typecheck && npm run worker:typecheck && npm run test && npm run build && npm run worker:build",
     "dist": "npm run build && electron-builder --win nsis --x64 --publish never",
     "start": "electron dist-electron/main.js"
   },

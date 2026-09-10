@@ -1,0 +1,9 @@
+# The index is normalised to LF; the working tree keeps whatever the machine
+# prefers (this repo is worked on from Windows with core.autocrlf=true).
+* text=auto
+
+# Not a preference. A shell script with CRLF line endings fails to execute on
+# Linux and macOS with "bad interpreter: /usr/bin/env sh^M", so the git hooks
+# and any shell script are pinned to LF in the working tree as well.
+.githooks/* text eol=lf
+*.sh text eol=lf
