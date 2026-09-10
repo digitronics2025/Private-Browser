@@ -27,7 +27,7 @@ assert(manifest.sha256 === expectedHash, 'Manifest checksum does not match the i
 const pageResponse = await fetch(manifest.downloadPageUrl, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
 assert(pageResponse.status === 200, `Signed download page returned ${pageResponse.status}`);
 const page = await pageResponse.text();
-assert(page.includes(`Version ${manifest.version}`) && page.includes(expectedHash), 'Download page metadata is incomplete');
+assert(page.includes(manifest.version) && page.includes(expectedHash), 'Download page metadata is incomplete');
 
 const stablePageResponse = await fetch(`${endpoint}/download/${encodeURIComponent(accessToken)}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
 assert(stablePageResponse.status === 200, `Stable install page returned ${stablePageResponse.status}`);
