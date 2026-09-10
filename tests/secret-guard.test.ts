@@ -74,6 +74,39 @@ describe('secret-guard leaves ordinary code alone', () => {
   });
 });
 
+// Regression block. On 2026-09-10 a real set of production credentials was pasted
+// into .gitignore and this guard reported the tree clean. Two rules were at fault:
+// the value had to be quoted, and `\b` never matched a name like
+// PRIVATE_BROWSER_ADMIN_API_KEY because `_` is a word character. Every case below
+// is a shape that was live at the time and went unseen. Values are synthetic.
+describe('secret-guard reads dotenv lines', () => {
+  it.each([
+    ['a prefixed key name', 'PRIVATE_BROWSER_ADMIN_API_KEY=40EtqwY8Hh6d8qmrjtCBQGJ90x9XjO1Qu4tOX4m24ce'],
+    ['a prefixed secret name', 'PRIVATE_BROWSER_SIGNING_SECRET=Qz-4TfNbWmR_8HkLp-VaXcYd31Ee7GgHh2Ii5JjKk'],
+    ['a prefixed token name', 'CLOUDFLARE_API_TOKEN=cfut_9QwErTyUiOpAsDfGhJkLzXcVbNm4321'],
+    ['an exported assignment', 'export ACCESS_TOKEN=qbu1ZDMDKa3M8iBj6kotRlXPBtS7q8vbewsrvEZKgC4'],
+    ['a quoted dotenv value', 'API_KEY="9f2a7e41b8d6503fe27a9c4b1d80e6f3"'],
+  ])('refuses %s', (_label, body) => {
+    expect(scan('env-' + Math.random().toString(36).slice(2) + '.txt', body)).not.toBe('');
+  });
+
+  it('catches it inside .gitignore itself, the file that started this', () => {
+    const body = ['node_modules/', '*.log', 'D1_TOKEN=Qz4TfNbWmR8HkLpVaXcYd31Ee7Gg'].join('\n');
+    expect(scan('gitignore-fixture.txt', body)).toContain(':3');
+  });
+
+  it('still ignores a line that only mentions a credential name', () => {
+    expect(scan('p.ts', 'const token = randomUUID();')).toBe('');
+    expect(scan('q.ts', 'this.config = { apiKey: input.apiKey.trim() };')).toBe('');
+    expect(scan('r.tsx', '<input type="password" placeholder="Download access token" />')).toBe('');
+  });
+
+  it('treats zero-entropy filler as the fixture it is', () => {
+    expect(scan('s.ts', "const accessToken = 'download-token-abcdefghijklmnopqrstuvwxyz012345';")).toBe('');
+    expect(scan('t.ts', "const accessToken = 'test-token-that-is-long-enough-for-bootstrap';")).toBe('');
+  });
+});
+
 describe('the repository itself', () => {
   it('carries no credentials in any tracked file', () => {
     let output = '';

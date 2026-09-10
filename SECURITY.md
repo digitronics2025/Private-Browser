@@ -57,7 +57,9 @@ The Worker checks R2 object size against D1 before publication and again before 
 
 ## Credentials in the repository
 
-No credential is ever stored in a tracked file. `.gitignore` is itself committed and public; it keeps named paths out of the index and nothing more, and `git add -f` bypasses it entirely. Enforcement is [scripts/secret-guard.mjs](scripts/secret-guard.mjs), which refuses vendor token shapes, private key blocks, URLs carrying embedded credentials, hard-coded credential assignments, and any path that names an environment or key file regardless of its contents.
+No credential is ever stored in a tracked file. `.gitignore` is itself committed and public; it keeps named paths out of the index and nothing more, and `git add -f` bypasses it entirely. Enforcement is [scripts/secret-guard.mjs](scripts/secret-guard.mjs), which refuses vendor token shapes, private key blocks, URLs carrying embedded credentials, and any path that names an environment or key file regardless of its contents.
+
+It reads credential assignments in both forms, because both have appeared here: a quoted literal in source, and an unquoted `NAME=VALUE` dotenv line — the latter only when the whole line has that shape, so ordinary code such as `const token = randomUUID()` is not flagged. Names are matched as substrings of the surrounding identifier: `PRIVATE_BROWSER_ADMIN_API_KEY` must match, and a word-boundary anchor never fires there because `_` is a word character. Values are dismissed as fixtures only on evidence — a documented placeholder, a repeated character, a run of six consecutive characters, or lowercase words joined by separators with no digit anywhere. One uppercase letter or one digit is enough to disqualify a value from that dismissal.
 
 It runs in two places: `.githooks/pre-commit` scans staged additions and blocks the commit, and `npm run secrets:check` scans every tracked file as the first step of `npm run check`, so a secret cannot survive by never being re-staged. A deliberate fixture is exempted with a `secret-guard:allow` marker on the line — the exemption is per line, visible in review, and never a directory or file-wide silence.
 

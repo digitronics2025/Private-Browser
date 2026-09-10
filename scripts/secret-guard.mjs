@@ -43,23 +43,75 @@ const TOKEN_RULES = [
   ['OpenAI API key', /\bsk-(?:proj-)?[A-Za-z0-9]{32,}\b/],
   ['Slack token', /\bxox[baprs]-[A-Za-z0-9-]{12,}\b/],
   ['Google API key', /\bAIza[0-9A-Za-z_-]{35}\b/],
+  ['Cloudflare API token', /\b(?:cfut_[A-Za-z0-9_-]{20,}|v1\.0-[A-Za-z0-9_-]{40,})\b/],
   ['JSON Web Token', /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
   ['URL with embedded password', /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]{4,}@/i],
 ];
 
-/** A named credential assigned a literal value. Needs a placeholder filter. */
-const ASSIGNMENT_RE =
-  /\b(pass(?:word|wd|phrase)|secret|token|api[_-]?key|apikey|access[_-]?key|auth[_-]?key|client[_-]?secret|private[_-]?key)\b\s*[:=]\s*(['"`])([^'"`\n]{8,})\2/i;
+/**
+ * A named credential assigned a literal value.
+ *
+ * Two things this must get right, both learned the hard way:
+ *   - The name is usually a SUFFIX of a longer identifier — `PRIVATE_BROWSER_ADMIN_API_KEY`,
+ *     `CLOUDFLARE_API_TOKEN`. A `\b` anchor never fires there, because `_` is a word
+ *     character, so the whole surrounding identifier has to be allowed to match.
+ *   - The value is often UNQUOTED. Dotenv lines carry no quotes at all, and a rule that
+ *     demands them sees nothing in the one file format that exists to hold secrets.
+ */
+const CREDENTIAL_NAME =
+  '[A-Za-z0-9_.-]*(?:pass(?:word|wd|phrase)|secret|token|api[_-]?key|apikey|access[_-]?key|auth[_-]?(?:key|token|secret)|client[_-]?secret|private[_-]?key|credential)[A-Za-z0-9_.-]*';
+
+/**
+ * Unquoted values are only read when the WHOLE line is a dotenv assignment.
+ * Anything looser matches ordinary code — `const token = randomUUID();`,
+ * `apiKey: input.apiKey.trim()` — and a guard that flags those gets bypassed.
+ */
+const DOTENV_LINE_RE = new RegExp(
+  `^\\s*(?:export\\s+)?(${CREDENTIAL_NAME})\\s*=\\s*(['"]?)([^\\s'"#]{8,})\\2\\s*(?:#.*)?$`,
+  'i',
+);
+
+/** Quoted literals anywhere on the line, for source code. */
+const QUOTED_ASSIGNMENT_RE = new RegExp(
+  `(?:^|[^A-Za-z0-9_.-])(${CREDENTIAL_NAME})\\s*[:=]\\s*(['"\`])([^'"\`\\n]{8,})\\2`,
+  'i',
+);
+
+/**
+ * Does this value have the shape of a credential at all? Names, labels and UI
+ * strings sit next to credential-ish identifiers constantly — `type="password"`,
+ * `placeholder="Download access token"` — and none of them are secrets.
+ */
+function looksLikeSecret(value) {
+  if (/\s/.test(value)) return false; // a real credential has no spaces in it
+  if (value.length < 12) return false; // shorter than any token worth guarding
+  return /\d/.test(value) || value.length >= 20; // some entropy signal
+}
 
 /** Values that are obviously stand-ins, not credentials. */
 const PLACEHOLDER_RE =
   /^(?:\s*$|.*(?:\$\{|process\.env|import\.meta\.env|env\.|<[^>]+>|\.\.\.|example|sample|placeholder|your[-_ ]|my[-_ ]|dummy|fake|changeme|redacted|xxx+|\*{3,}|todo|replace[-_ ]?me|null|undefined|none))/i;
 
+/** A run of six consecutive characters — "abcdef", "012345" — is filler, not entropy. */
+function hasSequentialRun(value) {
+  const lower = value.toLowerCase();
+  let run = 1;
+  for (let i = 1; i < lower.length; i += 1) {
+    run = lower.charCodeAt(i) === lower.charCodeAt(i - 1) + 1 ? run + 1 : 1;
+    if (run >= 6) return true;
+  }
+  return false;
+}
+
 function isPlaceholder(value) {
   if (PLACEHOLDER_RE.test(value)) return true;
   if (/^(.)\1*$/.test(value)) return true; // "aaaaaaaa"
-  // Readable words joined by - or _ are names, not entropy: "content-length", "test_token".
-  return /^[a-z0-9]+([-_][a-z0-9]+)+$/i.test(value) && !/\d{4}/.test(value);
+  if (hasSequentialRun(value)) return true; // "download-token-abcdefghijk…"
+  // All-lowercase words joined by - or _, with no digits at all: "content-length",
+  // "test-token-that-is-long-enough". Narrow on purpose — one uppercase letter or one
+  // digit disqualifies it, because `H-UoUEWgCBw_9GJq-Qilnx…` slipped through a looser
+  // version of this rule and that is a live signing secret.
+  return /^[a-z]+([-_][a-z]+)+$/.test(value);
 }
 
 function scanLine(line) {
@@ -67,8 +119,14 @@ function scanLine(line) {
   for (const [label, re] of TOKEN_RULES) {
     if (re.test(line)) return label;
   }
-  const assigned = ASSIGNMENT_RE.exec(line);
-  if (assigned && !isPlaceholder(assigned[3])) return `hard-coded ${assigned[1].toLowerCase()}`;
+  for (const re of [DOTENV_LINE_RE, QUOTED_ASSIGNMENT_RE]) {
+    const assigned = re.exec(line);
+    if (!assigned) continue;
+    const value = assigned[3];
+    if (looksLikeSecret(value) && !isPlaceholder(value)) {
+      return `hard-coded ${assigned[1].toLowerCase()}`;
+    }
+  }
   return null;
 }
 
