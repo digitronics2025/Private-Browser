@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, statSync } from 'node:fs';
 import { basename } from 'node:path';
+import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
 
 const [installerPath] = process.argv.slice(2);
-const endpoint = process.env.PRIVATE_BROWSER_DOWNLOAD_URL?.replace(/\/+$/, '');
+const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
 const accessToken = process.env.PRIVATE_BROWSER_DOWNLOAD_TOKEN;
 if (!installerPath || !endpoint || !accessToken) throw new Error('Live release verification is not configured');
 

@@ -19,8 +19,8 @@ describe('navigation security', () => {
   });
 
   it('rejects credentials embedded in URLs', () => {
-    expect(() => normalizeNavigationInput('https://user:password@example.com')).toThrow(/credentials/);
-    expect(isAllowedRemoteUrl('https://user:password@example.com')).toBe(false);
+    expect(() => normalizeNavigationInput('https://user:password@example.com')).toThrow(/credentials/); // secret-guard:allow
+    expect(isAllowedRemoteUrl('https://user:password@example.com')).toBe(false); // secret-guard:allow
   });
 
   it('protects banking and payment pages', () => {
@@ -56,6 +56,17 @@ describe('navigation security', () => {
     expect(isSafeAiEndpoint('https://[::1]/api')).toBe(false);
   });
 
+  it('rejects the loopback spellings the first guard missed', () => {
+    // All three were confirmed to slip through in the 2026-09-10 audit (F-19).
+    expect(isSafeAiEndpoint('https://[::]/api')).toBe(false);
+    expect(isSafeAiEndpoint('https://[::ffff:127.0.0.1]/api')).toBe(false);
+    expect(isSafeAiEndpoint('https://localhost./api')).toBe(false);
+    // A trailing dot must not defeat the private-range checks either.
+    expect(isSafeAiEndpoint('https://192.168.1.5./api')).toBe(false);
+    // And a public host is still allowed.
+    expect(isSafeAiEndpoint('https://api.openai.com/v1')).toBe(true);
+  });
+
   it('accepts only a public HTTPS origin for the update service', () => {
     expect(isSafeUpdateEndpoint('https://downloads.example.com')).toBe(true);
     expect(isSafeUpdateEndpoint('https://downloads.example.com/tenant')).toBe(false);
@@ -75,6 +86,10 @@ describe('AI redaction', () => {
     expect(result.text).not.toContain('4242 4242');
     expect(result.text).not.toContain('abc123');
     expect(result.redactions).toBeGreaterThanOrEqual(3);
+    // Without this, a redactor that returned an empty string would pass every
+    // assertion above. Ordinary text must survive (audit finding F-23).
+    expect(result.text).toContain('card');
+    expect(result.text.length).toBeGreaterThan(20);
   });
 });
 
@@ -93,7 +108,15 @@ describe('local data', () => {
     const repaired = sanitizeState(state);
     expect(repaired.tabs).toHaveLength(5);
     expect(repaired.tabs.every((tab) => tab.url === 'private://home')).toBe(true);
-    expect(repaired.activeTabByWorkspace.digitronics).toBeTruthy();
+    // toBeTruthy() passed for any string, including an id absent from the repaired
+    // tabs — which is the exact bug this test is named for (audit finding F-23).
+    const repairedIds = repaired.tabs.map((tab) => tab.id);
+    expect(repairedIds).toContain(repaired.activeTabByWorkspace.digitronics);
+    for (const workspace of ['digitronics', 'tenten', 'development', 'personal', 'banking'] as const) {
+      const active = repaired.activeTabByWorkspace[workspace];
+      expect(repairedIds).toContain(active);
+      expect(repaired.tabs.find((tab) => tab.id === active)?.workspaceId).toBe(workspace);
+    }
   });
 
   it('generates RFC 6238-compatible TOTP values', () => {

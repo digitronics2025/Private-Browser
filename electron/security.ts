@@ -135,10 +135,14 @@ export function isSafeAiEndpoint(value: string): boolean {
     const url = new URL(value);
     if (url.protocol !== 'https:' || url.username || url.password) return false;
     const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    if (host === 'localhost' || host === '0.0.0.0' || host === '::1' || host.endsWith('.local')) return false;
-    if (/^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host)) return false;
-    if (/^(fc|fd|fe8|fe9|fea|feb)[0-9a-f]*:/i.test(host)) return false;
-    const match = host.match(/^172\.(\d{1,3})\./);
+    // '::' is the all-zeros address and '::ffff:127.0.0.1' the IPv4-mapped form of
+    // loopback; a trailing dot is the fully-qualified spelling of a hostname.
+    const bare = host.replace(/\.$/, '');
+    if (bare === 'localhost' || bare === '0.0.0.0' || bare === '::1' || bare === '::' || bare.endsWith('.local')) return false;
+    if (/^::ffff:/i.test(bare)) return false;
+    if (/^127\./.test(bare) || /^10\./.test(bare) || /^192\.168\./.test(bare) || /^169\.254\./.test(bare)) return false;
+    if (/^(fc|fd|fe8|fe9|fea|feb)[0-9a-f]*:/i.test(bare)) return false;
+    const match = bare.match(/^172\.(\d{1,3})\./);
     if (match && Number(match[1]) >= 16 && Number(match[1]) <= 31) return false;
     return true;
   } catch {

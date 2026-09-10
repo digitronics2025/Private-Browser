@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
+import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
 
 const [installerPath, objectKey] = process.argv.slice(2);
-const endpoint = process.env.PRIVATE_BROWSER_DOWNLOAD_URL?.replace(/\/+$/, '');
+const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
 const adminKey = process.env.PRIVATE_BROWSER_ADMIN_API_KEY;
 const commitSha = process.env.GITHUB_SHA;
 const buildNumber = Number(process.env.GITHUB_RUN_NUMBER);

@@ -43,6 +43,8 @@ export interface DownloadEntry {
   totalBytes: number;
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
   savePath?: string;
+  /** Set once a completed download has been compared against the release manifest. */
+  checksum?: 'verified' | 'mismatch' | 'unchecked';
 }
 
 export interface PrivacyEvent {

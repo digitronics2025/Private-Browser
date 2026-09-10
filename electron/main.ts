@@ -14,6 +14,7 @@ import {
 } from 'electron';
 import { isAllowedRemoteUrl, isAutofillTarget, isProtectedPage, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from './security.js';
 import { ClipboardGuard } from './clipboard-guard.js';
+import { verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { AiProviderStore } from './ai-provider.js';
 import { StateStore, WORKSPACES } from './state-store.js';
 import type {
@@ -69,6 +70,7 @@ class BrowserController {
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
   private readonly clipboardGuard = new ClipboardGuard(clipboard);
   private readonly faviconCache = new Map<string, string>();
+  private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { top: 104, left: 78, right: 356, bottom: 0 };
   private window!: BrowserWindow;
 
@@ -428,7 +430,11 @@ class BrowserController {
 
   openDownload(id: string): void {
     const item = this.downloads.get(id);
-    if (item?.state === 'completed' && item.savePath) void shell.openPath(item.savePath);
+    if (!item || item.state !== 'completed' || !item.savePath) return;
+    // A file whose checksum did not match the manifest is the one case where the
+    // app knows something is wrong; opening it anyway would waste the check.
+    if (item.checksum === 'mismatch') throw new Error('This download does not match the published checksum and will not be opened. Delete it and download again.');
+    void shell.openPath(item.savePath);
   }
 
   showDownload(id: string): void {
@@ -463,7 +469,9 @@ class BrowserController {
   }
 
   async checkForUpdates() {
-    return this.updates.check(app.getVersion());
+    const result = await this.updates.check(app.getVersion());
+    this.expectedInstaller = { filename: result.latest.filename, sha256: result.latest.sha256.toLowerCase(), sizeBytes: result.latest.sizeBytes };
+    return result;
   }
 
   async openUpdatePage(): Promise<void> {
@@ -571,6 +579,19 @@ class BrowserController {
       item.once('done', (_downloadEvent, state) => {
         Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath() });
         this.broadcast();
+        if (state !== 'completed') return;
+        void verifyDownload(entry.savePath ?? '', entry.filename, this.expectedInstaller).then((checksum) => {
+          if (checksum === 'unchecked') return;
+          entry.checksum = checksum;
+          this.addPrivacyEvent(
+            checksum === 'verified' ? 'vault' : 'blocked',
+            checksum === 'verified' ? 'Installer checksum verified' : 'Installer checksum did NOT match',
+            checksum === 'verified'
+              ? `${entry.filename} matches the signed release manifest`
+              : `${entry.filename} does not match the published checksum — do not run it`,
+          );
+          this.broadcast();
+        });
       });
       this.broadcast();
     });
@@ -755,9 +776,16 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const updateBootstrapPath = join(process.resourcesPath, 'private-browser-update.json');
   try {
     const updateBootstrap = readUpdateBootstrap(updateBootstrapPath);
-    if (updateBootstrap && updates.bootstrap(updateBootstrap, app.getVersion())) removeUpdateBootstrap(updateBootstrapPath);
+    if (updateBootstrap) updates.bootstrap(updateBootstrap, app.getVersion());
   } catch {
     console.error('update_bootstrap_invalid');
+  } finally {
+    // Remove the plaintext bootstrap whatever happened to it. Previously it was
+    // deleted only when it had been stored successfully, so on a machine with no
+    // OS encryption — exactly the machine least able to protect it — the shared
+    // download token stayed readable in the install directory forever. Losing the
+    // convenience of first-launch enrolment is the cheaper failure.
+    removeUpdateBootstrap(updateBootstrapPath);
   }
   controller = new BrowserController(store, vault, aiProvider, updates);
 

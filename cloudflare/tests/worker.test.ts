@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker, { type Env } from '../src/index';
+import { signValue } from '../src/auth';
 import type { ReleaseRecord } from '../src/protocol';
 
 const accessToken = 'download-token-abcdefghijklmnopqrstuvwxyz012345';
@@ -15,21 +16,71 @@ const release: ReleaseRecord = {
   published_at: '2026-09-10T00:00:00.000Z', is_active: 1,
 };
 
+/**
+ * A fake that actually stores rows. The previous version discarded every bound
+ * parameter and returned one hard-coded row for any query, so the publish write
+ * path and all channel scoping were untested — audit finding F-09.
+ */
 class Statement {
   values: unknown[] = [];
   constructor(private readonly database: FakeDatabase, private readonly sql: string) {}
   bind(...values: unknown[]) { this.values = values; return this; }
+
   async first<T>() {
-    if (this.sql.includes('SELECT object_key')) return (this.database.release ? { object_key: this.database.release.object_key } : null) as T | null;
-    return this.database.release as T | null;
+    if (this.sql.includes('SELECT object_key')) {
+      const [appId] = this.values as [string];
+      const row = this.database.active(appId);
+      return (row ? { object_key: row.object_key } : null) as T | null;
+    }
+    // Both the latest-release read and the downgrade lookup bind (app_id, channel).
+    const [appId, channel] = this.values as [string, string];
+    return (this.database.active(appId, channel) ?? null) as T | null;
+  }
+
+  /** Interpret the two statements handlePublish batches, honouring bound values. */
+  apply(): void {
+    if (this.sql.includes('INSERT INTO releases')) {
+      const [id, appId, version, buildNumber, channel, objectKey, filename, contentType, sizeBytes, sha256, commitSha, releaseNotes, publishedAt] =
+        this.values as [string, string, string, number, 'stable' | 'beta', string, string, string, number, string, string, string, string];
+      const row: ReleaseRecord = {
+        id, app_id: appId, version, build_number: buildNumber, channel, object_key: objectKey,
+        filename, content_type: contentType, size_bytes: sizeBytes, sha256, commit_sha: commitSha,
+        release_notes: releaseNotes, published_at: publishedAt, is_active: 1,
+      };
+      const existing = this.database.rows.findIndex((candidate) => candidate.id === id);
+      if (existing >= 0) this.database.rows[existing] = row;
+      else this.database.rows.push(row);
+      return;
+    }
+    if (this.sql.includes('UPDATE releases SET is_active')) {
+      const [id, appId, channel] = this.values as [string, string, string];
+      for (const row of this.database.rows) {
+        if (row.app_id !== appId || row.channel !== channel) continue;
+        row.is_active = row.id === id ? 1 : 0;
+      }
+    }
   }
 }
 
 class FakeDatabase {
-  release: ReleaseRecord | null = { ...release };
+  rows: ReleaseRecord[] = [{ ...release }];
   batches = 0;
+
   prepare(sql: string) { return new Statement(this, sql); }
-  async batch(statements: Statement[]) { this.batches += 1; return statements.map(() => ({ success: true })); }
+
+  active(appId?: string, channel?: string): ReleaseRecord | null {
+    return this.rows
+      .filter((row) => row.is_active === 1
+        && (appId === undefined || row.app_id === appId)
+        && (channel === undefined || row.channel === channel))
+      .sort((left, right) => right.build_number - left.build_number || right.published_at.localeCompare(left.published_at))[0] ?? null;
+  }
+
+  async batch(statements: Statement[]) {
+    this.batches += 1;
+    for (const statement of statements) statement.apply();
+    return statements.map(() => ({ success: true }));
+  }
 }
 
 class FakeBucket {
@@ -86,7 +137,11 @@ describe('download Worker', () => {
     const page = await fetchSigned(item.downloadPageUrl);
     expect(page.status).toBe(200);
     expect(page.headers.get('x-robots-tag')).toContain('noindex');
-    expect(await page.text()).toContain('Private-Browser-0.3.0-Setup.exe'.replace('Private-Browser-0.3.0-Setup.exe', 'Download Private Browser'));
+    const html = await page.text();
+    // Assert the page carries THIS release's details, not a hard-coded template string.
+    expect(html).toContain('Version 0.3.0');
+    expect(html).toContain('a'.repeat(64));
+    expect(html).toContain('abcdef123456');
   });
 
   it('serves full, HEAD, open, closed and suffix byte ranges', async () => {
@@ -118,12 +173,24 @@ describe('download Worker', () => {
     expect(pastEnd.headers.get('content-range')).toBe('bytes */16');
   });
 
-  it('rejects tampered and expired signed URLs', async () => {
+  it('rejects tampered signed URLs', async () => {
     const item = await manifest();
     const url = new URL(item.downloadUrl);
     url.searchParams.set('signature', `${url.searchParams.get('signature')}x`);
     expect((await request(`${url.pathname}${url.search}`)).status).toBe(404);
-    url.searchParams.set('expires', '1000000000');
+  });
+
+  it('rejects an expired link even when its signature is perfectly valid', async () => {
+    const item = await manifest();
+    const url = new URL(item.downloadUrl);
+    // Re-sign for the stale expiry, so ONLY the expiry check can reject this.
+    // Reusing the tampered signature from the test above would have passed even
+    // with the expiry check deleted entirely — audit finding F-09.
+    const expires = '1000000000';
+    url.searchParams.set('expires', expires);
+    url.searchParams.set('signature', await signValue(signingSecret, `binary
+${release.id}
+${expires}`));
     expect((await request(`${url.pathname}${url.search}`)).status).toBe(404);
   });
 
@@ -135,6 +202,15 @@ describe('download Worker', () => {
     const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(201);
     expect(database.batches).toBe(1);
+    // Inspect the row that was actually written, not merely that a batch ran.
+    const written = database.active('private-browser', 'stable');
+    expect(written).toMatchObject({
+      id: 'stable-0.3.0-3', version: '0.3.0', build_number: 3, channel: 'stable',
+      object_key: release.object_key, filename: release.filename, sha256: release.sha256,
+      commit_sha: release.commit_sha, size_bytes: bytes.byteLength, is_active: 1,
+    });
+    // Exactly one active release per channel.
+    expect(database.rows.filter((row) => row.channel === 'stable' && row.is_active === 1)).toHaveLength(1);
 
     bucket.object = new Uint8Array(2);
     const mismatch = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
@@ -214,6 +290,22 @@ describe('download Worker', () => {
     const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(201);
     expect(database.batches).toBe(1);
+  });
+
+  it('keeps channels separate', async () => {
+    // The stable row must not satisfy a beta lookup, and publishing beta must not
+    // disturb stable. Nothing exercised the channel dimension before.
+    const input = {
+      version: '0.4.0-beta.1', buildNumber: 10, channel: 'beta', objectKey: release.object_key,
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    expect(response.status).toBe(201);
+    expect(database.active('private-browser', 'beta')).toMatchObject({ version: '0.4.0-beta.1', channel: 'beta' });
+    // Stable is untouched, and /update.json still serves it.
+    expect(database.active('private-browser', 'stable')).toMatchObject({ version: '0.3.0', is_active: 1 });
+    const item = await manifest();
+    expect(item.sha256).toBe('a'.repeat(64));
   });
 
   it('rejects a release build-number downgrade', async () => {

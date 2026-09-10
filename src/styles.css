@@ -258,3 +258,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .context-origin { display: block; color: var(--muted); font-size: 11px; margin-top: -4px; overflow-wrap: anywhere; }
 .context-text { max-height: 220px; overflow: auto; margin: 10px 0 6px; padding: 10px; background: #0b1018; border: 1px solid #252e40; border-radius: 10px; color: #aab7cd; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .context-size { display: block; color: var(--muted); font-size: 10.5px; }
+
+/* A download the app could not vouch for must say so where the Open button is. */
+.checksum { display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 10.5px; }
+.checksum.ok { color: var(--green); }
+.checksum.bad { color: var(--danger); font-weight: 700; }
+
+/* The security badge reports what was actually checked, so it needs a
+   not-yet-known state and a failing state, not only the green one. */
+.settings-row b.pending { color: var(--muted); font-weight: 600; }
+.settings-row b.failing { color: var(--danger); }
