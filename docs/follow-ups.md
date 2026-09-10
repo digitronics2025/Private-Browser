@@ -168,5 +168,13 @@ person who owns the product, not work waiting on an engineer.
 - **The Windows installer is not code-signed.** SmartScreen shows an
   unknown-publisher warning on every install, which is a real trust cost for a
   browser that holds credentials. A trusted code-signing certificate is an annual
-  purchase and an identity-verification process, so this is a spending decision
-  rather than an engineering one. *(2026-09-10)*
+  purchase and an identity-verification process. The workflow now signs
+  automatically when `WINDOWS_CODE_SIGNING_CERTIFICATE` and
+  `WINDOWS_CODE_SIGNING_PASSWORD` exist; obtaining them remains an owner decision.
+  *(2026-09-10)*
+
+- **Commercial threat-intelligence credentials are not configured.** Runtime
+  hardening can block known tracker hosts and risky local file types, but a live
+  phishing/malware interstitial requires a commercial reputation service. Use
+  Google Web Risk or an equivalent business-licensed provider; the free Google
+  Safe Browsing service is non-commercial. *(2026-09-10)*

@@ -2,7 +2,7 @@
 system: security-boundary
 sources:
   - electron/security.ts
-verified_at: 8b576d74
+verified_at: 6070f099
 ---
 
 # Security Boundary
@@ -11,8 +11,8 @@ verified_at: 8b576d74
 
 ## Agent Brief
 
-**Scope.** [electron/security.ts](../../electron/security.ts) is seven exported,
-dependency-free predicates. Every URL crossing from an untrusted source — typed
+**Scope.** [electron/security.ts](../../electron/security.ts) is a dependency-free
+set of URL, permission and download policy helpers. Every URL crossing from an untrusted source — typed
 text, a popup, the state file on disk, a saved provider config — into a
 navigation, a stored record or an outbound `fetch` passes one of them. They hold
 no state and import nothing, which is why they are cheap to call twice.
@@ -31,9 +31,6 @@ model, this doc explains the code. Do not restate either here.
   `electron/state-store.ts`, which re-filters everything read back from disk.
 - **AI consent** → [ai-consent.md](ai-consent.md). Owns the protocol that
   redaction, page protection and origin-stripping serve.
-- **Releases** → [release-and-updates.md](release-and-updates.md). Owns
-  `electron/update-service.ts`, sole caller of `isSafeUpdateEndpoint`.
-
 ### Invariants
 
 1. **A URL is validated at every boundary it crosses, not once at the door.**
@@ -65,6 +62,8 @@ model, this doc explains the code. Do not restate either here.
 | You are changing… | Section |
 | --- | --- |
 | what the address bar does with typed text | [normalizeNavigationInput](#normalizenavigationinput) |
+| campaign identifiers or address warnings | [Tracking and runtime policy](#tracking-and-runtime-policy) |
+| site permission or download risk policy | [Tracking and runtime policy](#tracking-and-runtime-policy) |
 | which schemes may load, or be written to disk | [isAllowedRemoteUrl](#isallowedremoteurl) |
 | a secret pattern, or the redaction count shown to the user | [redactSensitiveText](#redactsensitivetext) |
 | adding a bank, or why a page refuses AI access | [isProtectedPage](#isprotectedpage) |
@@ -97,6 +96,17 @@ is the default browser, and the JSON state file on disk. Rather than scattering
 scheme checks across those paths, all of them call the same small set of
 predicates. Three more serve the AI path — deciding what may be read, what must
 be scrubbed, and where a request may be sent.
+
+## Tracking and runtime policy
+
+`stripTrackingParameters` removes `utm_*` and common advertising click ids while
+retaining functional parameters and fragments. It runs for typed URLs, popups,
+navigations, redirects and stored URLs. `navigationWarning` marks public
+cleartext HTTP and punycode (`xn--`) hosts; localhost and loopback HTTP remain
+usable. `isAllowedSitePermission` permits only top-frame fullscreen and sanitized
+clipboard writes from trustworthy origins, and denies every permission in
+Banking. `downloadRisk` detects executable/script extensions and deceptive names
+such as `invoice.pdf.exe` so the shell can refuse to open them.
 
 ## normalizeNavigationInput
 

@@ -4,7 +4,7 @@ sources:
   - src/App.tsx
   - src/styles.css
   - index.html
-verified_at: 017e88ff
+verified_at: 3f68afed
 ---
 
 # Renderer UI
@@ -102,7 +102,7 @@ All in [App.tsx](../../src/App.tsx).
 | `AssistantPanel` | Provider strip, provider form, local preview card, cloud-permission card, question box, answer | `preview`, `approvalToken`, `loading`, `provider`, `showProviderForm`, `providerForm` (endpoint defaults to `https://openrouter.ai/api/v1`), `question`, `answer`; `summary` is a `useMemo` |
 | `VaultPanel` | Encryption-health banner, corrupt-vault recovery button, add form, credential cards | `items`, `available`, `unavailableReason`, `adding`, `form` |
 | `AutomationPanel` | The three hard-coded routines and the approval-boundary note | `running` (id of the routine in flight) |
-| `DownloadsPanel` | One card per `state.downloads` with a percentage bar | none |
+| `DownloadsPanel` | Download progress plus checksum and executable-risk warnings | none |
 | `PrivacyPanel` | Three summary tiles and the `state.privacyLog` feed | none |
 | `SettingsPanel` | Default-browser row, private-downloads row + form + actions, security row, about card | `isDefault`, `updateStatus`, `updateResult`, `editingUpdates`, `checking`, `updateForm` |
 | `EmptyState` | Icon + one line, used at five call sites across four panels | none |

@@ -63,7 +63,13 @@ jobs:
           # single-user build, and rotate the token before distributing it.
           PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN: ${{ vars.PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN }}
         run: node cloudflare/scripts/write-update-bootstrap.mjs
-      - run: npm run dist
+      - name: Build hardened Windows installer
+        env:
+          # Optional repository secrets. electron-builder signs when both are
+          # configured; an unset pair keeps local and fork builds working.
+          CSC_LINK: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_PASSWORD }}
+        run: npm run dist
       - name: Generate release metadata
         shell: pwsh
         run: |
@@ -71,6 +77,8 @@ jobs:
           $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
           "$hash  $($installer.Name)" | Set-Content release\SHA256SUMS.txt
           "${{ steps.packaged-version.outputs.version }}" | Set-Content release\VERSION.txt -NoNewline
+          npm sbom --sbom-format cyclonedx | Out-File -Encoding utf8 release\SBOM.cdx.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: private-browser-windows
@@ -78,6 +86,7 @@ jobs:
             release/*.exe
             release/SHA256SUMS.txt
             release/VERSION.txt
+            release/SBOM.cdx.json
           if-no-files-found: error
           retention-days: 30
 

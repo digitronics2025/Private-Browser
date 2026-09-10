@@ -53,6 +53,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .address-icon { margin-left: 12px; flex: 0 0 auto; color: #738095; }
 .address-icon.safe { color: var(--green); }
 .address-icon.insecure { color: #f59e0b; }
+.security-warning { color: #fbbf24; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .address-shell input { border: 0; outline: 0; background: transparent; color: #e8ecf5; height: 100%; padding: 0 11px; min-width: 0; flex: 1; font-size: 12px; }
 .address-shell input::placeholder { color: #657084; }
 .address-domain { color: #697488; font-size: 10px; padding-right: 11px; white-space: nowrap; }

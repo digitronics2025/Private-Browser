@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAllowedRemoteUrl, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, normalizeNavigationInput, redactSensitiveText, urlOriginForSharing } from '../electron/security';
+import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
 import { createDefaultState, sanitizeState } from '../electron/state-store';
 import { generateTotp } from '../electron/vault';
 
@@ -21,6 +21,33 @@ describe('navigation security', () => {
   it('rejects credentials embedded in URLs', () => {
     expect(() => normalizeNavigationInput('https://user:password@example.com')).toThrow(/credentials/); // secret-guard:allow
     expect(isAllowedRemoteUrl('https://user:password@example.com')).toBe(false); // secret-guard:allow
+  });
+
+  it('removes common tracking identifiers without changing useful parameters', () => {
+    expect(stripTrackingParameters('https://example.com/item?id=7&utm_source=mail&fbclid=abc#details')).toBe('https://example.com/item?id=7#details');
+    expect(normalizeNavigationInput('https://example.com/?gclid=abc&q=tv')).toBe('https://example.com/?q=tv');
+  });
+
+  it('warns about cleartext and internationalized look-alike domains', () => {
+    expect(navigationWarning('http://example.com')).toBe('insecure');
+    expect(navigationWarning('http://localhost:5173')).toBeUndefined();
+    expect(navigationWarning('https://xn--80ak6aa92e.com')).toBe('idn');
+    expect(navigationWarning('https://digitronics.ma')).toBeUndefined();
+  });
+
+  it('allows only narrow, secure, top-frame permissions outside Banking', () => {
+    expect(isAllowedSitePermission('fullscreen', 'https://video.example/watch', false, true)).toBe(true);
+    expect(isAllowedSitePermission('clipboard-sanitized-write', 'http://localhost:5173', false, true)).toBe(true);
+    expect(isAllowedSitePermission('media', 'https://video.example/watch', false, true)).toBe(false);
+    expect(isAllowedSitePermission('fullscreen', 'http://example.com', false, true)).toBe(false);
+    expect(isAllowedSitePermission('fullscreen', 'https://video.example/watch', true, true)).toBe(false);
+    expect(isAllowedSitePermission('fullscreen', 'https://video.example/watch', false, false)).toBe(false);
+  });
+
+  it('classifies executable and deceptive downloads', () => {
+    expect(downloadRisk('invoice.pdf.exe')).toBe('deceptive');
+    expect(downloadRisk('installer.msi')).toBe('dangerous');
+    expect(downloadRisk('report.pdf')).toBe('ordinary');
   });
 
   it('protects banking and payment pages', () => {

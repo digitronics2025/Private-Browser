@@ -1,5 +1,10 @@
 const SEARCH_ENDPOINT = 'https://duckduckgo.com/?q=';
 
+const TRACKING_PARAMETERS = new Set([
+  'dclid', 'fbclid', 'gclid', 'gbraid', 'mc_cid', 'mc_eid', 'msclkid',
+  'twclid', 'wbraid', '_hsenc', '_hsmi', 'vero_conv', 'vero_id',
+]);
+
 export function normalizeNavigationInput(value: string): string {
   const input = value.trim();
   if (!input) return 'private://home';
@@ -14,7 +19,7 @@ export function normalizeNavigationInput(value: string): string {
   if (parsed) {
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
       if (parsed.username || parsed.password) throw new Error('URLs containing credentials are not allowed');
-      return parsed.toString();
+      return stripTrackingParameters(parsed.toString());
     }
   }
 
@@ -25,6 +30,60 @@ export function normalizeNavigationInput(value: string): string {
     return new URL(`https://${input}`).toString();
   }
   return `${SEARCH_ENDPOINT}${encodeURIComponent(input)}`;
+}
+
+/** Remove common cross-site campaign identifiers before a URL is loaded or saved. */
+export function stripTrackingParameters(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return value;
+    for (const key of [...url.searchParams.keys()]) {
+      if (key.toLowerCase().startsWith('utm_') || TRACKING_PARAMETERS.has(key.toLowerCase())) {
+        url.searchParams.delete(key);
+      }
+    }
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+
+/** Surface look-alike internationalised domains without blocking legitimate IDNs. */
+export function navigationWarning(value: string): 'insecure' | 'idn' | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'http:' && !isLocalDevelopmentHost(url.hostname)) return 'insecure';
+    if (url.hostname.split('.').some((label) => label.startsWith('xn--'))) return 'idn';
+    return undefined;
+  } catch {
+    return 'insecure';
+  }
+}
+
+export function isAllowedSitePermission(permission: string, requestingUrl: string, protectedWorkspace: boolean, isMainFrame: boolean): boolean {
+  if (protectedWorkspace || !isMainFrame) return false;
+  try {
+    const url = new URL(requestingUrl);
+    const trustworthy = url.protocol === 'https:' || (url.protocol === 'http:' && isLocalDevelopmentHost(url.hostname));
+    return trustworthy && (permission === 'fullscreen' || permission === 'clipboard-sanitized-write');
+  } catch {
+    return false;
+  }
+}
+
+export function downloadRisk(filename: string): 'ordinary' | 'dangerous' | 'deceptive' {
+  const parts = filename.toLowerCase().trim().split('.').filter(Boolean);
+  if (parts.length < 2) return 'ordinary';
+  const dangerous = new Set(['bat', 'chm', 'cmd', 'com', 'cpl', 'exe', 'hta', 'img', 'iso', 'jar', 'js', 'jse', 'lnk', 'msi', 'msp', 'pif', 'ps1', 'reg', 'scr', 'vbs', 'vbe', 'wsf']);
+  const last = parts.at(-1)!;
+  if (!dangerous.has(last)) return 'ordinary';
+  const disguise = new Set(['doc', 'docx', 'gif', 'jpeg', 'jpg', 'pdf', 'png', 'ppt', 'pptx', 'txt', 'xls', 'xlsx', 'zip']);
+  return parts.length >= 3 && disguise.has(parts.at(-2)!) ? 'deceptive' : 'dangerous';
+}
+
+function isLocalDevelopmentHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '::1' || /^127\./.test(host);
 }
 
 export function isAllowedRemoteUrl(value: string): boolean {

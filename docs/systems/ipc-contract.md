@@ -3,7 +3,8 @@ system: ipc-contract
 sources:
   - electron/preload.cts
   - electron/types.ts
-verified_at: 017e88ff
+  - electron/ipc-guard.ts
+verified_at: 3f68afed
 ---
 
 # IPC Contract
@@ -35,8 +36,9 @@ trusted-sender check, the browser methods) and in [vault.md](vault.md),
 1. **Adding or renaming a channel is three edits, not one.** Channel string in
    `main.ts`, method in `preload.cts`, payload type in `types.ts`. →
    **The Contract Is Written Three Times**
-2. **Nothing but this doc checks the three agree.** Both sides of `invoke` are
-   typed `any`. → **The Contract Is Written Three Times**
+2. **Types do not enforce runtime input.** The shared handler authenticates the
+   sender and bounds rate and payload size; business methods validate values. →
+   **The Contract Is Written Three Times**
 3. **Only these keys reach the renderer.** `contextBridge` exposes exactly the
    `api` object; nothing else is reachable from page or chrome JavaScript. →
    **The Bridge**
@@ -228,6 +230,7 @@ preload and the renderer.
 ### Browsing data
 
 - `BrowserTab` — `id`, `workspaceId`, `title`, `url`, `favicon?`, `loading`,
+  `securityWarning?`,
   `canGoBack`, `canGoForward`, `isHome`, `developerToolsAllowed`,
   `developerToolsOpen`.
 - `Bookmark` — `id`, `title`, `url`, `workspaceId`, `createdAt`.
@@ -235,7 +238,7 @@ preload and the renderer.
 - `DownloadEntry` — now also carries `checksum?: 'verified' | 'mismatch' | 'unchecked'`,
   set once a completed download has been compared with the release manifest
   ([browser-shell.md](browser-shell.md#downloads--checksum-verification)).
-- `DownloadEntry` — `id`, `filename`, `receivedBytes`, `totalBytes`,
+- `DownloadEntry` — `id`, `filename`, `receivedBytes`, `totalBytes`, `risk`,
   `state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'`, `savePath?`.
   The union is hand-written to mirror Electron's download states, and the main
   process assigns Electron's own state string straight into it.

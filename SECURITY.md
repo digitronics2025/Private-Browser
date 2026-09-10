@@ -4,6 +4,15 @@
 
 Private Browser treats every loaded website as hostile. Remote pages run in sandboxed `WebContentsView` instances with Node.js disabled, context isolation enabled, no preload script, no privileged IPC and strict protocol filtering. The trusted React browser chrome runs separately with a small, typed preload bridge.
 
+The packaged Electron executable disables `ELECTRON_RUN_AS_NODE`, Node options
+and CLI debugging, enables cookie encryption and embedded ASAR integrity, and
+loads the application only from its ASAR. Chromium's process sandbox is enabled
+globally. Certificate errors are rejected, `<webview>` attachment is refused,
+WebRTC is restricted to the default public interface, and IPC payloads are
+size-bounded and rate-limited after a main-frame trusted-sender check. The chrome
+renderer is pinned to its packaged file (or the configured local dev origin), so
+a remote page cannot navigate the privileged window and inherit its preload API.
+
 Each workspace uses a separate persistent Electron session partition, preventing cookies and authenticated sessions from crossing workspace boundaries.
 
 ## Vault
@@ -43,6 +52,16 @@ Nothing in it leaves the device.
 
 Remote sites are denied sensitive Electron permissions by default. Fullscreen and sanitized clipboard writes are the only allowed permissions in the initial release. Popups are converted to ordinary sandboxed tabs. Non-HTTP(S) navigation is blocked.
 
+Those two permissions require a top-level HTTPS page (or localhost development
+page). Banking denies every site permission, popup and download. Common campaign
+identifiers are removed from navigations, DNT and Global Privacy Control headers
+are sent, common tracker hosts are blocked, and cleartext or punycode domains are
+visibly marked in the address bar.
+
+Executable, script and deceptive double-extension downloads are labelled and
+cannot be opened from Private Browser unless they match the checksum of the
+release manifest. This does not replace operating-system malware scanning.
+
 ## Developer tools
 
 Chromium DevTools attach only to non-home pages in the Development workspace. They are refused in every other workspace and on detected banking or payment URLs, and are closed whenever the user switches tabs or workspaces or a tab commits a protected navigation. Page context menus expose exact element inspection only inside that boundary.
@@ -73,7 +92,13 @@ Local values belong in `.env` or `cloudflare/.dev.vars`; production values are s
 
 ## Known external requirement
 
-The generated Windows installer is reproducible but unsigned. A trusted code-signing certificate is required to eliminate Windows unknown-publisher warnings.
+The generated Windows installer is reproducible and the workflow is ready to
+sign when `WINDOWS_CODE_SIGNING_CERTIFICATE` and
+`WINDOWS_CODE_SIGNING_PASSWORD` repository secrets are configured. Until then,
+the release remains unsigned and Windows can show an unknown-publisher warning.
+A commercial URL-reputation feed is also still required for live phishing and
+malware-site intelligence; Google Safe Browsing's free service is not licensed
+for this business use case.
 
 ## Reporting
 

@@ -3,7 +3,7 @@ system: browser-shell
 sources:
   - electron/main.ts
   - electron/developer-tools.ts
-verified_at: 017e88ff
+verified_at: 3f68afed
 ---
 
 # Browser Shell
@@ -106,8 +106,9 @@ why the chrome reserves that strip itself.
   `contextIsolation`, `sandbox` and `webSecurity` on, `nodeIntegration` off.
 - `Menu.setApplicationMenu(null)` removes the default application menu — and with
   it every default accelerator. That is why Ctrl+L/T/W/R are hand-rolled.
-- Dev versus packaged: `process.env.VITE_DEV_SERVER_URL` if set, otherwise
-  `loadFile('../dist/index.html')` relative to the compiled main.
+- Dev versus packaged: `process.env.VITE_DEV_SERVER_URL` if set, otherwise a
+  `file:` URL for `../dist/index.html` relative to the compiled main. A
+  `will-navigate` guard pins chrome to that file or the configured dev origin.
 - `setWindowOpenHandler(() => ({ action: 'deny' }))` on the chrome's own
   webContents. The React layer can never open a window.
 - `resize` re-runs `applyLayout()`. `closed` closes every tab's webContents and
@@ -251,7 +252,10 @@ becomes a `DownloadEntry` in an in-memory `Map` keyed by a fresh `randomUUID()`:
   listeners, and every mutation calls `broadcast()`, so the renderer sees live
   progress.
 - Nothing calls `item.setSavePath()`, so Electron's own save behaviour applies.
-- `openDownload(id)` requires state `completed` **and** a `savePath`;
+- Banking-workspace downloads are cancelled before a file is written.
+- `downloadRisk` marks executable/script extensions and deceptive double
+  extensions. `openDownload(id)` requires state `completed` **and** a `savePath`,
+  and refuses a risky file unless it is the checksum-verified app installer;
   `showDownload(id)` only requires a `savePath`.
 - The map is never persisted and never pruned.
 
@@ -300,10 +304,10 @@ only ever receives a `data:` URL, `img-src` in index.html no longer needs `https
 
 ## Tracker Blocking
 
-`TRACKER_HOSTS` is a seven-entry hostname denylist (doubleclick.net,
-googlesyndication.com, google-analytics.com, connect.facebook.net,
-analytics.twitter.com, hotjar.com, scorecardresearch.com). `onBeforeRequest`
-matches a request's hostname exactly or as a `.suffix`, and cancels on a hit.
+`TRACKER_HOSTS` is a curated denylist covering common advertising, analytics,
+session-replay and retargeting providers. `onBeforeRequest` matches a request's
+hostname exactly or as a `.suffix`, and cancels on a hit. Every request also
+receives `DNT: 1` and `Sec-GPC: 1`.
 
 - The toggle is persisted state, so it applies to every workspace at once.
 - A URL that fails to parse is treated as not blocked.
@@ -330,7 +334,7 @@ the whole state file per event.
 persistent partitions, and cookies, storage and cache never cross one. This is
 the isolation the workspace concept sells.
 
-`configureSession(ses, partition)` returns immediately if `configuredSessions`
+`configureSession(ses, partition, workspaceId)` returns immediately if `configuredSessions`
 already holds the partition. That guard is load-bearing: the second tab in a
 workspace reuses the same `Session` object, and without it `onBeforeRequest` and
 `will-download` would be registered again and each download recorded twice.
@@ -339,10 +343,10 @@ What it configures, once per partition:
 
 - **User agent** — the default string with any ` Electron/<version>` and
   ` Private Browser/<version>` token stripped out.
-- **Permissions** — both `setPermissionRequestHandler` and
-  `setPermissionCheckHandler` allow only `fullscreen` and
-  `clipboard-sanitized-write`. Camera, microphone, geolocation, notifications and
-  the rest are denied without ever prompting. The two handlers must keep agreeing:
+- **Permissions** — both handlers allow only top-frame `fullscreen` and
+  `clipboard-sanitized-write` from HTTPS or localhost. Banking denies everything.
+  Camera, microphone, geolocation, notifications and the rest are denied without
+  prompting. The two handlers must keep agreeing:
   allowing something in one and not the other hands a page an API that fails when
   it is called.
 - **Request filtering** — the tracker denylist above.
@@ -352,17 +356,19 @@ What it configures, once per partition:
 
 Three guards keep a view on http and https:
 
-1. Per-view `setWindowOpenHandler(({ url }) => ...)` — an allowed URL becomes
-   `newTab(tab.workspaceId, url)` and the handler **always** returns
+1. Per-view `setWindowOpenHandler(({ url }) => ...)` — outside Banking, an
+   allowed URL becomes a sanitized `newTab(tab.workspaceId, url)` and the handler **always** returns
    `{ action: 'deny' }`. `window.open` and `target="_blank"` become tabs in the
    same workspace, never real windows and never a cross-workspace leak. The
-   workspace id is captured in the closure when the view is built.
-2. Per-view `will-navigate` calls `event.preventDefault()` on anything that fails
+   workspace id is captured in the closure when the view is built. Banking
+   denies the popup completely.
+2. Per-view `will-navigate` and `will-redirect` call `event.preventDefault()` on anything that fails
    `isAllowedRemoteUrl`, so a page cannot walk its own view to `file:`, `data:` or
-   a custom scheme.
+   a custom scheme. They reload URLs after removing tracking parameters.
 3. `commitNavigation` re-checks before writing the URL into state.
 
-The chrome window's own `setWindowOpenHandler` denies unconditionally.
+The chrome window's own `setWindowOpenHandler` denies unconditionally. Both
+chrome and page views explicitly cancel `will-attach-webview`.
 
 The `newTab` call inside the popup handler is fire-and-forget (`void`); a failure
 there is not reported anywhere.
@@ -415,6 +421,7 @@ F-15). Losing first-launch enrolment is the cheaper failure.
 function handle(channel, callback) {
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrusted(event);
+    ipcGuard.check(event.sender.id, args);
     return callback(event, ...args);
   });
 }
@@ -422,10 +429,13 @@ function handle(channel, callback) {
 
 `assertTrusted` throws `Untrusted IPC sender` unless
 `controller.isTrustedSender(event)` is true, which requires the window to exist,
-not be destroyed, and `event.sender === window.webContents`.
+not be destroyed, `event.sender === window.webContents`, and the sender frame to
+be that webContents' main frame.
 
 - Page views are created with no preload, so they have no `ipcRenderer` and cannot
   reach these channels at all. The sender check is the second layer, not the first.
+- `IpcGuard` rejects payloads over 256 KiB and throttles a compromised trusted
+  renderer after 300 calls in ten seconds.
 - All 40 channels are registered **before** `createWindow()`. The renderer calls
   `getState()` on mount, so registration has to precede the page load.
 - The wrapper body is `async`, so a synchronous `throw` inside any controller
