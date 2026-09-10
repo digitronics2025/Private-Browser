@@ -14,6 +14,17 @@ If the vault cannot be decrypted, writes are disabled to prevent silent data los
 
 Autofill is deliberately manual and restricted to an exact hostname and port match. The scheme is checked asymmetrically: a credential saved for `https` is never filled into an `http` page, while a page served over `https` is always acceptable. A website can still observe credentials entered into its own form, just as it can in any password manager; users must verify the domain before filling.
 
+## Local browsing data
+
+Saved credentials, the AI provider key and the download-service token are
+encrypted with Electron `safeStorage`. **Browsing history, bookmarks, open tab
+URLs and the privacy log are not** — they are written as plaintext JSON in the
+application's own data directory, so the app can still start when the operating
+system keychain is unavailable. The file is created with owner-only permissions
+where the OS supports them, which on Windows is largely advisory. Anyone with an
+account on the machine, or any process running as the user, can read that file.
+Nothing in it leaves the device.
+
 ## AI data controls
 
 - The Banking workspace rejects page extraction outright. Detected banking and
@@ -43,6 +54,14 @@ Installers ship **without** an embedded download credential by default. A privat
 That opt-in is deliberately awkward, because a credential distributed inside a desktop installer can be extracted by anyone holding the file, and this one is shared by every client rather than issued per device. Any installer built with it must be treated as carrying a public token: rotate `PRIVATE_BROWSER_DOWNLOAD_TOKEN` before the file goes anywhere beyond the machine it was built for. Production enrollment should issue revocable device-specific credentials instead.
 
 The Worker checks R2 object size against D1 before publication and again before serving. The release workflow calculates SHA-256 from the exact installer uploaded to R2. Resumable downloads are restricted to one validated byte range per request.
+
+## Credentials in the repository
+
+No credential is ever stored in a tracked file. `.gitignore` is itself committed and public; it keeps named paths out of the index and nothing more, and `git add -f` bypasses it entirely. Enforcement is [scripts/secret-guard.mjs](scripts/secret-guard.mjs), which refuses vendor token shapes, private key blocks, URLs carrying embedded credentials, hard-coded credential assignments, and any path that names an environment or key file regardless of its contents.
+
+It runs in two places: `.githooks/pre-commit` scans staged additions and blocks the commit, and `npm run secrets:check` scans every tracked file as the first step of `npm run check`, so a secret cannot survive by never being re-staged. A deliberate fixture is exempted with a `secret-guard:allow` marker on the line — the exemption is per line, visible in review, and never a directory or file-wide silence.
+
+Local values belong in `.env` or `cloudflare/.dev.vars`; production values are set with `wrangler secret put`, which cannot be read back, so the value is recorded in the operator's own vault first. A credential that reaches a commit stays in history after deletion. Rotate it; do not delete it and assume it is gone.
 
 ## Known external requirement
 

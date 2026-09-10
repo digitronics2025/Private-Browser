@@ -1,14 +1,41 @@
+# This file is COMMITTED and public. It hides nothing — it only keeps the paths
+# named below out of the index. Never write a password, key or token in here.
+# Secrets go in .env or cloudflare/.dev.vars locally, or `wrangler secret put`
+# for production. scripts/secret-guard.mjs blocks the ones that slip through.
+
+# Build output
 node_modules/
 dist/
 dist-electron/
 release/
+build/private-browser-update.json
 .wrangler/
 .wrangler-dist/
-cloudflare/wrangler.deploy.jsonc
-cloudflare/.dev.vars
-build/private-browser-update.json
-*.log
-.DS_Store
+
+# Local environment values
 .env
 .env.*
 !.env.example
+.dev.vars
+.dev.vars.*
+cloudflare/.dev.vars
+cloudflare/wrangler.deploy.jsonc
+
+# Keys, certificates and signing material
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.asc
+*.ppk
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+.npmrc
+
+# Noise
+*.log
+.DS_Store
