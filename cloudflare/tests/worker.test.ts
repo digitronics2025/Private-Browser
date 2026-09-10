@@ -86,7 +86,29 @@ describe('download Worker', () => {
     const page = await fetchSigned(item.downloadPageUrl);
     expect(page.status).toBe(200);
     expect(page.headers.get('x-robots-tag')).toContain('noindex');
-    expect(await page.text()).toContain('Private-Browser-0.3.0-Setup.exe'.replace('Private-Browser-0.3.0-Setup.exe', 'Download Private Browser'));
+    expect(await page.text()).toContain('Download and install');
+  });
+
+  it('serves a stable tokenized install page without exposing the token', async () => {
+    const page = await request(`/download/${accessToken}`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('cache-control')).toContain('no-store');
+    expect(page.headers.get('x-robots-tag')).toContain('noindex');
+    const html = await page.text();
+    expect(html).toContain('Download and install');
+    expect(html).toContain('Build number');
+    expect(html).toContain('Stable release');
+    expect(html).toMatch(/\/download\/latest\.exe\?expires=\d+&amp;signature=/);
+    expect(html).not.toContain(accessToken);
+
+    const head = await request(`/download/${accessToken}`, { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe('');
+  });
+
+  it('hides stable install pages with missing or incorrect tokens', async () => {
+    expect((await request('/download/wrong-token-that-is-long-enough-000000')).status).toBe(404);
+    expect((await request('/download/')).status).toBe(404);
   });
 
   it('serves full, HEAD, open, closed and suffix byte ranges', async () => {

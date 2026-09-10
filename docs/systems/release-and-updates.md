@@ -116,7 +116,8 @@ message and returns 500 `internal_error`.
 | `/api/v1/releases/latest` | GET, HEAD | client bearer | `handleLatest`. 404 on bad token or no release. Returns the signed manifest; HEAD returns the headers with no body. |
 | `/update.json` | GET, HEAD | client bearer | **The same handler.** This is the path the desktop client calls. |
 | `/api/v1/admin/releases` | POST | admin `x-api-key` | `handlePublish`. Registers a release. See below. |
-| `/download` | GET, HEAD | signed link | `handleDownloadPage`. Renders the branded HTML page from [page.ts](../../cloudflare/src/page.ts) and re-signs a binary link for the same `expires`. |
+| `/download` | GET, HEAD | signed link | `handleDownloadPage`. Renders the branded HTML install page from [page.ts](../../cloudflare/src/page.ts) and re-signs a binary link for the same `expires`. |
+| `/download/<token>` | GET, HEAD | client token in path | `handleStableDownloadPage`. Permanent private entry page for a human browser; always shows the active release and mints a fresh signed installer link on each load. Wrong tokens return the generic 404. |
 | `/download/latest.exe` | GET, HEAD | signed link | `handleBinary`. Streams the R2 object, with single-range support. |
 
 `handlePublish` in order: 405 unless POST → 404 unless admin-authorised → 415
@@ -146,11 +147,15 @@ Two distinct levels, and they never overlap.
 | Level | Function | Credential | Header | Routes |
 | --- | --- | --- | --- | --- |
 | Client | `isClientAuthorized` | `DOWNLOAD_ACCESS_TOKEN` | `authorization: Bearer <token>` | `/api/v1/releases/latest`, `/update.json` |
+| Install page | `handleStableDownloadPage` | `DOWNLOAD_ACCESS_TOKEN` | final `/download/<token>` path segment | Stable human-facing install page; token is compared in constant time and never rendered into the HTML. |
 | Admin | `isAdminAuthorized` | `ADMIN_API_KEY` | `x-api-key` | `POST /api/v1/admin/releases` |
 
 `/download` and `/download/latest.exe` use neither — they are authorised by the
-signed link alone, which is what makes the page shareable to a browser that has
-no token.
+signed link alone. `/download/<token>` is the persistent private entry point:
+it validates `DOWNLOAD_ACCESS_TOKEN` directly, then creates a fresh signed
+binary URL without echoing the token into the HTML. The tokenized URL remains
+valid until that Worker secret is rotated, so it belongs in a private bookmark,
+not messages, screenshots, logs or public documentation.
 
 **Both failures return `notFound()` — a 404 identical to an unknown path.** A
 caller cannot tell a wrong token from a route that does not exist, and
@@ -198,8 +203,11 @@ the signature is even checked. `verifySignedValue` then rejects an empty
 signature or one longer than 100 characters, and otherwise compares in constant
 time.
 
-The download page re-signs the installer link using **the same `expires` it was
-handed**, so opening the page never extends the window.
+The signed `/download` page re-signs the installer link using **the same
+`expires` it was handed**, so opening that page never extends the window. The
+stable `/download/<token>` page instead mints a new expiry and binary signature
+on every load. This makes the page bookmarkable while keeping every actual R2
+installer link short-lived.
 
 ## Range Serving
 

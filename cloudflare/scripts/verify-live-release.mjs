@@ -29,6 +29,13 @@ assert(pageResponse.status === 200, `Signed download page returned ${pageRespons
 const page = await pageResponse.text();
 assert(page.includes(`Version ${manifest.version}`) && page.includes(expectedHash), 'Download page metadata is incomplete');
 
+const stablePageResponse = await fetch(`${endpoint}/download/${encodeURIComponent(accessToken)}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+assert(stablePageResponse.status === 200, `Stable install page returned ${stablePageResponse.status}`);
+const stablePage = await stablePageResponse.text();
+assert(stablePage.includes('Download and install') && stablePage.includes(expectedHash), 'Stable install page metadata is incomplete');
+assert(!stablePage.includes(accessToken), 'Stable install page exposed its access token');
+await expectStatus(`${endpoint}/download/invalid-private-browser-token-000000`, 404);
+
 const head = await fetch(manifest.downloadUrl, { method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(30_000) });
 assert(head.status === 200, `Installer HEAD returned ${head.status}`);
 assert(Number(head.headers.get('content-length')) === expectedSize, 'Installer HEAD size is incorrect');
