@@ -4,7 +4,7 @@ sources:
   - electron/agent-bridge.ts
   - electron/codex-app-server.ts
   - vscode-extension/**
-verified_at: 8c8d2bee
+verified_at: 67925bd
 ---
 
 # Agent Bridge
