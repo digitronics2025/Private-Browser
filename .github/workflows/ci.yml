@@ -87,6 +87,7 @@ jobs:
             release/SHA256SUMS.txt
             release/VERSION.txt
             release/SBOM.cdx.json
+            build/private-browser-vscode-bridge.vsix
           if-no-files-found: error
           retention-days: 30
 

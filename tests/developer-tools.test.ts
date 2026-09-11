@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from '../electron/developer-tools';
+import { canUseDeveloperTools, diagnosticSourcePath, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from '../electron/developer-tools';
 
 describe('developer tool boundary', () => {
   it('allows only ordinary pages in the Development workspace', () => {
@@ -22,6 +22,13 @@ describe('developer tool boundary', () => {
     expect(result.text).toContain('request failed');
     expect(result.text).toContain('[REDACTED]');
     expect(result.text).not.toContain('hunter2');
+  });
+
+  it('maps only loopback development URLs to workspace-relative source paths', () => {
+    expect(diagnosticSourcePath('http://localhost:5173/src/App.tsx?t=123')).toBe('src/App.tsx');
+    expect(diagnosticSourcePath('https://example.com/src/App.tsx')).toBeUndefined();
+    expect(diagnosticSourcePath('http://localhost:5173/../secret.txt')).toBeUndefined();
+    expect(diagnosticSourcePath('file:///etc/passwd')).toBeUndefined();
   });
 
   it('produces a structured report suitable for an AI debugging prompt', () => {

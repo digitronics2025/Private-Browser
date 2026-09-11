@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Bot,
+  Cable,
   Bookmark,
   Bug,
   Check,
@@ -17,6 +18,7 @@ import {
   Eye,
   FileDown,
   FileCode2,
+  GitBranch,
   Globe2,
   Gauge,
   Home,
@@ -38,6 +40,7 @@ import {
   Shield,
   ShieldCheck,
   Sparkles,
+  Square,
   Star,
   Trash2,
   TriangleAlert,
@@ -45,9 +48,9 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, BrowserTab, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
+import type { AgentBridgeStatus, AgentEditorContext, AgentPairingSession, AgentRuntimeStatus, AgentTaskMode, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, BrowserTab, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
 
-type SidebarMode = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
+type SidebarMode = 'assistant' | 'agent' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
 
 const QUICK_LINKS: Record<WorkspaceId, Array<{ label: string; url: string; tone: string }>> = {
   digitronics: [
@@ -265,6 +268,7 @@ export default function App() {
           <SidebarNav mode={sidebarMode} setMode={setSidebarMode} counts={{ downloads: state.downloads.filter((item) => item.state === 'progressing').length }} />
           <div className="sidebar-content">
             {sidebarMode === 'assistant' && <AssistantPanel onToast={showToast} />}
+            {sidebarMode === 'agent' && <AgentPanel activeTab={activeTab} onToast={showToast} />}
             {sidebarMode === 'developer' && <DeveloperPanel activeTab={activeTab} onToast={showToast} />}
             {sidebarMode === 'vault' && <VaultPanel onToast={showToast} />}
             {sidebarMode === 'automations' && <AutomationPanel onToast={showToast} />}
@@ -354,6 +358,7 @@ function Dashboard({ state, open, openBookmark }: { state: BrowserSnapshot; open
 function SidebarNav({ mode, setMode, counts }: { mode: SidebarMode; setMode: (mode: SidebarMode) => void; counts: { downloads: number } }) {
   const items: Array<{ id: SidebarMode; icon: typeof Bot; label: string; count?: number }> = [
     { id: 'assistant', icon: Sparkles, label: 'AI' },
+    { id: 'agent', icon: Bot, label: 'Agent' },
     { id: 'developer', icon: Code2, label: 'Dev' },
     { id: 'vault', icon: KeyRound, label: 'Vault' },
     { id: 'automations', icon: Zap, label: 'Flows' },
@@ -366,6 +371,149 @@ function SidebarNav({ mode, setMode, counts }: { mode: SidebarMode; setMode: (mo
 
 function PanelHeader({ icon: Icon, eyebrow, title }: { icon: typeof Bot; eyebrow: string; title: string }) {
   return <div className="panel-header"><span className="panel-icon"><Icon size={18} /></span><div><small>{eyebrow}</small><h2>{title}</h2></div></div>;
+}
+
+function AgentPanel({ activeTab, onToast }: { activeTab: BrowserTab; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+  const [bridge, setBridge] = useState<AgentBridgeStatus | null>(null);
+  const [runtime, setRuntime] = useState<AgentRuntimeStatus | null>(null);
+  const [editor, setEditor] = useState<AgentEditorContext | null>(null);
+  const [pairing, setPairing] = useState<AgentPairingSession | null>(null);
+  const [mode, setMode] = useState<AgentTaskMode>('autopilot');
+  const [objective, setObjective] = useState('Diagnose the current browser errors, implement the correct fix, run all relevant tests, and leave a reviewable result.');
+  const [includeDiagnostics, setIncludeDiagnostics] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const allowed = activeTab.workspaceId === 'development' && (activeTab.isHome || activeTab.developerToolsAllowed);
+
+  const run = async <T,>(action: () => Promise<T>, success?: string): Promise<T | undefined> => {
+    setLoading(true);
+    try {
+      const result = await action();
+      if (success) onToast(success);
+      return result;
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : String(error), 'error');
+      return undefined;
+    } finally { setLoading(false); }
+  };
+
+  const refresh = async () => {
+    if (!allowed) return;
+    const [nextBridge, nextRuntime] = await Promise.all([
+      window.privateBrowser.getAgentBridge(),
+      window.privateBrowser.detectAgentRuntime(),
+    ]);
+    setBridge(nextBridge);
+    setRuntime(nextRuntime);
+    if (nextBridge.connected) setEditor(await window.privateBrowser.getAgentEditorContext());
+    else setEditor(null);
+  };
+
+  useEffect(() => {
+    if (!allowed) return;
+    void refresh().catch(() => undefined);
+    const stopBridge = window.privateBrowser.onAgentBridgeStatus((status) => {
+      setBridge(status);
+      if (status.connected) void window.privateBrowser.getAgentEditorContext().then(setEditor).catch(() => setEditor(null));
+      else setEditor(null);
+    });
+    const stopRuntime = window.privateBrowser.onAgentRuntimeStatus(setRuntime);
+    return () => { stopBridge(); stopRuntime(); };
+  }, [allowed]);
+
+  const pair = () => run(async () => {
+    setPairing(await window.privateBrowser.pairAgentBridge());
+  }, 'Pairing code ready — enter it in VS Code');
+
+  const disconnect = () => run(async () => {
+    setBridge(await window.privateBrowser.disconnectAgentBridge());
+    setPairing(null);
+    setEditor(null);
+  }, 'VS Code and agents disconnected');
+
+  const start = () => run(async () => {
+    const task = await window.privateBrowser.startAgentTask({ objective, mode, includeDiagnostics });
+    setRuntime((current) => ({ ...(current ?? { available: true, command: 'codex' }), activeTask: task }));
+  }, `${mode === 'autopilot' ? 'Guarded autopilot' : mode} started`);
+
+  const task = runtime?.activeTask;
+  const taskRunning = task?.status === 'starting' || task?.status === 'running';
+
+  if (!allowed) return (
+    <div className="side-panel agent-panel">
+      <PanelHeader icon={Bot} eyebrow="Local coding agents" title="Agent command center" />
+      <div className="developer-locked"><LockKeyhole size={24} /><h3>Development workspace only</h3><p>Agent access is disabled in every other workspace and on detected banking or payment pages.</p></div>
+    </div>
+  );
+
+  return (
+    <div className="side-panel agent-panel">
+      <PanelHeader icon={Bot} eyebrow="Private local bridge" title="Agent command center" />
+
+      <div className={`agent-connection ${bridge?.connected ? 'connected' : ''}`}>
+        <span><Cable size={16} /></span>
+        <div><strong>{bridge?.connected ? `${bridge.client?.name ?? 'VS Code'} connected` : bridge?.paired ? 'Waiting for VS Code' : 'VS Code not paired'}</strong><small>Local OS pipe · website access blocked</small></div>
+        <i>{bridge?.connected ? 'LIVE' : bridge?.state?.toUpperCase() ?? 'STARTING'}</i>
+      </div>
+
+      {!bridge?.connected && (
+        <section className="agent-setup">
+          <p>Install the bundled companion, then pair it once. The reusable credential stays in VS Code SecretStorage; this browser stores only its hash.</p>
+          <div>
+            <button disabled={loading} onClick={() => void run(() => window.privateBrowser.installVsCodeExtension(), 'VS Code companion installed')}><Download size={13} /> Install extension</button>
+            <button className="primary-button" disabled={loading} onClick={() => void pair()}><Cable size={13} /> Pair VS Code</button>
+          </div>
+          {pairing && <div className="pairing-code"><small>ENTER IN VS CODE · EXPIRES IN 5 MINUTES</small><strong>{pairing.code.slice(0, 4)} {pairing.code.slice(4)}</strong><span>Command Palette → Private Browser: Pair</span></div>}
+        </section>
+      )}
+
+      {bridge?.connected && (
+        <>
+          <section className="editor-context-card">
+            <div className="agent-section-title"><span><Code2 size={14} /> VS Code context</span><button onClick={() => void run(async () => setEditor(await window.privateBrowser.getAgentEditorContext()))}><RefreshCw size={12} /></button></div>
+            <div className="context-facts">
+              <span><strong>{editor?.workspaceName ?? 'Workspace'}</strong><small>{editor?.workspaceTrusted ? 'Trusted workspace' : 'Restricted workspace'}</small></span>
+              <span><strong>{editor?.git?.branch ?? 'No Git branch'}</strong><small>{editor?.git?.dirty ? `${editor.git.changedFiles} changed file(s)` : 'Clean working tree'}</small></span>
+            </div>
+            {editor?.activeFile && <button className="active-source" onClick={() => void run(() => window.privateBrowser.openAgentLocation(editor.activeFile!.path, editor.activeFile!.line))}><FileCode2 size={14} /><span><strong>{editor.activeFile.path}</strong><small>{editor.activeFile.language} · line {editor.activeFile.line}{editor.activeFile.selection ? ' · selection attached' : ''}</small></span><ExternalLink size={12} /></button>}
+            <div className="context-counts"><span>{editor?.diagnostics.filter((item) => item.severity === 'error').length ?? 0} errors</span><span>{editor?.diagnostics.filter((item) => item.severity === 'warning').length ?? 0} warnings</span><span>{editor?.tasks.length ?? 0} tasks</span></div>
+          </section>
+
+          <section className="agent-task-card">
+            <div className="agent-section-title"><span><Bot size={14} /> New coding task</span><b>{runtime?.available ? runtime.version ?? 'Codex ready' : 'Codex required'}</b></div>
+            <textarea value={objective} maxLength={10_000} onChange={(event) => setObjective(event.target.value)} placeholder="Describe the result you want…" />
+            <div className="agent-options">
+              <select value={mode} onChange={(event) => setMode(event.target.value as AgentTaskMode)}>
+                <option value="diagnose">Diagnose only</option>
+                <option value="build">Build · offline</option>
+                <option value="autopilot">Guarded autopilot</option>
+              </select>
+              <label><input type="checkbox" checked={includeDiagnostics} disabled={!activeTab.developerToolsAllowed} onChange={(event) => setIncludeDiagnostics(event.target.checked)} /> Browser diagnostics</label>
+            </div>
+            <p className="agent-policy">Autopilot can edit and test only inside the trusted workspace. Page content is treated as untrusted data. Banking remains inaccessible.</p>
+            <div className="agent-actions">
+              <button className="primary-button" disabled={loading || taskRunning || !runtime?.available || !editor?.workspaceTrusted || objective.trim().length < 3} onClick={() => void start()}><Play size={13} /> Run task</button>
+              {taskRunning && <button className="danger" onClick={() => void run(() => window.privateBrowser.interruptAgentTask())}><Square size={12} /> Stop</button>}
+              <button onClick={() => void run(() => window.privateBrowser.saveAgentWorkspace(), 'All files saved')}>Save all</button>
+              <button className="quiet" onClick={() => void disconnect()}>Disconnect</button>
+            </div>
+          </section>
+
+          {editor?.tasks.length ? <section className="workspace-tasks"><small>TRUSTED VS CODE TASKS</small><div>{editor.tasks.slice(0, 6).map((name) => <button key={name} onClick={() => void run(() => window.privateBrowser.runAgentWorkspaceTask(name), `${name} started`)}><Play size={11} /> {name}</button>)}</div></section> : null}
+
+          {task && (
+            <section className={`agent-run ${task.status}`}>
+              <div className="agent-section-title"><span><LoaderCircle className={taskRunning ? 'spin' : ''} size={14} /> {task.status}</span><b>{task.mode}</b></div>
+              {task.plan.length ? <div className="agent-plan">{task.plan.map((item, index) => <div key={`${index}-${item.step}`} className={item.status}><i /> <span>{item.step}</span></div>)}</div> : null}
+              <div className="agent-events">{task.events.slice(-12).map((item, index) => <div className={item.kind} key={`${item.at}-${index}`}><time>{new Date(item.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time><span>{item.text}</span></div>)}</div>
+              {task.answer && <div className="agent-answer">{task.answer}</div>}
+              {task.diff && <details><summary><GitBranch size={12} /> Review current diff</summary><pre>{task.diff}</pre></details>}
+              {task.error && <p className="agent-error">{task.error}</p>}
+            </section>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
@@ -444,6 +592,7 @@ function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; onToast
             {report && (
               <div className="diagnostic-result">
                 <div><span><strong>{report.console.length}</strong> console</span><span><strong>{report.network.length}</strong> network</span><span><strong>{report.redactions}</strong> redacted</span></div>
+                {report.console.filter((entry) => entry.sourcePath).slice(0, 5).map((entry, index) => <button className="source-error" key={`${entry.at}-${index}`} onClick={() => void run(() => window.privateBrowser.openAgentLocation(entry.sourcePath!, entry.line || 1), 'Opened source in VS Code')}><FileCode2 size={12} /><span>{entry.sourcePath}:{entry.line || 1}</span><ExternalLink size={11} /></button>)}
                 <button onClick={() => void run(() => window.privateBrowser.copyText(report.formatted), 'Report copied for Codex or Claude')}><Copy size={13} /> Copy for AI</button>
                 <button className="quiet" onClick={clear}>Clear captured data</button>
               </div>

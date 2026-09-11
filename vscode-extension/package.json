@@ -1,0 +1,62 @@
+{
+  "name": "private-browser-agent-bridge",
+  "displayName": "Private Browser Agent Bridge",
+  "description": "Securely connects a trusted VS Code workspace to Private Browser Developer Cockpit.",
+  "version": "0.4.0",
+  "publisher": "digitronics",
+  "license": "UNLICENSED",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/digitronics2025/Private-Browser.git",
+    "directory": "vscode-extension"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:privateBrowser.pair",
+    "onCommand:privateBrowser.connect",
+    "onCommand:privateBrowser.disconnect"
+  ],
+  "main": "./dist/extension.js",
+  "files": [
+    "dist/**",
+    "README.md",
+    "LICENSE.txt"
+  ],
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "private-browser-agent-tools",
+        "label": "Private Browser Agent Tools"
+      }
+    ],
+    "commands": [
+      {
+        "command": "privateBrowser.pair",
+        "title": "Private Browser: Pair with Developer Cockpit"
+      },
+      {
+        "command": "privateBrowser.connect",
+        "title": "Private Browser: Connect Agent Bridge"
+      },
+      {
+        "command": "privateBrowser.disconnect",
+        "title": "Private Browser: Disconnect Agent Bridge"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p tsconfig.json",
+    "package": "vsce package --no-dependencies"
+  }
+}

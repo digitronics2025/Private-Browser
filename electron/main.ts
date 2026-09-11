@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   app,
@@ -22,6 +24,12 @@ import type {
   AiApproval,
   AiPagePreview,
   AiProviderInput,
+  AgentBridgeStatus,
+  AgentEditorContext,
+  AgentPairingSession,
+  AgentRuntimeStatus,
+  AgentTaskRequest,
+  AgentTaskSnapshot,
   BrowserSnapshot,
   BrowserTab,
   DeveloperConsoleEntry,
@@ -37,8 +45,10 @@ import type {
 import { VaultStore } from './vault.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
-import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
+import { canUseDeveloperTools, diagnosticSourcePath, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
 import { IpcGuard } from './ipc-guard.js';
+import { AgentBridgeServer, publicEditorContext } from './agent-bridge.js';
+import { CodexAppServer } from './codex-app-server.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -107,6 +117,8 @@ class BrowserController {
     private readonly vault: VaultStore,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
+    private readonly agentBridge: AgentBridgeServer,
+    private readonly codex: CodexAppServer,
   ) {
     for (const tab of this.store.get().tabs) {
       this.runtimeTabs.set(tab.id, this.newRuntimeTab());
@@ -186,6 +198,14 @@ class BrowserController {
 
   broadcast(): void {
     if (!this.window.isDestroyed()) this.window.webContents.send('browser:state', this.getSnapshot());
+  }
+
+  sendAgentBridgeStatus(status: AgentBridgeStatus): void {
+    if (!this.window?.isDestroyed()) this.window.webContents.send('agent:bridge-status', status);
+  }
+
+  sendAgentRuntimeStatus(status: AgentRuntimeStatus): void {
+    if (!this.window?.isDestroyed()) this.window.webContents.send('agent:runtime-status', status);
   }
 
   isTrustedSender(event: IpcMainInvokeEvent): boolean {
@@ -611,6 +631,127 @@ class BrowserController {
     await this.newTab('development', result.latest.downloadPageUrl);
   }
 
+  getAgentBridgeStatus(): AgentBridgeStatus {
+    this.requireAgentWorkspace();
+    return this.agentBridge.status();
+  }
+
+  beginAgentPairing(): AgentPairingSession {
+    this.requireAgentWorkspace();
+    return this.agentBridge.beginPairing();
+  }
+
+  disconnectAgentBridge(): AgentBridgeStatus {
+    this.requireAgentWorkspace();
+    this.codex.stop();
+    return this.agentBridge.disconnect();
+  }
+
+  async getAgentEditorContext(): Promise<AgentEditorContext> {
+    this.requireAgentWorkspace();
+    return publicEditorContext(await this.agentBridge.getEditorContext());
+  }
+
+  async installVsCodeExtension(): Promise<void> {
+    this.requireAgentWorkspace();
+    const packagedPath = join(process.resourcesPath, 'agent-tools', 'private-browser-vscode-bridge.vsix');
+    const developmentPath = resolve(import.meta.dirname, '..', 'build', 'private-browser-vscode-bridge.vsix');
+    const extensionPath = existsSync(packagedPath) ? packagedPath : developmentPath;
+    if (!existsSync(extensionPath)) throw new Error('Build the VS Code companion first with npm run vscode:package');
+    const candidates = process.platform === 'win32'
+      ? [
+          process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'Code.exe'),
+          process.env.ProgramFiles && join(process.env.ProgramFiles, 'Microsoft VS Code', 'Code.exe'),
+          process.env['ProgramFiles(x86)'] && join(process.env['ProgramFiles(x86)'], 'Microsoft VS Code', 'Code.exe'),
+        ].filter((value): value is string => Boolean(value && existsSync(value)))
+      : ['code'];
+    if (!candidates.length) throw new Error('VS Code was not found; install the bundled VSIX manually');
+    await new Promise<void>((resolveInstall, rejectInstall) => {
+      const child = spawn(candidates[0], ['--install-extension', extensionPath, '--force'], { windowsHide: true, stdio: 'ignore' });
+      child.once('error', () => rejectInstall(new Error('Could not start the VS Code extension installer')));
+      child.once('close', (code) => code === 0 ? resolveInstall() : rejectInstall(new Error('VS Code could not install the companion extension')));
+    });
+  }
+
+  getAgentRuntimeStatus(): AgentRuntimeStatus {
+    this.requireAgentWorkspace();
+    return this.codex.status();
+  }
+
+  async detectAgentRuntime(): Promise<AgentRuntimeStatus> {
+    this.requireAgentWorkspace();
+    return this.codex.detect();
+  }
+
+  async startAgentTask(request: AgentTaskRequest): Promise<AgentTaskSnapshot> {
+    this.requireAgentWorkspace();
+    const editor = await this.agentBridge.getEditorContext();
+    if (!editor.rootPath) throw new Error('Open a folder in the connected VS Code window first');
+    if (!editor.workspaceTrusted) throw new Error('Trust the connected VS Code workspace before running an agent task');
+    const diagnostics = request.includeDiagnostics && this.developerTarget()
+      ? await this.captureDeveloperDiagnostics()
+      : undefined;
+    return this.codex.startTask(request, {
+      workspacePath: editor.rootPath,
+      editor: publicEditorContext(editor),
+      diagnostics,
+    });
+  }
+
+  async interruptAgentTask(): Promise<AgentTaskSnapshot | undefined> {
+    this.requireAgentWorkspace();
+    return this.codex.interrupt();
+  }
+
+  async openAgentLocation(path: string, line: number): Promise<void> {
+    this.requireAgentWorkspace();
+    await this.agentBridge.openLocation(path, line);
+  }
+
+  async saveAgentWorkspace(): Promise<void> {
+    this.requireAgentWorkspace();
+    await this.agentBridge.saveAll();
+  }
+
+  async runAgentWorkspaceTask(name: string): Promise<void> {
+    this.requireAgentWorkspace();
+    await this.agentBridge.runTask(name);
+  }
+
+  async handleAgentToolRequest(method: string, params: unknown): Promise<unknown> {
+    this.requireAgentWorkspace();
+    const input = params && typeof params === 'object' ? params as Record<string, unknown> : {};
+    if (method === 'tool.browser_status') {
+      const tab = this.activeTab(this.store.get());
+      return {
+        workspace: tab.workspaceId,
+        title: sanitizeDiagnosticText(tab.title, 300).text,
+        url: tab.isHome ? 'private://home' : sanitizeDiagnosticUrl(tab.url).text,
+        developerToolsAllowed: canUseDeveloperTools(tab.workspaceId, tab.isHome, tab.url),
+        developerToolsOpen: this.runtimeTabs.get(tab.id)?.developerToolsOpen ?? false,
+      };
+    }
+    if (method === 'tool.browser_diagnostics') return this.captureDeveloperDiagnostics();
+    if (method === 'tool.browser_reload') {
+      this.requireDeveloperTarget().contents.reload();
+      return { reloaded: true };
+    }
+    if (method === 'tool.browser_open_devtools') {
+      await this.toggleDeveloperTools('right');
+      return { open: true };
+    }
+    if (method === 'tool.vscode_context') return publicEditorContext(await this.agentBridge.getEditorContext());
+    if (method === 'tool.vscode_open_location') {
+      await this.agentBridge.openLocation(String(input.path ?? ''), Number(input.line ?? 1));
+      return { opened: true };
+    }
+    if (method === 'tool.vscode_run_task') {
+      await this.agentBridge.runTask(String(input.name ?? ''));
+      return { started: true };
+    }
+    throw new Error('Unsupported agent tool');
+  }
+
   async checkForUpdatesInBackground(): Promise<void> {
     if (!this.getUpdateService().configured || this.window.isDestroyed()) return;
     try {
@@ -644,6 +785,13 @@ class BrowserController {
     return target;
   }
 
+  private requireAgentWorkspace(): void {
+    const tab = this.activeTab(this.store.get());
+    if (tab.workspaceId !== 'development' || (!tab.isHome && isProtectedPage(tab.url))) {
+      throw new Error('Agent tools are available only in the Development workspace and never on protected pages');
+    }
+  }
+
   private recordConsoleMessage(tabId: string, details: Electron.Event<Electron.WebContentsConsoleMessageEventParams>): void {
     if (details.level !== 'warning' && details.level !== 'error') return;
     const target = this.developerTarget(tabId);
@@ -656,6 +804,7 @@ class BrowserController {
       message: message.text,
       source: source.text,
       line: Math.max(0, details.lineNumber || 0),
+      ...(diagnosticSourcePath(details.sourceId) ? { sourcePath: diagnosticSourcePath(details.sourceId) } : {}),
       redactions: message.redactions + source.redactions,
     });
     if (target.runtime.console.length > 100) target.runtime.console.splice(0, target.runtime.console.length - 100);
@@ -988,6 +1137,8 @@ class BrowserController {
 }
 
 let controller: BrowserController | undefined;
+let agentBridge: AgentBridgeServer | undefined;
+let codexRuntime: CodexAppServer | undefined;
 let pendingLaunchUrl = process.argv.find((argument) => isAllowedRemoteUrl(argument));
 app.enableSandbox();
 app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'default_public_interface_only');
@@ -1033,6 +1184,13 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const vault = new VaultStore(join(app.getPath('userData'), 'vault.enc'));
   const aiProvider = new AiProviderStore(join(app.getPath('userData'), 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(app.getPath('userData'), 'update-service.enc'));
+  agentBridge = new AgentBridgeServer(
+    join(app.getPath('userData'), 'agent-bridge.json'),
+    undefined,
+    (status) => controller?.sendAgentBridgeStatus(status),
+    (method, params) => controller?.handleAgentToolRequest(method, params) ?? Promise.reject(new Error('Browser is not ready')),
+  );
+  codexRuntime = new CodexAppServer((status) => controller?.sendAgentRuntimeStatus(status));
   const updateBootstrapPath = join(process.resourcesPath, 'private-browser-update.json');
   try {
     const updateBootstrap = readUpdateBootstrap(updateBootstrapPath);
@@ -1047,7 +1205,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     // convenience of first-launch enrolment is the cheaper failure.
     removeUpdateBootstrap(updateBootstrapPath);
   }
-  controller = new BrowserController(store, vault, aiProvider, updates);
+  controller = new BrowserController(store, vault, aiProvider, updates, agentBridge, codexRuntime);
+  await agentBridge.start().catch(() => undefined);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -1068,6 +1227,18 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('developer:toggle-tools', (_event, mode: DevToolsMode) => controller!.toggleDeveloperTools(mode));
   handle('developer:capture-diagnostics', () => controller!.captureDeveloperDiagnostics());
   handle('developer:clear-diagnostics', () => controller!.clearDeveloperDiagnostics());
+  handle('agent:bridge-status', () => controller!.getAgentBridgeStatus());
+  handle('agent:pair', () => controller!.beginAgentPairing());
+  handle('agent:disconnect', () => controller!.disconnectAgentBridge());
+  handle('agent:editor-context', () => controller!.getAgentEditorContext());
+  handle('agent:install-vscode-extension', () => controller!.installVsCodeExtension());
+  handle('agent:runtime-status', () => controller!.getAgentRuntimeStatus());
+  handle('agent:detect-runtime', () => controller!.detectAgentRuntime());
+  handle('agent:start-task', (_event, request: AgentTaskRequest) => controller!.startAgentTask(request));
+  handle('agent:interrupt-task', () => controller!.interruptAgentTask());
+  handle('agent:open-location', (_event, path: string, line: number) => controller!.openAgentLocation(path, line));
+  handle('agent:save-all', () => controller!.saveAgentWorkspace());
+  handle('agent:run-workspace-task', (_event, name: string) => controller!.runAgentWorkspaceTask(name));
   handle('ai:prepare-preview', () => controller!.prepareAiPreview());
   handle('ai:approve-preview', (_event, previewId: string) => controller!.approveAiPreview(previewId));
   handle('ai:provider-status', () => controller!.getAiProvider());
@@ -1092,6 +1263,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:open-page', () => controller!.openUpdatePage());
 
   await controller.createWindow();
+  void codexRuntime.detect().catch(() => undefined);
   setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();
   setInterval(() => void controller?.checkForUpdatesInBackground(), 24 * 60 * 60_000).unref();
   if (pendingLaunchUrl) {
@@ -1106,6 +1278,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   void controller?.flushClipboard();
+  codexRuntime?.stop();
+  void agentBridge?.stop();
 });
 
 app.on('window-all-closed', () => {

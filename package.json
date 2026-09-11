@@ -1,6 +1,6 @@
 {
   "name": "private-work-browser",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "A private, workspace-first Chromium browser for daily business operations.",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -12,7 +12,7 @@
   },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && npm run electron:compile && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js\"",
-    "build": "npm run typecheck && vite build && npm run electron:compile",
+    "build": "npm run typecheck && npm run vscode:compile && vite build && npm run electron:compile",
     "electron:compile": "tsc -p tsconfig.electron.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && vitest run --config cloudflare/vitest.config.ts",
@@ -21,12 +21,14 @@
     "scripts:typecheck": "tsc -p cloudflare/tsconfig.scripts.json",
     "worker:build": "wrangler deploy --dry-run --config cloudflare/wrangler.jsonc --outdir .wrangler-dist",
     "worker:dev": "wrangler dev --config cloudflare/wrangler.jsonc",
+    "vscode:compile": "tsc -p vscode-extension/tsconfig.json",
+    "vscode:package": "npm run vscode:compile && cd vscode-extension && vsce package --no-dependencies --out ../build/private-browser-vscode-bridge.vsix",
     "docs:check": "node scripts/docs-guard.mjs",
     "secrets:check": "node scripts/secret-guard.mjs",
     "docs:find": "node scripts/docs-find.mjs",
     "docs:stale": "node scripts/docs-guard.mjs stale",
     "check": "npm run secrets:check && npm run docs:check && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run build && npm run worker:build",
-    "dist": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "dist": "npm run build && npm run vscode:package && electron-builder --win nsis --x64 --publish never",
     "start": "electron dist-electron/main.js"
   },
   "dependencies": {
@@ -36,6 +38,8 @@
   },
   "devDependencies": {
     "@electron/fuses": "1.8.0",
+    "@types/vscode": "^1.137.0",
+    "@vscode/vsce": "^3.9.2",
     "@cloudflare/workers-types": "^5.20260910.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
@@ -80,6 +84,10 @@
         "filter": [
           "private-browser-update.json"
         ]
+      },
+      {
+        "from": "build/private-browser-vscode-bridge.vsix",
+        "to": "agent-tools/private-browser-vscode-bridge.vsix"
       }
     ],
     "win": {

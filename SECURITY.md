@@ -66,6 +66,32 @@ release manifest. This does not replace operating-system malware scanning.
 
 Chromium DevTools attach only to non-home pages in the Development workspace. They are refused in every other workspace and on detected banking or payment URLs, and are closed whenever the user switches tabs or workspaces or a tab commits a protected navigation. Page context menus expose exact element inspection only inside that boundary.
 
+## Local coding-agent bridge
+
+Agent functionality is available only in Development and is denied on detected
+banking/payment pages. Private Browser listens on a local operating-system pipe,
+never a LAN or browser-reachable HTTP port. Pairing uses a five-minute,
+attempt-limited code; VS Code stores the issued credential in SecretStorage and
+the browser persists only its SHA-256 digest.
+
+The companion extension requires VS Code Workspace Trust before saving, opening
+source locations or running existing named tasks. Real-path validation confines
+source opens against symlink/junction escape. Codex runs through App Server over
+stdio with read-only or workspace-write sandboxing. Arbitrary inherited secrets
+are removed from its child environment, browser telemetry is explicitly marked
+untrusted, additional interactive privilege requests are declined, and absolute
+workspace paths plus secret-like output are removed before reaching React.
+
+Remote tabs have no preload and cannot reach the Electron IPC surface or the
+agent pipe. The bridge never shares cookies, passwords, page storage, headers,
+request bodies or raw page text.
+
+The extension-provided MCP server is stdio-only. VS Code injects its bridge
+credential from SecretStorage when starting the process; it is not written into
+a workspace MCP configuration. Read-only MCP tools are annotated distinctly,
+while actions remain approval-visible to compatible clients. The MCP adapter has
+no arbitrary shell-execution tool.
+
 Developer diagnostics are process-memory-only, bounded per tab, and collect only console warnings/errors, failed-request method/status/type, sanitized source URLs, and aggregate document counts. They never collect page text, input values, cookies, local or session storage, headers, request or response bodies. URL credentials, queries and fragments are removed, high-entropy path segments and sensitive text patterns are redacted, and the user explicitly copies the resulting report before it can reach another tool.
 
 ## Release service

@@ -33,6 +33,19 @@ export function sanitizeDiagnosticUrl(value: string): { text: string; redactions
   }
 }
 
+export function diagnosticSourcePath(value: string): string | undefined {
+  try {
+    if (/(?:^|\/)\.\.(?:\/|$)/.test(decodeURIComponent(value))) return undefined;
+    const url = new URL(value);
+    if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return undefined;
+    const path = decodeURIComponent(url.pathname).replace(/^\/+/, '').replace(/^@fs\//, '');
+    if (!path || path.startsWith('.') || path.includes('..') || /^[A-Za-z]:/.test(path)) return undefined;
+    return path.slice(0, 1_000);
+  } catch {
+    return undefined;
+  }
+}
+
 export function formatDeveloperReport(report: Omit<DeveloperDiagnosticReport, 'formatted'>): string {
   const page = report.page;
   const lines = [
@@ -54,7 +67,8 @@ export function formatDeveloperReport(report: Omit<DeveloperDiagnosticReport, 'f
   if (!report.console.length) lines.push('None captured.');
   for (const entry of report.console) {
     const location = entry.source ? ` (${entry.source}${entry.line ? `:${entry.line}` : ''})` : '';
-    lines.push(`- [${entry.at}] ${entry.level.toUpperCase()}: ${entry.message}${location}`);
+    const workspace = entry.sourcePath ? ` [workspace: ${entry.sourcePath}:${entry.line || 1}]` : '';
+    lines.push(`- [${entry.at}] ${entry.level.toUpperCase()}: ${entry.message}${location}${workspace}`);
   }
 
   lines.push('', `## Failed network requests (${report.network.length})`);
