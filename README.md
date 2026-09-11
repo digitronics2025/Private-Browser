@@ -20,6 +20,10 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - A Cloudflare-native private release service with D1 metadata, R2 installers, a protected download page and resumable downloads.
 - OS-encrypted update-service configuration with startup and daily release checks.
 - A Development-workspace cockpit with native Chromium Elements, Console, Sources, Network, Performance, Application and Recorder tools; F12/Ctrl+Shift+I shortcuts; right-click element inspection; and sanitized AI-ready diagnostic reports.
+- A local Agent Command Center connecting the Development workspace to VS Code
+  and Codex: trusted editor/Git/Problems context, source links, named tasks,
+  streamed plans/commands/diffs, guarded diagnose/build/autopilot modes, and
+  seven MCP tools for compatible VS Code agents.
 - Hardened Electron fuses, explicit certificate/webview denial, bounded IPC,
   strict site permissions, risky-download blocking and a locked-down Banking workspace.
 
@@ -35,6 +39,13 @@ npm run dev
 The development command launches Vite on localhost and opens the Electron application.
 
 Open a webpage in the **Development** workspace, then select **Dev** in the right sidebar or press **F12** / **Ctrl+Shift+I**. Right-click a page element for exact inspection. The diagnostic report deliberately excludes page text, form values, cookies, storage, headers, request bodies, query strings and fragments, and developer access is blocked for Banking and detected payment pages.
+
+Select **Agent** to install the bundled VS Code companion and generate an
+eight-digit pairing code. In VS Code run **Private Browser: Pair with Developer
+Cockpit** once. Open a trusted workspace to use editor context or run a Codex
+task. Diagnose is read-only, Build writes only inside the workspace without
+network, and Guarded autopilot can use network while remaining workspace-
+confined.
 
 ## Verify and build
 
@@ -70,6 +81,6 @@ The AI panel first extracts visible page text locally. It removes common credent
 
 ## Current scope
 
-This is a functional desktop browser, not a Chromium fork. It is optimized for a private single-user Windows workflow. Android, extension compatibility, a passkey-management UI and encrypted cross-device sync remain future modules; Chromium's ordinary website WebAuthn/passkey flow remains available where supported by the host OS.
+This is a functional desktop browser, not a Chromium fork. It is optimized for a private single-user Windows workflow. Android, ordinary Chrome-extension compatibility, a passkey-management UI and encrypted cross-device sync remain future modules; the bundled VS Code companion is a separate trusted local integration, and Chromium's ordinary website WebAuthn/passkey flow remains available where supported by the host OS.
 
 See [SECURITY.md](SECURITY.md) before expanding privileged features.

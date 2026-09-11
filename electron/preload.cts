@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
+import type { AgentBridgeStatus, AgentEditorContext, AgentPairingSession, AgentRuntimeStatus, AgentTaskRequest, AgentTaskSnapshot, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 
 const api = {
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
@@ -21,6 +21,18 @@ const api = {
   toggleDeveloperTools: (mode: DevToolsMode): Promise<void> => ipcRenderer.invoke('developer:toggle-tools', mode),
   captureDeveloperDiagnostics: (): Promise<DeveloperDiagnosticReport> => ipcRenderer.invoke('developer:capture-diagnostics'),
   clearDeveloperDiagnostics: (): Promise<void> => ipcRenderer.invoke('developer:clear-diagnostics'),
+  getAgentBridge: (): Promise<AgentBridgeStatus> => ipcRenderer.invoke('agent:bridge-status'),
+  pairAgentBridge: (): Promise<AgentPairingSession> => ipcRenderer.invoke('agent:pair'),
+  disconnectAgentBridge: (): Promise<AgentBridgeStatus> => ipcRenderer.invoke('agent:disconnect'),
+  getAgentEditorContext: (): Promise<AgentEditorContext> => ipcRenderer.invoke('agent:editor-context'),
+  installVsCodeExtension: (): Promise<void> => ipcRenderer.invoke('agent:install-vscode-extension'),
+  getAgentRuntime: (): Promise<AgentRuntimeStatus> => ipcRenderer.invoke('agent:runtime-status'),
+  detectAgentRuntime: (): Promise<AgentRuntimeStatus> => ipcRenderer.invoke('agent:detect-runtime'),
+  startAgentTask: (request: AgentTaskRequest): Promise<AgentTaskSnapshot> => ipcRenderer.invoke('agent:start-task', request),
+  interruptAgentTask: (): Promise<AgentTaskSnapshot | undefined> => ipcRenderer.invoke('agent:interrupt-task'),
+  openAgentLocation: (path: string, line: number): Promise<void> => ipcRenderer.invoke('agent:open-location', path, line),
+  saveAgentWorkspace: (): Promise<void> => ipcRenderer.invoke('agent:save-all'),
+  runAgentWorkspaceTask: (name: string): Promise<void> => ipcRenderer.invoke('agent:run-workspace-task', name),
   prepareAiPreview: (): Promise<AiPagePreview> => ipcRenderer.invoke('ai:prepare-preview'),
   approveAiPreview: (previewId: string): Promise<AiApproval> => ipcRenderer.invoke('ai:approve-preview', previewId),
   getAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:provider-status'),
@@ -57,6 +69,16 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, result: UpdateCheckResult) => callback(result);
     ipcRenderer.on('updates:available', listener);
     return () => { ipcRenderer.removeListener('updates:available', listener); };
+  },
+  onAgentBridgeStatus: (callback: (status: AgentBridgeStatus) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: AgentBridgeStatus) => callback(status);
+    ipcRenderer.on('agent:bridge-status', listener);
+    return () => { ipcRenderer.removeListener('agent:bridge-status', listener); };
+  },
+  onAgentRuntimeStatus: (callback: (status: AgentRuntimeStatus) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: AgentRuntimeStatus) => callback(status);
+    ipcRenderer.on('agent:runtime-status', listener);
+    return () => { ipcRenderer.removeListener('agent:runtime-status', listener); };
   },
 };
 

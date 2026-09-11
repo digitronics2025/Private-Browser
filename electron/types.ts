@@ -117,6 +117,8 @@ export interface DeveloperConsoleEntry {
   message: string;
   source: string;
   line: number;
+  /** Workspace-relative source path inferred only from a loopback development URL. */
+  sourcePath?: string;
 }
 
 export interface DeveloperNetworkIssue {
@@ -148,6 +150,101 @@ export interface DeveloperDiagnosticReport {
   network: DeveloperNetworkIssue[];
   redactions: number;
   formatted: string;
+}
+
+export type AgentTaskMode = 'diagnose' | 'build' | 'autopilot';
+
+export interface AgentCapability {
+  id: string;
+  label: string;
+}
+
+export interface AgentBridgeStatus {
+  state: 'starting' | 'ready' | 'pairing' | 'connected' | 'error';
+  paired: boolean;
+  connected: boolean;
+  endpoint: 'local-os-pipe';
+  client?: {
+    name: string;
+    version: string;
+    connectedAt: string;
+  };
+  capabilities: AgentCapability[];
+  error?: string;
+}
+
+export interface AgentPairingSession {
+  code: string;
+  expiresAt: string;
+}
+
+export interface AgentEditorDiagnostic {
+  severity: 'error' | 'warning' | 'information' | 'hint';
+  message: string;
+  file: string;
+  line: number;
+  source?: string;
+}
+
+export interface AgentEditorContext {
+  workspaceTrusted: boolean;
+  workspaceName?: string;
+  rootName?: string;
+  activeFile?: {
+    path: string;
+    language: string;
+    selection?: string;
+    line: number;
+  };
+  diagnostics: AgentEditorDiagnostic[];
+  git?: {
+    branch?: string;
+    dirty: boolean;
+    changedFiles: number;
+  };
+  tasks: string[];
+  capturedAt: string;
+}
+
+export interface AgentTaskRequest {
+  objective: string;
+  mode: AgentTaskMode;
+  includeDiagnostics: boolean;
+}
+
+export interface AgentTaskPlanStep {
+  step: string;
+  status: 'pending' | 'inProgress' | 'completed';
+}
+
+export interface AgentTaskEvent {
+  at: string;
+  kind: 'status' | 'message' | 'command' | 'file' | 'error';
+  text: string;
+}
+
+export interface AgentTaskSnapshot {
+  id: string;
+  status: 'starting' | 'running' | 'completed' | 'failed' | 'interrupted';
+  mode: AgentTaskMode;
+  objective: string;
+  startedAt: string;
+  completedAt?: string;
+  threadId?: string;
+  turnId?: string;
+  plan: AgentTaskPlanStep[];
+  events: AgentTaskEvent[];
+  answer: string;
+  diff: string;
+  error?: string;
+}
+
+export interface AgentRuntimeStatus {
+  available: boolean;
+  command: 'codex';
+  version?: string;
+  activeTask?: AgentTaskSnapshot;
+  error?: string;
 }
 
 export interface VaultItemInput {

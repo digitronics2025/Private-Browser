@@ -14,7 +14,7 @@ verified_at: 3f68afed
 ## Agent Brief
 
 **Scope.** The whole surface between the Electron main process and the React
-renderer: 40 `invoke` channels in six namespaces, three main-to-renderer event
+renderer: 53 `invoke` channels in seven namespaces, five main-to-renderer event
 subscriptions, and every shared payload type. Defined in
 [preload.cts](../../electron/preload.cts) and
 [types.ts](../../electron/types.ts).
@@ -42,7 +42,7 @@ trusted-sender check, the browser methods) and in [vault.md](vault.md),
 3. **Only these keys reach the renderer.** `contextBridge` exposes exactly the
    `api` object; nothing else is reachable from page or chrome JavaScript. →
    **The Bridge**
-4. **The three `on*` methods return an unsubscribe function.** Dropping it leaks a
+4. **The five `on*` methods return an unsubscribe function.** Dropping it leaks a
    listener on every re-render. → **Main to Renderer Events**
 
 ### Where to look
@@ -85,7 +85,7 @@ contextBridge.exposeInMainWorld('privateBrowser', api);
 export type PrivateBrowserApi = typeof api;
 ```
 
-- The exposed object is the literal `api` const: 40 `invoke` wrappers and three
+- The exposed object is the literal `api` const: 53 `invoke` wrappers and five
   `on*` subscription helpers. Nothing else crosses.
 - `PrivateBrowserApi` is derived with `typeof`, so the renderer's type follows the
   implementation automatically. This is the one place in the contract that cannot
@@ -138,7 +138,28 @@ the renderer's disabled state is only presentation. `DevToolsMode` is
 `'right' | 'bottom' | 'detach'`. Diagnostics are sanitized in the main process
 before this bridge can return them.
 
-### ai: — 6 channels
+### agent: — 12 channels
+
+| Channel | Preload method | Arguments | Resolves with |
+| --- | --- | --- | --- |
+| `agent:bridge-status` | `getAgentBridge()` | — | `AgentBridgeStatus` |
+| `agent:pair` | `pairAgentBridge()` | — | `AgentPairingSession` |
+| `agent:disconnect` | `disconnectAgentBridge()` | — | `AgentBridgeStatus` |
+| `agent:editor-context` | `getAgentEditorContext()` | — | `AgentEditorContext` |
+| `agent:install-vscode-extension` | `installVsCodeExtension()` | — | `void` |
+| `agent:runtime-status` | `getAgentRuntime()` | — | `AgentRuntimeStatus` |
+| `agent:detect-runtime` | `detectAgentRuntime()` | — | `AgentRuntimeStatus` |
+| `agent:start-task` | `startAgentTask(request)` | `AgentTaskRequest` | `AgentTaskSnapshot` |
+| `agent:interrupt-task` | `interruptAgentTask()` | — | `AgentTaskSnapshot \| undefined` |
+| `agent:open-location` | `openAgentLocation(path, line)` | `string`, `number` | `void` |
+| `agent:save-all` | `saveAgentWorkspace()` | — | `void` |
+| `agent:run-workspace-task` | `runAgentWorkspaceTask(name)` | `string` | `void` |
+
+Every channel is main-process gated to Development and refuses protected pages.
+Absolute editor paths are removed before `AgentEditorContext` reaches this
+contract. See [agent-bridge.md](agent-bridge.md).
+
+### ai: — 7 channels
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
@@ -195,7 +216,7 @@ in the controller — `back()` calls `browser:back` which runs `goBack()`.
 
 ## Main to Renderer Events
 
-Three channels flow the other way, via `webContents.send` in `main.ts` and
+Five channels flow the other way, via `webContents.send` in `main.ts` and
 `ipcRenderer.on` in the preload.
 
 | Channel | Preload method | Payload | Sent when |
@@ -203,6 +224,8 @@ Three channels flow the other way, via `webContents.send` in `main.ts` and
 | `browser:state` | `onState(cb)` | `BrowserSnapshot` | every `broadcast()` in the controller |
 | `browser:focus-address` | `onFocusAddress(cb)` | none | Ctrl/Cmd+L pressed inside a page view |
 | `updates:available` | `onUpdateAvailable(cb)` | `UpdateCheckResult` | a background check found a newer version |
+| `agent:bridge-status` | `onAgentBridgeStatus(cb)` | `AgentBridgeStatus` | pairing or VS Code connection state changes |
+| `agent:runtime-status` | `onAgentRuntimeStatus(cb)` | `AgentRuntimeStatus` | Codex plan, command, file, answer, diff or final state changes |
 
 Each helper wraps the caller's callback in a listener that strips the
 `IpcRendererEvent` argument, and **returns an unsubscribe function** that calls
@@ -273,12 +296,24 @@ The snapshot also truncates `history` to 100 and `privacyLog` to 50, and adds
 
 - `DevToolsMode` — `'right' | 'bottom' | 'detach'`.
 - `DeveloperConsoleEntry` — timestamp, warning/error level, sanitized message,
-  sanitized source and line.
+  sanitized source and line, plus an optional workspace-relative `sourcePath`
+  inferred only from a loopback URL.
 - `DeveloperNetworkIssue` — timestamp, method, resource type, sanitized URL,
   optional status and error.
 - `DeveloperDiagnosticReport` — schema version, capture/app metadata, sanitized
   page metadata and DOM counts, bounded console/network arrays, redaction count,
   and the preformatted AI-ready report.
+
+### Agent bridge and tasks
+
+- `AgentBridgeStatus` and `AgentPairingSession` expose connection state and an
+  ephemeral eight-digit code, never the reusable bearer token or its digest.
+- `AgentEditorContext` exposes trust, display names, a relative active file and
+  bounded selection, Problems, Git summary and named tasks; no root path.
+- `AgentTaskRequest` selects `diagnose | build | autopilot` and whether safe
+  browser diagnostics are attached.
+- `AgentRuntimeStatus` carries availability and one `AgentTaskSnapshot` with
+  bounded plan, event, answer and diff data.
 
 ### Vault
 
@@ -365,14 +400,16 @@ response field by field before it is cast — see
 
 ## Related Systems
 
-- [browser-shell.md](browser-shell.md) — registers all 40 channels and sends all
-  three events.
+- [browser-shell.md](browser-shell.md) — registers all 53 channels and sends all
+  five events.
 - [renderer-ui.md](renderer-ui.md) — the only consumer of the bridge.
 - [workspaces-and-state.md](workspaces-and-state.md) — owns `PersistedState` and
   `WorkspaceId` at runtime.
 - [vault.md](vault.md), [ai-consent.md](ai-consent.md),
   [release-and-updates.md](release-and-updates.md) — the behaviour behind the
   `vault:`, `ai:` and `updates:` namespaces.
+- [agent-bridge.md](agent-bridge.md) — the authenticated local protocol and
+  Codex lifecycle behind `agent:`.
 
 ## Gotchas
 

@@ -9,6 +9,7 @@ dist/
 dist-electron/
 release/
 build/private-browser-update.json
+build/*.vsix
 .wrangler/
 .wrangler-dist/
 

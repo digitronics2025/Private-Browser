@@ -32,7 +32,9 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
 - **URL and text safety** → [security-boundary.md](security-boundary.md). Owns
   `normalizeNavigationInput`, `isAllowedRemoteUrl`, `isProtectedPage`, redaction.
 - **The channel surface** → [ipc-contract.md](ipc-contract.md). Owns the table of
-  the 40 channels this file registers and their payload types.
+  the 53 channels this file registers and their payload types.
+- **Local coding agents** → [agent-bridge.md](agent-bridge.md). Owns OS-pipe
+  pairing, the VS Code companion and Codex App Server lifecycle.
 - **What survives a restart** → [workspaces-and-state.md](workspaces-and-state.md).
   Owns `WORKSPACES`, `PersistedState`, `sanitizeState`, the atomic save.
 - **The React chrome** → [renderer-ui.md](renderer-ui.md). Owns App.tsx, its own
@@ -243,6 +245,11 @@ and formats a self-contained debugging prompt. Page text, form values, cookies,
 storage, headers and bodies are never read. `clearDeveloperDiagnostics` empties
 the active tab's rings.
 
+`diagnosticSourcePath` recognizes source locations only when the console source
+is a loopback development URL. It emits a workspace-relative candidate, never an
+absolute path; the VS Code companion still performs real-path root confinement
+before opening it.
+
 ## Downloads
 
 `will-download` is registered per session inside `configureSession`. Each download
@@ -436,7 +443,7 @@ be that webContents' main frame.
   reach these channels at all. The sender check is the second layer, not the first.
 - `IpcGuard` rejects payloads over 256 KiB and throttles a compromised trusted
   renderer after 300 calls in ten seconds.
-- All 40 channels are registered **before** `createWindow()`. The renderer calls
+- All 53 channels are registered **before** `createWindow()`. The renderer calls
   `getState()` on mount, so registration has to precede the page load.
 - The wrapper body is `async`, so a synchronous `throw` inside any controller
   method becomes a rejected `invoke` in the renderer, which App.tsx turns into a
@@ -461,6 +468,10 @@ event each writes, and any shell-level decision embedded in them.
 - **Updates** → [release-and-updates.md](release-and-updates.md).
   `getUpdateService`, `configureUpdateService`, `clearUpdateService`,
   `checkForUpdates`, `openUpdatePage`, `checkForUpdatesInBackground`.
+- **Agent bridge** → [agent-bridge.md](agent-bridge.md).
+  `getAgentBridgeStatus`, pairing/disconnect, VS Code installation/context/task
+  facades, Codex detection/start/interrupt, `requireAgentWorkspace`, and the two
+  pushed status feeds.
 
 Two shell-level details inside that last group belong here: `openUpdatePage`
 hard-codes the `development` workspace for the download page, and

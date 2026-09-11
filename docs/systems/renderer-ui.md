@@ -14,8 +14,8 @@ verified_at: 3f68afed
 ## Agent Brief
 
 **Scope.** The entire chrome of Private Browser — title bar, tab strip, toolbar,
-workspace rail, home dashboard and the seven-mode right sidebar — lives in one
-732-line file, [App.tsx](../../src/App.tsx), styled by one 307-line stylesheet.
+workspace rail, home dashboard and the eight-mode right sidebar — lives in
+[App.tsx](../../src/App.tsx), styled by one stylesheet.
 The renderer owns no browsing state: it renders a `BrowserSnapshot` pushed from
 the main process and calls back over `window.privateBrowser`.
 
@@ -32,6 +32,8 @@ and session lifecycle, and everything behind an IPC channel. Web content is
 - **workspaces-and-state.md** — owns the snapshot this file renders.
 - **vault.md** / **ai-consent.md** / **release-and-updates.md** — own the
   behaviour behind the Vault, Assistant and Settings panels.
+- **agent-bridge.md** — owns pairing, VS Code context and Codex task execution
+  behind the Agent panel.
 
 ### Invariants
 
@@ -96,8 +98,9 @@ All in [App.tsx](../../src/App.tsx).
 | `App` (default) | Title bar, tab strip, toolbar, rail, dashboard, sidebar, toast | `state` (snapshot or `null`), `address`, `sidebarOpen` (default `true`), `sidebarMode` (default `assistant`), `toast`, `addressRef` |
 | `WorkspaceRail` | One button per `state.workspaces`; lock icon when `workspace.protected`, else `workspace.icon`; sets `--workspace-color` per button | none |
 | `Dashboard` | The home screen — welcome block, quick-link grid, 5 most recent history rows, 5 bookmarks, all filtered to the active workspace | none (derives from props) |
-| `SidebarNav` | The seven mode buttons; red badge showing the count of downloads in `progressing` state | none |
+| `SidebarNav` | The eight mode buttons; red badge showing the count of downloads in `progressing` state | none |
 | `PanelHeader` | Icon + eyebrow + title, shared by every panel | none |
+| `AgentPanel` | Local connection/pairing, editor/Git/Problems context, Codex mode/objective, VS Code tasks and live task plan/events/answer/diff | `bridge`, `runtime`, `editor`, `pairing`, `mode`, `objective`, `includeDiagnostics`, `loading` |
 | `DeveloperPanel` | Workspace gate, native DevTools launcher/position, inspection hint, built-in panel map and sanitized diagnostic report | `mode`, `report`, `loading` |
 | `AssistantPanel` | Provider strip, provider form, local preview card, cloud-permission card, question box, answer | `preview`, `approvalToken`, `loading`, `provider`, `showProviderForm`, `providerForm` (endpoint defaults to `https://openrouter.ai/api/v1`), `question`, `answer`; `summary` is a `useMemo` |
 | `VaultPanel` | Encryption-health banner, corrupt-vault recovery button, add form, credential cards | `items`, `available`, `unavailableReason`, `adding`, `form` |
@@ -114,13 +117,14 @@ turns either the success string or the thrown error message into a toast.
 
 ## Sidebar Modes and Their IPC
 
-`SidebarMode = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' |
+`SidebarMode = 'assistant' | 'agent' | 'developer' | 'vault' | 'automations' | 'downloads' |
 'privacy' | 'settings'`. Exactly one panel is mounted at a time, so a panel's `useEffect`
 load runs each time the user switches to it.
 
 | Mode | `window.privateBrowser` methods called |
 | --- | --- |
 | `assistant` | `getAiProvider`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi` |
+| `agent` | bridge status/pair/disconnect, install companion, editor context/open/save/task, runtime detect/status/start/interrupt, and both pushed status subscriptions |
 | `developer` | `toggleDeveloperTools`, `captureDeveloperDiagnostics`, `clearDeveloperDiagnostics`, `copyText` |
 | `vault` | `listVault`, `addVaultItem`, `removeVaultItem`, `resetCorruptVault`, `copyPassword`, `copyTotp`, `autofill` |
 | `automations` | `newTab(workspaceId, url)` only |
@@ -166,7 +170,8 @@ and that boundary is the point of the feature, not a limitation to fix.
 
 ## Main-Process Subscriptions
 
-Three push channels, each set up in its own `useEffect` in `App`. Each preload
+Five push channels. The three global subscriptions are set up in `App`; the two
+agent subscriptions live in `AgentPanel` while it is mounted. Each preload
 method returns an unsubscribe function, and each effect returns it directly, so
 React tears the listener down on unmount.
 
@@ -175,6 +180,8 @@ React tears the listener down on unmount.
 | `onState` | `BrowserSnapshot` | `setState` — the only way browsing state ever changes |
 | `onFocusAddress` | none | focuses and selects the address input (this is how the main process's Ctrl+L reaches the box) |
 | `onUpdateAvailable` | `UpdateCheckResult` | toasts `Private Browser <version> is ready to download` |
+| `onAgentBridgeStatus` | `AgentBridgeStatus` | refreshes pairing/connection state and editor context |
+| `onAgentRuntimeStatus` | `AgentRuntimeStatus` | streams Codex progress into the task timeline |
 
 `onState` is paired with a one-shot `getState()` in the same effect so the first
 paint does not wait for a push. Two further effects are pure renderer bookkeeping:
@@ -292,6 +299,7 @@ preprocessor, no CSS modules. What a future editor needs:
 - [browser-shell.md](browser-shell.md) — the other half of the layout handshake
   and the other copy of the keyboard shortcuts.
 - [ipc-contract.md](ipc-contract.md) — the preload bridge every call above uses.
+- [agent-bridge.md](agent-bridge.md) — security and lifecycle behind the Agent panel.
 - [workspaces-and-state.md](workspaces-and-state.md) — what is in a snapshot.
 - [vault.md](vault.md), [ai-consent.md](ai-consent.md),
   [release-and-updates.md](release-and-updates.md) — the three panels with real
@@ -319,10 +327,6 @@ preprocessor, no CSS modules. What a future editor needs:
   third copy of the same measurements.
 - **`PrivacyPanel` hard-codes `5` isolated spaces** instead of reading
   `state.workspaces.length`. Adding a workspace silently leaves it wrong.
-- **`SettingsPanel` falls back to a hard-coded version string** for the about
-  card when `updateStatus` has not loaded yet. It is not read from
-  `package.json`, so it goes stale on every version bump — and already has: the
-  0.3.0 → 0.3.1 release had to edit this literal by hand.
 - **The download button shows even when you are up to date.** It used to render
   only when a newer version existed; it now always renders once the service is
   configured, relabelled `Download page`. Both labels call the same
@@ -330,8 +334,8 @@ preprocessor, no CSS modules. What a future editor needs:
 - **The "LOCAL SUMMARY" text is not AI output.** It is the `summary` `useMemo`:
   collapse whitespace, split on sentence endings, keep sentences longer than 35
   characters, join the first three. Nothing has left the machine at that point.
-- **Panels re-fetch on every mode switch.** `VaultPanel`, `AssistantPanel` and
-  `SettingsPanel` load in a mount effect, and switching modes unmounts them, so
+- **Panels re-fetch on every mode switch.** `VaultPanel`, `AssistantPanel`,
+  `AgentPanel` and `SettingsPanel` load in a mount effect, and switching modes unmounts them, so
   toggling the sidebar tabs repeatedly re-issues those IPC calls.
 - **`act()` is only used by the chrome.** Each panel repeats its own
   try/catch/toast instead, so error handling is duplicated eleven times over.

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.0 — 2026-09-10
+
+- Added the local Agent Command Center with guarded diagnose, build and
+  end-to-end autopilot modes powered by Codex App Server.
+- Added a bundled VS Code companion with one-time pairing, SecretStorage,
+  Workspace Trust, editor/selection/Problems/Git context and named task support.
+- Registered seven MCP tools so compatible VS Code agents can safely inspect
+  browser diagnostics, read editor context, open source, run named tasks, reload
+  the development page and open DevTools.
+- Added live agent plans, commands, file changes, answers, diffs, interruption
+  and loopback error-to-source links.
+- Kept agent access exclusive to Development, used a local OS pipe instead of a
+  browser-reachable port, confined writes to the trusted workspace and treated
+  all browser telemetry as untrusted input.
+
 ## 0.3.4 — 2026-09-10
 
 - Hardened packaged Electron executables with sandbox, cookie-encryption,

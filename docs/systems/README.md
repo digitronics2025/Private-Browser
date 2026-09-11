@@ -53,6 +53,8 @@ node scripts/docs-guard.mjs ratchet --write # tighten allowances that gained sla
   two halves of the app, and every shared payload type.
 - [workspaces-and-state.md](workspaces-and-state.md) — the five cookie-isolated
   workspaces and the on-disk state file that survives a restart.
+- [agent-bridge.md](agent-bridge.md) — secure OS-pipe pairing, the VS Code
+  companion, trusted editor context and sandboxed Codex App Server tasks.
 
 **The desktop app — security-critical**
 
@@ -67,7 +69,7 @@ node scripts/docs-guard.mjs ratchet --write # tighten allowances that gained sla
 **The desktop app — renderer**
 
 - [renderer-ui.md](renderer-ui.md) — the React chrome: workspace rail, tab bar,
-  dashboard and the six sidebar panels, plus the layout handshake with the main
+  dashboard and the eight sidebar panels, plus the layout handshake with the main
   process.
 
 **Shipping**
