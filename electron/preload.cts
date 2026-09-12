@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
+import type { AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 
 const api = {
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
@@ -15,6 +15,10 @@ const api = {
   setLayout: (layout: { top: number; left: number; right: number; bottom: number }): Promise<void> => ipcRenderer.invoke('browser:set-layout', layout),
   toggleBookmark: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark'),
   openBookmark: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-bookmark', id),
+  toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
+  listChromeProfiles: (): Promise<ChromeProfileSource[]> => ipcRenderer.invoke('browser:list-chrome-profiles'),
+  importChrome: (options: ChromeImportOptions): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome', options),
+  importChromePasswords: (): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome-passwords'),
   toggleTrackerBlocking: (): Promise<void> => ipcRenderer.invoke('browser:toggle-tracker-blocking'),
   openDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-download', id),
   showDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:show-download', id),

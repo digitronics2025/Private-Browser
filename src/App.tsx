@@ -17,6 +17,7 @@ import {
   Eye,
   FileDown,
   FileCode2,
+  Folder,
   Globe2,
   Gauge,
   Home,
@@ -39,13 +40,14 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  Upload,
   Trash2,
   TriangleAlert,
   UserRound,
   X,
   Zap,
 } from 'lucide-react';
-import type { AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, BrowserTab, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
+import type { AiPagePreview, AiProviderInput, AiProviderStatus, Bookmark as BookmarkItem, BrowserSnapshot, BrowserTab, ChromeImportResult, ChromeProfileSource, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
 
 type SidebarMode = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
 
@@ -159,8 +161,9 @@ export default function App() {
   }, [activeTab?.id, activeTab?.url, activeTab?.isHome]);
 
   useEffect(() => {
-    void window.privateBrowser.setLayout({ top: 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
-  }, [sidebarOpen]);
+    if (!state) return;
+    void window.privateBrowser.setLayout({ top: state.bookmarkBarVisible ? 158 : 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
+  }, [sidebarOpen, state?.bookmarkBarVisible]);
 
   useEffect(() => {
     if (!toast) return;
@@ -190,6 +193,9 @@ export default function App() {
       } else if (key === 'r' && activeTab && !activeTab.isHome) {
         event.preventDefault();
         void window.privateBrowser.reload();
+      } else if (event.shiftKey && key === 'b') {
+        event.preventDefault();
+        void window.privateBrowser.toggleBookmarkBar();
       }
     };
     window.addEventListener('keydown', listener);
@@ -218,7 +224,7 @@ export default function App() {
   const bookmarked = state.bookmarks.some((item) => item.url === activeTab.url && item.workspaceId === activeTab.workspaceId);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${state.bookmarkBarVisible ? 'bookmark-bar-on' : ''}`}>
       <header className="titlebar">
         <div className="brand-mark"><ShieldCheck size={17} /> Private Browser</div>
         <div className="privacy-status"><span className="status-dot" /> Local protection active</div>
@@ -256,6 +262,8 @@ export default function App() {
         <button className="icon-button" title="Settings" onClick={() => { setSidebarMode('settings'); setSidebarOpen(true); }}><MoreHorizontal size={18} /></button>
       </nav>
 
+      {state.bookmarkBarVisible && <BookmarkBar state={state} openBookmark={(id) => void act(() => window.privateBrowser.openBookmark(id))} />}
+
       {activeTab.isHome && <Dashboard state={state} open={(url) => void act(() => window.privateBrowser.navigate(url))} openBookmark={(id) => void act(() => window.privateBrowser.openBookmark(id))} />}
 
       {sidebarOpen && (
@@ -270,7 +278,7 @@ export default function App() {
               {sidebarMode === 'automations' && <AutomationPanel onToast={showToast} />}
               {sidebarMode === 'downloads' && <DownloadsPanel state={state} onToast={showToast} />}
               {sidebarMode === 'privacy' && <PrivacyPanel state={state} />}
-              {sidebarMode === 'settings' && <SettingsPanel onToast={showToast} />}
+              {sidebarMode === 'settings' && <SettingsPanel state={state} onToast={showToast} />}
             </div>
           </div>
         </aside>
@@ -296,6 +304,58 @@ function WorkspaceSwitcher({ state, onSwitch }: { state: BrowserSnapshot; onSwit
       </div>
     </section>
   );
+}
+
+function bookmarkOrder(item: BookmarkItem, depth: number): number {
+  return item.orderPath?.[depth] ?? item.order;
+}
+
+type BookmarkTreeEntry =
+  | { kind: 'bookmark'; order: number; item: BookmarkItem }
+  | { kind: 'folder'; order: number; name: string; descendants: BookmarkItem[] };
+
+function bookmarkEntries(items: BookmarkItem[], path: string[]): BookmarkTreeEntry[] {
+  const depth = path.length;
+  const direct = items
+    .filter((item) => item.folderPath.length === depth && path.every((part, index) => item.folderPath[index] === part))
+    .map((item) => ({ kind: 'bookmark' as const, order: bookmarkOrder(item, depth), item }));
+  const folderNames = [...new Set(items
+    .filter((item) => item.folderPath.length > depth && path.every((part, index) => item.folderPath[index] === part))
+    .map((item) => item.folderPath[depth]))];
+  const folders = folderNames.map((name) => {
+    const descendants = items.filter((item) => item.folderPath[depth] === name && path.every((part, index) => item.folderPath[index] === part));
+    return { kind: 'folder' as const, order: Math.min(...descendants.map((item) => bookmarkOrder(item, depth))), name, descendants };
+  });
+  return [...direct, ...folders].sort((left, right) => left.order - right.order);
+}
+
+function BookmarkEntries({ entries, path, openBookmark }: { entries: BookmarkTreeEntry[]; path: string[]; openBookmark: (id: string) => void }) {
+  return <>{entries.map((entry) => entry.kind === 'bookmark'
+    ? <button className="bookmark-bar-item" key={entry.item.id} title={entry.item.title} onClick={() => openBookmark(entry.item.id)}><Globe2 size={13} /><span>{entry.item.title}</span></button>
+    : <details className="bookmark-folder" key={`${path.join('/')}/${entry.name}`}>
+        <summary><Folder size={14} fill="currentColor" /><span>{entry.name}</span><ChevronDown size={12} /></summary>
+        <div className="bookmark-folder-menu"><BookmarkTree items={entry.descendants} path={[...path, entry.name]} openBookmark={openBookmark} /></div>
+      </details>)}</>;
+}
+
+function BookmarkTree({ items, path = [], limit, openBookmark }: { items: BookmarkItem[]; path?: string[]; limit?: number; openBookmark: (id: string) => void }) {
+  const entries = bookmarkEntries(items, path);
+  const visible = limit ? entries.slice(0, limit) : entries;
+  const overflow = limit ? entries.slice(limit) : [];
+  return <>
+    <BookmarkEntries entries={visible} path={path} openBookmark={openBookmark} />
+    {overflow.length > 0 && <details className="bookmark-folder bookmark-overflow"><summary title="More bookmarks"><MoreHorizontal size={15} /></summary><div className="bookmark-folder-menu right"><BookmarkEntries entries={overflow} path={path} openBookmark={openBookmark} /></div></details>}
+  </>;
+}
+
+function BookmarkBar({ state, openBookmark }: { state: BrowserSnapshot; openBookmark: (id: string) => void }) {
+  const workspaceItems = state.bookmarks.filter((item) => item.workspaceId === state.activeWorkspaceId);
+  const barItems = workspaceItems.filter((item) => item.location === 'bar');
+  const otherItems = workspaceItems.filter((item) => item.location === 'other');
+  return <nav className="bookmark-bar" aria-label="Bookmarks bar">
+    <div className="bookmark-bar-scroll">{barItems.length ? <BookmarkTree items={barItems} limit={7} openBookmark={openBookmark} /> : <span className="bookmark-bar-empty">Import Chrome bookmarks or star a page</span>}</div>
+    {otherItems.length > 0 && <details className="bookmark-folder other-bookmarks"><summary><Folder size={14} fill="currentColor" /><span>Other bookmarks</span><ChevronDown size={12} /></summary><div className="bookmark-folder-menu right"><BookmarkTree items={otherItems} openBookmark={openBookmark} /></div></details>}
+  </nav>;
 }
 
 function Dashboard({ state, open, openBookmark }: { state: BrowserSnapshot; open: (url: string) => void; openBookmark: (id: string) => void }) {
@@ -653,13 +713,21 @@ function PrivacyPanel({ state }: { state: BrowserSnapshot }) {
   return <div className="side-panel"><PanelHeader icon={ShieldCheck} eyebrow="Transparent by design" title="Privacy log" /><div className="privacy-summary"><div><strong>{state.trackerBlocking ? 'On' : 'Off'}</strong><span>Tracker blocking</span></div><div><strong>5</strong><span>Isolated spaces</span></div><div><strong>{state.privacyLog.length}</strong><span>Logged events</span></div></div><div className="privacy-events">{state.privacyLog.map((event) => <div className="privacy-event" key={event.id}><span className={`event-dot ${event.kind}`} /><div><strong>{event.title}</strong><small>{event.detail}</small></div><time>{timeAgo(event.at)}</time></div>)}{!state.privacyLog.length && <EmptyState icon={ShieldCheck} text="Sensitive access events will be recorded here." />}</div></div>;
 }
 
-function SettingsPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+function SettingsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [isDefault, setIsDefault] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
   const [editingUpdates, setEditingUpdates] = useState(false);
   const [checking, setChecking] = useState(false);
   const [updateForm, setUpdateForm] = useState<UpdateServiceInput>({ endpoint: '', accessToken: '' });
+  const [chromeProfiles, setChromeProfiles] = useState<ChromeProfileSource[]>([]);
+  const [chromeProfileId, setChromeProfileId] = useState('');
+  const [chromeWorkspace, setChromeWorkspace] = useState<WorkspaceId>(state.activeWorkspaceId === 'banking' ? 'personal' : state.activeWorkspaceId);
+  const [chromeBookmarks, setChromeBookmarks] = useState(true);
+  const [chromeHistory, setChromeHistory] = useState(true);
+  const [chromeImportOpen, setChromeImportOpen] = useState(false);
+  const [chromeLoading, setChromeLoading] = useState(false);
+  const [chromeResult, setChromeResult] = useState<ChromeImportResult | null>(null);
   // null while the first status is still in flight — better than claiming
   // 'Active' before anything has been checked, which is what it used to do.
   const encryptionAvailable = updateStatus ? updateStatus.error !== 'os-encryption-unavailable' : null;
@@ -707,9 +775,57 @@ function SettingsPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | '
       onToast('Private download service disconnected');
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
+  const openChromeImport = async () => {
+    setChromeImportOpen(true);
+    setChromeLoading(true);
+    setChromeResult(null);
+    try {
+      const profiles = await window.privateBrowser.listChromeProfiles();
+      setChromeProfiles(profiles);
+      setChromeProfileId((current) => current || profiles.find((profile) => profile.isDefault)?.id || profiles[0]?.id || '');
+      if (!profiles.length) onToast('No local Chrome profile was found', 'error');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setChromeLoading(false); }
+  };
+  const importChrome = async () => {
+    setChromeLoading(true);
+    try {
+      const result = await window.privateBrowser.importChrome({ profileId: chromeProfileId, workspaceId: chromeWorkspace, bookmarks: chromeBookmarks, history: chromeHistory });
+      setChromeResult(result);
+      onToast(`Imported ${result.imported.bookmarks} bookmarks and ${result.imported.history} history entries`);
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setChromeLoading(false); }
+  };
+  const importChromePasswords = async () => {
+    setChromeLoading(true);
+    try {
+      const result = await window.privateBrowser.importChromePasswords();
+      setChromeResult(result);
+      onToast(`Encrypted ${result.imported.passwords} Chrome passwords in your local vault`);
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setChromeLoading(false); }
+  };
   return <div className="side-panel">
     <PanelHeader icon={Settings} eyebrow="Application" title="Settings" />
     <div className="settings-card"><div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Default browser</strong><small>{isDefault ? 'Private Browser opens web links.' : 'Use Private Browser for HTTP and HTTPS links.'}</small></div>{isDefault ? <b><Check size={14} /> Set</b> : <button onClick={() => void makeDefault()}>Set default</button>}</div></div>
+    <div className="settings-card chrome-import-settings">
+      <div className="settings-row"><span><Upload size={17} /></span><div><strong>Import from Chrome</strong><small>Bookmarks, bookmark folders and browsing history stay on this computer.</small></div><button onClick={() => chromeImportOpen ? setChromeImportOpen(false) : void openChromeImport()}>{chromeImportOpen ? 'Close' : 'Import'}</button></div>
+      {chromeImportOpen && <div className="chrome-import-form">
+        {chromeLoading && !chromeProfiles.length ? <div className="import-loading"><LoaderCircle className="spin" size={15} /> Detecting Chrome profiles…</div> : chromeProfiles.length > 0 ? <>
+          <label><span>Chrome profile</span><select value={chromeProfileId} onChange={(event) => setChromeProfileId(event.target.value)}>{chromeProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}{profile.isDefault ? ' (Default)' : ''}</option>)}</select></label>
+          <label><span>Import into workspace</span><select value={chromeWorkspace} onChange={(event) => setChromeWorkspace(event.target.value as WorkspaceId)}>{state.workspaces.filter((item) => !item.protected).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+          <div className="import-checks">
+            <label><input type="checkbox" checked={chromeBookmarks} onChange={(event) => setChromeBookmarks(event.target.checked)} /> <span><strong>Bookmarks</strong><small>Includes the full Chrome bookmarks bar and folder hierarchy.</small></span></label>
+            <label><input type="checkbox" checked={chromeHistory} onChange={(event) => setChromeHistory(event.target.checked)} /> <span><strong>Browsing history</strong><small>Up to 10,000 recent Chrome pages.</small></span></label>
+          </div>
+          <button className="primary-button full" disabled={chromeLoading || (!chromeBookmarks && !chromeHistory)} onClick={() => void importChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Import selected data</button>
+        </> : !chromeLoading ? <p className="import-note">Install or open Chrome once so a local profile exists, then try again.</p> : null}
+        <div className="password-import-row"><div><strong>Saved passwords</strong><small>Chrome protects direct access. Export passwords as CSV, then select that file here. Secrets go straight into the OS-encrypted Vault and never enter the page.</small></div><button disabled={chromeLoading} onClick={() => void importChromePasswords()}>Choose CSV</button></div>
+        <p className="import-limit"><Shield size={13} /> Cookies, signed-in sessions, payment cards, extensions and Chrome account tokens are intentionally not copied.</p>
+        {chromeResult && <div className="import-result"><Check size={15} /><div><strong>Import complete</strong><small>{chromeResult.imported.bookmarks} bookmarks · {chromeResult.imported.history} history · {chromeResult.imported.passwords} passwords</small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords > 0 && <small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords} duplicate or unsafe entries skipped</small>}{chromeResult.warnings.map((warning) => <small className="warning" key={warning}>{warning}</small>)}</div></div>}
+      </div>}
+    </div>
+    <div className="settings-card"><div className="settings-row"><span><Bookmark size={17} /></span><div><strong>Bookmarks bar</strong><small>Show the Chrome-style bookmarks bar. Shortcut: Ctrl+Shift+B.</small></div><button onClick={() => void window.privateBrowser.toggleBookmarkBar()}>{state.bookmarkBarVisible ? 'Hide' : 'Show'}</button></div></div>
     <div className="settings-card update-settings">
       <div className="settings-row"><span><Cloud size={17} /></span><div><strong>Private downloads</strong><small>{updateStatus?.configured ? updateStatus.endpoint : 'Cloudflare Worker · D1 metadata · R2 installers'}</small></div>{updateStatus?.configured ? <b><Check size={14} /> Connected</b> : <button onClick={() => setEditingUpdates((value) => !value)}>Connect</button>}</div>
       {(editingUpdates || updateStatus?.error) && <form className="update-form" onSubmit={configureUpdates}>

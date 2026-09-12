@@ -53,6 +53,8 @@ node scripts/docs-guard.mjs ratchet --write # tighten allowances that gained sla
   two halves of the app, and every shared payload type.
 - [workspaces-and-state.md](workspaces-and-state.md) — the five cookie-isolated
   workspaces and the on-disk state file that survives a restart.
+- [chrome-import.md](chrome-import.md) — local Chrome profile discovery,
+  bookmark/history migration, and secure password-CSV parsing.
 
 **The desktop app — security-critical**
 

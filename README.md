@@ -6,7 +6,10 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 
 - Real Chromium browsing in native Electron `WebContentsView` tabs.
 - Five persistent, cookie-isolated workspaces: Digitronics, TenTen, Development, Personal and Banking.
-- Chrome-style tabs, address/search bar, navigation, bookmarks, history and download management.
+- Chrome-style tabs, address/search bar, navigation, a full bookmarks bar,
+  history and download management.
+- Local Chrome migration for bookmark-bar folders and history, plus secure
+  Password Manager CSV import directly into the encrypted Vault.
 - Tracker blocking for common analytics, advertising and session-replay hosts,
   tracking-parameter removal, DNT/GPC, and WebRTC private-address protection.
 - Crash/session restoration without storing form values or page content.
@@ -33,6 +36,12 @@ npm run dev
 ```
 
 The development command launches Vite on localhost and opens the Electron application.
+
+To migrate from Chrome, open **Settings → Import from Chrome**, choose the Chrome
+profile and destination workspace, then import bookmarks and/or history. Chrome
+passwords can be exported as CSV and selected in the same panel; delete that
+unencrypted CSV after checking the Vault. Cookies, live sessions, payment cards,
+extensions and account tokens are not copied.
 
 Open a webpage in the **Development** workspace, then select **Dev** in the right sidebar or press **F12** / **Ctrl+Shift+I**. Right-click a page element for exact inspection. The diagnostic report deliberately excludes page text, form values, cookies, storage, headers, request bodies, query strings and fragments, and developer access is blocked for Banking and detected payment pages.
 

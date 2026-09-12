@@ -9,12 +9,12 @@ verified_at: 3f68afed
 
 # IPC Contract
 
-> Last verified: 2026-09-10
+> Last verified: 2026-09-12
 
 ## Agent Brief
 
 **Scope.** The whole surface between the Electron main process and the React
-renderer: 40 `invoke` channels in six namespaces, three main-to-renderer event
+renderer: 44 `invoke` channels in six namespaces, three main-to-renderer event
 subscriptions, and every shared payload type. Defined in
 [preload.cts](../../electron/preload.cts) and
 [types.ts](../../electron/types.ts).
@@ -100,7 +100,7 @@ process is what actually produces them; see the caveat in
 [The Contract Is Written Three Times](#the-contract-is-written-three-times).
 Every method returns a `Promise`, so the "Resolves with" column omits the wrapper.
 
-### browser: — 16 channels
+### browser: — 20 channels
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
@@ -117,6 +117,10 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:set-layout` | `setLayout(layout)` | `{ top: number; left: number; right: number; bottom: number }` | `void` |
 | `browser:toggle-bookmark` | `toggleBookmark()` | — | `void` |
 | `browser:open-bookmark` | `openBookmark(id)` | `id: string` | `void` |
+| `browser:toggle-bookmark-bar` | `toggleBookmarkBar()` | — | `void` |
+| `browser:list-chrome-profiles` | `listChromeProfiles()` | — | `ChromeProfileSource[]` |
+| `browser:import-chrome` | `importChrome(options)` | `ChromeImportOptions` | `ChromeImportResult` |
+| `browser:import-chrome-passwords` | `importChromePasswords()` | — | `ChromeImportResult` |
 | `browser:toggle-tracker-blocking` | `toggleTrackerBlocking()` | — | `void` |
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
@@ -233,7 +237,8 @@ preload and the renderer.
   `securityWarning?`,
   `canGoBack`, `canGoForward`, `isHome`, `developerToolsAllowed`,
   `developerToolsOpen`.
-- `Bookmark` — `id`, `title`, `url`, `workspaceId`, `createdAt`.
+- `Bookmark` — `id`, `title`, `url`, `workspaceId`, `createdAt`, `location`
+  (`bar|other`), `folderPath`, `order`, `orderPath`.
 - `HistoryEntry` — same, with `visitedAt` instead of `createdAt`.
 - `DownloadEntry` — now also carries `checksum?: 'verified' | 'mismatch' | 'unchecked'`,
   set once a completed download has been compared with the release manifest

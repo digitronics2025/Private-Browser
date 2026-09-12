@@ -177,9 +177,10 @@ check `navigationHistory.canGoBack()` / `canGoForward()` first.
 ## Layout Maths
 
 The main process holds one `Layout` for all tabs, defaulting to
-`{ top: 128, left: 0, right: 366, bottom: 0 }`. This matches the renderer and
-CSS: there is no permanent left rail, and the right panel reserves 366 px while
-open.
+`{ top: 158, left: 0, right: 366, bottom: 0 }`, matching the initially visible
+bookmarks bar and the absence of a permanent left rail. The renderer then sends
+the persisted 158 px or 128 px top inset, and reserves 366 px on the right while
+the panel is open.
 
 `setLayout` clamps before storing: `top` becomes `Math.max(80, Math.round(top))`,
 the other three become `Math.max(0, Math.round(n))`.
@@ -212,6 +213,7 @@ inside a page.
 | Ctrl/Cmd+T | `newTab()` in the current workspace |
 | Ctrl/Cmd+W | `closeTab()` on the active tab |
 | Ctrl/Cmd+R | `reload()` |
+| Ctrl/Cmd+Shift+B | toggles and persists the bookmarks bar |
 | F12 or Ctrl/Cmd+Shift+I | toggles Chromium DevTools for an allowed Development-workspace page |
 | Alt+Left | `goBack()` |
 | Alt+Right | `goForward()` |
@@ -244,6 +246,17 @@ queries and fragments, redacts high-entropy path segments and sensitive text,
 and formats a self-contained debugging prompt. Page text, form values, cookies,
 storage, headers and bodies are never read. `clearDeveloperDiagnostics` empties
 the active tab's rings.
+
+## Chrome Import and Bookmarks Bar
+
+`listChromeProfiles`, `importChrome` and `importChromePasswords` are trusted IPC
+facades over [chrome-import.md](chrome-import.md). `importChrome` merges records
+without duplicating the same bookmark path/title/URL or history URL/timestamp,
+refuses Banking as a target, persists the result and records a local-read event.
+The password path uses the native file chooser and calls `VaultStore.addMany`;
+CSV contents and filesystem paths never enter the renderer. `toggleBookmarkBar`
+persists visibility and broadcasts so React can update both the bar and the view
+inset.
 
 ## Downloads
 

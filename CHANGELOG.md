@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added local Chrome profile detection and selective bookmark/history import.
+- Added a Chrome-style bookmarks bar with preserved folders, ordering, Other
+  bookmarks, overflow menus, and the Ctrl+Shift+B visibility shortcut.
+- Added secure Chrome Password Manager CSV import directly into the OS-encrypted
+  Vault, with duplicate and unsafe-entry filtering.
+
 ## 0.3.4 — 2026-09-10
 
 - Hardened packaged Electron executables with sandbox, cookie-encryption,

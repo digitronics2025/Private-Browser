@@ -29,6 +29,7 @@ export function createDefaultState(): PersistedState {
     history: [],
     privacyLog: [],
     trackerBlocking: true,
+    bookmarkBarVisible: true,
   };
 }
 
@@ -102,9 +103,27 @@ export function sanitizeState(input: PersistedState): PersistedState {
     activeWorkspaceId: validWorkspace,
     tabs,
     activeTabByWorkspace,
-    bookmarks: Array.isArray(input.bookmarks) ? input.bookmarks.filter((item) => workspaceIds.has(item.workspaceId) && isAllowedRemoteUrl(item.url)).slice(0, 1000) : [],
-    history: Array.isArray(input.history) ? input.history.filter((item) => workspaceIds.has(item.workspaceId) && isAllowedRemoteUrl(item.url)).slice(0, 500) : [],
+    bookmarks: Array.isArray(input.bookmarks) ? input.bookmarks
+      .filter((item) => workspaceIds.has(item.workspaceId) && isAllowedRemoteUrl(item.url))
+      .slice(0, 25_000)
+      .map((item, index) => ({
+        id: typeof item.id === 'string' ? item.id : randomUUID(),
+        title: typeof item.title === 'string' ? item.title.slice(0, 500) : item.url,
+        url: item.url,
+        workspaceId: item.workspaceId,
+        createdAt: typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString(),
+        location: item.location === 'other' ? 'other' as const : 'bar' as const,
+        folderPath: Array.isArray(item.folderPath)
+          ? item.folderPath.filter((part): part is string => typeof part === 'string').slice(0, 20).map((part) => part.slice(0, 200))
+          : [],
+        order: Number.isSafeInteger(item.order) && item.order >= 0 ? item.order : index,
+        orderPath: Array.isArray(item.orderPath)
+          ? item.orderPath.filter((part): part is number => Number.isSafeInteger(part) && part >= 0).slice(0, 21)
+          : [Number.isSafeInteger(item.order) && item.order >= 0 ? item.order : index],
+      })) : [],
+    history: Array.isArray(input.history) ? input.history.filter((item) => workspaceIds.has(item.workspaceId) && isAllowedRemoteUrl(item.url)).slice(0, 10_000) : [],
     privacyLog: Array.isArray(input.privacyLog) ? input.privacyLog.slice(0, 100) : [],
     trackerBlocking: input.trackerBlocking !== false,
+    bookmarkBarVisible: input.bookmarkBarVisible !== false,
   };
 }

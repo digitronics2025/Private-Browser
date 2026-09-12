@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   app,
   BrowserWindow,
   clipboard,
+  dialog,
   ipcMain,
   Menu,
   session,
@@ -24,6 +26,9 @@ import type {
   AiProviderInput,
   BrowserSnapshot,
   BrowserTab,
+  ChromeImportOptions,
+  ChromeImportResult,
+  ChromeProfileSource,
   DeveloperConsoleEntry,
   DeveloperNetworkIssue,
   DevToolsMode,
@@ -39,6 +44,7 @@ import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
 import { IpcGuard } from './ipc-guard.js';
+import { listChromeProfiles, parseChromePasswordCsv, readChromeProfile } from './chrome-importer.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -99,7 +105,7 @@ class BrowserController {
   private readonly clipboardGuard = new ClipboardGuard(clipboard);
   private readonly faviconCache = new Map<string, string>();
   private expectedInstaller?: ExpectedInstaller;
-  private layout: Layout = { top: 128, left: 0, right: 366, bottom: 0 };
+  private layout: Layout = { top: 158, left: 0, right: 366, bottom: 0 };
   private window!: BrowserWindow;
 
   constructor(
@@ -181,6 +187,7 @@ class BrowserController {
       downloads: [...this.downloads.values()],
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
+      bookmarkBarVisible: persisted.bookmarkBarVisible,
     };
   }
 
@@ -320,7 +327,7 @@ class BrowserController {
     this.store.update((next) => {
       const existing = next.bookmarks.findIndex((item) => item.url === tab.url && item.workspaceId === tab.workspaceId);
       if (existing >= 0) next.bookmarks.splice(existing, 1);
-      else next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, createdAt: new Date().toISOString() });
+      else next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order: next.bookmarks.length, orderPath: [next.bookmarks.length] });
     });
     this.broadcast();
   }
@@ -329,6 +336,57 @@ class BrowserController {
     const bookmark = this.store.get().bookmarks.find((item) => item.id === id);
     if (!bookmark) return;
     await this.newTab(bookmark.workspaceId, bookmark.url);
+  }
+
+  toggleBookmarkBar(): void {
+    this.store.update((state) => { state.bookmarkBarVisible = !state.bookmarkBarVisible; });
+    this.broadcast();
+  }
+
+  listChromeProfiles(): ChromeProfileSource[] {
+    return listChromeProfiles();
+  }
+
+  importChrome(options: ChromeImportOptions): ChromeImportResult {
+    if (!options || typeof options.profileId !== 'string') throw new Error('Choose a Chrome profile');
+    const data = readChromeProfile(options.profileId, options.workspaceId, options.bookmarks === true, options.history === true);
+    this.store.update((state) => {
+      const bookmarkKeys = new Set(state.bookmarks.map((item) => `${item.workspaceId}\u0000${item.location}\u0000${item.folderPath.join('\u0001')}\u0000${item.title}\u0000${item.url}`));
+      for (const bookmark of data.bookmarks) {
+        const key = `${bookmark.workspaceId}\u0000${bookmark.location}\u0000${bookmark.folderPath.join('\u0001')}\u0000${bookmark.title}\u0000${bookmark.url}`;
+        if (bookmarkKeys.has(key) || state.bookmarks.length >= 25_000) data.result.skipped.bookmarks += 1;
+        else { state.bookmarks.push(bookmark); bookmarkKeys.add(key); data.result.imported.bookmarks += 1; }
+      }
+      const historyKeys = new Set(state.history.map((item) => `${item.workspaceId}\u0000${item.url}\u0000${item.visitedAt}`));
+      for (const entry of data.history) {
+        const key = `${entry.workspaceId}\u0000${entry.url}\u0000${entry.visitedAt}`;
+        if (historyKeys.has(key) || state.history.length >= 10_000) data.result.skipped.history += 1;
+        else { state.history.push(entry); historyKeys.add(key); data.result.imported.history += 1; }
+      }
+      state.history.sort((left, right) => right.visitedAt.localeCompare(left.visitedAt));
+    });
+    this.addPrivacyEvent('local-read', 'Chrome data imported', `${data.result.imported.bookmarks} bookmarks and ${data.result.imported.history} history entries imported locally`);
+    this.broadcast();
+    return data.result;
+  }
+
+  async importChromePasswords(): Promise<ChromeImportResult> {
+    const selection = await dialog.showOpenDialog(this.window, {
+      title: 'Choose a Chrome password export',
+      filters: [{ name: 'CSV files', extensions: ['csv'] }],
+      properties: ['openFile'],
+    });
+    if (selection.canceled || !selection.filePaths[0]) throw new Error('Password import cancelled');
+    const filePath = selection.filePaths[0];
+    if (statSync(filePath).size > 20 * 1024 * 1024) throw new Error('Password CSV is unusually large');
+    const parsed = parseChromePasswordCsv(readFileSync(filePath, 'utf8'));
+    const added = this.vault.addMany(parsed.items);
+    this.addPrivacyEvent('vault', 'Chrome passwords imported', `${added.imported} credentials encrypted in the local vault`);
+    return {
+      imported: { bookmarks: 0, history: 0, passwords: added.imported },
+      skipped: { bookmarks: 0, history: 0, passwords: parsed.skipped + added.skipped },
+      warnings: ['Delete the unencrypted Chrome CSV file after checking the import.'],
+    };
   }
 
   toggleTrackerBlocking(): void {
@@ -932,7 +990,7 @@ class BrowserController {
       tab.isHome = false;
       if (addHistory && tab.workspaceId !== 'banking') {
         state.history.unshift({ id: randomUUID(), title: tab.title, url: sanitizedUrl, workspaceId: tab.workspaceId, visitedAt: new Date().toISOString() });
-        state.history = state.history.slice(0, 500);
+        state.history = state.history.slice(0, 10_000);
       }
     });
     this.updateRuntime(tabId, {});
@@ -977,6 +1035,9 @@ class BrowserController {
     } else if (command && key === 'r') {
       event.preventDefault();
       this.reload();
+    } else if (command && input.shift && key === 'b') {
+      event.preventDefault();
+      this.toggleBookmarkBar();
     } else if (input.alt && input.key === 'Left') {
       event.preventDefault();
       this.goBack();
@@ -1062,6 +1123,10 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:set-layout', (_event, layout: Layout) => controller!.setLayout(layout));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
+  handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
+  handle('browser:list-chrome-profiles', () => controller!.listChromeProfiles());
+  handle('browser:import-chrome', (_event, options: ChromeImportOptions) => controller!.importChrome(options));
+  handle('browser:import-chrome-passwords', () => controller!.importChromePasswords());
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));

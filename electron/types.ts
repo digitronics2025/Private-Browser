@@ -29,6 +29,10 @@ export interface Bookmark {
   url: string;
   workspaceId: WorkspaceId;
   createdAt: string;
+  location: 'bar' | 'other';
+  folderPath: string[];
+  order: number;
+  orderPath: number[];
 }
 
 export interface HistoryEntry {
@@ -69,6 +73,7 @@ export interface BrowserSnapshot {
   downloads: DownloadEntry[];
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
+  bookmarkBarVisible: boolean;
 }
 
 export interface PersistedState {
@@ -80,6 +85,28 @@ export interface PersistedState {
   history: HistoryEntry[];
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
+  bookmarkBarVisible: boolean;
+}
+
+export interface ChromeProfileSource {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  hasBookmarks: boolean;
+  hasHistory: boolean;
+}
+
+export interface ChromeImportOptions {
+  profileId: string;
+  workspaceId: WorkspaceId;
+  bookmarks: boolean;
+  history: boolean;
+}
+
+export interface ChromeImportResult {
+  imported: { bookmarks: number; history: number; passwords: number };
+  skipped: { bookmarks: number; history: number; passwords: number };
+  warnings: string[];
 }
 
 export interface AiPagePreview {

@@ -7,7 +7,7 @@ verified_at: d0102bf
 
 # Workspaces and Persisted State
 
-> Last verified: 2026-09-10
+> Last verified: 2026-09-12
 
 ## Agent Brief
 
@@ -127,7 +127,7 @@ Declared in [types.ts](../../electron/types.ts); this is the entire on-disk shap
 | `activeWorkspaceId` | `WorkspaceId` | which workspace the window opens on |
 | `tabs` | `Array<Pick<BrowserTab, 'id' \| 'workspaceId' \| 'title' \| 'url' \| 'isHome'>>` | the `Pick` is where the persist/runtime split is declared |
 | `activeTabByWorkspace` | `Partial<Record<WorkspaceId, string>>` | declared partial, always complete after a load |
-| `bookmarks` | `Bookmark[]` | newest first |
+| `bookmarks` | `Bookmark[]` | Chrome-compatible bar/other placement, folder path and order metadata |
 | `history` | `HistoryEntry[]` | newest first |
 | `privacyLog` | `PrivacyEvent[]` | newest first |
 | `trackerBlocking` | `boolean` | one global toggle, not per workspace |
@@ -145,7 +145,7 @@ Builds a fresh state with one home tab per workspace, each with its own
 - `activeTabByWorkspace` is built from those tabs with `Object.fromEntries(...)`
   and cast `as Record<WorkspaceId, string>` — that cast is what reconciles the
   complete object with the `Partial` type on the field.
-- `bookmarks`, `history` and `privacyLog` start empty.
+- `bookmarks`, `history` and `privacyLog` start empty; the bookmarks bar starts visible.
 - `trackerBlocking` starts `true`. Tracker blocking is on by default.
 
 It is called from two places: the load fallback, and `sanitizeState`, which uses
@@ -197,8 +197,8 @@ rule in one place:
 | empty workspace | a fresh default home tab is appended | — |
 | `activeTabByWorkspace` | the requested id, only if a surviving tab has it **and** belongs to that workspace | that workspace's first tab |
 | `activeWorkspaceId` | if it is in `WORKSPACES` | `'digitronics'` |
-| a bookmark | `Array.isArray` **and** `workspaceId` in `WORKSPACES` **and** `isAllowedRemoteUrl(url)`; first 1000 | dropped, or `[]` if not an array |
-| a history entry | the same three checks; first 500 | dropped, or `[]` if not an array |
+| a bookmark | valid workspace and remote URL; first 25,000; legacy rows gain bar placement and order defaults | dropped, or `[]` if not an array |
+| a history entry | valid workspace and remote URL; first 10,000 | dropped, or `[]` if not an array |
 | a privacy event | `Array.isArray` only; first 100 | `[]` if not an array |
 | `trackerBlocking` | `input.trackerBlocking !== false` | anything that is not literally `false` reads as on |
 
@@ -255,10 +255,9 @@ starts with defaults.
 - **There is no migration path.** `version !== 1` discards the file. Shipping a
   version 2 without writing a migration first wipes every user's tabs, bookmarks
   and history on their next launch, with no warning and no backup.
-- **`sanitizeState` runs on load, never on save.** The caps it enforces are not
-  enforced while the app runs: `main.ts` slices history to 500 and the privacy log
-  to 100 itself, but **bookmarks have no runtime cap at all** — `toggleBookmark`
-  unshifts without a limit and the 1000-cap only bites at the next start.
+- **`sanitizeState` runs on load, never on save.** Runtime paths therefore carry
+  their own caps: navigation keeps 10,000 history rows, Chrome import refuses to
+  exceed 25,000 bookmarks/10,000 history rows, and the privacy log keeps 100.
 - **The same `slice(0, n)` means opposite things.** Tabs are `push`ed, so slicing
   keeps the oldest 100 and drops the newest. Bookmarks, history and privacy events
   are `unshift`ed, so slicing keeps the newest and drops the oldest.
