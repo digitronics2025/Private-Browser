@@ -4,7 +4,7 @@ sources:
   - electron/preload.cts
   - electron/types.ts
   - electron/ipc-guard.ts
-verified_at: 3f68afed
+verified_at: 1e9a38cd
 ---
 
 # IPC Contract
@@ -129,18 +129,29 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 than a named type. `main.ts` has its own unexported `Layout` interface with the
 same four fields, and neither file imports the other.
 
-### developer: — 3 channels
+### developer: — 12 channels
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
 | `developer:toggle-tools` | `toggleDeveloperTools(mode)` | `mode: DevToolsMode` | `void` |
 | `developer:capture-diagnostics` | `captureDeveloperDiagnostics()` | — | `DeveloperDiagnosticReport` |
 | `developer:clear-diagnostics` | `clearDeveloperDiagnostics()` | — | `void` |
+| `developer:bridge-status` | `getBridgeStatus()` | — | `BridgeStatus` |
+| `developer:bridge-pair` | `beginBridgePairing()` | — | `BridgeStatus` |
+| `developer:bridge-disconnect` | `disconnectBridge(revoke)` | `revoke: boolean` | `BridgeStatus` |
+| `developer:bridge-projects` | `listBridgeProjects()` | — | `ProjectSummary[]` |
+| `developer:bridge-select-project` | `selectBridgeProject(projectId)` | `projectId: string` | `ProjectInfo` |
+| `developer:bridge-action` | `runBridgeAction(action, payload)` | bounded action and payload | protocol response |
+| `developer:inspect-page` | `inspectDeveloperPage(selectElement)` | `selectElement: boolean` | `DeveloperPageInfo` |
+| `developer:prepare-ai-preview` | `prepareDeveloperAiPreview(options)` | opt-in DOM/screenshot flags | `AiPagePreview` |
+| `developer:install-extension` | `installBridgeExtension()` | — | status message |
 
 The controller enforces the Development-workspace and protected-page boundary;
 the renderer's disabled state is only presentation. `DevToolsMode` is
 `'right' | 'bottom' | 'detach'`. Diagnostics are sanitized in the main process
 before this bridge can return them.
+The bridge channels are still chrome-renderer IPC; the authenticated named-pipe
+protocol behind them is documented in [vscode-bridge.md](vscode-bridge.md).
 
 ### ai: — 6 channels
 

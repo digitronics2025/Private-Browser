@@ -65,6 +65,8 @@ node scripts/docs-guard.mjs ratchet --write # tighten allowances that gained sla
   autofill and clipboard clearing.
 - [ai-consent.md](ai-consent.md) — local page extraction, redaction, the
   single-use approval token, and the cloud provider it is spent on.
+- [vscode-bridge.md](vscode-bridge.md) — authenticated local pairing, workspace
+  and command grants, project adapters, isolated tests, reports, and guarded AI edits.
 
 **The desktop app — renderer**
 

@@ -3,7 +3,7 @@ system: vault
 sources:
   - electron/vault.ts
   - electron/clipboard-guard.ts
-verified_at: b7407463
+verified_at: 1e9a38cd
 ---
 
 # Vault

@@ -2,12 +2,12 @@
 system: ai-consent
 sources:
   - electron/ai-provider.ts
-verified_at: d0102bf
+verified_at: 1e9a38cd
 ---
 
 # AI Consent
 
-> Last verified: 2026-09-10
+> Last verified: 2026-09-12
 
 ## Agent Brief
 
@@ -229,10 +229,14 @@ one `fetch`, no retries, no streaming.
 - The system prompt, verbatim: *"Answer only from the user-approved webpage
   context. Clearly say when the context is insufficient. Never request or expose
   credentials."*
-- The user message is assembled as
-  `Page: {title}` / `URL: {url}` / `Approved context:` + text / `Question: {question}`,
-  where `title`, `url` and `text` come straight off the approved preview — the
-  origin-only URL and the redacted text.
+- The text prompt is assembled as `Page: {title}` / `URL: {url}` / `Approved
+  context:` + text / optional `Approved structural DOM` / `Question:
+  {question}`. The Developer Bridge may add structural DOM metadata or a
+  compressed screenshot only when the user selected that option before viewing
+  and approving the exact preview. DOM contains bounded element structure, not
+  text or values; form controls are masked during screenshot capture. Without an
+  approved screenshot, `content` remains the original plain string. With one,
+  it becomes the provider's text-plus-`image_url` content array.
 - **`redirect: 'error'`.** `isSafeAiEndpoint` validated a URL, and a redirect
   would move the request off that URL after the check. Without this flag a
   permissive or compromised host could 302 the request — carrying the API key and

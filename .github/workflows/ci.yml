@@ -23,6 +23,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Verify bridge protocol (Windows transport is skipped here)
+        run: npm run bridge:test
       - run: npm audit --audit-level=high
       - run: npm run check
 
@@ -39,6 +42,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npx playwright install chromium
+      - name: Exercise the real Windows named-pipe transport
+        run: npm run bridge:test
       - name: Select the next release version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
@@ -70,6 +76,15 @@ jobs:
           CSC_LINK: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_PASSWORD }}
         run: npm run dist
+      - name: Smoke install the private VSIX in an isolated profile
+        shell: pwsh
+        run: |
+          $profile = Join-Path $env:RUNNER_TEMP 'private-browser-vscode-profile'
+          $extensions = Join-Path $env:RUNNER_TEMP 'private-browser-vscode-extensions'
+          $vsix = Get-ChildItem release\private-browser-bridge-*.vsix | Select-Object -First 1
+          code --install-extension $vsix.FullName --force --user-data-dir $profile --extensions-dir $extensions
+          $installed = code --list-extensions --user-data-dir $profile --extensions-dir $extensions
+          if ($installed -notcontains 'digitronics.private-browser-bridge') { throw 'Private Browser Bridge VSIX smoke install failed' }
       - name: Generate release metadata
         shell: pwsh
         run: |
@@ -87,6 +102,12 @@ jobs:
             release/SHA256SUMS.txt
             release/VERSION.txt
             release/SBOM.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: private-browser-bridge-vsix
+          path: release/private-browser-bridge-*.vsix
           if-no-files-found: error
           retention-days: 30
 

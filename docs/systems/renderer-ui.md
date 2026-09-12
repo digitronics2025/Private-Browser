@@ -4,7 +4,7 @@ sources:
   - src/App.tsx
   - src/styles.css
   - index.html
-verified_at: 3f68afed
+verified_at: 1e9a38cd
 ---
 
 # Renderer UI
@@ -99,7 +99,7 @@ All in [App.tsx](../../src/App.tsx).
 | `Dashboard` | The home screen — welcome block, quick-link grid, 5 most recent history rows, 5 bookmarks, all filtered to the active workspace | none (derives from props) |
 | `SidebarNav` | The seven mode buttons; red badge showing the count of downloads in `progressing` state | none |
 | `PanelHeader` | Icon + eyebrow + title, shared by every panel | none |
-| `DeveloperPanel` | Workspace gate, native DevTools launcher/position, inspection hint, built-in panel map and sanitized diagnostic report | `mode`, `report`, `loading` |
+| `DeveloperPanel` | Four focused Project, Inspect, Test and AI Fix tabs; persistent bridge/version state; workspace/server controls; native DevTools; isolated checks, reports and exact AI preview | bridge, project, inspection, report, AI-option and loading state |
 | `AssistantPanel` | Provider strip, provider form, local preview card, cloud-permission card, question box, answer | `preview`, `approvalToken`, `loading`, `provider`, `showProviderForm`, `providerForm` (endpoint defaults to `https://openrouter.ai/api/v1`), `question`, `answer`; `summary` is a `useMemo` |
 | `VaultPanel` | Encryption-health banner, corrupt-vault recovery button, add form, credential cards | `items`, `available`, `unavailableReason`, `adding`, `form` |
 | `AutomationPanel` | The three hard-coded routines and the approval-boundary note | `running` (id of the routine in flight) |
@@ -122,7 +122,7 @@ load runs each time the user switches to it.
 | Mode | `window.privateBrowser` methods called |
 | --- | --- |
 | `assistant` | `getAiProvider`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi` |
-| `developer` | `toggleDeveloperTools`, `captureDeveloperDiagnostics`, `clearDeveloperDiagnostics`, `copyText` |
+| `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview and `copyText` |
 | `vault` | `listVault`, `addVaultItem`, `removeVaultItem`, `resetCorruptVault`, `copyPassword`, `copyTotp`, `autofill` |
 | `automations` | `newTab(workspaceId, url)` only |
 | `downloads` | `openDownload`, `showDownload` (the list itself comes from `state.downloads`) |

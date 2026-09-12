@@ -3,7 +3,7 @@ system: browser-shell
 sources:
   - electron/main.ts
   - electron/developer-tools.ts
-verified_at: 3f68afed
+verified_at: 1e9a38cd
 ---
 
 # Browser Shell
@@ -246,6 +246,13 @@ queries and fragments, redacts high-entropy path segments and sensitive text,
 and formats a self-contained debugging prompt. Page text, form values, cookies,
 storage, headers and bodies are never read. `clearDeveloperDiagnostics` empties
 the active tab's rings.
+
+The Developer panel's VS Code features are a separate local trust boundary
+documented in [vscode-bridge.md](vscode-bridge.md). Project and server actions
+may run from Development Home so a server can be started before navigation;
+page inspection and diagnostic capture still require a non-home, non-protected
+target. Element selection uses an internal CDP session and never opens a remote
+debugging port.
 
 ## Chrome Import and Bookmarks Bar
 

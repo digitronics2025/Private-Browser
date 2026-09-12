@@ -1,0 +1,97 @@
+{
+  "name": "private-browser-bridge",
+  "displayName": "Private Browser Bridge",
+  "description": "Private, authenticated project and testing companion for Private Browser.",
+  "version": "0.4.0",
+  "publisher": "digitronics",
+  "license": "UNLICENSED",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/digitronics2025/Private-Browser.git",
+    "directory": "vscode-extension"
+  },
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other",
+    "Testing"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Connection status remains available, but project inspection, commands, tests, and edits require a trusted workspace."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "privateBrowser.pair",
+        "title": "Private Browser: Pair with Browser"
+      },
+      {
+        "command": "privateBrowser.reconnect",
+        "title": "Private Browser: Reconnect"
+      },
+      {
+        "command": "privateBrowser.disconnect",
+        "title": "Private Browser: Disconnect"
+      },
+      {
+        "command": "privateBrowser.revoke",
+        "title": "Private Browser: Disconnect and Revoke"
+      },
+      {
+        "command": "privateBrowser.showStatus",
+        "title": "Private Browser: Show Connection Status"
+      }
+    ],
+    "configuration": {
+      "title": "Private Browser Bridge",
+      "properties": {
+        "privateBrowserBridge.reportRetentionDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 365,
+          "description": "Days to retain local test reports. Reports are never synchronized."
+        },
+        "privateBrowserBridge.maxReports": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 500,
+          "description": "Maximum number of local test reports."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "npm run typecheck && vitest run",
+    "package": "npm run compile && vsce package --no-dependencies --out ../build/private-browser-bridge.vsix"
+  },
+  "devDependencies": {
+    "@private-browser/bridge-protocol": "*",
+    "@types/node": "^22.10.2",
+    "@types/pngjs": "^6.0.5",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.6.0",
+    "axe-core": "^4.10.3",
+    "esbuild": "^0.25.9",
+    "pixelmatch": "^7.1.0",
+    "pngjs": "^7.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^5.0.0"
+  }
+}
