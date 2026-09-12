@@ -64,7 +64,14 @@ This feature-oriented log tracks the approved secure multi-Google-account Accoun
 [STEP] 11.1 — Add public Worker routes and recent stable release query — done
 [STEP] 11.2 — Build responsive signed-installer landing page and developer profile — done
 [STEP] 11.3 — Expand Worker security, history and compatibility coverage — done
-[STEP] 11.4 — Full quality gate passed; production publication and verification — in progress
+[STEP] 11.4 — Full quality gate passed; production publication and verification — done
+[DONE] System 11 — Public cloud download page — 2026-09-12
+
+- PR #22 introduced the public `/` and `/download` routes; PRs #23 and #26 hardened the live release verifier. The final Worker code revision is `fabad9b310b10efcc7332e88599620db8d437b2a`.
+- Direct Wrangler publication activated Worker version `3e220d74-5243-49dc-af9b-f617f9f1c688` with tag `git-fabad9b`; live `/health` returned 200 with database `ok` and `releaseReady: true`.
+- Private Browser 0.5.7 build 82 is active in D1/R2. The public CTA downloaded 115,638,545 bytes and matched SHA-256 `259a374e199949d72b7fa87c6aed3eef9834340b99ed5dfd17da68038a922eec`.
+- CI run `34705898039` passed the complete gate, Windows packaging and smoke installation, R2/D1 publication, and authenticated full, HEAD, range, resumed, expiry and tamper verification.
+- Independent production browser checks passed at 1440px and 375px with five ordered historical releases, the developer profile, no scripts, no horizontal overflow, and no console or network failures.
 
 [START] System 12 — Cloudflare human-verification compatibility — 2026-09-12
 [STEP] 12.1 — Reproduce packaged User-Agent and Client Hints mismatch — done
