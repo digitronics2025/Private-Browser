@@ -69,7 +69,7 @@ Audit baseline:
 
 ## Steps
 
-- [ ] 1. Persist coordinated execution records and compatibility contract — done when: both repos record the work and Private Browser independently passes MyVault’s unchanged envelope/schema vectors — check: `node C:/Users/abuye/.agents/skills/implement-plan/scripts/plan-check.mjs docs/plans/secure-myvault-private-browser-integration.md && npm test -- --run tests/myvault-compatibility.test.ts`
+- [x] 1. Persist coordinated execution records and compatibility contract — done when: both repos record the work and Private Browser independently passes MyVault’s unchanged envelope/schema vectors — check: `node C:/Users/abuye/.agents/skills/implement-plan/scripts/plan-check.mjs docs/plans/secure-myvault-private-browser-integration.md && npx vitest run tests/myvault-compatibility.test.ts`
 - [ ] 2. Add scoped device credential schema and Worker APIs — done when: additive local migrations apply and enrollment, redemption, authorization, scope, revocation, replay, and legacy-token integration tests pass — check: `cd C:/Users/abuye/My_vault && npm run lint && npx vitest run worker/vaultApi.test.ts worker/deviceCredentials.test.ts`
 - [ ] 3. Add MyVault device-management UI and synchronize security/deployment documentation — done when: administrators can create/list/revoke devices without persisted raw tokens and stale secret claims are gone — check: `cd C:/Users/abuye/My_vault && npm run check`
 - [ ] 4. Implement the encrypted local store and trusted VaultBroker boundary — done when: compatibility, wrong-password, tamper, corrupt-file, future-schema, offline, locking, atomic-write, and redaction tests pass — check: `npm test -- --run tests/myvault-compatibility.test.ts tests/vault-broker.test.ts tests/vault-security-boundary.test.ts`
@@ -95,4 +95,5 @@ Audit baseline:
 ## Ledger
 
 - 2026-09-12 11:05 — created from the approved conversation plan; Private Browser refreshed from `68e8356`, MyVault from `ccb64ab`; unrelated PRs #10 and #42 left untouched.
-
+- 2026-09-12 11:09 — step 1 — the repository hook renamed the Private Browser branch to `feat/private-browser-bridge`; accepted the scoped name and kept the coordinated MyVault branch unchanged.
+- 2026-09-12 11:11 — step 1 — used MyVault's complete portable type file but replaced its UI-only `IconName` import with an opaque string because visual registries are outside the envelope contract; all five unchanged vectors passed, including production Argon2id cost.
