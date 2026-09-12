@@ -12,7 +12,7 @@ const MOCK_TOTP_SEED = ['JBSW', 'Y3DP', 'EHPK', '3PXP'].join('');
 
 const protectedStorage: SafeStorageAdapter = {
   isEncryptionAvailable: () => true,
-  encryptString: (value) => Buffer.from(value, 'utf8').map((byte) => byte ^ 0xa5),
+  encryptString: (value) => Buffer.from(Buffer.from(value, 'utf8').map((byte) => byte ^ 0xa5)),
   decryptString: (value) => Buffer.from(value.map((byte) => byte ^ 0xa5)).toString('utf8'),
 };
 

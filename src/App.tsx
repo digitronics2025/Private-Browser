@@ -47,7 +47,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AiPagePreview, AiProviderInput, AiProviderStatus, Bookmark as BookmarkItem, BrowserSnapshot, BrowserTab, ChromeImportResult, ChromeProfileSource, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
+import type { AiPagePreview, AiProviderInput, AiProviderStatus, Bookmark as BookmarkItem, BrowserSnapshot, BrowserTab, ChromeImportResult, ChromeProfileSource, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemMeta, VaultStatus, WorkspaceId } from '../electron/types';
 
 type SidebarMode = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
 
@@ -630,30 +630,12 @@ function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 
 
 function VaultPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [items, setItems] = useState<VaultItemMeta[]>([]);
-  const [available, setAvailable] = useState(true);
-  const [unavailableReason, setUnavailableReason] = useState<string | undefined>();
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState<VaultItemInput>({ label: '', url: '', username: '', password: '', totpSecret: '' });
+  const [status, setStatus] = useState<VaultStatus>({ available: true, items: [] });
   const load = async () => {
-    try { const result = await window.privateBrowser.listVault(); setItems(result.items); setAvailable(result.available); setUnavailableReason(result.reason); }
+    try { const result = await window.privateBrowser.listVault(); setItems(result.items); setStatus(result); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   useEffect(() => { void load(); }, []);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    try {
-      await window.privateBrowser.addVaultItem(form);
-      setForm({ label: '', url: '', username: '', password: '', totpSecret: '' });
-      setAdding(false);
-      await load();
-      onToast('Credential encrypted and saved');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
-    finally {
-      // The password and authenticator seed go, pass or fail. Label, address and
-      // username are kept so a rejected entry does not have to be retyped whole.
-      setForm((value) => ({ ...value, password: '', totpSecret: '' }));
-    }
-  };
   const copyPassword = async (id: string) => {
     try { await window.privateBrowser.copyPassword(id); onToast('Password copied; clipboard clears in 30 seconds'); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
@@ -662,20 +644,16 @@ function VaultPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'err
     try { const { secondsRemaining } = await window.privateBrowser.copyTotp(id); onToast(`Authenticator code copied · ${secondsRemaining}s remaining`); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
+  const unlock = async () => { try { const result = await window.privateBrowser.requestVaultUnlock(); setStatus(result); setItems(result.items); } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
+  const lock = async () => { const result = await window.privateBrowser.lockVault(); setStatus(result); setItems([]); };
+  const add = async () => { try { const result = await window.privateBrowser.openVaultEditor(); if (result) { await load(); onToast('Login encrypted in MyVault'); } } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
   return (
     <div className="side-panel">
-      <PanelHeader icon={KeyRound} eyebrow="OS encrypted" title="Private vault" />
-      <div className={`vault-health ${available ? '' : 'warning'}`}><ShieldCheck size={16} /><div><strong>{available ? 'Device encryption active' : unavailableReason === 'vault-corrupt' ? 'Vault recovery required' : 'Encryption unavailable'}</strong><span>{unavailableReason === 'vault-corrupt' ? 'The existing vault was preserved and writes are blocked.' : 'Secrets never enter browser history or sync.'}</span></div></div>
-      {unavailableReason === 'vault-corrupt' && <button className="recovery-button" onClick={() => { if (window.confirm('Reset the unreadable vault? The encrypted file will be preserved as a backup.')) void window.privateBrowser.resetCorruptVault().then(load); }}>Preserve backup and reset vault</button>}
-      <button className="primary-button full" onClick={() => setAdding((value) => !value)} disabled={!available}><Plus size={16} /> Add credential</button>
-      {adding && <form className="vault-form" onSubmit={submit}>
-        <input placeholder="Name (e.g. Digitronics Admin)" required value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
-        <input placeholder="Website" required value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
-        <input placeholder="Username or email" required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-        <input placeholder="Password" type="password" required spellCheck={false} autoComplete="off" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-        <input placeholder="Authenticator secret (optional)" type="password" spellCheck={false} autoComplete="off" value={form.totpSecret} onChange={(e) => setForm({ ...form, totpSecret: e.target.value })} />
-        <button className="primary-button" type="submit"><LockKeyhole size={15} /> Encrypt and save</button>
-      </form>}
+      <PanelHeader icon={KeyRound} eyebrow="MyVault broker" title="MyVault" />
+      <div className={`vault-health ${status.available ? '' : 'warning'}`}><ShieldCheck size={16} /><div><strong>{status.lifecycle === 'unlocked' ? 'Unlocked on this device' : status.lifecycle === 'recovery-required' ? 'Recovery required' : status.lifecycle === 'unconfigured' ? 'Connection required' : 'Locked'}</strong><span>{status.sync === 'dirty' ? 'Encrypted changes are waiting to sync.' : 'Passwords stay outside this interface and browser pages.'}</span></div></div>
+      {status.lifecycle === 'recovery-required' && <button className="recovery-button" onClick={() => void window.privateBrowser.acknowledgeVaultRecovery().then((result) => { setStatus(result); setItems(result.items); })}>Keep recovery copy and continue</button>}
+      {status.lifecycle === 'locked' && <button className="primary-button full" onClick={() => void unlock()}><LockKeyhole size={16} /> Unlock in secure window</button>}
+      {status.lifecycle === 'unlocked' && <div className="credential-actions"><button className="primary-button" onClick={() => void add()}><Plus size={16} /> Add login</button><button onClick={() => void lock()}><LockKeyhole size={14} /> Lock</button></div>}
       <div className="credential-list">
         {items.map((item) => <div className="credential-card" key={item.id}>
           <div className="credential-top"><span className="site-badge">{item.label.slice(0, 1).toUpperCase()}</span><div><strong>{item.label}</strong><small>{domainFromUrl(item.url)} · {item.username}</small></div></div>
@@ -683,10 +661,10 @@ function VaultPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'err
             <button onClick={() => void window.privateBrowser.autofill(item.id).then(() => onToast('Credential filled')).catch((error) => onToast(error.message, 'error'))}><Zap size={14} /> Fill</button>
             <button onClick={() => void copyPassword(item.id)}><Copy size={14} /> Password</button>
             {item.hasTotp && <button onClick={() => void copyTotp(item.id)}><Clock3 size={14} /> Code</button>}
-            <button className="danger" title="Delete" onClick={() => { if (window.confirm(`Delete ${item.label}? This cannot be undone.`)) void window.privateBrowser.removeVaultItem(item.id).then(load); }}><Trash2 size={14} /></button>
+            <button className="danger" title="Delete" onClick={() => void window.privateBrowser.requestVaultDelete(item.id).then(load)}><Trash2 size={14} /></button>
           </div>
         </div>)}
-        {!items.length && !adding && <EmptyState icon={KeyRound} text="No credentials saved on this device." />}
+        {!items.length && status.lifecycle === 'unlocked' && <EmptyState icon={KeyRound} text="No logins in MyVault yet." />}
       </div>
     </div>
   );

@@ -6,3 +6,4 @@
 [DONE] Phase 1.1 — Compatibility contract — 2026-09-12
 [START] Phase 2 — Trusted broker and secure operations — 2026-09-12
 [STEP] 2.1 — Encrypted envelope, OS-protected connection state, and in-memory broker — done
+[STEP] 2.2 — Metadata-only IPC and one-shot secure dialogs — done

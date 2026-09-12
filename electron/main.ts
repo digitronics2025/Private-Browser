@@ -9,6 +9,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  safeStorage,
   session,
   shell,
   WebContentsView,
@@ -35,11 +36,14 @@ import type {
   DownloadEntry,
   PersistedState,
   PrivacyEvent,
-  VaultItemInput,
   UpdateServiceInput,
   WorkspaceId,
 } from './types.js';
-import { VaultStore } from './vault.js';
+import { generateTotp } from './vault.js';
+import { VaultBroker } from './myvault/vault-broker.js';
+import { MyVaultDiskStore } from './myvault/vault-store.js';
+import { SecureVaultDialogs } from './myvault/secure-dialog.js';
+import type { ConfirmDeleteDialogValue, EditLoginDialogValue, UnlockDialogValue } from './myvault/secure-dialog-contract.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
@@ -107,10 +111,11 @@ class BrowserController {
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { top: 158, left: 0, right: 366, bottom: 0 };
   private window!: BrowserWindow;
+  private readonly secureDialogs = new SecureVaultDialogs(() => this.window);
 
   constructor(
     private readonly store: StateStore,
-    private readonly vault: VaultStore,
+    private readonly vault: VaultBroker,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
   ) {
@@ -547,41 +552,82 @@ class BrowserController {
   }
 
   listVault() {
-    return { available: this.vault.isAvailable(), reason: this.vault.reason(), items: this.vault.list() };
+    const status = this.vault.status();
+    const items = status.lifecycle === 'unlocked'
+      ? this.vault.searchMetadata().map((item) => ({ ...item, label: item.title, url: item.url ?? '' }))
+      : [];
+    return {
+      available: status.credentialPersistenceAvailable && status.lifecycle !== 'recovery-required',
+      reason: !status.credentialPersistenceAvailable
+        ? 'os-encryption-unavailable' as const
+        : status.blockedReason === 'envelope-unsupported'
+          ? 'vault-unsupported' as const
+          : status.blockedReason
+            ? 'vault-corrupt' as const
+            : undefined,
+      items,
+      lifecycle: status.lifecycle,
+      sync: status.sync,
+      dirty: status.dirty,
+      generation: status.generation,
+    };
   }
 
-  addVaultItem(input: VaultItemInput) {
-    if (!input.label.trim() || !input.url.trim() || !input.username.trim() || !input.password) throw new Error('Complete all required fields');
-    if (input.label.length > 200 || input.url.length > 2000 || input.username.length > 500 || input.password.length > 5000 || (input.totpSecret?.length ?? 0) > 500) throw new Error('A vault field is too long');
-    const normalizedUrl = normalizeNavigationInput(input.url);
-    if (!isAllowedRemoteUrl(normalizedUrl)) throw new Error('Enter a valid website');
-    const result = this.vault.add({ ...input, label: input.label.trim(), url: normalizedUrl, username: input.username.trim() });
-    this.addPrivacyEvent('vault', 'Vault entry saved', input.label.trim());
-    return result;
+  async requestVaultUnlock() {
+    const value = await this.secureDialogs.open('unlock') as UnlockDialogValue | undefined;
+    if (!value) return this.listVault();
+    await this.vault.unlock(value.password);
+    this.addPrivacyEvent('vault', 'MyVault unlocked', 'Decrypted state is held only by the trusted broker');
+    return this.listVault();
   }
 
-  removeVaultItem(id: string): boolean {
-    const removed = this.vault.remove(id);
+  async lockVault() {
+    this.secureDialogs.closeAll();
+    this.vault.lock();
+    await this.clipboardGuard.flush();
+    this.addPrivacyEvent('vault', 'MyVault locked', 'Pending vault actions and clipboard state were invalidated');
+    return this.listVault();
+  }
+
+  async openVaultEditor(origin?: string) {
+    const value = await this.secureDialogs.open('edit-login', origin) as EditLoginDialogValue | undefined;
+    if (!value) return undefined;
+    const result = await this.vault.saveLogin({
+      title: value.title,
+      url: value.url,
+      username: value.username,
+      password: value.password,
+      totp: value.totpSecret ? { secret: value.totpSecret, algorithm: 'SHA-1', digits: 6, period: 30 } : undefined,
+    });
+    this.addPrivacyEvent('vault', 'MyVault login saved', value.url);
+    return { ...result, label: result.title, url: result.url ?? '' };
+  }
+
+  async requestVaultDelete(id: string): Promise<boolean> {
+    const value = await this.secureDialogs.open('confirm-delete') as ConfirmDeleteDialogValue | undefined;
+    if (!value?.confirmed) return false;
+    const removed = await this.vault.deleteEntry(id);
     if (removed) this.addPrivacyEvent('vault', 'Vault entry removed', 'A credential was deleted');
     return removed;
   }
 
-  resetCorruptVault(): boolean {
-    const reset = this.vault.resetCorrupt();
-    if (reset) this.addPrivacyEvent('vault', 'Corrupt vault reset', 'The unreadable encrypted file was preserved as a backup');
-    return reset;
+  acknowledgeVaultRecovery() {
+    this.vault.acknowledgeRecovery();
+    this.addPrivacyEvent('vault', 'Vault recovery acknowledged', 'The unreadable encrypted file remains preserved');
+    return this.listVault();
   }
 
   copyPassword(id: string): void {
-    this.copySensitiveValue(this.vault.getPassword(id));
+    this.copySensitiveValue(this.vault.resolveSecretForTrustedOperation(id, 'password'));
     this.addPrivacyEvent('vault', 'Password copied', 'Clipboard clears automatically after 30 seconds');
   }
 
   copyTotp(id: string): { secondsRemaining: number } {
-    const result = this.vault.getTotp(id);
-    this.copySensitiveValue(result.code);
+    const now = Math.floor(Date.now() / 1000);
+    const code = generateTotp(this.vault.resolveSecretForTrustedOperation(id, 'totp-secret'), now);
+    this.copySensitiveValue(code);
     this.addPrivacyEvent('vault', 'Authenticator code copied', 'Generated locally; clipboard auto-clear enabled');
-    return { secondsRemaining: result.secondsRemaining };
+    return { secondsRemaining: 30 - (now % 30) };
   }
 
   /** Clear a still-pending copied secret now — used on quit, so exiting inside
@@ -595,9 +641,9 @@ class BrowserController {
     const state = this.store.get();
     const tab = this.activeTab(state);
     if (!contents || tab.isHome) throw new Error('Open the saved website first');
-    const credential = this.vault.getForAutofill(id);
-    if (!isAutofillTarget(credential.url, tab.url)) throw new Error('This credential belongs to another website, or this page is not secure');
-    const payload = JSON.stringify({ username: credential.username, password: credential.password });
+    const match = this.vault.searchMetadata('', tab.url).find((entry) => entry.id === id);
+    if (!match?.url || !isAutofillTarget(match.url, tab.url)) throw new Error('This credential belongs to another website, or this page is not secure');
+    const payload = JSON.stringify({ username: this.vault.resolveSecretForTrustedOperation(id, 'username'), password: this.vault.resolveSecretForTrustedOperation(id, 'password') });
     await contents.executeJavaScript(`(() => {
       const credential = ${payload};
       const setValue = (element, value) => {
@@ -1091,7 +1137,8 @@ function handle(channel: string, callback: (event: IpcMainInvokeEvent, ...args: 
 
 if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const store = new StateStore(join(app.getPath('userData'), 'browser-state.json'));
-  const vault = new VaultStore(join(app.getPath('userData'), 'vault.enc'));
+  const vault = new VaultBroker(new MyVaultDiskStore(app.getPath('userData'), safeStorage));
+  vault.initialize();
   const aiProvider = new AiProviderStore(join(app.getPath('userData'), 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(app.getPath('userData'), 'update-service.enc'));
   const updateBootstrapPath = join(process.resourcesPath, 'private-browser-update.json');
@@ -1141,9 +1188,11 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:ask', (_event, token: string, question: string) => controller!.askAi(token, question));
   handle('ai:revoke', () => controller!.revokeAiContext());
   handle('vault:list', () => controller!.listVault());
-  handle('vault:add', (_event, input: VaultItemInput) => controller!.addVaultItem(input));
-  handle('vault:remove', (_event, id: string) => controller!.removeVaultItem(id));
-  handle('vault:reset-corrupt', () => controller!.resetCorruptVault());
+  handle('vault:request-unlock', () => controller!.requestVaultUnlock());
+  handle('vault:lock', () => controller!.lockVault());
+  handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
+  handle('vault:request-delete', (_event, id: string) => controller!.requestVaultDelete(id));
+  handle('vault:acknowledge-recovery', () => controller!.acknowledgeVaultRecovery());
   handle('vault:copy-password', (_event, id: string) => controller!.copyPassword(id));
   handle('vault:copy-totp', (_event, id: string) => controller!.copyTotp(id));
   handle('vault:autofill', (_event, id: string) => controller!.autofill(id));

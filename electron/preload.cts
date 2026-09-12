@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
+import type { AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 
 const api = {
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
@@ -33,9 +33,11 @@ const api = {
   askAi: (token: string, question: string): Promise<string> => ipcRenderer.invoke('ai:ask', token, question),
   revokeAiContext: (): Promise<void> => ipcRenderer.invoke('ai:revoke'),
   listVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:list'),
-  addVaultItem: (input: VaultItemInput): Promise<VaultItemMeta> => ipcRenderer.invoke('vault:add', input),
-  removeVaultItem: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:remove', id),
-  resetCorruptVault: (): Promise<boolean> => ipcRenderer.invoke('vault:reset-corrupt'),
+  requestVaultUnlock: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-unlock'),
+  lockVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:lock'),
+  openVaultEditor: (origin?: string): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:open-editor', origin),
+  requestVaultDelete: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:request-delete', id),
+  acknowledgeVaultRecovery: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:acknowledge-recovery'),
   copyPassword: (id: string): Promise<void> => ipcRenderer.invoke('vault:copy-password', id),
   copyTotp: (id: string): Promise<{ secondsRemaining: number }> => ipcRenderer.invoke('vault:copy-totp', id),
   autofill: (id: string): Promise<void> => ipcRenderer.invoke('vault:autofill', id),
