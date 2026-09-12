@@ -57,7 +57,8 @@ This feature-oriented log tracks the approved secure multi-Google-account Accoun
 [STEP] 10.2 — Run two security and same-pattern review passes — done
 [STEP] 10.3 — Pass the full repository gate and build a runnable installer — done
 [STEP] 10.4 — Integrate upstream Chrome import, bookmark hierarchy, VS Code bridge and MyVault without weakening Account Space isolation — done
-[STEP] 10.5 — Push, merge, publish and verify release artifacts — in progress
+[STEP] 10.5 — Push, merge, publish and verify release artifacts — done
+[DONE] System 10 — Upstream compatibility, audit, packaging and release — 2026-09-12
 
 ## Upstream systems incorporated
 
@@ -78,3 +79,13 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 - Packaged app: clean-profile launch stayed alive; the test process was then closed deliberately.
 - Installer: `Private-Browser-0.5.0-Setup.exe`, 115,636,947 bytes, SHA-256 `85D2F72CCF1A2EBECD27597A5AC2BD4922EA7283D9D1C561A6F2346C94E3492E`.
 - Private VSIX: `private-browser-bridge-0.5.0.vsix`, 346,767 bytes, SHA-256 `D9CD5C03FB213203F588D2B8EA159ECCFBCDB5C5CE1A7698D0121B03A1301AAD`.
+
+[FINAL AUDIT] Account Spaces production release passed — 2026-09-12
+- PR #15 merged to `main` as `602507486a3981b0742be75c3712c99453cf03cd`; CodeQL and Verify/package run `34695431157` passed on that exact SHA.
+- GitHub Advanced Security's new high-severity Chrome import race finding was fixed before merge; the pre-existing repository alerts remain outside this feature's changed-code gate.
+- Direct Cloudflare release from an isolated exact-commit worktree applied no pending D1 migrations and activated Worker version `8e97020e-9376-4469-b3c7-cb3dcfbf4691` with tag `git-6025074`; previous active version was `f77e0b0f-0877-4ed0-96f7-487be2ad2ee1`.
+- Live `/health` returned 200 with database `ok` and `releaseReady: true`; unauthenticated update and unknown routes returned 404.
+- Private Browser `0.5.2` build 61 is active in D1/R2 for commit `602507486a3981b0742be75c3712c99453cf03cd`; its 115,637,314-byte installer SHA-256 is `d6d558341d165fe7a1d661629dbb7b63f3953ce9af3f933f07b3e57def6c1af3`.
+- The independently downloaded CI artifact matched the live hash and contains a CycloneDX SBOM with 660 components; CI also verified authenticated full, range and resumed downloads.
+- No repository claims register, scheduled application task or alert sender exists. Equivalent downstream probe due 2026-09-13: re-read the active D1 release row and require the same commit/version/hash tuple; lower traffic is not relevant because publication is deterministic.
+- Live Google OAuth remains intentionally unclaimed until an operator privately configures a Desktop OAuth client ID and consent screen; no client secret is accepted.
