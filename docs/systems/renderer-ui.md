@@ -15,7 +15,8 @@ verified_at: f6f0c96
 ## Agent Brief
 
 **Scope.** The entire chrome of Private Browser — title bar, tab strip, toolbar,
-home dashboard, workspace switcher and the seven-mode right sidebar — lives in one
+Chrome-style bookmarks bar, home dashboard, workspace switcher and the seven-mode
+right sidebar — lives in one
 732-line file, [App.tsx](../../src/App.tsx), styled by one 307-line stylesheet.
 The renderer owns no browsing state: it renders a `BrowserSnapshot` pushed from
 the main process and calls back over `window.privateBrowser`.
@@ -99,13 +100,13 @@ All in [App.tsx](../../src/App.tsx).
 | `Dashboard` | The home screen — welcome block, quick-link grid, 5 most recent history rows, 5 bookmarks, all filtered to the active workspace | none (derives from props) |
 | `SidebarNav` | The seven mode buttons; red badge showing the count of downloads in `progressing` state | none |
 | `PanelHeader` | Icon + eyebrow + title, shared by every panel | none |
-| `DeveloperPanel` | Workspace gate, native DevTools launcher/position, inspection hint, built-in panel map and sanitized diagnostic report | `mode`, `report`, `loading` |
+| `DeveloperPanel` | Four focused Project, Inspect, Test and AI Fix tabs; persistent bridge/version state; workspace/server controls; native DevTools; isolated checks, reports and exact AI preview | bridge, project, inspection, report, AI-option and loading state |
 | `AssistantPanel` | Provider strip, provider form, local preview card, cloud-permission card, question box, answer | `preview`, `approvalToken`, `loading`, `provider`, `showProviderForm`, `providerForm` (endpoint defaults to `https://openrouter.ai/api/v1`), `question`, `answer`; `summary` is a `useMemo` |
 | `VaultPanel` | Encryption-health banner, corrupt-vault recovery button, add form, credential cards | `items`, `available`, `unavailableReason`, `adding`, `form` |
 | `AutomationPanel` | The three hard-coded routines and the approval-boundary note | `running` (id of the routine in flight) |
 | `DownloadsPanel` | Download progress plus checksum and executable-risk warnings | none |
 | `PrivacyPanel` | Three summary tiles and the `state.privacyLog` feed | none |
-| `SettingsPanel` | Default-browser row, private-downloads row + form + actions, security row, about card | `isDefault`, `updateStatus`, `updateResult`, `editingUpdates`, `checking`, `updateForm` |
+| `SettingsPanel` | Default browser, Chrome import wizard, bookmark-bar toggle, private downloads, security and about | update state plus Chrome profiles, options and result |
 | `EmptyState` | Icon + one line, used at five call sites across four panels | none |
 
 Module-level helpers: `domainFromUrl` (hostname minus `www.`, falls back to the
@@ -122,7 +123,7 @@ load runs each time the user switches to it.
 | Mode | `window.privateBrowser` methods called |
 | --- | --- |
 | `assistant` | `getAiProvider`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi` |
-| `developer` | `toggleDeveloperTools`, `captureDeveloperDiagnostics`, `clearDeveloperDiagnostics`, `copyText` |
+| `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview and `copyText` |
 | `vault` | `listVault`, `addVaultItem`, `removeVaultItem`, `resetCorruptVault`, `copyPassword`, `copyTotp`, `autofill` |
 | `automations` | `newTab(workspaceId, url)` only |
 | `downloads` | `openDownload`, `showDownload` (the list itself comes from `state.downloads`) |
@@ -131,8 +132,9 @@ load runs each time the user switches to it.
 
 The always-mounted chrome (not a sidebar mode) calls `getState`, `setLayout`,
 `navigate`, `back`, `forward`, `reload`, `stop`, `newTab`, `closeTab`,
-`activateTab`, `switchWorkspace`, `toggleBookmark`, `openBookmark` and
-`toggleTrackerBlocking`.
+`activateTab`, `switchWorkspace`, `toggleBookmark`, `openBookmark`,
+`toggleBookmarkBar` and `toggleTrackerBlocking`. Settings additionally calls the
+three Chrome import methods.
 
 `copyText` is used only to copy the main-process-formatted developer report; it
 does not receive raw page content or browser secrets.
@@ -242,21 +244,21 @@ that rectangle to the active `WebContentsView`.
 
 ```
 useEffect(() => {
-  void window.privateBrowser.setLayout({ top: 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
-}, [sidebarOpen]);
+  void window.privateBrowser.setLayout({ top: bookmarkBarVisible ? 158 : 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
+}, [sidebarOpen, bookmarkBarVisible]);
 ```
 
 Where those numbers come from in [styles.css](../../src/styles.css):
 
 | Inset | Value | Source |
 | --- | --- | --- |
-| `top` | 128 | `.titlebar` 39px + `.tabbar` 37px + `.toolbar` 52px |
+| `top` | 128 or 158 | title, tabs and toolbar, plus the optional 30px bookmarks bar |
 | `left` | 0 | the removed left rail no longer reserves webpage space |
 | `right` | 366 when open, 0 when closed | `.sidebar` width |
 | `bottom` | 0 | no status bar |
 
-The effect depends only on `sidebarOpen`, so it fires once at mount and once per
-sidebar toggle. Window resizes are handled entirely in the main process, which
+The effect depends on `sidebarOpen` and bookmark-bar visibility, so it fires at
+mount and whenever either inset changes. Window resizes are handled in the main process, which
 re-applies the last received insets on `resize`.
 
 The main process clamps what it receives (`top` at minimum 80, the rest at

@@ -124,7 +124,7 @@ export class AccountSpaceStateStore {
     const accounts = this.ensureDefaultAccounts(ids, fingerprint);
     const accountStates = WORKSPACES.map((workspace) => createDefaultAccountState(workspace.id, ids[workspace.id]));
     for (const state of accountStates) this.saveAccountState(state);
-    const manifest = createManifest(ids, 'digitronics', [], true);
+    const manifest = createManifest(ids, 'digitronics', [], true, true);
     this.saveManifest(manifest);
     return { status: 'ready', manifest, accounts, accountStates, accountRecoveries: [] };
   }
@@ -162,6 +162,7 @@ export class AccountSpaceStateStore {
         legacy.activeWorkspaceId,
         legacy.privacyLog,
         legacy.trackerBlocking,
+        legacy.bookmarkBarVisible,
       );
       this.saveManifest(manifest);
       this.options.onMigrationPhase?.('manifest');
@@ -347,6 +348,7 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
     accountSpaceIds,
     activeAccountSpaceByWorkspace,
     trackerBlocking: input.trackerBlocking !== false,
+    bookmarkBarVisible: input.bookmarkBarVisible !== false,
     privacyLog: sanitizePrivacyLog(input.privacyLog),
   };
 }
@@ -372,8 +374,14 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
     tabs.push({ id: randomUUID(), workspaceId, accountSpaceId: input.accountSpaceId, title: 'New tab', url: 'private://home', isHome: true });
   }
   const activeTabId = tabs.some((tab) => tab.id === input.activeTabId) ? input.activeTabId : tabs[0].id;
-  const bookmarks = sanitizeAccountItems<AccountSpaceBookmark>(input.bookmarks, input.accountSpaceId, workspaceId, 1000);
-  const history = sanitizeAccountItems<AccountSpaceHistoryEntry>(input.history, input.accountSpaceId, workspaceId, 500);
+  const bookmarks = sanitizeAccountItems<AccountSpaceBookmark>(input.bookmarks, input.accountSpaceId, workspaceId, 25_000).map((item, index) => ({
+    ...item,
+    location: (item.location === 'other' ? 'other' : 'bar') as AccountSpaceBookmark['location'],
+    folderPath: Array.isArray(item.folderPath) ? item.folderPath.slice(0, 20).filter((part) => typeof part === 'string').map((part) => part.slice(0, 200)) : [],
+    order: Number.isSafeInteger(item.order) && item.order >= 0 ? item.order : index,
+    orderPath: Array.isArray(item.orderPath) ? item.orderPath.slice(0, 20).filter((part) => Number.isSafeInteger(part) && part >= 0) : [index],
+  }));
+  const history = sanitizeAccountItems<AccountSpaceHistoryEntry>(input.history, input.accountSpaceId, workspaceId, 10_000);
   return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs, activeTabId, bookmarks, history };
 }
 
@@ -399,6 +407,7 @@ function createManifest(
   activeWorkspaceId: WorkspaceId,
   privacyLog: PrivacyEvent[],
   trackerBlocking: boolean,
+  bookmarkBarVisible: boolean,
 ): BrowserStateManifestV2 {
   return {
     version: 2,
@@ -406,6 +415,7 @@ function createManifest(
     accountSpaceIds: WORKSPACES.map((workspace) => ids[workspace.id]),
     activeAccountSpaceByWorkspace: Object.fromEntries(WORKSPACES.map((workspace) => [workspace.id, ids[workspace.id]])),
     trackerBlocking,
+    bookmarkBarVisible,
     privacyLog: sanitizePrivacyLog(privacyLog),
   };
 }

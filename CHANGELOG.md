@@ -17,6 +17,16 @@
   manager, plus account-scoped permission and recovery overlays.
 - Added browser and real Electron Playwright coverage proving partition isolation
   and retained Banking/Development policy.
+- Added local Chrome profile detection and selective bookmark/history import.
+- Added a Chrome-style bookmarks bar with preserved folders, ordering, Other
+  bookmarks, overflow menus, and the Ctrl+Shift+B visibility shortcut.
+- Added secure Chrome Password Manager CSV import directly into the OS-encrypted
+  Vault, with duplicate and unsafe-entry filtering.
+- Added the authenticated Private Browser Bridge and private VS Code extension.
+- Added explicit workspace, command, live-origin, AI-context, and patch approvals.
+- Added Vite/React, Node/PWA, Electron, Worker, WordPress, and Android adapters.
+- Added isolated Playwright page checks, bounded local reports, and guarded AI fixes.
+- Added bundled and standalone VSIX packaging plus Windows CI smoke coverage.
 
 ## 0.3.4 — 2026-09-10
 

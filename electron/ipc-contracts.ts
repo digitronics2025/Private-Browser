@@ -87,6 +87,16 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); requireUuid(args[0], 'operation'); return;
     case 'browser:set-overlay-open':
       exact(args, 1); requireBoolean(args[0]); return;
+    case 'browser:import-chrome': {
+      exact(args, 1);
+      const input = requireObject(args[0]);
+      requireBoundedText(input.profileId, 'Chrome profile identifier', 200);
+      requireWorkspaceId(input.workspaceId);
+      requireAccountSpaceId(input.accountSpaceId);
+      requireBoolean(input.bookmarks);
+      requireBoolean(input.history);
+      return;
+    }
     case 'recovery:act':
       between(args, 1, 2);
       if (!['retry', 'open-backup-location', 'restore-v1', 'fresh-start'].includes(String(args[0]))) throw new Error('Invalid recovery action');

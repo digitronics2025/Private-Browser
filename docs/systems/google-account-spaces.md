@@ -206,9 +206,9 @@ No live-Google success claim is valid without completing step 6 privately.
 
 ## Limitations and rollback
 
-Chrome Sync, Chrome import, bookmark folders and a bookmark bar do not exist in
-this checkout. Account-aware destination types are ready for those separate
-features, but Account Spaces does not advertise or recreate them.
+Chrome import, bookmark folders and the bookmark bar are implemented and scoped
+to the explicitly selected Account Space. Chrome Sync is not implemented or
+advertised, and imports intentionally exclude live sessions and Google tokens.
 
 For migration rollback, close the app, keep every timestamped recovery file,
 choose **Restore v1** in the recovery screen, and restart. Never rename an

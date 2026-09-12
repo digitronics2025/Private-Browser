@@ -19,7 +19,7 @@ function account(id: string, workspaceId: WorkspaceId, label: string, color: 'in
 }
 
 export function installPreviewApi(): void {
-  if (!import.meta.env.DEV || 'privateBrowser' in window) return;
+  if (!import.meta.env.DEV || 'privateBrowser' in window || new URLSearchParams(location.search).get('preview') === 'bridge') return;
   const accounts = [
     account(ids.digitronics, 'digitronics', 'Digitronics', 'indigo'), account(ids.tenten, 'tenten', 'TenTen', 'amber'), account(ids.development, 'development', 'Development', 'violet'),
     account(ids.personal, 'personal', 'Personal', 'emerald'),
@@ -32,9 +32,9 @@ export function installPreviewApi(): void {
     activeAccountSpaceId: ids.google as AccountSpaceId,
     activeTabId: `preview-${ids.google}`,
     tabs: accounts.map((item) => ({ id: `preview-${item.id}`, workspaceId: item.workspaceId, accountSpaceId: item.id, title: 'New tab', url: 'private://home', loading: false, canGoBack: false, canGoForward: false, isHome: true, developerToolsAllowed: false, developerToolsOpen: false })),
-    bookmarks: [{ id: 'preview-bookmark', workspaceId: 'personal', accountSpaceId: ids.google as AccountSpaceId, title: 'Google Drive', url: 'https://drive.google.com/', createdAt: '2026-09-12T11:00:00Z' }],
+    bookmarks: [{ id: 'preview-bookmark', workspaceId: 'personal', accountSpaceId: ids.google as AccountSpaceId, title: 'Google Drive', url: 'https://drive.google.com/', createdAt: '2026-09-12T11:00:00Z', location: 'bar', folderPath: [], order: 0, orderPath: [0] }],
     history: [{ id: 'preview-history', workspaceId: 'personal', accountSpaceId: ids.google as AccountSpaceId, title: 'Calendar', url: 'https://calendar.google.com/', visitedAt: new Date().toISOString() }],
-    downloads: [], privacyLog: [], trackerBlocking: true,
+    downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true,
     accountSpaces: accounts.map((item) => ({ ...item, enabledModules: [...item.enabledModules], grantedScopes: [...item.grantedScopes] })),
     accountHealth: accounts.map((item) => ({ accountSpaceId: item.id, status: item.googleConnection, checkedAt: '2026-09-12T12:00:00Z' })),
     googleConfiguration: { configured: true, source: 'encrypted-settings' },

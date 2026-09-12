@@ -71,6 +71,23 @@ export class VaultStore {
     return this.list()[0];
   }
 
+  addMany(inputs: VaultItemInput[]): { imported: number; skipped: number } {
+    if (!this.isAvailable()) throw new Error('OS encryption is not available');
+    const existing = new Set(this.items.map((item) => `${item.url}\u0000${item.username}`));
+    const now = new Date().toISOString();
+    let imported = 0;
+    let skipped = 0;
+    for (const input of inputs) {
+      const key = `${input.url}\u0000${input.username}`;
+      if (existing.has(key)) { skipped += 1; continue; }
+      this.items.unshift({ ...input, id: randomUUID(), updatedAt: now });
+      existing.add(key);
+      imported += 1;
+    }
+    if (imported) this.save();
+    return { imported, skipped };
+  }
+
   remove(id: string): boolean {
     const originalLength = this.items.length;
     this.items = this.items.filter((item) => item.id !== id);

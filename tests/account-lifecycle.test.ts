@@ -49,8 +49,8 @@ describe('Account Space lifecycle', () => {
     const added = accounts.createLocal({ workspaceId: 'personal', label: 'Second', color: 'emerald', order: 1 });
     runtime.addAccount(added);
     runtime.update((state) => {
-      state.bookmarks.push({ id: 'removed-bookmark', workspaceId: 'personal', accountSpaceId: added.id, title: 'Removed', url: 'https://example.com/', createdAt: new Date().toISOString() });
-      state.bookmarks.push({ id: 'kept-bookmark', workspaceId: 'personal', accountSpaceId: original.id, title: 'Kept', url: 'https://example.org/', createdAt: new Date().toISOString() });
+      state.bookmarks.push({ id: 'removed-bookmark', workspaceId: 'personal', accountSpaceId: added.id, title: 'Removed', url: 'https://example.com/', createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order: 0, orderPath: [0] });
+      state.bookmarks.push({ id: 'kept-bookmark', workspaceId: 'personal', accountSpaceId: original.id, title: 'Kept', url: 'https://example.org/', createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order: 0, orderPath: [0] });
     });
 
     runtime.removeAccount(added.id);

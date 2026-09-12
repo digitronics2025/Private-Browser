@@ -9,12 +9,13 @@ verified_at: f6f0c96
 
 # IPC Contract
 
-> Last verified: 2026-09-10
+> Last verified: 2026-09-12
 
 ## Agent Brief
 
 **Scope.** The whole surface between the Electron main process and the React
-renderer: 75 `invoke` channels and four main-to-renderer event
+renderer: schema-validated channels spanning browser, Account Space, Google,
+backup, VS Code bridge, vault, AI and update groups, plus main-to-renderer event
 subscriptions, and every shared payload type. Defined in
 [preload.cts](../../electron/preload.cts) and
 [types.ts](../../electron/types.ts).
@@ -100,7 +101,7 @@ process is what actually produces them; see the caveat in
 [The Contract Is Written Three Times](#the-contract-is-written-three-times).
 Every method returns a `Promise`, so the "Resolves with" column omits the wrapper.
 
-### browser: — 16 channels
+### browser: — 20 channels
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
@@ -117,6 +118,10 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:set-layout` | `setLayout(layout)` | `{ top: number; left: number; right: number; bottom: number }` | `void` |
 | `browser:toggle-bookmark` | `toggleBookmark()` | — | `void` |
 | `browser:open-bookmark` | `openBookmark(id)` | `id: string` | `void` |
+| `browser:toggle-bookmark-bar` | `toggleBookmarkBar()` | — | `void` |
+| `browser:list-chrome-profiles` | `listChromeProfiles()` | — | `ChromeProfileSource[]` |
+| `browser:import-chrome` | `importChrome(options)` | `ChromeImportOptions` | `ChromeImportResult` |
+| `browser:import-chrome-passwords` | `importChromePasswords()` | — | `ChromeImportResult` |
 | `browser:toggle-tracker-blocking` | `toggleTrackerBlocking()` | — | `void` |
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
@@ -125,18 +130,29 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 than a named type. `main.ts` has its own unexported `Layout` interface with the
 same four fields, and neither file imports the other.
 
-### developer: — 3 channels
+### developer: — 12 channels
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
 | `developer:toggle-tools` | `toggleDeveloperTools(mode)` | `mode: DevToolsMode` | `void` |
 | `developer:capture-diagnostics` | `captureDeveloperDiagnostics()` | — | `DeveloperDiagnosticReport` |
 | `developer:clear-diagnostics` | `clearDeveloperDiagnostics()` | — | `void` |
+| `developer:bridge-status` | `getBridgeStatus()` | — | `BridgeStatus` |
+| `developer:bridge-pair` | `beginBridgePairing()` | — | `BridgeStatus` |
+| `developer:bridge-disconnect` | `disconnectBridge(revoke)` | `revoke: boolean` | `BridgeStatus` |
+| `developer:bridge-projects` | `listBridgeProjects()` | — | `ProjectSummary[]` |
+| `developer:bridge-select-project` | `selectBridgeProject(projectId)` | `projectId: string` | `ProjectInfo` |
+| `developer:bridge-action` | `runBridgeAction(action, payload)` | bounded action and payload | protocol response |
+| `developer:inspect-page` | `inspectDeveloperPage(selectElement)` | `selectElement: boolean` | `DeveloperPageInfo` |
+| `developer:prepare-ai-preview` | `prepareDeveloperAiPreview(options)` | opt-in DOM/screenshot flags | `AiPagePreview` |
+| `developer:install-extension` | `installBridgeExtension()` | — | status message |
 
 The controller enforces the Development-workspace and protected-page boundary;
 the renderer's disabled state is only presentation. `DevToolsMode` is
 `'right' | 'bottom' | 'detach'`. Diagnostics are sanitized in the main process
 before this bridge can return them.
+The bridge channels are still chrome-renderer IPC; the authenticated named-pipe
+protocol behind them is documented in [vscode-bridge.md](vscode-bridge.md).
 
 ### ai: — 6 channels
 
@@ -253,7 +269,8 @@ preload and the renderer.
   `securityWarning?`,
   `canGoBack`, `canGoForward`, `isHome`, `developerToolsAllowed`,
   `developerToolsOpen`.
-- `Bookmark` — `id`, `title`, `url`, `workspaceId`, `createdAt`.
+- `Bookmark` — `id`, `title`, `url`, `workspaceId`, `createdAt`, `location`
+  (`bar|other`), `folderPath`, `order`, `orderPath`.
 - `HistoryEntry` — same, with `visitedAt` instead of `createdAt`.
 - `DownloadEntry` — now also carries `checksum?: 'verified' | 'mismatch' | 'unchecked'`,
   set once a completed download has been compared with the release manifest

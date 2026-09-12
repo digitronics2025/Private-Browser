@@ -18,6 +18,7 @@ import {
   Eye,
   FileDown,
   FileCode2,
+  Folder,
   Globe2,
   Gauge,
   HardDrive,
@@ -43,6 +44,7 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  Upload,
   Trash2,
   TriangleAlert,
   UserRound,
@@ -50,7 +52,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { AccountSpaceColor, AccountSpaceSummary, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, BrowserTab, DeveloperDiagnosticReport, DevToolsMode, GoogleModule, GoogleOperationResult, PermissionDecision, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
+import type { AccountSpaceColor, AccountSpaceId, AccountSpaceSummary, AiPagePreview, AiProviderInput, AiProviderStatus, Bookmark as BookmarkItem, BridgeStatus, BrowserSnapshot, BrowserTab, ChromeImportResult, ChromeProfileSource, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, GoogleModule, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, TestKind, TestReport, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, WorkspaceId } from '../electron/types';
 
 type SidebarMode = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
 
@@ -169,8 +171,9 @@ export default function App() {
   }, [activeTab?.id, activeTab?.url, activeTab?.isHome]);
 
   useEffect(() => {
-    void window.privateBrowser.setLayout({ top: 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
-  }, [sidebarOpen]);
+    if (!state) return;
+    void window.privateBrowser.setLayout({ top: state.bookmarkBarVisible ? 158 : 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
+  }, [sidebarOpen, state?.bookmarkBarVisible]);
 
   useEffect(() => {
     void window.privateBrowser.setOverlayOpen(modalOpen);
@@ -212,6 +215,9 @@ export default function App() {
         const direction = event.key === 'ArrowRight' ? 1 : -1;
         const target = accounts[(index + direction + accounts.length) % accounts.length];
         if (target) void act(() => window.privateBrowser.switchAccountSpace(target.id));
+      } else if (event.shiftKey && key === 'b') {
+        event.preventDefault();
+        void window.privateBrowser.toggleBookmarkBar();
       }
     };
     window.addEventListener('keydown', listener);
@@ -240,7 +246,7 @@ export default function App() {
   const bookmarked = state.bookmarks.some((item) => item.url === activeTab.url && item.workspaceId === activeTab.workspaceId);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${state.bookmarkBarVisible ? 'bookmark-bar-on' : ''}`}>
       <header className="titlebar">
         <div className="brand-mark"><ShieldCheck size={17} /> Private Browser</div>
         <div className="privacy-status"><span className="status-dot" /> Local protection active</div>
@@ -282,6 +288,7 @@ export default function App() {
       </nav>
 
       {accountMenuOpen && <AccountMenu state={state} onClose={() => { setAccountMenuOpen(false); accountButtonRef.current?.focus(); }} onManage={() => { setAccountMenuOpen(false); setAccountManagerOpen(true); }} onSwitch={(id) => void act(async () => { await window.privateBrowser.switchAccountSpace(id); setAccountMenuOpen(false); accountButtonRef.current?.focus(); })} />}
+      {state.bookmarkBarVisible && <BookmarkBar state={state} openBookmark={(id) => void act(() => window.privateBrowser.openBookmark(id))} />}
 
       {activeTab.isHome && <Dashboard state={state} open={(url) => void act(() => window.privateBrowser.navigate(url))} openBookmark={(id) => void act(() => window.privateBrowser.openBookmark(id))} />}
 
@@ -297,7 +304,7 @@ export default function App() {
               {sidebarMode === 'automations' && <AutomationPanel onToast={showToast} />}
               {sidebarMode === 'downloads' && <DownloadsPanel state={state} onToast={showToast} />}
               {sidebarMode === 'privacy' && <PrivacyPanel state={state} />}
-              {sidebarMode === 'settings' && <SettingsPanel onToast={showToast} />}
+              {sidebarMode === 'settings' && <SettingsPanel state={state} onToast={showToast} />}
             </div>
           </div>
         </aside>
@@ -474,6 +481,58 @@ function RecoveryOverlay({ state }: { state: BrowserSnapshot }) {
   return <div className="modal-backdrop recovery-backdrop"><div className="permission-dialog recovery-dialog" role="alertdialog" aria-modal="true"><span className="permission-icon danger"><TriangleAlert size={23} /></span><small>READ-ONLY RECOVERY</small><h2>Browser data needs attention</h2><p>The original data was preserved{recovery.backupAvailable ? ' with a timestamped backup' : ''}. Writes stay disabled so one bad file cannot damage other Account Spaces.</p><div className="recovery-options">{recovery.actions.map((action) => <button key={action} onClick={() => act(action)}>{action.replaceAll('-', ' ')}</button>)}</div><p className="recovery-note">Retry restarts without replacing anything. Restore and fresh start always require explicit confirmation.</p></div></div>;
 }
 
+function bookmarkOrder(item: BookmarkItem, depth: number): number {
+  return item.orderPath?.[depth] ?? item.order;
+}
+
+type BookmarkTreeEntry =
+  | { kind: 'bookmark'; order: number; item: BookmarkItem }
+  | { kind: 'folder'; order: number; name: string; descendants: BookmarkItem[] };
+
+function bookmarkEntries(items: BookmarkItem[], path: string[]): BookmarkTreeEntry[] {
+  const depth = path.length;
+  const direct = items
+    .filter((item) => item.folderPath.length === depth && path.every((part, index) => item.folderPath[index] === part))
+    .map((item) => ({ kind: 'bookmark' as const, order: bookmarkOrder(item, depth), item }));
+  const folderNames = [...new Set(items
+    .filter((item) => item.folderPath.length > depth && path.every((part, index) => item.folderPath[index] === part))
+    .map((item) => item.folderPath[depth]))];
+  const folders = folderNames.map((name) => {
+    const descendants = items.filter((item) => item.folderPath[depth] === name && path.every((part, index) => item.folderPath[index] === part));
+    return { kind: 'folder' as const, order: Math.min(...descendants.map((item) => bookmarkOrder(item, depth))), name, descendants };
+  });
+  return [...direct, ...folders].sort((left, right) => left.order - right.order);
+}
+
+function BookmarkEntries({ entries, path, openBookmark }: { entries: BookmarkTreeEntry[]; path: string[]; openBookmark: (id: string) => void }) {
+  return <>{entries.map((entry) => entry.kind === 'bookmark'
+    ? <button className="bookmark-bar-item" key={entry.item.id} title={entry.item.title} onClick={() => openBookmark(entry.item.id)}><Globe2 size={13} /><span>{entry.item.title}</span></button>
+    : <details className="bookmark-folder" key={`${path.join('/')}/${entry.name}`}>
+        <summary><Folder size={14} fill="currentColor" /><span>{entry.name}</span><ChevronDown size={12} /></summary>
+        <div className="bookmark-folder-menu"><BookmarkTree items={entry.descendants} path={[...path, entry.name]} openBookmark={openBookmark} /></div>
+      </details>)}</>;
+}
+
+function BookmarkTree({ items, path = [], limit, openBookmark }: { items: BookmarkItem[]; path?: string[]; limit?: number; openBookmark: (id: string) => void }) {
+  const entries = bookmarkEntries(items, path);
+  const visible = limit ? entries.slice(0, limit) : entries;
+  const overflow = limit ? entries.slice(limit) : [];
+  return <>
+    <BookmarkEntries entries={visible} path={path} openBookmark={openBookmark} />
+    {overflow.length > 0 && <details className="bookmark-folder bookmark-overflow"><summary title="More bookmarks"><MoreHorizontal size={15} /></summary><div className="bookmark-folder-menu right"><BookmarkEntries entries={overflow} path={path} openBookmark={openBookmark} /></div></details>}
+  </>;
+}
+
+function BookmarkBar({ state, openBookmark }: { state: BrowserSnapshot; openBookmark: (id: string) => void }) {
+  const workspaceItems = state.bookmarks.filter((item) => item.workspaceId === state.activeWorkspaceId && item.accountSpaceId === state.activeAccountSpaceId);
+  const barItems = workspaceItems.filter((item) => item.location === 'bar');
+  const otherItems = workspaceItems.filter((item) => item.location === 'other');
+  return <nav className="bookmark-bar" aria-label="Bookmarks bar">
+    <div className="bookmark-bar-scroll">{barItems.length ? <BookmarkTree items={barItems} limit={7} openBookmark={openBookmark} /> : <span className="bookmark-bar-empty">Import Chrome bookmarks or star a page</span>}</div>
+    {otherItems.length > 0 && <details className="bookmark-folder other-bookmarks"><summary><Folder size={14} fill="currentColor" /><span>Other bookmarks</span><ChevronDown size={12} /></summary><div className="bookmark-folder-menu right"><BookmarkTree items={otherItems} openBookmark={openBookmark} /></div></details>}
+  </nav>;
+}
+
 function Dashboard({ state, open, openBookmark }: { state: BrowserSnapshot; open: (url: string) => void; openBookmark: (id: string) => void }) {
   const workspace = state.workspaces.find((item) => item.id === state.activeWorkspaceId)!;
   const recent = state.history.filter((item) => item.accountSpaceId === state.activeAccountSpaceId).slice(0, 5);
@@ -547,90 +606,108 @@ function PanelHeader({ icon: Icon, eyebrow, title }: { icon: typeof Bot; eyebrow
 }
 
 function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+  const [tab, setTab] = useState<'project' | 'inspect' | 'test' | 'ai'>('project');
   const [mode, setMode] = useState<DevToolsMode>('right');
-  const [report, setReport] = useState<DeveloperDiagnosticReport | null>(null);
+  const [bridge, setBridge] = useState<BridgeStatus>({ state: 'disconnected', browserVersion: '0.4.0' });
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [project, setProject] = useState<ProjectInfo | null>(null);
+  const [inspection, setInspection] = useState<DeveloperPageInfo | null>(null);
+  const [report, setReport] = useState<TestReport | null>(null);
+  const [reports, setReports] = useState<TestReport[]>([]);
+  const [aiPreview, setAiPreview] = useState<AiPagePreview | null>(null);
+  const [aiAnswer, setAiAnswer] = useState('');
+  const [includeDom, setIncludeDom] = useState(false);
+  const [includeScreenshot, setIncludeScreenshot] = useState(false);
+  const [liveUrl, setLiveUrl] = useState('');
+  const [retentionDays, setRetentionDays] = useState(30);
+  const [retentionMax, setRetentionMax] = useState(100);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => setReport(null), [activeTab.id, activeTab.url]);
+  const refresh = async () => {
+    const next = await window.privateBrowser.getBridgeStatus();
+    setBridge(next);
+    if (next.project) setProject(next.project);
+    if (next.state === 'connected' && activeTab.workspaceId === 'development') setProjects(await window.privateBrowser.listBridgeProjects());
+  };
+
+  useEffect(() => {
+    void refresh().catch(() => undefined);
+    const timer = window.setInterval(() => void refresh().catch(() => undefined), 3000);
+    return () => window.clearInterval(timer);
+  }, [activeTab.workspaceId]);
+  useEffect(() => { setInspection(null); setAiPreview(null); void window.privateBrowser.revokeAiContext().catch(() => undefined); }, [activeTab.id, activeTab.url]);
+  useEffect(() => () => { void window.privateBrowser.revokeAiContext().catch(() => undefined); }, []);
 
   const run = async (action: () => Promise<unknown>, success?: string) => {
     setLoading(true);
-    try {
-      await action();
-      if (success) onToast(success);
-    } catch (error) {
-      onToast(error instanceof Error ? error.message : String(error), 'error');
-    } finally {
-      setLoading(false);
-    }
+    try { await action(); if (success) onToast(success); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setLoading(false); }
   };
 
-  const capture = () => run(async () => {
-    const next = await window.privateBrowser.captureDeveloperDiagnostics();
-    setReport(next);
-  }, 'Sanitized diagnostics captured locally');
+  const bridgeAction = (action: Parameters<typeof window.privateBrowser.runBridgeAction>[0], payload: Record<string, unknown> = {}, success?: string) => run(async () => {
+    const result = await window.privateBrowser.runBridgeAction(action, payload);
+    if (action === 'test.run' || action === 'test.rerun') setReport(result as TestReport);
+    if (action === 'reports.list') setReports(result as TestReport[]);
+    await refresh();
+  }, success);
 
-  const clear = () => run(async () => {
-    await window.privateBrowser.clearDeveloperDiagnostics();
-    setReport(null);
-  }, 'Developer diagnostics cleared');
+  const selectProject = (projectId: string) => run(async () => {
+    const next = await window.privateBrowser.selectBridgeProject(projectId);
+    setProject(next);
+    await refresh();
+  }, 'Workspace approved in VS Code');
 
-  return (
-    <div className="side-panel developer-panel">
-      <PanelHeader icon={Code2} eyebrow="Development workspace" title="Developer cockpit" />
+  const inspect = (pick: boolean) => run(async () => {
+    const page = await window.privateBrowser.inspectDeveloperPage(pick);
+    setInspection(page);
+  }, pick ? 'Element selected locally' : 'Page inspected locally');
 
-      {!activeTab.developerToolsAllowed ? (
-        <div className="developer-locked">
-          <LockKeyhole size={24} />
-          <h3>Protected by workspace policy</h3>
-          <p>Open a non-banking webpage in the Development workspace. Developer tools never attach to Home, Banking, or detected payment pages.</p>
-        </div>
-      ) : (
-        <>
-          <div className="developer-status">
-            <span className={activeTab.developerToolsOpen ? 'live' : ''} />
-            <div><strong>{activeTab.developerToolsOpen ? 'Chromium DevTools open' : 'Ready to inspect'}</strong><small>{domainFromUrl(activeTab.url)} · F12 or Ctrl+Shift+I</small></div>
-          </div>
+  const connected = bridge.state === 'connected';
+  const askDeveloperAi = (question: string) => run(async () => {
+    if (!aiPreview) return;
+    const approval = await window.privateBrowser.approveAiPreview(aiPreview.id);
+    setAiAnswer(await window.privateBrowser.askAi(approval.token, question));
+    setAiPreview(null);
+  });
+  const tests: Array<{ kind: TestKind; label: string }> = [
+    { kind: 'quick', label: 'Quick Test' }, { kind: 'everything', label: 'Test Everything' },
+    { kind: 'current-page', label: 'Current Page' }, { kind: 'responsive', label: 'Responsive' },
+    { kind: 'accessibility', label: 'Accessibility' }, { kind: 'performance', label: 'Performance' },
+    { kind: 'record-flow', label: 'Record Flow' }, { kind: 'live-site', label: 'Live Website' }, { kind: 'compare', label: 'Local vs Live' },
+  ];
 
-          <div className="developer-launch">
-            <select value={mode} onChange={(event) => setMode(event.target.value as DevToolsMode)} aria-label="DevTools position">
-              <option value="right">Dock right</option>
-              <option value="bottom">Dock bottom</option>
-              <option value="detach">Separate window</option>
-            </select>
-            <button className="primary-button" disabled={loading} onClick={() => void run(() => window.privateBrowser.toggleDeveloperTools(mode))}>
-              {activeTab.developerToolsOpen ? <PanelRightClose size={14} /> : mode === 'bottom' ? <PanelBottom size={14} /> : mode === 'detach' ? <PictureInPicture2 size={14} /> : <PanelRightOpen size={14} />}
-              {activeTab.developerToolsOpen ? 'Close tools' : 'Open tools'}
-            </button>
-          </div>
+  return <div className="side-panel developer-panel">
+    <PanelHeader icon={Code2} eyebrow="Secure VS Code companion" title="Developer Bridge" />
+    {activeTab.workspaceId !== 'development' ? <div className="developer-locked"><LockKeyhole size={24} /><h3>Protected by workspace policy</h3><p>Switch to Development. Bridge and AI capabilities never attach to Banking, payment, or other protected pages.</p></div> : <>
+      <div className="bridge-status-card"><span className={connected ? 'live' : bridge.state === 'pairing' ? 'pairing' : ''} /><div><strong>{connected ? 'VS Code connected' : bridge.state === 'pairing' ? `Pair with ${bridge.pairingCode}` : 'VS Code disconnected'}</strong><small>Browser {bridge.browserVersion}{bridge.extensionVersion ? ` · Extension ${bridge.extensionVersion}` : ''}</small></div>{connected ? <button onClick={() => void run(() => window.privateBrowser.disconnectBridge(false).then(setBridge), 'VS Code disconnected')}>Disconnect</button> : <button onClick={() => void run(() => window.privateBrowser.beginBridgePairing().then(setBridge))}>Pair</button>}</div>
+      <div className="bridge-tabs" role="tablist" aria-label="Developer tools">{(['project', 'inspect', 'test', 'ai'] as const).map((item) => <button key={item} role="tab" aria-selected={tab === item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item === 'ai' ? 'AI Fix' : item[0].toUpperCase() + item.slice(1)}</button>)}</div>
 
-          <div className="developer-tip"><ScanSearch size={16} /><p><strong>Inspect exact UI.</strong> Right-click anything in the page and choose <em>Inspect element</em>.</p></div>
+      {tab === 'project' && <div className="bridge-pane">{!connected ? <div className="bridge-empty"><Code2 size={26} /><strong>Connect your local editor</strong><p>Install the bundled private extension, then enter the single-use code in VS Code. No TCP port or webpage bridge is opened.</p><button className="primary-button" onClick={() => void run(async () => onToast(await window.privateBrowser.installBridgeExtension()))}>Install VS Code extension</button></div> : <>
+        <label className="bridge-label">Workspace folder<select value={project?.project.id ?? ''} onChange={(event) => void selectProject(event.target.value)}><option value="">Choose a workspace</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.trusted ? '' : ' (restricted)'}</option>)}</select></label>
+        {project && <div className="project-summary"><div><small>PROJECT</small><strong>{project.project.name}</strong><span>{project.framework} · {project.packageManager}</span></div><button onClick={() => void bridgeAction('project.open')}>Reveal</button><p>{project.types.join(' + ') || 'Generic project'}</p>{project.activeFile && <p>Editing: {project.activeFile}</p>}</div>}
+        <div className="bridge-action-row"><button className="primary-button" disabled={!project || loading} onClick={() => void bridgeAction('server.start', {}, 'Development server started')}>Start server</button><button disabled={!project || loading} onClick={() => void bridgeAction('server.restart', {}, 'Server restarted')}>Restart</button><button disabled={!project || loading} onClick={() => void bridgeAction('server.stop', {}, 'Server stopped')}>Stop</button></div>
+        <button className="bridge-danger" onClick={() => void run(() => window.privateBrowser.disconnectBridge(true).then(setBridge), 'VS Code identity revoked')}>Revoke this VS Code</button>
+      </>}</div>}
 
-          <div className="tool-grid">
-            <div><ScanSearch size={15} /><strong>Elements</strong><small>DOM & CSS</small></div>
-            <div><Bug size={15} /><strong>Console</strong><small>Errors & JS</small></div>
-            <div><Network size={15} /><strong>Network</strong><small>APIs & timing</small></div>
-            <div><FileCode2 size={15} /><strong>Sources</strong><small>Breakpoints</small></div>
-            <div><Gauge size={15} /><strong>Performance</strong><small>CPU & layout</small></div>
-            <div><Play size={15} /><strong>Recorder</strong><small>User flows</small></div>
-          </div>
+      {tab === 'inspect' && <div className="bridge-pane"><div className="developer-launch"><select value={mode} onChange={(event) => setMode(event.target.value as DevToolsMode)} aria-label="DevTools position"><option value="right">Dock right</option><option value="bottom">Dock bottom</option><option value="detach">Separate window</option></select><button className="primary-button" disabled={!activeTab.developerToolsAllowed || loading} onClick={() => void run(() => window.privateBrowser.toggleDeveloperTools(mode))}>{activeTab.developerToolsOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}{activeTab.developerToolsOpen ? 'Close tools' : 'Open DevTools'}</button></div>
+        <div className="bridge-action-grid"><button disabled={!activeTab.developerToolsAllowed} onClick={() => void inspect(false)}><FileCode2 size={15} />Inspect page</button><button disabled={!activeTab.developerToolsAllowed} onClick={() => void inspect(true)}><ScanSearch size={15} />Select element</button></div>
+        {inspection ? <div className="inspection-result"><small>{inspection.framework} · {inspection.viewport}</small><strong>{inspection.selector ?? inspection.route}</strong><span>{inspection.confidence ? `${inspection.confidence} source match` : 'Page metadata only'}</span>{(inspection.sourcePath || project?.activeFile) && <button onClick={() => void bridgeAction('source.open', { path: inspection.sourcePath ?? project?.activeFile, line: 1 })}>Open {inspection.confidence ?? 'nearest'} location in VS Code</button>}</div> : <div className="developer-tip"><ScanSearch size={16} /><p>Pick an element on the current development page. Only bounded structure and source hints cross the authenticated bridge.</p></div>}
+      </div>}
 
-          <section className="diagnostic-card">
-            <div><div><small>AI-READY REPORT</small><strong>Safe debugging context</strong></div>{report && <b>{report.console.length + report.network.length} issues</b>}</div>
-            <p>Captures document counts, console warnings/errors, and failed requests. It excludes page text, inputs, cookies, storage, headers, request bodies, query strings, and fragments.</p>
-            <button className="primary-button full" disabled={loading} onClick={capture}><Bug size={14} /> Capture diagnostics</button>
-            {report && (
-              <div className="diagnostic-result">
-                <div><span><strong>{report.console.length}</strong> console</span><span><strong>{report.network.length}</strong> network</span><span><strong>{report.redactions}</strong> redacted</span></div>
-                <button onClick={() => void run(() => window.privateBrowser.copyText(report.formatted), 'Report copied for Codex or Claude')}><Copy size={13} /> Copy for AI</button>
-                <button className="quiet" onClick={clear}>Clear captured data</button>
-              </div>
-            )}
-          </section>
-        </>
-      )}
-    </div>
-  );
+      {tab === 'test' && <div className="bridge-pane"><label className="bridge-label">Optional approved live URL<input value={liveUrl} onChange={(event) => setLiveUrl(event.target.value)} placeholder="https://staging.example.com" /></label><div className="bridge-action-grid test-grid">{tests.map((item) => <button key={item.kind} disabled={!connected || !project || loading || ((item.kind === 'live-site' || item.kind === 'compare') && !liveUrl)} onClick={() => void bridgeAction('test.run', { kind: item.kind, url: item.kind === 'live-site' ? liveUrl : activeTab.url, ...(liveUrl ? { liveUrl } : {}) })}><Play size={14} />{item.label}</button>)}</div><div className="bridge-action-row"><button disabled={!report} onClick={() => void bridgeAction('test.rerun')}>Re-run</button><button onClick={() => void bridgeAction('reports.list')}>Results</button><button disabled={!project} onClick={() => void bridgeAction('test.cancel')}>Cancel</button></div>
+        {report && <div className={`test-result ${report.status}`}><small>{report.status === 'attention' ? 'Needs attention' : report.status}</small><strong>{report.title}</strong><p>{report.summary}</p><span>{report.findings.length} findings · {report.artifacts.length} artifacts</span><button onClick={() => void bridgeAction('reports.open', { reportId: report.id })}>Open in VS Code</button>{report.artifacts.filter((item) => item.kind === 'test').map((item) => <button key={item.id} onClick={() => void bridgeAction('test.save-artifact', { reportId: report.id, name: item.name, path: 'tests/e2e/private-browser-recorded.spec.ts' }, 'Generated test saved after VS Code approval')}>Save generated test…</button>)}</div>}
+        {reports.length > 0 && <div className="report-controls"><label>Days<input type="number" min="1" max="365" value={retentionDays} onChange={(event) => setRetentionDays(Number(event.target.value))} /></label><label>Max<input type="number" min="10" max="500" value={retentionMax} onChange={(event) => setRetentionMax(Number(event.target.value))} /></label><button onClick={() => void bridgeAction('reports.retention', { days: retentionDays, max: retentionMax }, 'Report retention updated')}>Save</button><button onClick={() => void bridgeAction('reports.clear', {}, 'Local reports cleared').then(() => setReports([]))}>Clear</button></div>}
+        {reports.slice(0, 4).map((item) => <div className="report-row" key={item.id}><span className={item.status} /><button onClick={() => { setReport(item); void bridgeAction('reports.open', { reportId: item.id }); }}>{item.title}</button><small>{new Date(item.finishedAt).toLocaleDateString()}</small><button aria-label={`Delete ${item.title}`} onClick={() => void bridgeAction('reports.delete', { reportId: item.id }).then(() => setReports((current) => current.filter((entry) => entry.id !== item.id)))}><Trash2 size={12} /></button></div>)}
+      </div>}
+
+      {tab === 'ai' && <div className="bridge-pane"><div className="ai-privacy-note"><ShieldCheck size={16} /><p><strong>You control every upload.</strong> Cookies, storage, form values, headers, bodies, URL queries, secrets, and protected pages are always excluded.</p></div><label className="bridge-check"><input type="checkbox" checked={includeDom} onChange={(event) => setIncludeDom(event.target.checked)} /> Include structural DOM metadata</label><label className="bridge-check"><input type="checkbox" checked={includeScreenshot} onChange={(event) => setIncludeScreenshot(event.target.checked)} /> Include a compressed screenshot</label><button className="primary-button full" disabled={!activeTab.developerToolsAllowed || loading} onClick={() => void run(async () => { setAiAnswer(''); setAiPreview(await window.privateBrowser.prepareDeveloperAiPreview({ includeDom, includeScreenshot })); }, 'Sanitized AI context is ready for review')}><Sparkles size={14} /> Preview debugging context</button>
+        {aiPreview && <div className="ai-context-preview"><div><small>EXACT CONTEXT · {aiPreview.redactions} REDACTIONS</small><button onClick={() => void window.privateBrowser.revokeAiContext().then(() => setAiPreview(null))}>Clear</button></div>{aiPreview.screenshotDataUrl && <img src={aiPreview.screenshotDataUrl} alt="Approved page screenshot preview" />}<pre>{aiPreview.text}</pre>{aiPreview.dom && <details><summary>Structural DOM</summary><pre>{aiPreview.dom}</pre></details>}<div className="bridge-action-row"><button onClick={() => void askDeveloperAi('Explain the observed page and diagnostic evidence.')}>Explain</button><button onClick={() => void askDeveloperAi('Diagnose the most likely root cause and recommend a minimal fix.')}>Diagnose</button></div><div className="bridge-action-row"><button onClick={() => void window.privateBrowser.copyText(aiPreview.text).then(() => onToast('Context copied'))}><Copy size={13} />Copy</button><button className="primary-button" disabled={!connected || !project} onClick={() => void run(async () => { const approval = await window.privateBrowser.approveAiPreview(aiPreview.id); await window.privateBrowser.runBridgeAction('ai.handoff', { approvalToken: approval.token, action: 'Diagnose and propose a fix' }); setAiPreview(null); }, 'Opened secure handoff in VS Code')}>Fix in VS Code</button></div></div>}
+        {aiAnswer && <div className="ai-answer"><Sparkles size={14} /><p>{aiAnswer}</p><button onClick={() => setAiAnswer('')}>Clear answer</button></div>}
+      </div>}
+      {loading && <div className="bridge-working"><LoaderCircle size={13} /> Working locally…</div>}{bridge.error && <div className="bridge-error"><TriangleAlert size={14} />{bridge.error}</div>}
+    </>}
+  </div>;
 }
 
 function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
@@ -829,13 +906,24 @@ function PrivacyPanel({ state }: { state: BrowserSnapshot }) {
   return <div className="side-panel"><PanelHeader icon={ShieldCheck} eyebrow="Transparent by design" title="Privacy log" /><div className="privacy-summary"><div><strong>{state.trackerBlocking ? 'On' : 'Off'}</strong><span>Tracker blocking</span></div><div><strong>5</strong><span>Isolated spaces</span></div><div><strong>{state.privacyLog.length}</strong><span>Logged events</span></div></div><div className="privacy-events">{state.privacyLog.map((event) => <div className="privacy-event" key={event.id}><span className={`event-dot ${event.kind}`} /><div><strong>{event.title}</strong><small>{event.detail}</small></div><time>{timeAgo(event.at)}</time></div>)}{!state.privacyLog.length && <EmptyState icon={ShieldCheck} text="Sensitive access events will be recorded here." />}</div></div>;
 }
 
-function SettingsPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+function SettingsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [isDefault, setIsDefault] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
   const [editingUpdates, setEditingUpdates] = useState(false);
   const [checking, setChecking] = useState(false);
   const [updateForm, setUpdateForm] = useState<UpdateServiceInput>({ endpoint: '', accessToken: '' });
+  const [chromeProfiles, setChromeProfiles] = useState<ChromeProfileSource[]>([]);
+  const [chromeProfileId, setChromeProfileId] = useState('');
+  const [chromeAccountSpaceId, setChromeAccountSpaceId] = useState(() => {
+    const active = state.accountSpaces.find((account) => account.id === state.activeAccountSpaceId && account.workspaceId !== 'banking');
+    return active?.id ?? state.accountSpaces.find((account) => account.workspaceId !== 'banking')?.id ?? state.activeAccountSpaceId;
+  });
+  const [chromeBookmarks, setChromeBookmarks] = useState(true);
+  const [chromeHistory, setChromeHistory] = useState(true);
+  const [chromeImportOpen, setChromeImportOpen] = useState(false);
+  const [chromeLoading, setChromeLoading] = useState(false);
+  const [chromeResult, setChromeResult] = useState<ChromeImportResult | null>(null);
   // null while the first status is still in flight — better than claiming
   // 'Active' before anything has been checked, which is what it used to do.
   const encryptionAvailable = updateStatus ? updateStatus.error !== 'os-encryption-unavailable' : null;
@@ -883,9 +971,59 @@ function SettingsPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | '
       onToast('Private download service disconnected');
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
+  const openChromeImport = async () => {
+    setChromeImportOpen(true);
+    setChromeLoading(true);
+    setChromeResult(null);
+    try {
+      const profiles = await window.privateBrowser.listChromeProfiles();
+      setChromeProfiles(profiles);
+      setChromeProfileId((current) => current || profiles.find((profile) => profile.isDefault)?.id || profiles[0]?.id || '');
+      if (!profiles.length) onToast('No local Chrome profile was found', 'error');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setChromeLoading(false); }
+  };
+  const importChrome = async () => {
+    setChromeLoading(true);
+    try {
+      const destination = state.accountSpaces.find((account) => account.id === chromeAccountSpaceId);
+      if (!destination || destination.workspaceId === 'banking') throw new Error('Choose a non-Banking Account Space');
+      const result = await window.privateBrowser.importChrome({ profileId: chromeProfileId, workspaceId: destination.workspaceId, accountSpaceId: destination.id, bookmarks: chromeBookmarks, history: chromeHistory });
+      setChromeResult(result);
+      onToast(`Imported ${result.imported.bookmarks} bookmarks and ${result.imported.history} history entries`);
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setChromeLoading(false); }
+  };
+  const importChromePasswords = async () => {
+    setChromeLoading(true);
+    try {
+      const result = await window.privateBrowser.importChromePasswords();
+      setChromeResult(result);
+      onToast(`Encrypted ${result.imported.passwords} Chrome passwords in your local vault`);
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setChromeLoading(false); }
+  };
   return <div className="side-panel">
     <PanelHeader icon={Settings} eyebrow="Application" title="Settings" />
     <div className="settings-card"><div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Default browser</strong><small>{isDefault ? 'Private Browser opens web links.' : 'Use Private Browser for HTTP and HTTPS links.'}</small></div>{isDefault ? <b><Check size={14} /> Set</b> : <button onClick={() => void makeDefault()}>Set default</button>}</div></div>
+    <div className="settings-card chrome-import-settings">
+      <div className="settings-row"><span><Upload size={17} /></span><div><strong>Import from Chrome</strong><small>Bookmarks, bookmark folders and browsing history stay on this computer.</small></div><button onClick={() => chromeImportOpen ? setChromeImportOpen(false) : void openChromeImport()}>{chromeImportOpen ? 'Close' : 'Import'}</button></div>
+      {chromeImportOpen && <div className="chrome-import-form">
+        {chromeLoading && !chromeProfiles.length ? <div className="import-loading"><LoaderCircle className="spin" size={15} /> Detecting Chrome profiles…</div> : chromeProfiles.length > 0 ? <>
+          <label><span>Chrome profile</span><select value={chromeProfileId} onChange={(event) => setChromeProfileId(event.target.value)}>{chromeProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}{profile.isDefault ? ' (Default)' : ''}</option>)}</select></label>
+          <label><span>Import into Account Space</span><select value={chromeAccountSpaceId} onChange={(event) => setChromeAccountSpaceId(event.target.value as AccountSpaceId)}>{state.accountSpaces.filter((account) => account.workspaceId !== 'banking').map((account) => <option value={account.id} key={account.id}>{state.workspaces.find((workspace) => workspace.id === account.workspaceId)?.name} / {account.label}</option>)}</select></label>
+          <div className="import-checks">
+            <label><input type="checkbox" checked={chromeBookmarks} onChange={(event) => setChromeBookmarks(event.target.checked)} /> <span><strong>Bookmarks</strong><small>Includes the full Chrome bookmarks bar and folder hierarchy.</small></span></label>
+            <label><input type="checkbox" checked={chromeHistory} onChange={(event) => setChromeHistory(event.target.checked)} /> <span><strong>Browsing history</strong><small>Up to 10,000 recent Chrome pages.</small></span></label>
+          </div>
+          <button className="primary-button full" disabled={chromeLoading || (!chromeBookmarks && !chromeHistory)} onClick={() => void importChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Import selected data</button>
+        </> : !chromeLoading ? <p className="import-note">Install or open Chrome once so a local profile exists, then try again.</p> : null}
+        <div className="password-import-row"><div><strong>Saved passwords</strong><small>Chrome protects direct access. Export passwords as CSV, then select that file here. Secrets go straight into the OS-encrypted Vault and never enter the page.</small></div><button disabled={chromeLoading} onClick={() => void importChromePasswords()}>Choose CSV</button></div>
+        <p className="import-limit"><Shield size={13} /> Cookies, signed-in sessions, payment cards, extensions and Chrome account tokens are intentionally not copied.</p>
+        {chromeResult && <div className="import-result"><Check size={15} /><div><strong>Import complete</strong><small>{chromeResult.imported.bookmarks} bookmarks · {chromeResult.imported.history} history · {chromeResult.imported.passwords} passwords</small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords > 0 && <small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords} duplicate or unsafe entries skipped</small>}{chromeResult.warnings.map((warning) => <small className="warning" key={warning}>{warning}</small>)}</div></div>}
+      </div>}
+    </div>
+    <div className="settings-card"><div className="settings-row"><span><Bookmark size={17} /></span><div><strong>Bookmarks bar</strong><small>Show the Chrome-style bookmarks bar. Shortcut: Ctrl+Shift+B.</small></div><button onClick={() => void window.privateBrowser.toggleBookmarkBar()}>{state.bookmarkBarVisible ? 'Hide' : 'Show'}</button></div></div>
     <div className="settings-card update-settings">
       <div className="settings-row"><span><Cloud size={17} /></span><div><strong>Private downloads</strong><small>{updateStatus?.configured ? updateStatus.endpoint : 'Cloudflare Worker · D1 metadata · R2 installers'}</small></div>{updateStatus?.configured ? <b><Check size={14} /> Connected</b> : <button onClick={() => setEditingUpdates((value) => !value)}>Connect</button>}</div>
       {(editingUpdates || updateStatus?.error) && <form className="update-form" onSubmit={configureUpdates}>

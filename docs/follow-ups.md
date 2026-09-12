@@ -43,10 +43,13 @@ node scripts/docs-find.mjs --history "<term from the entry>"
   Desktop OAuth client ID and consent-screen test user, then run the documented
   identity-only live check. Testing-mode refresh tokens may expire after seven
   days. Symbol: `GoogleOAuthManager`. *(2026-09-12)*
-- **Chrome Sync/import, bookmark folders and a bookmark bar are absent.** This
-  feature provides Account-Space-aware destination contracts only; it does not
-  advertise or recreate those parallel features. Symbol:
-  `AccountSpaceBookmark`. *(2026-09-12)*
+- **Chrome import deliberately excludes cookies, live sessions, payment cards,
+  extensions, account tokens, search engines and full autofill profiles.** The
+  current app has no compatible storage/runtime for most of these, and copying
+  authentication state would undermine per-workspace session isolation. Empty
+  Chrome bookmark folders are also not persisted because bookmarks are stored as
+  URL records with folder paths rather than folder nodes. Symbol:
+  `readChromeProfile`. *(2026-09-12)*
 
 ## Main-process structure
 

@@ -7,16 +7,27 @@
   "author": "Digitronics",
   "license": "UNLICENSED",
   "private": true,
+  "workspaces": [
+    "packages/bridge-protocol",
+    "vscode-extension"
+  ],
   "overrides": {
     "sharp": "0.35.4"
   },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && npm run electron:compile && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js\"",
     "dev:preview": "vite --host 127.0.0.1",
-    "build": "npm run typecheck && vite build && npm run electron:compile",
-    "electron:compile": "tsc -p tsconfig.electron.json",
+    "bridge:build": "npm run build --workspace @private-browser/bridge-protocol",
+    "bridge:test": "npm run test --workspace @private-browser/bridge-protocol",
+    "extension:compile": "npm run compile --workspace private-browser-bridge",
+    "extension:test": "npm run test --workspace private-browser-bridge",
+    "extension:package": "npm run package --workspace private-browser-bridge",
+    "extension:validate": "node scripts/stage-vsix.mjs --validate-only",
+    "extension:stage": "node scripts/stage-vsix.mjs",
+    "build": "npm run bridge:build && npm run typecheck && vite build && npm run electron:compile && npm run extension:compile",
+    "electron:compile": "npm run bridge:build && tsc -p tsconfig.electron.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && vitest run --config cloudflare/vitest.config.ts",
+    "test": "vitest run && npm run bridge:test && npm run extension:test && vitest run --config cloudflare/vitest.config.ts",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:electron": "npm run build && npm run test:electron:only",
@@ -29,11 +40,12 @@
     "secrets:check": "node scripts/secret-guard.mjs",
     "docs:find": "node scripts/docs-find.mjs",
     "docs:stale": "node scripts/docs-guard.mjs stale",
-    "check": "npm run secrets:check && npm run docs:check && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run test:e2e && npm run build && npm run test:electron:only && npm run worker:build",
-    "dist": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "check": "npm run secrets:check && npm run docs:check && npm run bridge:build && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run extension:package && npm run extension:validate && npm run build && npm run test:e2e && npm run test:electron:only && npm run worker:build",
+    "dist": "npm run extension:package && npm run build && electron-builder --win nsis --x64 --publish never && npm run extension:stage",
     "start": "electron dist-electron/main.js"
   },
   "dependencies": {
+    "@private-browser/bridge-protocol": "*",
     "google-auth-library": "^11.0.2",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
@@ -55,7 +67,8 @@
     "vite": "^6.0.5",
     "vitest": "^5.0.0",
     "wait-on": "^8.0.1",
-    "wrangler": "^4.130.0"
+    "wrangler": "^4.131.1",
+    "yauzl": "^3.4.0"
   },
   "build": {
     "appId": "ma.digitronics.privatebrowser",
@@ -85,7 +98,8 @@
         "from": "build",
         "to": ".",
         "filter": [
-          "private-browser-update.json"
+          "private-browser-update.json",
+          "private-browser-bridge.vsix"
         ]
       }
     ],

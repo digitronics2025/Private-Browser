@@ -7,7 +7,7 @@ verified_at: f6f0c96
 
 # Security Boundary
 
-> Last verified: 2026-09-10
+> Last verified: 2026-09-12
 
 ## Agent Brief
 

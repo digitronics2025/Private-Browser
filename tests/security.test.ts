@@ -126,6 +126,14 @@ describe('local data', () => {
     expect(state.tabs).toHaveLength(5);
     expect(new Set(state.tabs.map((tab) => tab.workspaceId)).size).toBe(5);
     expect(state.trackerBlocking).toBe(true);
+    expect(state.bookmarkBarVisible).toBe(true);
+  });
+
+  it('upgrades legacy flat bookmarks into bookmark-bar entries', () => {
+    const state = createDefaultState();
+    state.bookmarks = [{ id: 'legacy', title: 'Legacy', url: 'https://example.com', workspaceId: 'personal', createdAt: '2026-01-01T00:00:00.000Z' } as typeof state.bookmarks[number]];
+    const repaired = sanitizeState(state);
+    expect(repaired.bookmarks[0]).toEqual(expect.objectContaining({ location: 'bar', folderPath: [], orderPath: [0] }));
   });
 
   it('repairs missing and unsafe persisted tabs', () => {

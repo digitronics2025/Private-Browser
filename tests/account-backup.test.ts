@@ -74,7 +74,7 @@ describe('encrypted Account Space backup', () => {
     const code = manager.createRecoveryCode(ID);
     manager.verifyAndEnable(ID, code, true, false);
     const payload = manager.buildPayload(ID, {
-      bookmarks: [{ id: 'b1', accountSpaceId: ID, workspaceId: 'personal', title: 'Safe', url: 'https://example.com/', createdAt: '2026-09-12T10:00:00Z' }],
+      bookmarks: [{ id: 'b1', accountSpaceId: ID, workspaceId: 'personal', title: 'Safe', url: 'https://example.com/', createdAt: '2026-09-12T10:00:00Z', location: 'bar', folderPath: [], order: 0, orderPath: [0] }],
       trackerBlocking: true,
       openTabs: [{ id: 't1', accountSpaceId: ID, workspaceId: 'personal', title: 'Tab', url: 'https://example.com/', isHome: false, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false }],
       history: [{ id: 'h1', accountSpaceId: ID, workspaceId: 'personal', title: 'History', url: 'https://example.com/', visitedAt: '2026-09-12T10:00:00Z' }],
@@ -97,7 +97,7 @@ describe('encrypted Account Space backup', () => {
     expect(uploaded).not.toContain('trackerBlocking');
     expect(uploaded).toContain('AES-256-GCM');
     transport.remote = { ...transport.remote!, etag: 'other-device' };
-    await expect(manager.upload(ID, { ...payload, bookmarks: [{ id: 'local', accountSpaceId: ID, workspaceId: 'personal', title: 'Local', url: 'https://local.example/', createdAt: payload.createdAt }] })).resolves.toEqual({ status: 'conflict', localEtag: 'etag-1', remoteEtag: 'other-device' });
+    await expect(manager.upload(ID, { ...payload, bookmarks: [{ id: 'local', accountSpaceId: ID, workspaceId: 'personal', title: 'Local', url: 'https://local.example/', createdAt: payload.createdAt, location: 'bar', folderPath: [], order: 0, orderPath: [0] }] })).resolves.toEqual({ status: 'conflict', localEtag: 'etag-1', remoteEtag: 'other-device' });
     expect(transport.writes).toHaveLength(1);
     expect(accounts.require(ID).backup.remoteEtag).toBe('etag-1');
   });
@@ -106,10 +106,10 @@ describe('encrypted Account Space backup', () => {
     const first = fixture();
     const code = first.manager.createRecoveryCode(ID);
     first.manager.verifyAndEnable(ID, code, false, false);
-    const remotePayload = first.manager.buildPayload(ID, { bookmarks: [{ id: 'remote', accountSpaceId: ID, workspaceId: 'personal', title: 'Remote', url: 'https://remote.example/', createdAt: '2026-09-12T10:00:00Z' }], trackerBlocking: true, openTabs: [], history: [] });
+    const remotePayload = first.manager.buildPayload(ID, { bookmarks: [{ id: 'remote', accountSpaceId: ID, workspaceId: 'personal', title: 'Remote', url: 'https://remote.example/', createdAt: '2026-09-12T10:00:00Z', location: 'bar', folderPath: [], order: 0, orderPath: [0] }], trackerBlocking: true, openTabs: [], history: [] });
     await first.manager.upload(ID, remotePayload);
     first.transport.remote = { ...first.transport.remote!, etag: 'changed' };
-    const localPayload = first.manager.buildPayload(ID, { bookmarks: [{ id: 'local', accountSpaceId: ID, workspaceId: 'personal', title: 'Local', url: 'https://local.example/', createdAt: '2026-09-12T10:00:00Z' }], trackerBlocking: false, openTabs: [], history: [] });
+    const localPayload = first.manager.buildPayload(ID, { bookmarks: [{ id: 'local', accountSpaceId: ID, workspaceId: 'personal', title: 'Local', url: 'https://local.example/', createdAt: '2026-09-12T10:00:00Z', location: 'bar', folderPath: [], order: 0, orderPath: [0] }], trackerBlocking: false, openTabs: [], history: [] });
     await expect(first.manager.upload(ID, localPayload, 'merge')).resolves.toMatchObject({ status: 'uploaded' });
 
     const second = fixture();

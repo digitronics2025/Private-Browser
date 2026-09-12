@@ -43,8 +43,12 @@ export class AiProviderStore {
     return this.status();
   }
 
-  async ask(context: { title: string; url: string; text: string }, question: string): Promise<string> {
+  async ask(context: { title: string; url: string; text: string; dom?: string; screenshotDataUrl?: string }, question: string): Promise<string> {
     if (!this.config) throw new Error('Configure a cloud AI provider first');
+    const prompt = `Page: ${context.title}\nURL: ${context.url}\n\nApproved context:\n${context.text}${context.dom ? `\n\nApproved structural DOM (no text or values):\n${context.dom}` : ''}\n\nQuestion: ${question}`;
+    const content = context.screenshotDataUrl
+      ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: context.screenshotDataUrl } }]
+      : prompt;
     const response = await fetch(`${this.config.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -56,7 +60,7 @@ export class AiProviderStore {
         temperature: 0.2,
         messages: [
           { role: 'system', content: 'Answer only from the user-approved webpage context. Clearly say when the context is insufficient. Never request or expose credentials.' },
-          { role: 'user', content: `Page: ${context.title}\nURL: ${context.url}\n\nApproved context:\n${context.text}\n\nQuestion: ${question}` },
+          { role: 'user', content },
         ],
       }),
       redirect: 'error',

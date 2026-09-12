@@ -276,6 +276,7 @@ export interface BrowserStateManifestV2 {
   accountSpaceIds: AccountSpaceId[];
   activeAccountSpaceByWorkspace: Partial<Record<WorkspaceId, AccountSpaceId>>;
   trackerBlocking: boolean;
+  bookmarkBarVisible: boolean;
   privacyLog: PrivacyEvent[];
 }
 
@@ -302,6 +303,10 @@ export interface Bookmark {
   workspaceId: WorkspaceId;
   accountSpaceId: AccountSpaceId;
   createdAt: string;
+  location: 'bar' | 'other';
+  folderPath: string[];
+  order: number;
+  orderPath: number[];
 }
 
 export interface HistoryEntry {
@@ -354,6 +359,7 @@ export interface BrowserSnapshot {
   externalBrowsers: ExternalBrowserSummary[];
   recovery?: StateRecoveryStatus;
   pendingPermission?: PermissionPrompt;
+  bookmarkBarVisible: boolean;
 }
 
 export interface PersistedState {
@@ -365,6 +371,29 @@ export interface PersistedState {
   history: Array<Omit<HistoryEntry, 'accountSpaceId'>>;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
+  bookmarkBarVisible: boolean;
+}
+
+export interface ChromeProfileSource {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  hasBookmarks: boolean;
+  hasHistory: boolean;
+}
+
+export interface ChromeImportOptions {
+  profileId: string;
+  workspaceId: WorkspaceId;
+  accountSpaceId: AccountSpaceId;
+  bookmarks: boolean;
+  history: boolean;
+}
+
+export interface ChromeImportResult {
+  imported: { bookmarks: number; history: number; passwords: number };
+  skipped: { bookmarks: number; history: number; passwords: number };
+  warnings: string[];
 }
 
 export interface RuntimeBrowserStateV2 {
@@ -377,6 +406,7 @@ export interface RuntimeBrowserStateV2 {
   history: AccountSpaceHistoryEntry[];
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
+  bookmarkBarVisible: boolean;
   accountSpaces: AccountSpaceSummary[];
   accountHealth: AccountSpaceHealth[];
   recovery?: StateRecoveryStatus;
@@ -394,6 +424,13 @@ export interface AiPagePreview {
   text: string;
   redactions: number;
   protectedPage: boolean;
+  dom?: string;
+  screenshotDataUrl?: string;
+}
+
+export interface DeveloperAiPreviewOptions {
+  includeDom: boolean;
+  includeScreenshot: boolean;
 }
 
 export interface AiApproval {
@@ -455,6 +492,24 @@ export interface DeveloperDiagnosticReport {
   formatted: string;
 }
 
+export type DeveloperBridgeAction =
+  | 'project.open' | 'source.open'
+  | 'server.discover' | 'server.start' | 'server.stop' | 'server.restart'
+  | 'inspect.page' | 'inspect.open-source'
+  | 'test.run' | 'test.cancel' | 'test.rerun' | 'test.save-artifact'
+  | 'ai.handoff' | 'ai.apply-edits'
+  | 'reports.list' | 'reports.get' | 'reports.delete' | 'reports.clear' | 'reports.open' | 'reports.retention';
+
+export interface DeveloperPageInfo {
+  route: string;
+  framework: string;
+  viewport: string;
+  selector?: string;
+  element?: string;
+  sourcePath?: string;
+  confidence?: 'exact' | 'source-map' | 'nearest';
+}
+
 export interface VaultItemInput {
   label: string;
   url: string;
@@ -513,3 +568,4 @@ export interface UpdateCheckResult {
   latest: ReleaseManifest;
   checkedAt: string;
 }
+export type { BridgeStatus, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';

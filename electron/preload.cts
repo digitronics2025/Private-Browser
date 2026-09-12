@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, CalendarEventSummary, ContactSummary, DeveloperDiagnosticReport, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
+import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { BackupWriteResult } from './account-backup.js';
 
@@ -51,12 +51,25 @@ const api = {
   setOverlayOpen: (open: boolean): Promise<void> => ipcRenderer.invoke('browser:set-overlay-open', open),
   toggleBookmark: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark'),
   openBookmark: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-bookmark', id),
+  toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
+  listChromeProfiles: (): Promise<ChromeProfileSource[]> => ipcRenderer.invoke('browser:list-chrome-profiles'),
+  importChrome: (options: ChromeImportOptions): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome', options),
+  importChromePasswords: (): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome-passwords'),
   toggleTrackerBlocking: (): Promise<void> => ipcRenderer.invoke('browser:toggle-tracker-blocking'),
   openDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-download', id),
   showDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:show-download', id),
   toggleDeveloperTools: (mode: DevToolsMode): Promise<void> => ipcRenderer.invoke('developer:toggle-tools', mode),
   captureDeveloperDiagnostics: (): Promise<DeveloperDiagnosticReport> => ipcRenderer.invoke('developer:capture-diagnostics'),
   clearDeveloperDiagnostics: (): Promise<void> => ipcRenderer.invoke('developer:clear-diagnostics'),
+  getBridgeStatus: (): Promise<BridgeStatus> => ipcRenderer.invoke('developer:bridge-status'),
+  beginBridgePairing: (): Promise<BridgeStatus> => ipcRenderer.invoke('developer:bridge-pair'),
+  disconnectBridge: (revoke = false): Promise<BridgeStatus> => ipcRenderer.invoke('developer:bridge-disconnect', revoke),
+  listBridgeProjects: (): Promise<ProjectSummary[]> => ipcRenderer.invoke('developer:bridge-projects'),
+  selectBridgeProject: (projectId: string): Promise<ProjectInfo> => ipcRenderer.invoke('developer:bridge-select-project', projectId),
+  runBridgeAction: (action: DeveloperBridgeAction, payload: Record<string, unknown> = {}): Promise<unknown> => ipcRenderer.invoke('developer:bridge-action', action, payload),
+  inspectDeveloperPage: (selectElement = false): Promise<DeveloperPageInfo> => ipcRenderer.invoke('developer:inspect-page', selectElement),
+  prepareDeveloperAiPreview: (options: DeveloperAiPreviewOptions): Promise<AiPagePreview> => ipcRenderer.invoke('developer:prepare-ai-preview', options),
+  installBridgeExtension: (): Promise<string> => ipcRenderer.invoke('developer:install-extension'),
   prepareAiPreview: (): Promise<AiPagePreview> => ipcRenderer.invoke('ai:prepare-preview'),
   approveAiPreview: (previewId: string): Promise<AiApproval> => ipcRenderer.invoke('ai:approve-preview', previewId),
   getAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:provider-status'),

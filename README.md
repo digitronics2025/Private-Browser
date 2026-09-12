@@ -15,6 +15,9 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - Optional AES-256-GCM Drive app-data backup with a user-verified recovery code;
   Google receives ciphertext and My Vault is never included.
 - Chrome-style tabs, address/search bar, navigation, bookmarks, history and download management.
+- A Chrome-style bookmarks bar with preserved folders, ordering and overflow.
+- Local Chrome migration for bookmark-bar folders and history, plus secure
+  Password Manager CSV import directly into the encrypted Vault.
 - Tracker blocking for common analytics, advertising and session-replay hosts,
   tracking-parameter removal, DNT/GPC, and WebRTC private-address protection.
 - Crash/session restoration without storing form values or page content.
@@ -28,6 +31,7 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - A Cloudflare-native private release service with D1 metadata, R2 installers, a protected download page and resumable downloads.
 - OS-encrypted update-service configuration with startup and daily release checks.
 - A Development-workspace cockpit with native Chromium Elements, Console, Sources, Network, Performance, Application and Recorder tools; F12/Ctrl+Shift+I shortcuts; right-click element inspection; and sanitized AI-ready diagnostic reports.
+- A private VS Code companion with authenticated named-pipe pairing, explicit workspace/command grants, project adapters, isolated Playwright checks, local reports, source handoff, and reviewed AI edits.
 - Hardened Electron fuses, explicit certificate/webview denial, bounded IPC,
   strict site permissions, risky-download blocking and a locked-down Banking workspace.
 
@@ -45,7 +49,15 @@ The development command launches Vite on localhost and opens the Electron applic
 For a credential-free visual review of Account Spaces, run `npm run dev:preview`.
 Real partition isolation is verified separately with `npm run test:electron`.
 
+To migrate from Chrome, open **Settings → Import from Chrome**, choose the Chrome
+profile and destination Account Space, then import bookmarks and/or history. Chrome
+passwords can be exported as CSV and selected in the same panel; delete that
+unencrypted CSV after checking the Vault. Cookies, live sessions, payment cards,
+extensions and account tokens are not copied.
+
 Open a webpage in the **Development** workspace, then select **Dev** in the right sidebar or press **F12** / **Ctrl+Shift+I**. Right-click a page element for exact inspection. The diagnostic report deliberately excludes page text, form values, cookies, storage, headers, request bodies, query strings and fragments, and developer access is blocked for Banking and detected payment pages.
+
+Open **Development → Dev**. The Project, Inspect, Test, and AI Fix tabs guide you through installing the bundled VSIX, entering the browser's single-use pairing code in VS Code, granting one local workspace, and approving exact commands. See the [ten-step walkthrough](docs/systems/vscode-bridge.md#ten-step-non-developer-walkthrough).
 
 ## Verify and build
 
@@ -59,7 +71,7 @@ Create the Windows installer on a Windows machine:
 npm run dist
 ```
 
-The installer is written to `release/Private-Browser-<version>-Setup.exe`. GitHub Actions also creates a downloadable Windows artifact and CycloneDX SBOM for every push to `main`.
+The installer is written to `release/Private-Browser-<version>-Setup.exe` and the private extension to `release/private-browser-bridge-<version>.vsix`. The VSIX is also embedded in the installer; it is never published to Marketplace.
 
 The release workflow automatically code-signs when the two Windows signing
 secrets documented in `SECURITY.md` are configured. Until then, Windows
@@ -87,10 +99,9 @@ The AI panel first extracts visible page text locally. It removes common credent
 ## Current scope
 
 This is a functional desktop browser, not a Chromium fork. It is optimized for a
-private single-user Windows workflow. Chrome Sync/import, bookmark folders and a
-bookmark bar are not implemented or advertised. Account-Space-aware destination
-contracts are ready for future import work. Android, extension compatibility and
-a passkey-management UI remain future modules; Chromium's ordinary website
+private single-user Windows workflow. Chrome import, bookmark folders and the
+bookmark bar are Account-Space-aware; Chrome Sync is not implemented or
+advertised. Android, general Chrome-extension compatibility and a passkey-management UI remain future modules; Chromium's ordinary website
 WebAuthn/passkey flow remains available where supported by the host OS.
 
 Google API access requires a privately configured Desktop OAuth client ID. See

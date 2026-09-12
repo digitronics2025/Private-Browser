@@ -62,6 +62,7 @@ function runtimeFixture() {
     },
     privacyLog: [],
     trackerBlocking: true,
+    bookmarkBarVisible: true,
   };
   const persistence = new AccountSpaceStateStore({
     paths: {
@@ -91,7 +92,7 @@ describe('Account Space runtime isolation', () => {
     const second = accountId(IDS.digitronicsSecond);
     store.update((state) => {
       state.tabs.push({ ...state.tabs[0], id: 'second-sales-tab' });
-      state.bookmarks.push({ id: 'sales-bookmark', workspaceId: 'digitronics', accountSpaceId: first, title: 'Sales', url: 'https://example.com/', createdAt: new Date().toISOString() });
+      state.bookmarks.push({ id: 'sales-bookmark', workspaceId: 'digitronics', accountSpaceId: first, title: 'Sales', url: 'https://example.com/', createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order: 0, orderPath: [0] });
       state.history.push({ id: 'admin-history', workspaceId: 'digitronics', accountSpaceId: second, title: 'Admin', url: 'https://example.test/', visitedAt: new Date().toISOString() });
       state.history.push({ id: 'crossed', workspaceId: 'personal', accountSpaceId: first, title: 'Invalid', url: 'https://invalid.example/', visitedAt: new Date().toISOString() });
     });
@@ -115,7 +116,7 @@ describe('Account Space runtime isolation', () => {
     expect(source).toContain('this.store.partitionFor(tab.accountSpaceId)');
     expect(source).toContain('this.newTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId)');
     expect(source).toContain('const cacheKey = `${tab.accountSpaceId}:${url}`');
-    expect(source).toContain('accountSpaceId,\n        filename: item.getFilename()');
+    expect(source).toMatch(/accountSpaceId,\r?\n\s+filename: item\.getFilename\(\)/);
     expect(source).not.toContain('const partition = `persist:private-browser-${tab.workspaceId}`');
   });
 });

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -6,6 +8,7 @@ import {
   BrowserWindow,
   clipboard,
   desktopCapturer,
+  dialog,
   ipcMain,
   Menu,
   safeStorage,
@@ -34,7 +37,13 @@ import type {
   AiProviderInput,
   BrowserSnapshot,
   BrowserTab,
+  ChromeImportOptions,
+  ChromeImportResult,
+  ChromeProfileSource,
+  DeveloperAiPreviewOptions,
   DeveloperConsoleEntry,
+  DeveloperBridgeAction,
+  DeveloperPageInfo,
   DeveloperNetworkIssue,
   DevToolsMode,
   DownloadEntry,
@@ -48,6 +57,7 @@ import type {
   WorkspaceId,
   StateRecoveryAction,
 } from './types.js';
+import type { ProjectInfo, ProjectSummary } from '@private-browser/bridge-protocol';
 import { VaultStore } from './vault.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
@@ -65,6 +75,8 @@ import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
 import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
 import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-status.js';
+import { listChromeProfiles, parseChromePasswordCsv, readChromeProfile } from './chrome-importer.js';
+import { VscodeBridgeServer } from './vscode-bridge.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -160,7 +172,7 @@ class BrowserController {
   private readonly faviconCache = new Map<string, string>();
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private expectedInstaller?: ExpectedInstaller;
-  private layout: Layout = { top: 128, left: 0, right: 366, bottom: 0 };
+  private layout: Layout = { top: 158, left: 0, right: 366, bottom: 0 };
   private window!: BrowserWindow;
 
   constructor(
@@ -175,6 +187,7 @@ class BrowserController {
     private readonly vault: VaultStore,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
+    private readonly vscodeBridge: VscodeBridgeServer,
   ) {
     this.permissions = new AccountPermissionManager(accounts);
     const state = this.store.get();
@@ -257,6 +270,7 @@ class BrowserController {
       pendingPermission: this.pendingPermission?.prompt,
       googleConfiguration: this.googleConfiguration.status(),
       externalBrowsers: this.externalBrowsers.discover().map(({ id, name }) => ({ id, name })),
+      bookmarkBarVisible: persisted.bookmarkBarVisible,
     };
   }
 
@@ -811,7 +825,10 @@ class BrowserController {
     this.store.update((next) => {
       const existing = next.bookmarks.findIndex((item) => item.url === tab.url && item.accountSpaceId === tab.accountSpaceId);
       if (existing >= 0) next.bookmarks.splice(existing, 1);
-      else next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, createdAt: new Date().toISOString() });
+      else {
+        const order = next.bookmarks.filter((item) => item.accountSpaceId === tab.accountSpaceId && item.location === 'bar').length;
+        next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order, orderPath: [order] });
+      }
     });
     this.broadcast();
   }
@@ -820,6 +837,59 @@ class BrowserController {
     const bookmark = this.store.get().bookmarks.find((item) => item.id === id);
     if (!bookmark) return;
     await this.newTab(bookmark.workspaceId, bookmark.url, bookmark.accountSpaceId);
+  }
+
+  toggleBookmarkBar(): void {
+    this.store.update((state) => { state.bookmarkBarVisible = !state.bookmarkBarVisible; });
+    this.broadcast();
+  }
+
+  listChromeProfiles(): ChromeProfileSource[] {
+    return listChromeProfiles();
+  }
+
+  importChrome(options: ChromeImportOptions): ChromeImportResult {
+    if (!options || typeof options.profileId !== 'string') throw new Error('Choose a Chrome profile');
+    const account = this.requireAccountMembership(options.accountSpaceId);
+    if (account.workspaceId !== options.workspaceId) throw new Error('Chrome imports cannot cross workspace boundaries');
+    const data = readChromeProfile(options.profileId, options.workspaceId, options.accountSpaceId, options.bookmarks === true, options.history === true);
+    this.store.update((state) => {
+      const bookmarkKeys = new Set(state.bookmarks.map((item) => `${item.accountSpaceId}\u0000${item.location}\u0000${item.folderPath.join('\u0001')}\u0000${item.title}\u0000${item.url}`));
+      for (const bookmark of data.bookmarks) {
+        const key = `${bookmark.accountSpaceId}\u0000${bookmark.location}\u0000${bookmark.folderPath.join('\u0001')}\u0000${bookmark.title}\u0000${bookmark.url}`;
+        if (bookmarkKeys.has(key) || state.bookmarks.length >= 25_000) data.result.skipped.bookmarks += 1;
+        else { state.bookmarks.push(bookmark); bookmarkKeys.add(key); data.result.imported.bookmarks += 1; }
+      }
+      const historyKeys = new Set(state.history.map((item) => `${item.accountSpaceId}\u0000${item.url}\u0000${item.visitedAt}`));
+      for (const entry of data.history) {
+        const key = `${entry.accountSpaceId}\u0000${entry.url}\u0000${entry.visitedAt}`;
+        if (historyKeys.has(key) || state.history.length >= 10_000) data.result.skipped.history += 1;
+        else { state.history.push(entry); historyKeys.add(key); data.result.imported.history += 1; }
+      }
+      state.history.sort((left, right) => right.visitedAt.localeCompare(left.visitedAt));
+    });
+    this.addPrivacyEvent('local-read', 'Chrome data imported', `${data.result.imported.bookmarks} bookmarks and ${data.result.imported.history} history entries imported locally`);
+    this.broadcast();
+    return data.result;
+  }
+
+  async importChromePasswords(): Promise<ChromeImportResult> {
+    const selection = await dialog.showOpenDialog(this.window, {
+      title: 'Choose a Chrome password export',
+      filters: [{ name: 'CSV files', extensions: ['csv'] }],
+      properties: ['openFile'],
+    });
+    if (selection.canceled || !selection.filePaths[0]) throw new Error('Password import cancelled');
+    const filePath = selection.filePaths[0];
+    if (statSync(filePath).size > 20 * 1024 * 1024) throw new Error('Password CSV is unusually large');
+    const parsed = parseChromePasswordCsv(readFileSync(filePath, 'utf8'));
+    const added = this.vault.addMany(parsed.items);
+    this.addPrivacyEvent('vault', 'Chrome passwords imported', `${added.imported} credentials encrypted in the local vault`);
+    return {
+      imported: { bookmarks: 0, history: 0, passwords: added.imported },
+      skipped: { bookmarks: 0, history: 0, passwords: parsed.skipped + added.skipped },
+      warnings: ['Delete the unencrypted Chrome CSV file after checking the import.'],
+    };
   }
 
   toggleTrackerBlocking(): void {
@@ -900,6 +970,145 @@ class BrowserController {
     this.broadcast();
   }
 
+  getBridgeStatus() { return this.vscodeBridge.status(); }
+
+  beginBridgePairing() { this.requireDeveloperWorkspace(); return this.vscodeBridge.beginPairing(); }
+
+  async disconnectBridge(revoke: boolean) {
+    await this.vscodeBridge.disconnect(Boolean(revoke));
+    return this.vscodeBridge.status();
+  }
+
+  async listBridgeProjects(): Promise<ProjectSummary[]> {
+    this.requireDeveloperWorkspace();
+    return await this.vscodeBridge.request('project.list', {}) as ProjectSummary[];
+  }
+
+  async selectBridgeProject(projectId: string): Promise<ProjectInfo> {
+    this.requireDeveloperWorkspace();
+    if (!/^[a-f\d]{32}$/i.test(projectId)) throw new Error('Invalid project id');
+    const info = await this.vscodeBridge.request('project.authorize', { projectId }) as ProjectInfo;
+    this.vscodeBridge.setProject(info);
+    return info;
+  }
+
+  async runBridgeAction(action: DeveloperBridgeAction, payload: Record<string, unknown>): Promise<unknown> {
+    this.requireDeveloperWorkspace();
+    const allowed: ReadonlySet<string> = new Set(['project.open', 'source.open', 'server.discover', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
+    if (!allowed.has(action)) throw new Error('Unsupported VS Code action');
+    const projectId = this.vscodeBridge.status().project?.project.id;
+    let safePayload: Record<string, unknown> = { ...payload, ...(projectId ? { projectId } : {}) };
+    if (action === 'ai.handoff') {
+      const preview = this.consumeAiApproval(String(payload.approvalToken ?? ''));
+      safePayload = { projectId, action: String(payload.action ?? 'Diagnose').slice(0, 100), context: `${preview.text}${preview.dom ? `\n\nStructural DOM:\n${preview.dom}` : ''}` };
+      this.addPrivacyEvent('cloud-approved', 'VS Code AI handoff approved', preview.title);
+    }
+    const result = await this.vscodeBridge.request(action, safePayload);
+    if ((action === 'server.start' || action === 'server.restart') && result && typeof result === 'object' && 'url' in result) {
+      const url = new URL(String((result as { url: unknown }).url));
+      if (!['http:', 'https:'].includes(url.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) throw new Error('VS Code reported an invalid development-server URL');
+      const current = this.vscodeBridge.status().project;
+      if (current) this.vscodeBridge.setProject({ ...current, devServerUrl: url.toString() });
+      await this.navigate(url.toString());
+    }
+    return result;
+  }
+
+  async inspectDeveloperPage(selectElement: boolean): Promise<DeveloperPageInfo> {
+    const target = this.requireDeveloperTarget();
+    const expression = selectElement ? `new Promise((resolve) => {
+      const finish = (value) => { document.removeEventListener('click', click, true); document.removeEventListener('keydown', key, true); resolve(value); };
+      const selector = (node) => { if (node.id) return '#' + CSS.escape(node.id); const parts = []; for (let item = node; item && item.nodeType === 1 && parts.length < 5; item = item.parentElement) { let part = item.tagName.toLowerCase(); if (item.classList.length) part += '.' + [...item.classList].slice(0, 2).map((name) => CSS.escape(name)).join('.'); parts.unshift(part); } return parts.join(' > '); };
+      const click = (event) => { event.preventDefault(); event.stopPropagation(); const node = event.target; finish({ route: location.pathname, framework: window.__REACT_DEVTOOLS_GLOBAL_HOOK__ ? 'React' : 'Unknown', viewport: innerWidth + '?' + innerHeight, selector: selector(node), element: node.tagName.toLowerCase() }); };
+      const key = (event) => { if (event.key === 'Escape') finish({ route: location.pathname, framework: 'Unknown', viewport: innerWidth + '?' + innerHeight }); };
+      document.addEventListener('click', click, true); document.addEventListener('keydown', key, true); setTimeout(() => finish({ route: location.pathname, framework: 'Unknown', viewport: innerWidth + '?' + innerHeight }), 60000);
+    })` : `(() => ({ route: location.pathname, framework: window.__REACT_DEVTOOLS_GLOBAL_HOOK__ ? 'React' : 'Unknown', viewport: innerWidth + '?' + innerHeight }))()`;
+    const raw = await this.evaluateWithCdp(target.contents, expression, selectElement) as Record<string, unknown>;
+    const clean = (value: unknown, limit: number) => sanitizeDiagnosticText(String(value ?? ''), limit).text;
+    const selector = clean(raw.selector, 500);
+    const page: DeveloperPageInfo = { route: clean(raw.route, 1_000), framework: clean(raw.framework, 100), viewport: clean(raw.viewport, 50), ...(selector ? { selector, element: clean(raw.element, 100), confidence: 'nearest' as const } : {}) };
+    if (this.vscodeBridge.status().state !== 'connected' || !this.vscodeBridge.status().project) return page;
+    const sourceUrl = target.runtime.console.at(-1)?.source;
+    return await this.vscodeBridge.request('inspect.page', { ...page, ...(sourceUrl ? { sourceUrl } : {}) }) as DeveloperPageInfo;
+  }
+
+  private async evaluateWithCdp(contents: Electron.WebContents, expression: string, awaitPromise: boolean): Promise<unknown> {
+    const wasAttached = contents.debugger.isAttached();
+    try {
+      if (!wasAttached) contents.debugger.attach('1.3');
+      const response = await contents.debugger.sendCommand('Runtime.evaluate', { expression, awaitPromise, returnByValue: true, userGesture: true }) as { result?: { value?: unknown }; exceptionDetails?: unknown };
+      if (response.exceptionDetails) throw new Error('The page refused element inspection');
+      return response.result?.value;
+    } catch (error) {
+      if (!contents.isDevToolsOpened()) throw error;
+      return contents.executeJavaScript(expression, true);
+    } finally {
+      if (!wasAttached && contents.debugger.isAttached()) contents.debugger.detach();
+    }
+  }
+
+  async prepareDeveloperAiPreview(options: DeveloperAiPreviewOptions): Promise<AiPagePreview> {
+    const report = await this.captureDeveloperDiagnostics();
+    const bridge = this.vscodeBridge.status();
+    const text = redactSensitiveText(JSON.stringify({
+      project: bridge.project ? { name: bridge.project.project.name, types: bridge.project.types, framework: bridge.project.framework, packageManager: bridge.project.packageManager, activeFile: bridge.project.activeFile } : undefined,
+      page: report.page, console: report.console, network: report.network,
+      exclusions: ['cookies', 'passwords', 'TOTP values', 'API keys', 'tokens', 'authorization headers', 'request and response bodies', 'form values', 'browser storage', 'environment files'],
+    }, null, 2));
+    const state = this.store.get(); const tab = this.activeTab(state);
+    let dom: string | undefined;
+    let screenshotDataUrl: string | undefined;
+    if (options?.includeDom) {
+      const rawDom = await this.requireDeveloperTarget().contents.executeJavaScript(`(() => [...document.querySelectorAll('main,section,form,button,input,textarea,select,a,[role]')].slice(0, 250).map((node) => ({ tag: node.tagName.toLowerCase(), id: node.id || undefined, classes: [...node.classList].slice(0, 4), role: node.getAttribute('role') || undefined, type: node.getAttribute('type') || undefined, name: node.getAttribute('name') || undefined })).filter((node) => node.type !== 'password'))()`, true);
+      dom = redactSensitiveText(JSON.stringify(rawDom)).text.slice(0, 12_000);
+    }
+    if (options?.includeScreenshot) {
+      const contents = this.requireDeveloperTarget().contents;
+      const mask = await contents.insertCSS('input, textarea, [contenteditable="true"] { color: transparent !important; text-shadow: 0 0 10px #777 !important; caret-color: transparent !important; }');
+      try {
+        const image = await contents.capturePage();
+        const resized = image.getSize().width > 1280 ? image.resize({ width: 1280 }) : image;
+        const encoded = resized.toJPEG(70).toString('base64');
+        if (encoded.length <= 1_400_000) screenshotDataUrl = `data:image/jpeg;base64,${encoded}`;
+      } finally {
+        await contents.removeInsertedCSS(mask);
+      }
+    }
+    const previewText = text.text.slice(0, 12_000);
+    const preview: AiPagePreview = {
+      id: randomUUID(),
+      accountSpaceId: tab.accountSpaceId,
+      tabId: tab.id,
+      service: 'browser',
+      sourceRevision: aiSourceRevision(tab.accountSpaceId, tab, previewText),
+      sourceUrl: tab.url,
+      title: `Developer diagnosis - ${sanitizeDiagnosticText(tab.title, 200).text}`,
+      url: sanitizeDiagnosticUrl(tab.url).text,
+      text: previewText,
+      redactions: report.redactions + text.redactions,
+      protectedPage: false,
+      ...(dom ? { dom } : {}),
+      ...(screenshotDataUrl ? { screenshotDataUrl } : {}),
+    };
+    this.pendingAiPreviews.set(preview.id, { preview, expiresAt: Date.now() + 5 * 60_000 });
+    return preview;
+  }
+
+  async installBridgeExtension(): Promise<string> {
+    this.requireDeveloperWorkspace();
+    const packaged = join(process.resourcesPath, 'private-browser-bridge.vsix');
+    const development = join(app.getAppPath(), 'build', 'private-browser-bridge.vsix');
+    const vsix = existsSync(packaged) ? packaged : development;
+    if (!existsSync(vsix)) throw new Error('Build the private VSIX first with npm run extension:package');
+    const localAppData = process.env.LOCALAPPDATA;
+    const programFiles = process.env.ProgramFiles;
+    const code = [localAppData ? join(localAppData, 'Programs', 'Microsoft VS Code', 'Code.exe') : '', programFiles ? join(programFiles, 'Microsoft VS Code', 'Code.exe') : ''].find((candidate) => candidate && existsSync(candidate));
+    if (!code) { shell.showItemInFolder(vsix); return 'VSIX revealed. In VS Code choose Extensions: Install from VSIX.'; }
+    const child = spawn(code, ['--install-extension', vsix, '--force'], { shell: false, windowsHide: true, stdio: 'ignore' });
+    await new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('exit', (value) => value === 0 ? resolve() : reject(new Error('VS Code extension installation failed'))); });
+    return 'Private Browser Bridge installed. Reload VS Code if it was already open.';
+  }
+
   async prepareAiPreview(): Promise<AiPagePreview> {
     this.pruneAiCapabilities();
     const state = this.store.get();
@@ -966,18 +1175,23 @@ class BrowserController {
   }
 
   async askAi(token: string, questionValue: string): Promise<string> {
+    const question = questionValue.trim();
+    if (!question || question.length > 2000) throw new Error('Enter a question under 2,000 characters');
+    const preview = this.consumeAiApproval(token);
+    const answer = await this.aiProvider.ask(preview, question);
+    this.addPrivacyEvent('cloud-approved', 'Cloud AI request completed', preview.title);
+    return answer;
+  }
+
+  private consumeAiApproval(token: string): AiPagePreview {
     const approval = this.aiApprovals.get(token);
     this.aiApprovals.delete(token);
-    const question = questionValue.trim();
     if (!approval || approval.expiresAt < Date.now()) throw new Error('AI approval expired; approve the page again');
-    if (!question || question.length > 2000) throw new Error('Enter a question under 2,000 characters');
     const state = this.store.get();
     const tab = this.activeTab(state);
     const accountSpaceId = this.activeAccountSpaceId(state);
     if (!sameAiSource(approval.preview, accountSpaceId, tab) || isProtectedPage(tab.url)) throw new Error('The page, tab, or Account Space changed or is protected');
-    const answer = await this.aiProvider.ask(approval.preview, question);
-    this.addPrivacyEvent('cloud-approved', 'Cloud AI request completed', approval.preview.title);
-    return answer;
+    return approval.preview;
   }
 
   /**
@@ -1159,6 +1373,13 @@ class BrowserController {
     const target = this.developerTarget();
     if (!target) throw new Error('Developer tools are available only for non-protected pages in the Development workspace');
     return target;
+  }
+
+  private requireDeveloperWorkspace(): void {
+    const tab = this.activeTab(this.store.get());
+    if (tab.workspaceId !== 'development' || isProtectedPage(tab.url)) {
+      throw new Error('The VS Code bridge is available only in the non-protected Development workspace');
+    }
   }
 
   private recordConsoleMessage(tabId: string, details: Electron.Event<Electron.WebContentsConsoleMessageEventParams>): void {
@@ -1603,6 +1824,9 @@ class BrowserController {
     } else if (command && key === 'r') {
       event.preventDefault();
       this.reload();
+    } else if (command && input.shift && key === 'b') {
+      event.preventDefault();
+      this.toggleBookmarkBar();
     } else if (input.alt && input.key === 'Left') {
       event.preventDefault();
       this.goBack();
@@ -1614,6 +1838,7 @@ class BrowserController {
 }
 
 let controller: BrowserController | undefined;
+let vscodeBridge: VscodeBridgeServer | undefined;
 let pendingLaunchUrl = process.argv.find((argument) => isAllowedRemoteUrl(argument));
 app.enableSandbox();
 app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'default_public_interface_only');
@@ -1677,6 +1902,15 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const vault = new VaultStore(join(userDataPath, 'vault.enc'));
   const aiProvider = new AiProviderStore(join(userDataPath, 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(userDataPath, 'update-service.enc'));
+  const bridgeDataRoot = join(process.env.LOCALAPPDATA ?? userDataPath, 'Private Browser Bridge');
+  vscodeBridge = new VscodeBridgeServer(join(userDataPath, 'vscode-bridge.enc'), join(bridgeDataRoot, 'rendezvous.json'), app.getVersion(), () => controller?.broadcast());
+  try {
+    await vscodeBridge.start();
+  } catch (error) {
+    dialog.showErrorBox('Private Browser could not start securely', `The local VS Code bridge failed closed. Restart Private Browser as your normal Windows user and check that operating-system credential protection is available.\n\n${error instanceof Error ? error.message : 'Unknown bridge error'}`);
+    app.quit();
+    return;
+  }
   const updateBootstrapPath = join(process.resourcesPath, 'private-browser-update.json');
   try {
     const updateBootstrap = readUpdateBootstrap(updateBootstrapPath);
@@ -1691,7 +1925,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     // convenience of first-launch enrolment is the cheaper failure.
     removeUpdateBootstrap(updateBootstrapPath);
   }
-  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, aiProvider, updates);
+  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, aiProvider, updates, vscodeBridge);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -1740,12 +1974,25 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:set-overlay-open', (_event, open: boolean) => controller!.setOverlayOpen(open));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
+  handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
+  handle('browser:list-chrome-profiles', () => controller!.listChromeProfiles());
+  handle('browser:import-chrome', (_event, options: ChromeImportOptions) => controller!.importChrome(options));
+  handle('browser:import-chrome-passwords', () => controller!.importChromePasswords());
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
   handle('developer:toggle-tools', (_event, mode: DevToolsMode) => controller!.toggleDeveloperTools(mode));
   handle('developer:capture-diagnostics', () => controller!.captureDeveloperDiagnostics());
   handle('developer:clear-diagnostics', () => controller!.clearDeveloperDiagnostics());
+  handle('developer:bridge-status', () => controller!.getBridgeStatus());
+  handle('developer:bridge-pair', () => controller!.beginBridgePairing());
+  handle('developer:bridge-disconnect', (_event, revoke: boolean) => controller!.disconnectBridge(revoke));
+  handle('developer:bridge-projects', () => controller!.listBridgeProjects());
+  handle('developer:bridge-select-project', (_event, projectId: string) => controller!.selectBridgeProject(projectId));
+  handle('developer:bridge-action', (_event, action: DeveloperBridgeAction, payload: Record<string, unknown>) => controller!.runBridgeAction(action, payload));
+  handle('developer:inspect-page', (_event, selectElement: boolean) => controller!.inspectDeveloperPage(Boolean(selectElement)));
+  handle('developer:prepare-ai-preview', (_event, options: DeveloperAiPreviewOptions) => controller!.prepareDeveloperAiPreview({ includeDom: Boolean(options?.includeDom), includeScreenshot: Boolean(options?.includeScreenshot) }));
+  handle('developer:install-extension', () => controller!.installBridgeExtension());
   handle('ai:prepare-preview', () => controller!.prepareAiPreview());
   handle('ai:approve-preview', (_event, previewId: string) => controller!.approveAiPreview(previewId));
   handle('ai:provider-status', () => controller!.getAiProvider());
@@ -1784,6 +2031,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   void controller?.flushClipboard();
+  void vscodeBridge?.close();
 });
 
 app.on('window-all-closed', () => {

@@ -140,6 +140,7 @@ export class RuntimeStateStore {
       activeAccountSpaceByWorkspace: next.activeAccountSpaceByWorkspace,
       privacyLog: next.privacyLog,
       trackerBlocking: next.trackerBlocking,
+      bookmarkBarVisible: next.bookmarkBarVisible,
     };
     for (const account of next.accountSpaces) {
       const tabs = next.tabs.filter((tab) => tab.accountSpaceId === account.id);
@@ -194,6 +195,7 @@ function combine(
     history: accountStates.flatMap((state) => state.history),
     privacyLog: [...manifest.privacyLog],
     trackerBlocking: manifest.trackerBlocking,
+    bookmarkBarVisible: manifest.bookmarkBarVisible,
     accountSpaces,
     accountHealth,
     recovery: firstRecovery,
@@ -256,7 +258,7 @@ function normalizeRuntimeState(state: RuntimeBrowserStateV2): void {
     if (!tabs.some((tab) => tab.id === state.activeTabByAccountSpace[account.id])) state.activeTabByAccountSpace[account.id] = tabs[0].id;
   }
   state.bookmarks = state.bookmarks.filter((item) => accountsById.get(item.accountSpaceId)?.workspaceId === item.workspaceId);
-  state.history = state.history.filter((item) => accountsById.get(item.accountSpaceId)?.workspaceId === item.workspaceId).slice(0, 2500);
+  state.history = state.history.filter((item) => accountsById.get(item.accountSpaceId)?.workspaceId === item.workspaceId).slice(0, 10_000);
   state.privacyLog = state.privacyLog.slice(0, 100);
 }
 
@@ -303,6 +305,7 @@ function recoveryRuntimeState(recovery: StateRecoveryStatus): RuntimeBrowserStat
     history: [],
     privacyLog: [],
     trackerBlocking: true,
+    bookmarkBarVisible: true,
     accountSpaces,
     accountHealth: accountSpaces.map((account) => ({ accountSpaceId: account.id, status: 'locked', checkedAt: now })),
     recovery,

@@ -8,7 +8,7 @@ verified_at: f6f0c96
 
 # Vault
 
-> Last verified: 2026-09-10
+> Last verified: 2026-09-12
 
 ## Agent Brief
 
@@ -140,6 +140,9 @@ Constructed once at startup with the file path; `load()` runs in the constructor
   reject a malformed secret by letting the generator throw (see **Gotchas** — in
   practice it does not throw). Assigns `id` and `updatedAt`, `unshift`s, saves,
   and returns `this.list()[0]` — so even the create path returns metadata only.
+- **`addMany(inputs)`** — imports a validated batch with one encrypted atomic
+  write, skips duplicate `(url, username)` pairs, and returns counts only. It is
+  used by Chrome password CSV import so no secret crosses into the renderer.
 - **`remove(id): boolean`** — filters the array, saves **only** if the length
   changed, returns whether it changed.
 - **`getPassword(id): string`**, **`getTotp(id)`**, **`getForAutofill(id)`** — the

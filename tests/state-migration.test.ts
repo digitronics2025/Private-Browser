@@ -40,6 +40,7 @@ function fixture() {
     history: [{ id: 'history-1', title: 'Calendar', url: 'https://calendar.google.com/', workspaceId: 'personal', visitedAt: NOW.toISOString() }],
     privacyLog: [],
     trackerBlocking: true,
+    bookmarkBarVisible: false,
   };
   const original = Buffer.from(JSON.stringify(v1, null, 2));
   writeFileSync(legacyFilePath, original);
@@ -58,6 +59,7 @@ describe('v1 to Account Spaces v2 migration', () => {
     expect(result.status).toBe('ready');
     if (result.status !== 'ready') return;
     expect(result.manifest.activeWorkspaceId).toBe('personal');
+    expect(result.manifest.bookmarkBarVisible).toBe(false);
     const personal = result.accounts.find((account) => account.workspaceId === 'personal')!;
     expect(personal.partitionKey).toBe('persist:private-browser-personal');
     const personalState = result.accountStates.find((state) => state.workspaceId === 'personal')!;
