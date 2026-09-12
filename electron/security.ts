@@ -71,6 +71,27 @@ export function isAllowedSitePermission(permission: string, requestingUrl: strin
   }
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Keep the HTTP User-Agent aligned with Chromium's User-Agent Client Hints.
+ * Electron inserts both its own product token and the packaged application
+ * name. Leaving either token behind makes the legacy UA disagree with
+ * `navigator.userAgentData`, which breaks strict browser-integrity checks.
+ */
+export function browserCompatibleUserAgent(userAgent: string, applicationNames: readonly string[]): string {
+  let result = userAgent.replace(/(^|\s)Electron\/\S+/gi, '$1');
+  for (const applicationName of applicationNames) {
+    const name = applicationName.trim();
+    if (!name) continue;
+    const flexibleName = name.split(/[\s_-]+/).map(escapeRegExp).join('[\\s_-]+');
+    result = result.replace(new RegExp(`(^|\\s)${flexibleName}\\/\\S+`, 'gi'), '$1');
+  }
+  return result.replace(/\s+/g, ' ').trim();
+}
+
 export function downloadRisk(filename: string): 'ordinary' | 'dangerous' | 'deceptive' {
   const parts = filename.toLowerCase().trim().split('.').filter(Boolean);
   if (parts.length < 2) return 'ordinary';
