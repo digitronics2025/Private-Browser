@@ -4,7 +4,7 @@ sources:
   - electron/vscode-bridge.ts
   - packages/bridge-protocol/**
   - vscode-extension/**
-verified_at: 1e9a38cd
+verified_at: e8f39a3
 ---
 
 # VS Code Bridge
@@ -135,7 +135,9 @@ are not supported.
 Outcomes normalize to Passed, Needs attention, Failed, or Skipped. Findings
 carry a cause, evidence, optional location, and recommendation. JSON reports and
 their bounded artifacts are written with user-only permissions under extension
-global storage. The browser receives summaries and artifact metadata only.
+global storage. Stored report size and content are checked through one open file
+handle before schema validation, preventing a check/read swap. The browser
+receives summaries and artifact metadata only.
 Users can list, open, delete, clear, and change retention (1–365 days, 10–500
 reports). Defaults are 30 days and 100 reports.
 

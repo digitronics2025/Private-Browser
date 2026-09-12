@@ -20,7 +20,7 @@
     "bridge:test": "npm run test --workspace @private-browser/bridge-protocol",
     "extension:compile": "npm run compile --workspace private-browser-bridge",
     "extension:test": "npm run test --workspace private-browser-bridge",
-    "extension:package": "npm run package --workspace private-browser-bridge",
+    "extension:package": "npm run bridge:build && npm run package --workspace private-browser-bridge",
     "extension:validate": "node scripts/stage-vsix.mjs --validate-only",
     "extension:stage": "node scripts/stage-vsix.mjs",
     "build": "npm run bridge:build && npm run typecheck && vite build && npm run electron:compile && npm run extension:compile",
