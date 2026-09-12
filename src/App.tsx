@@ -924,6 +924,7 @@ function SettingsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (m
   const [chromeImportOpen, setChromeImportOpen] = useState(false);
   const [chromeLoading, setChromeLoading] = useState(false);
   const [chromeResult, setChromeResult] = useState<ChromeImportResult | null>(null);
+  const chromeDestinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && account.workspaceId !== 'banking');
   // null while the first status is still in flight — better than claiming
   // 'Active' before anything has been checked, which is what it used to do.
   const encryptionAvailable = updateStatus ? updateStatus.error !== 'os-encryption-unavailable' : null;
@@ -934,6 +935,9 @@ function SettingsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (m
       setUpdateForm((value) => ({ ...value, endpoint: status.endpoint ?? '' }));
     }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'));
   }, []);
+  useEffect(() => {
+    if (!chromeDestinations.some((account) => account.id === chromeAccountSpaceId) && chromeDestinations[0]) setChromeAccountSpaceId(chromeDestinations[0].id);
+  }, [state.activeWorkspaceId, state.activeAccountSpaceId, state.accountSpaces]);
   const makeDefault = async () => {
     try {
       const result = await window.privateBrowser.setDefaultBrowser();
@@ -1011,12 +1015,13 @@ function SettingsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (m
       {chromeImportOpen && <div className="chrome-import-form">
         {chromeLoading && !chromeProfiles.length ? <div className="import-loading"><LoaderCircle className="spin" size={15} /> Detecting Chrome profiles…</div> : chromeProfiles.length > 0 ? <>
           <label><span>Chrome profile</span><select value={chromeProfileId} onChange={(event) => setChromeProfileId(event.target.value)}>{chromeProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}{profile.isDefault ? ' (Default)' : ''}</option>)}</select></label>
-          <label><span>Import into Account Space</span><select value={chromeAccountSpaceId} onChange={(event) => setChromeAccountSpaceId(event.target.value as AccountSpaceId)}>{state.accountSpaces.filter((account) => account.workspaceId !== 'banking').map((account) => <option value={account.id} key={account.id}>{state.workspaces.find((workspace) => workspace.id === account.workspaceId)?.name} / {account.label}</option>)}</select></label>
+          <label><span>Import into Account Space</span><select disabled={!chromeDestinations.length} value={chromeAccountSpaceId} onChange={(event) => setChromeAccountSpaceId(event.target.value as AccountSpaceId)}>{chromeDestinations.map((account) => <option value={account.id} key={account.id}>{account.label}</option>)}</select></label>
+          {!chromeDestinations.length && <p className="import-note">Chrome data cannot be imported into Banking. Switch to another workspace first.</p>}
           <div className="import-checks">
             <label><input type="checkbox" checked={chromeBookmarks} onChange={(event) => setChromeBookmarks(event.target.checked)} /> <span><strong>Bookmarks</strong><small>Includes the full Chrome bookmarks bar and folder hierarchy.</small></span></label>
             <label><input type="checkbox" checked={chromeHistory} onChange={(event) => setChromeHistory(event.target.checked)} /> <span><strong>Browsing history</strong><small>Up to 10,000 recent Chrome pages.</small></span></label>
           </div>
-          <button className="primary-button full" disabled={chromeLoading || (!chromeBookmarks && !chromeHistory)} onClick={() => void importChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Import selected data</button>
+          <button className="primary-button full" disabled={chromeLoading || !chromeDestinations.length || (!chromeBookmarks && !chromeHistory)} onClick={() => void importChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Import selected data</button>
         </> : !chromeLoading ? <p className="import-note">Install or open Chrome once so a local profile exists, then try again.</p> : null}
         <div className="password-import-row"><div><strong>Saved passwords</strong><small>Chrome protects direct access. Export passwords as CSV, then select that file here. Secrets go straight into the OS-encrypted Vault and never enter the page.</small></div><button disabled={chromeLoading} onClick={() => void importChromePasswords()}>Choose CSV</button></div>
         <p className="import-limit"><Shield size={13} /> Cookies, signed-in sessions, payment cards, extensions and Chrome account tokens are intentionally not copied.</p>

@@ -8,6 +8,7 @@ describe('Account Space IPC contracts', () => {
     expect(() => validateIpcArguments('accounts:add-local', ['personal', 'Work mail', 'indigo'])).not.toThrow();
     expect(() => validateIpcArguments('google:connect', [ID, ['identity', 'gmail-metadata'], 'edge'])).not.toThrow();
     expect(() => validateIpcArguments('google:gmail-prepare-send', [ID, { to: ['person@example.com'], subject: 'Hello', body: 'Body' }, 'rev-1'])).not.toThrow();
+    expect(() => validateIpcArguments('browser:import-chrome', [{ profileId: 'Default', workspaceId: 'personal', accountSpaceId: ID, bookmarks: true, history: false }])).not.toThrow();
   });
 
   it('rejects invalid IDs, cross-shape payloads and oversized sensitive bodies', () => {
@@ -15,6 +16,7 @@ describe('Account Space IPC contracts', () => {
     expect(() => validateIpcArguments('google:connect', [ID, ['unknown'], 'edge'])).toThrow(/module/);
     expect(() => validateIpcArguments('google:gmail-prepare-send', [ID, { to: ['person@example.com'], subject: 'Hello', body: 'x'.repeat(65_537) }])).toThrow(/size/);
     expect(() => validateIpcArguments('accounts:delete', [ID, 'yes'])).toThrow(/Exact/);
+    expect(() => validateIpcArguments('browser:import-chrome', [{ profileId: 'Default', workspaceId: 'personal', accountSpaceId: 'personal', bookmarks: true, history: false }])).toThrow(/identifier/);
   });
 
   it('rejects generic URL-like service requests and invalid permission decisions', () => {
