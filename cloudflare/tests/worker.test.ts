@@ -37,6 +37,15 @@ class Statement {
     return (this.database.active(appId, channel) ?? null) as T | null;
   }
 
+  async all<T>() {
+    const [appId, channel, activeReleaseId] = this.values as [string, string, string];
+    const results = this.database.rows
+      .filter((row) => row.app_id === appId && row.channel === channel && row.id !== activeReleaseId)
+      .sort((left, right) => right.published_at.localeCompare(left.published_at) || right.build_number - left.build_number)
+      .slice(0, 5) as T[];
+    return { results, success: true };
+  }
+
   /** Interpret the two statements handlePublish batches, honouring bound values. */
   apply(): void {
     if (this.sql.includes('INSERT INTO releases')) {
@@ -131,14 +140,14 @@ describe('download Worker', () => {
     expect((await request('/health')).status).toBe(503);
   });
 
-  it('returns a private signed manifest and branded download page', async () => {
+  it('returns a private signed manifest whose page URL opens the public branded page', async () => {
     const item = await manifest();
     expect(item.sha256).toBe('a'.repeat(64));
     const page = await fetchSigned(item.downloadPageUrl);
     expect(page.status).toBe(200);
-    expect(page.headers.get('x-robots-tag')).toContain('noindex');
+    expect(page.headers.get('x-robots-tag')).toBe('index, follow');
     const html = await page.text();
-    expect(html).toContain('Download and install');
+    expect(html).toContain('Download for Windows');
     // This release's own details, not a hard-coded template string: the assertion
     // these replaced was `'X'.replace('X','Y')` and could not fail (F-09).
     expect(html).toContain(release.version);
@@ -152,8 +161,8 @@ describe('download Worker', () => {
     expect(page.headers.get('cache-control')).toContain('no-store');
     expect(page.headers.get('x-robots-tag')).toContain('noindex');
     const html = await page.text();
-    expect(html).toContain('Download and install');
-    expect(html).toContain('Build number');
+    expect(html).toContain('Download for Windows');
+    expect(html).toContain(`Build ${release.build_number}`);
     expect(html).toContain('Stable release');
     expect(html).toMatch(/\/download\/latest\.exe\?expires=\d+&amp;signature=/);
     expect(html).not.toContain(accessToken);
@@ -163,9 +172,102 @@ describe('download Worker', () => {
     expect(await head.text()).toBe('');
   });
 
-  it('hides stable install pages with missing or incorrect tokens', async () => {
+  it('serves public root and download routes with fresh signed installer links', async () => {
+    for (const path of ['/', '/download']) {
+      const page = await request(path);
+      expect(page.status).toBe(200);
+      expect(page.headers.get('cache-control')).toContain('no-store');
+      expect(page.headers.get('x-robots-tag')).toBe('index, follow');
+      expect(page.headers.get('content-security-policy')).toContain("default-src 'none'");
+      const html = await page.text();
+      expect(html).toContain('<title>Download Private Browser for Windows</title>');
+      expect(html).toContain('<meta name="robots" content="index,follow">');
+      expect(html).toContain('<link rel="canonical" href="https://downloads.example.com/">');
+      expect(html).toContain('Dr. Badawi Abdalsalam');
+      expect(html).toContain('Software Architect · Casablanca, Morocco');
+      expect(html).toContain('https://dr-badawi-abdalsalam.com/');
+      expect(html).toContain(`datetime="${release.published_at}"`);
+      expect(html).toContain(release.sha256);
+      expect(html).toContain(release.commit_sha.slice(0, 12));
+      expect(html).toMatch(/\/download\/latest\.exe\?expires=\d+&amp;signature=/);
+      expect(html).not.toContain(accessToken);
+      expect((html.match(/<h1[ >]/g) ?? [])).toHaveLength(1);
+      expect(html).not.toContain('<script');
+
+      const href = html.match(/href="(\/download\/latest\.exe\?expires=\d+&amp;signature=[^"]+)"/)?.[1];
+      expect(href).toBeTruthy();
+      const binary = await request(href!.replaceAll('&amp;', '&'));
+      expect(binary.status).toBe(200);
+      expect(binary.headers.get('x-checksum-sha256')).toBe(release.sha256);
+      expect(await binary.text()).toBe('0123456789abcdef');
+    }
+
+    const head = await request('/', { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(Number(head.headers.get('content-length'))).toBeGreaterThan(1_000);
+    expect(await head.text()).toBe('');
+  });
+
+  it('shows only the five most recently published prior stable releases', async () => {
+    const prior = Array.from({ length: 7 }, (_, index): ReleaseRecord => ({
+      ...release,
+      id: `stable-0.2.${index}-${index + 10}`,
+      version: `0.2.${index}`,
+      build_number: index + 10,
+      published_at: `2026-09-${String(index + 1).padStart(2, '0')}T12:00:00.000Z`,
+      release_notes: `History release ${index}`,
+      is_active: 0,
+    }));
+    database.rows.push(...prior, {
+      ...release,
+      id: 'beta-9.0.0-99', version: '9.0.0-beta.1', build_number: 99, channel: 'beta',
+      published_at: '2026-09-09T12:00:00.000Z', release_notes: 'Beta should stay private', is_active: 0,
+    });
+
+    const html = await (await request('/')).text();
+    for (const index of [6, 5, 4, 3, 2]) expect(html).toContain(`History release ${index}`);
+    for (const index of [1, 0]) expect(html).not.toContain(`History release ${index}`);
+    expect(html).not.toContain('Beta should stay private');
+    expect(html.indexOf('History release 6')).toBeLessThan(html.indexOf('History release 5'));
+    expect((html.match(/class="history-item"/g) ?? [])).toHaveLength(5);
+  });
+
+  it('escapes release content and developer-facing metadata in public HTML', async () => {
+    database.rows[0] = {
+      ...release,
+      release_notes: '<img src=x onerror=alert(1)> & ready',
+      filename: 'Private Browser <candidate>.exe',
+    };
+    const html = await (await request('/')).text();
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt; &amp; ready');
+    expect(html).toContain('Private Browser &lt;candidate&gt;.exe');
+    expect(html).not.toContain('<img src=x');
+  });
+
+  it('keeps tokenized routes private while the canonical page is public', async () => {
     expect((await request('/download/wrong-token-that-is-long-enough-000000')).status).toBe(404);
     expect((await request('/download/')).status).toBe(404);
+    expect((await request('/update.json')).status).toBe(404);
+    expect((await request('/api/v1/releases/latest')).status).toBe(404);
+  });
+
+  it('returns clear HTTP failures when no public release or installer exists', async () => {
+    database.rows = [];
+    expect((await request('/')).status).toBe(404);
+    expect((await request('/download')).status).toBe(404);
+
+    database.rows = [{ ...release }];
+    bucket.object = new Uint8Array(0);
+    const html = await (await request('/')).text();
+    const href = html.match(/href="(\/download\/latest\.exe\?expires=\d+&amp;signature=[^"]+)"/)?.[1];
+    expect(href).toBeTruthy();
+    expect((await request(href!.replaceAll('&amp;', '&'))).status).toBe(404);
+  });
+
+  it('restricts public page methods to GET and HEAD', async () => {
+    const response = await request('/', { method: 'POST' });
+    expect(response.status).toBe(405);
+    expect(response.headers.get('allow')).toBe('GET, HEAD');
   });
 
   it('serves full, HEAD, open, closed and suffix byte ranges', async () => {

@@ -10,7 +10,7 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: b3cc4cb
+verified_at: eec0d54
 ---
 
 # Release and Updates
@@ -44,9 +44,10 @@ plumbing in `electron/main.ts` ([browser-shell.md](browser-shell.md)), and
 1. **A rejected credential must return 404, never 401 or 403.** A wrong token
    and a route that does not exist must be indistinguishable, so the service
    cannot be probed. → **Worker Authentication**
-2. **Missing or short secrets fail closed.** `secretsReady` gates every route;
-   without all three secrets at 32+ characters the Worker serves 404 everywhere
-   and 503 on `/health`. Never add a route that skips it. → **Worker Authentication**
+2. **Missing or short secrets fail closed.** `secretsReady` gates every release
+   route, including the public page because it must sign installer links; without
+   all three secrets at 32+ characters the Worker serves 404 everywhere and 503
+   on `/health`. Never add a route that skips it. → **Worker Authentication**
 3. **An active release can never be replaced by a lower build number** inside one
    `app_id` + `channel`. This is enforced by database triggers, not by the
    handler. → **Database Tables**
@@ -99,12 +100,12 @@ plumbing in `electron/main.ts` ([browser-shell.md](browser-shell.md)), and
 ## Overview
 
 Two deployables, one contract. The Worker
-(`private-browser-downloads`) stores release metadata in D1 and installers in R2,
-and serves both only to callers holding a shared bearer token or a fresh
-HMAC-signed link. The desktop app stores that token encrypted at rest, calls
-`/update.json` on a schedule, and refuses any manifest that does not match a
-strict field-by-field contract. Nothing is public: there is no unauthenticated
-route except `/health`, and no route is cacheable.
+(`private-browser-downloads`) stores release metadata in D1 and installers in R2.
+Its public landing page exposes the active stable release and five prior releases,
+then creates a fresh HMAC-signed installer URL; R2 itself remains private. The
+desktop app stores a separate client token encrypted at rest, calls `/update.json`
+on a schedule, and refuses any manifest that does not match a strict
+field-by-field contract. No release route is cacheable.
 
 ## Worker Routes
 
@@ -115,12 +116,26 @@ message and returns 500 `internal_error`.
 | Route | Methods | Auth | Behaviour |
 | --- | --- | --- | --- |
 | `/health` | GET, HEAD | none | 503 `{status:'degraded'}` if `secretsReady` is false or the D1 query throws. Otherwise 200 `{status:'ok', service, database:'ok', releaseReady}`, where `releaseReady` is whether the newest active release's R2 object exists. `cache-control: no-store`. |
+| `/` | GET, HEAD | none | `handlePublicDownloadPage`. Renders the canonical public page, current release, five previous stable releases and a freshly signed installer URL. |
 | `/api/v1/releases/latest` | GET, HEAD | client bearer | `handleLatest`. 404 on bad token or no release. Returns the signed manifest; HEAD returns the headers with no body. |
 | `/update.json` | GET, HEAD | client bearer | **The same handler.** This is the path the desktop client calls. |
 | `/api/v1/admin/releases` | POST | admin `x-api-key` | `handlePublish`. Registers a release. See below. |
-| `/download` | GET, HEAD | signed link | `handleDownloadPage`. Renders the branded HTML install page from [page.ts](../../cloudflare/src/page.ts) and re-signs a binary link for the same `expires`. |
+| `/download` | GET, HEAD | none | Alias of the canonical public page. Existing signed manifest URLs continue to work, but each page load creates a new installer signature rather than extending or reusing the query expiry. |
 | `/download/<token>` | GET, HEAD | client token in path | `handleStableDownloadPage`. Permanent private entry page for a human browser; always shows the active release and mints a fresh signed installer link on each load. Wrong tokens return the generic 404. |
 | `/download/latest.exe` | GET, HEAD | signed link | `handleBinary`. Streams the R2 object, with single-range support. |
+
+`releaseHistory` reads only the same `app_id` and stable channel, excludes the
+active row, orders by `published_at DESC` then build number, and returns at most
+five records. The query is sequential after `latestRelease`; the Worker does not
+run dependent D1 reads in parallel. History is informational and does not expose
+download URLs for old installers.
+
+[page.ts](../../cloudflare/src/page.ts) receives a typed page model: active
+release, history, signed download URL, canonical origin, render timestamp and the
+fixed public developer profile. It emits one script-free responsive document
+with semantic headings, UTC-backed `<time>` values, release notes, source commit,
+checksum, install steps and the developer profile link. Every D1 value is escaped
+before interpolation.
 
 `handlePublish` in order: 405 unless POST → 404 unless admin-authorised → 415
 unless `content-type` starts with `application/json` → 400 `invalid_release` if
@@ -140,10 +155,12 @@ Default id when the caller omits one: `<channel>-<version>-<buildNumber>`.
 `x-content-type-options: nosniff`, `referrer-policy: no-referrer`,
 `x-frame-options: DENY` and a `permissions-policy` disabling camera, microphone,
 geolocation, payment and USB. Everything except `/health` uses `cache-control:
-private, no-store, max-age=0`. The download page adds its own CSP
-(`default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri
-'none'; form-action 'none'; frame-ancestors 'none'`) and `x-robots-tag: noindex,
-nofollow, noarchive`.
+private, no-store, max-age=0`; public visibility does not make expiring links
+cacheable. Download pages add a script-blocking CSP (`default-src 'none';
+style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri
+'none'; form-action 'none'; frame-ancestors 'none'`). `/` and `/download` carry
+`x-robots-tag: index, follow`; `/download/<token>` remains `noindex, nofollow,
+noarchive`.
 
 ## Worker Authentication
 
@@ -155,8 +172,9 @@ Two distinct levels, and they never overlap.
 | Install page | `handleStableDownloadPage` | `DOWNLOAD_ACCESS_TOKEN` | final `/download/<token>` path segment | Stable human-facing install page; token is compared in constant time and never rendered into the HTML. |
 | Admin | `isAdminAuthorized` | `ADMIN_API_KEY` | `x-api-key` | `POST /api/v1/admin/releases` |
 
-`/download` and `/download/latest.exe` use neither — they are authorised by the
-signed link alone. `/download/<token>` is the persistent private entry point:
+`/` and `/download` are intentionally public but still require `secretsReady`
+because their installer CTA must be signed. `/download/latest.exe` is authorised
+only by its signed link. `/download/<token>` is the persistent private entry point:
 it validates `DOWNLOAD_ACCESS_TOKEN` directly, then creates a fresh signed
 binary URL without echoing the token into the HTML. The tokenized URL remains
 valid until that Worker secret is rotated, so it belongs in a private bookmark,
@@ -173,10 +191,10 @@ regardless of how much of the secret matched, and leaks nothing through length.
 
 **`secretsReady(env)`** requires all three of `DOWNLOAD_ACCESS_TOKEN`,
 `SIGNING_SECRET` and `ADMIN_API_KEY` to be at least 32 characters. It is checked
-inside both auth helpers and at the top of `/download`, `/download/latest.exe`
-and `/health`. If any secret is absent or short, the Worker serves 404 on every
-route and 503 `degraded` on `/health` — it never serves a release with a weak
-key, and it never explains why.
+inside both auth helpers and at the top of `/`, `/download`,
+`/download/latest.exe` and `/health`. If any secret is absent or short, the
+Worker serves 404 on every release route and 503 `degraded` on `/health` — it
+never serves a release with a weak key, and it never explains why.
 
 ## Signed Download Links
 
@@ -185,7 +203,7 @@ payloads, base64url-encoded without padding:
 
 | Link | Signed payload | Path checked |
 | --- | --- | --- |
-| Download page | `page\n<expires>` | `/download` |
+| Download page | `page\n<expires>` | `/download` (wire compatibility; the page is now public) |
 | Installer | `binary\n<release.id>\n<expires>` | `/download/latest.exe` |
 
 Because the binary payload includes the release id, a link signed for one release
@@ -208,11 +226,12 @@ the signature is even checked. `verifySignedValue` then rejects an empty
 signature or one longer than 100 characters, and otherwise compares in constant
 time.
 
-The signed `/download` page re-signs the installer link using **the same
-`expires` it was handed**, so opening that page never extends the window. The
-stable `/download/<token>` page instead mints a new expiry and binary signature
-on every load. This makes the page bookmarkable while keeping every actual R2
-installer link short-lived.
+The manifest retains a signed `/download` URL because existing desktop clients
+validate that exact schema, origin and query shape. The route itself is public and
+ignores the legacy page signature; every visit to `/` or `/download` mints a new
+installer expiry and signature. `/download/<token>` does the same only after its
+constant-time token check. Every actual R2 installer link therefore remains
+short-lived even though the landing page is public and bookmarkable.
 
 ## Range Serving
 
@@ -730,7 +749,7 @@ signed link inside an older result may already have expired.
 - **The download page is built by string concatenation.** Every D1-sourced value
   in [page.ts](../../cloudflare/src/page.ts) goes through `escapeHtml` by hand;
   there is no template engine. A new field added to that page must be escaped
-  explicitly, and `tests/cloudflare-release.test.ts` has a case for it.
+  explicitly, and `cloudflare/tests/worker.test.ts` has a case for it.
 - **Nothing verifies the downloaded file's checksum.** The manifest carries
   `sha256`, the page displays it, the binary response echoes it as
   `x-checksum-sha256`, and the client validates that it is 64 hex characters —
