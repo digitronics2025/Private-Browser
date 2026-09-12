@@ -121,7 +121,8 @@ why the chrome reserves that strip itself.
 A tab has two halves. The persisted half lives in `StateStore` (id, workspaceId,
 title, url, isHome). The runtime half lives in `runtimeTabs: Map<string, RuntimeTab>`
 and holds the `WebContentsView` plus `loading`, `canGoBack`, `canGoForward`,
-`favicon`, `developerToolsOpen`, and bounded developer diagnostic rings. The
+`favicon`, `developerToolsOpen`, bounded developer diagnostic rings, and the
+current navigation's automatic-fill attempt state. The
 constructor seeds one empty runtime entry per persisted tab, so none of that
 runtime state survives a restart.
 `getSnapshot()` merges the two halves for the wire.
@@ -135,13 +136,19 @@ is why back, forward, reload and stop silently do nothing there.
 `did-navigate-in-page`, `page-title-updated` (which calls `event.preventDefault()`
 so the OS window title never follows the page), `page-favicon-updated`,
 `before-input-event`, and `render-process-gone` (which only clears `loading`).
+`did-finish-load` also schedules exact-origin MyVault fill attempts immediately
+and after short delays so client-rendered login forms can appear. The fill path
+rechecks active tab, navigation generation, Account Space, workspace, HTTPS
+origin, certificate state and vault lock state before any isolated-world injection.
 
 Ordering matters in the three switchers:
 
 - `newTab` calls `hideAllViews()` **before** pushing the tab and setting it active,
   then broadcasts, then navigates if a URL was given.
 - `activateTab` and `switchWorkspace` both hide everything, update the store, then
-  call `showActiveTab()`.
+  call `showActiveTab()`. Showing an already-loaded tab schedules the same guarded
+  automatic-fill check, which also makes unlocking MyVault on an open login page
+  behave like Chrome without requiring a reload.
 
 `closeTab` picks the successor as `siblings[Math.min(closedIndex, siblings.length - 1)]`,
 removes the child view from `window.contentView`, closes its webContents, deletes
