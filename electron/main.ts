@@ -50,7 +50,8 @@ import { MyVaultDiskStore } from './myvault/vault-store.js';
 import { SecureVaultDialogs } from './myvault/secure-dialog.js';
 import type { ConfirmDeleteDialogValue, EditLoginDialogValue, UnlockDialogValue } from './myvault/secure-dialog-contract.js';
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
-import { fillLoginInIsolatedWorld } from './myvault/isolated-fill.js';
+import { captureLoginInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape } from './myvault/isolated-fill.js';
+import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
@@ -615,6 +616,7 @@ class BrowserController {
   }
 
   async prepareAiPreview(): Promise<AiPagePreview> {
+    if (!workspaceVaultPolicy(this.store.get().activeWorkspaceId).aiExtraction) throw new Error('AI extraction is disabled in this workspace');
     this.pruneAiCapabilities();
     const state = this.store.get();
     const tab = this.activeTab(state);
@@ -699,7 +701,7 @@ class BrowserController {
 
   listVault() {
     const status = this.vault.status();
-    const items = status.lifecycle === 'unlocked'
+    const items = status.lifecycle === 'unlocked' && this.activeVaultPolicy().vaultSurface
       ? this.vault.searchMetadata().map((item) => ({ ...item, label: item.title, url: item.url ?? '' }))
       : [];
     return {
@@ -720,6 +722,7 @@ class BrowserController {
   }
 
   async requestVaultUnlock() {
+    this.assertVaultSurface();
     const value = await this.secureDialogs.open('unlock') as UnlockDialogValue | undefined;
     if (!value) return this.listVault();
     await this.vault.unlock(value.password);
@@ -737,6 +740,8 @@ class BrowserController {
   }
 
   async openVaultEditor(origin?: string) {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.saveCapture) throw new Error('Saving passwords is disabled in this workspace');
     const value = await this.secureDialogs.open('edit-login', origin) as EditLoginDialogValue | undefined;
     if (!value) return undefined;
     const result = await this.vault.saveLogin({
@@ -751,6 +756,7 @@ class BrowserController {
   }
 
   async requestVaultDelete(id: string): Promise<boolean> {
+    this.assertVaultSurface();
     const value = await this.secureDialogs.open('confirm-delete') as ConfirmDeleteDialogValue | undefined;
     if (!value?.confirmed) return false;
     const removed = await this.vault.deleteEntry(id);
@@ -765,11 +771,15 @@ class BrowserController {
   }
 
   copyPassword(id: string): void {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Password clipboard is disabled in this workspace');
     this.copySensitiveValue(this.vault.resolveSecretForTrustedOperation(id, 'password'));
     this.addPrivacyEvent('vault', 'Password copied', 'Clipboard clears automatically after 30 seconds');
   }
 
   copyTotp(id: string): { secondsRemaining: number } {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Vault clipboard is disabled in this workspace');
     const now = Math.floor(Date.now() / 1000);
     const code = generateTotp(this.vault.resolveSecretForTrustedOperation(id, 'totp-secret'), now);
     this.copySensitiveValue(code);
@@ -784,7 +794,14 @@ class BrowserController {
   }
 
   async autofill(id: string): Promise<void> {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.manualFill) throw new Error('Vault fill is disabled in this workspace');
     const initial = this.currentFillContext();
+    if (policy.requireFillConfirmation) {
+      const approval = await this.secureDialogs.open('confirm-fill', initial.origin) as ConfirmDeleteDialogValue | undefined;
+      if (!approval?.confirmed) return;
+      if (JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) throw new Error('Vault fill expired because the page context changed');
+    }
     const capability = this.fillCapabilities.issue(initial, id, 'fill-login');
     this.fillCapabilities.redeem(capability, this.currentFillContext(), id, 'fill-login');
     const match = this.vault.searchMetadata('', initial.origin).find((entry) => entry.id === id);
@@ -799,7 +816,35 @@ class BrowserController {
     this.addPrivacyEvent('vault', 'Credential autofilled', new URL(initial.origin).hostname);
   }
 
+  async inspectVaultFormShape() {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.saveCapture) return { hasUsername: false, hasPassword: false };
+    const contents = this.activeContents();
+    if (!contents) return { hasUsername: false, hasPassword: false };
+    return inspectLoginFormShape(contents);
+  }
+
+  async requestSaveFromPage() {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.saveCapture) throw new Error('Password capture is disabled in this workspace');
+    const initial = this.currentFillContext();
+    const capability = this.fillCapabilities.issue(initial, 'page-capture', 'capture-login');
+    this.fillCapabilities.redeem(capability, this.currentFillContext(), 'page-capture', 'capture-login');
+    const contents = this.activeContents();
+    if (!contents) throw new Error('Open a login page first');
+    const captured = await captureLoginInIsolatedWorld(contents);
+    if (JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) throw new Error('Password capture expired because the page context changed');
+    const approval = await this.secureDialogs.open('confirm-capture', `${initial.origin} — ${captured.username || 'No username detected'}`) as ConfirmDeleteDialogValue | undefined;
+    if (!approval?.confirmed) return undefined;
+    const current = this.vault.searchMetadata('', initial.origin).find((entry) => entry.username === captured.username);
+    const saved = await this.vault.saveLogin({ id: current?.id, title: new URL(initial.origin).hostname, url: initial.origin, username: captured.username, password: captured.password });
+    this.addPrivacyEvent('vault', current ? 'MyVault login updated' : 'MyVault login saved', initial.origin);
+    return { ...saved, label: saved.title, url: saved.url ?? '' };
+  }
+
   copyGeneratedCredential(kind: GeneratedCredentialKind): void {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Credential clipboard is disabled in this workspace');
     if (!['password', 'passphrase', 'pin'].includes(kind)) throw new Error('Unsupported generator type');
     this.copySensitiveValue(this.vault.generateCredential(kind));
     this.addPrivacyEvent('vault', 'Generated credential copied', 'Generated by the broker; clipboard auto-clear enabled');
@@ -883,6 +928,14 @@ class BrowserController {
       if (runtime.view?.webContents.id === webContentsId) runtime.certificateError = true;
     }
     this.fillCapabilities.invalidateAll();
+  }
+
+  private activeVaultPolicy() {
+    return workspaceVaultPolicy(this.store.get().activeWorkspaceId);
+  }
+
+  private assertVaultSurface(): void {
+    if (!this.activeVaultPolicy().vaultSurface) throw new Error('MyVault is unavailable in this workspace');
   }
 
   private currentFillContext(): FillContext {
@@ -1388,6 +1441,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:request-unlock', () => controller!.requestVaultUnlock());
   handle('vault:lock', () => controller!.lockVault());
   handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
+  handle('vault:form-shape', () => controller!.inspectVaultFormShape());
+  handle('vault:save-from-page', () => controller!.requestSaveFromPage());
   handle('vault:request-delete', (_event, id: string) => controller!.requestVaultDelete(id));
   handle('vault:acknowledge-recovery', () => controller!.acknowledgeVaultRecovery());
   handle('vault:copy-password', (_event, id: string) => controller!.copyPassword(id));

@@ -255,7 +255,7 @@ export default function App() {
           {activeTab.securityWarning && <span className="security-warning" title={activeTab.securityWarning === 'idn' ? 'Internationalized domain: verify this address carefully' : 'Connection is not encrypted'}>{activeTab.securityWarning === 'idn' ? 'Check domain' : 'Not secure'}</span>}
           {!activeTab.isHome && <span className="address-domain">{domainFromUrl(activeTab.url)}</span>}
         </form>
-        <button className={`icon-button ${sidebarMode === 'vault' && sidebarOpen ? 'selected' : ''}`} aria-label="Open MyVault" title="MyVault" onClick={() => { setSidebarMode('vault'); setSidebarOpen(true); }}><KeyRound size={18} /></button>
+        {state.activeWorkspaceId !== 'development' && <button className={`icon-button ${sidebarMode === 'vault' && sidebarOpen ? 'selected' : ''}`} aria-label="Open MyVault" title="MyVault" onClick={() => { setSidebarMode('vault'); setSidebarOpen(true); }}><KeyRound size={18} /></button>}
         <button className={`icon-button ${bookmarked ? 'selected' : ''}`} title="Bookmark" onClick={() => void act(() => window.privateBrowser.toggleBookmark())}><Star size={17} fill={bookmarked ? 'currentColor' : 'none'} /></button>
         <button className={`icon-button shield-button ${state.trackerBlocking ? 'selected' : ''}`} title="Tracker blocking" onClick={() => void act(() => window.privateBrowser.toggleTrackerBlocking(), state.trackerBlocking ? 'Tracker blocking paused' : 'Tracker blocking enabled')}><Shield size={18} /></button>
         <button className={`icon-button ${sidebarMode === 'developer' && sidebarOpen ? 'selected' : ''}`} title="Developer cockpit" onClick={() => { setSidebarMode('developer'); setSidebarOpen(true); }}><Code2 size={18} /></button>
@@ -276,7 +276,7 @@ export default function App() {
             <div className="sidebar-content">
               {sidebarMode === 'assistant' && <AssistantPanel onToast={showToast} />}
               {sidebarMode === 'developer' && <DeveloperPanel activeTab={activeTab} onToast={showToast} />}
-              {sidebarMode === 'vault' && <VaultPanel activeOrigin={activeTab.isHome ? undefined : activeTab.url} onOpenFull={() => setVaultFullOpen(true)} onToast={showToast} />}
+              {sidebarMode === 'vault' && (state.activeWorkspaceId === 'development' ? <EmptyState icon={KeyRound} text="MyVault is isolated from the Development workspace." /> : <VaultPanel workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onOpenFull={() => setVaultFullOpen(true)} onToast={showToast} />)}
               {sidebarMode === 'automations' && <AutomationPanel onToast={showToast} />}
               {sidebarMode === 'downloads' && <DownloadsPanel state={state} onToast={showToast} />}
               {sidebarMode === 'privacy' && <PrivacyPanel state={state} />}
@@ -286,7 +286,7 @@ export default function App() {
         </aside>
       )}
 
-      {vaultFullOpen && <div className="vault-full-overlay" role="dialog" aria-modal="true" aria-label="MyVault metadata"><div className="vault-full-shell"><button className="icon-button vault-full-close" aria-label="Close full MyVault view" onClick={() => setVaultFullOpen(false)}><X size={18} /></button><VaultPanel activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></div></div>}
+      {vaultFullOpen && <div className="vault-full-overlay" role="dialog" aria-modal="true" aria-label="MyVault metadata"><div className="vault-full-shell"><button className="icon-button vault-full-close" aria-label="Close full MyVault view" onClick={() => setVaultFullOpen(false)}><X size={18} /></button><VaultPanel workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></div></div>}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.kind === 'error' ? <X size={15} /> : <Check size={15} />} {toast.text}</div>}
     </div>
@@ -650,17 +650,19 @@ function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 
   );
 }
 
-function VaultPanel({ activeOrigin, onOpenFull, onToast }: { activeOrigin?: string; onOpenFull?: () => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+function VaultPanel({ workspaceId, activeOrigin, onOpenFull, onToast }: { workspaceId: WorkspaceId; activeOrigin?: string; onOpenFull?: () => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [items, setItems] = useState<VaultItemMeta[]>([]);
   const [status, setStatus] = useState<VaultStatus>({ available: true, items: [] });
   const [query, setQuery] = useState('');
   const [secondsRemaining, setSecondsRemaining] = useState(30 - (Math.floor(Date.now() / 1000) % 30));
+  const [formShape, setFormShape] = useState({ hasUsername: false, hasPassword: false });
   const load = async () => {
     try { const result = await window.privateBrowser.listVault(); setItems(result.items); setStatus(result); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   useEffect(() => { void load(); return window.privateBrowser.onVaultState(() => void load()); }, []);
   useEffect(() => { const timer = window.setInterval(() => setSecondsRemaining(30 - (Math.floor(Date.now() / 1000) % 30)), 1000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => { if (activeOrigin && workspaceId !== 'banking') void window.privateBrowser.inspectVaultFormShape().then(setFormShape).catch(() => setFormShape({ hasUsername: false, hasPassword: false })); else setFormShape({ hasUsername: false, hasPassword: false }); }, [activeOrigin, workspaceId]);
   const copyPassword = async (id: string) => {
     try { await window.privateBrowser.copyPassword(id); onToast('Password copied; clipboard clears in 30 seconds'); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
@@ -672,6 +674,7 @@ function VaultPanel({ activeOrigin, onOpenFull, onToast }: { activeOrigin?: stri
   const unlock = async () => { try { const result = await window.privateBrowser.requestVaultUnlock(); setStatus(result); setItems(result.items); } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
   const lock = async () => { const result = await window.privateBrowser.lockVault(); setStatus(result); setItems([]); };
   const add = async () => { try { const result = await window.privateBrowser.openVaultEditor(activeOrigin); if (result) { await load(); onToast('Login encrypted in MyVault'); } } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
+  const saveFromPage = async () => { try { const result = await window.privateBrowser.requestSaveFromPage(); if (result) { await load(); onToast('Captured login encrypted in MyVault'); } } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
   const visibleItems = items.filter((item) => [item.label, item.username, item.url].some((value) => value.toLocaleLowerCase().includes(query.toLocaleLowerCase())));
   return (
     <div className="side-panel">
@@ -681,14 +684,15 @@ function VaultPanel({ activeOrigin, onOpenFull, onToast }: { activeOrigin?: stri
       {status.lifecycle === 'recovery-required' && <button className="recovery-button" onClick={() => void window.privateBrowser.acknowledgeVaultRecovery().then((result) => { setStatus(result); setItems(result.items); })}>Keep recovery copy and continue</button>}
       {status.lifecycle === 'locked' && <button className="primary-button full" onClick={() => void unlock()}><LockKeyhole size={16} /> Unlock in secure window</button>}
       {status.lifecycle === 'unlocked' && <div className="credential-actions"><button className="primary-button" onClick={() => void add()}><Plus size={16} /> Add login</button><button onClick={() => void lock()}><LockKeyhole size={14} /> Lock</button></div>}
-      {status.lifecycle === 'unlocked' && <><label className="vault-search"><Search size={14} /><input aria-label="Search MyVault metadata" placeholder="Search logins" value={query} onChange={(event) => setQuery(event.target.value)} /></label><div className="credential-actions"><button onClick={() => void window.privateBrowser.copyGeneratedCredential('password').then(() => onToast('Generated password copied'))}>Password</button><button onClick={() => void window.privateBrowser.copyGeneratedCredential('passphrase').then(() => onToast('Generated passphrase copied'))}>Passphrase</button><button onClick={() => void window.privateBrowser.copyGeneratedCredential('pin').then(() => onToast('Generated PIN copied'))}>PIN</button></div></>}
+      {status.lifecycle === 'unlocked' && formShape.hasPassword && <button className="primary-button full" onClick={() => void saveFromPage()}><ShieldCheck size={15} /> {formShape.hasUsername ? 'Save or update this login' : 'Save password from this page'}</button>}
+      {status.lifecycle === 'unlocked' && <><label className="vault-search"><Search size={14} /><input aria-label="Search MyVault metadata" placeholder="Search logins" value={query} onChange={(event) => setQuery(event.target.value)} /></label>{workspaceId !== 'banking' && <div className="credential-actions"><button onClick={() => void window.privateBrowser.copyGeneratedCredential('password').then(() => onToast('Generated password copied'))}>Password</button><button onClick={() => void window.privateBrowser.copyGeneratedCredential('passphrase').then(() => onToast('Generated passphrase copied'))}>Passphrase</button><button onClick={() => void window.privateBrowser.copyGeneratedCredential('pin').then(() => onToast('Generated PIN copied'))}>PIN</button></div>}</>}
       <div className="credential-list">
         {visibleItems.map((item) => <div className="credential-card" key={item.id}>
           <div className="credential-top"><span className="site-badge">{item.label.slice(0, 1).toUpperCase()}</span><div><strong>{item.label}</strong><small>{domainFromUrl(item.url)} · {item.username}</small></div></div>
           <div className="credential-actions">
             <button onClick={() => void window.privateBrowser.autofill(item.id).then(() => onToast('Credential filled')).catch((error) => onToast(error.message, 'error'))}><Zap size={14} /> Fill</button>
-            <button onClick={() => void copyPassword(item.id)}><Copy size={14} /> Password</button>
-            {item.hasTotp && <button onClick={() => void copyTotp(item.id)}><Clock3 size={14} /> Code {secondsRemaining}s</button>}
+            {workspaceId !== 'banking' && <button onClick={() => void copyPassword(item.id)}><Copy size={14} /> Password</button>}
+            {workspaceId !== 'banking' && item.hasTotp && <button onClick={() => void copyTotp(item.id)}><Clock3 size={14} /> Code {secondsRemaining}s</button>}
             <button className="danger" title="Delete" onClick={() => void window.privateBrowser.requestVaultDelete(item.id).then(load)}><Trash2 size={14} /></button>
           </div>
         </div>)}

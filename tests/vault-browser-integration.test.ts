@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from '../electron/myvault/fill-capability';
+import { workspaceVaultPolicy } from '../electron/myvault/workspace-policy';
 
 const context: FillContext = { webContentsId: 4, tabId: 'tab-a', navigationGeneration: 2, workspaceId: 'personal', origin: 'https://example.test' };
 
@@ -35,5 +36,29 @@ describe('isolated-world fill source', () => {
     expect(source).toContain('executeJavaScriptInIsolatedWorld');
     expect(source).toContain('autocomplete="username"');
     expect(source).toContain('autocomplete="one-time-code"');
+  });
+
+  it('captures only after an explicit intent and excludes card and OTP autocomplete fields', () => {
+    const source = readFileSync(new URL('../electron/myvault/isolated-fill.ts', import.meta.url), 'utf8');
+    expect(source).toContain("'cc-number','cc-csc','cc-exp','one-time-code'");
+    expect(source).not.toMatch(/addEventListener\(['"]submit/);
+    expect(source).not.toMatch(/querySelectorAll\(['"]input['"]\)/);
+  });
+});
+
+describe('central workspace vault policy', () => {
+  it('hard-disables Banking extraction, capture, DevTools, extensions, and password clipboard', () => {
+    expect(workspaceVaultPolicy('banking')).toEqual({
+      vaultSurface: true, manualFill: true, saveCapture: false, passwordClipboard: false,
+      requireFillConfirmation: true, aiExtraction: false, devTools: false, extensions: false, passkeys: false,
+    });
+  });
+
+  it('isolates all vault operations from Development while preserving DevTools', () => {
+    expect(workspaceVaultPolicy('development')).toMatchObject({ vaultSurface: false, manualFill: false, saveCapture: false, passwordClipboard: false, devTools: true, passkeys: false });
+  });
+
+  it.each(['digitronics', 'tenten', 'personal'] as const)('allows deliberate fill/save defaults in %s', (workspace) => {
+    expect(workspaceVaultPolicy(workspace)).toMatchObject({ vaultSurface: true, manualFill: true, saveCapture: true, passwordClipboard: true, requireFillConfirmation: false });
   });
 });
