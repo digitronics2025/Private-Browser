@@ -2,7 +2,7 @@
 system: chrome-import
 sources:
   - electron/chrome-importer.ts
-verified_at: 1e9a38cd
+verified_at: f7520fcf
 ---
 
 # Chrome Import

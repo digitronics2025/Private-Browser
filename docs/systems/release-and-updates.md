@@ -8,7 +8,7 @@ sources:
   - .github/workflows/**
   - electron/update-service.ts
   - electron/update-bootstrap.ts
-verified_at: f6f0c96
+verified_at: f7520fcf
 ---
 
 # Release and Updates

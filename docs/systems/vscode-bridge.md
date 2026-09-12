@@ -4,7 +4,7 @@ sources:
   - electron/vscode-bridge.ts
   - packages/bridge-protocol/**
   - vscode-extension/**
-verified_at: 1e9a38cd
+verified_at: f7520fcf
 ---
 
 # VS Code Bridge

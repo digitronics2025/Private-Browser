@@ -5,7 +5,7 @@ sources:
   - src/styles.css
   - src/preview-api.ts
   - index.html
-verified_at: f6f0c96
+verified_at: 71b50ac
 ---
 
 # Renderer UI
@@ -183,6 +183,10 @@ and destructive deletion confirmation. Backup upload is unavailable until the
 one-time recovery code has been verified. Recovery and exact-origin permission
 dialogs are trusted renderer overlays; the main process hides native page views
 while they are open and focus is restored on close.
+
+The Chrome import wizard lists Account Spaces only from the active workspace and
+disables bookmark/history import entirely in Banking. The selected opaque ID is
+sent with the workspace ID so the main process can reject mismatched ownership.
 
 `src/preview-api.ts` exists only under Vite development mode and supplies
 credential-free data for visible review and browser E2E. Production Electron

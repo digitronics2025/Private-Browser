@@ -56,8 +56,8 @@ This log tracks the approved secure multi-Google-account Account Spaces implemen
 [STEP] 10.1 — Merge canonical Account Spaces and boundary documentation — done
 [STEP] 10.2 — Run two security and same-pattern review passes — done
 [STEP] 10.3 — Pass the full repository gate and build a runnable 0.4.0 installer — done
-[STEP] 10.4 — Integrate upstream Chrome migration, bookmark hierarchy and VS Code bridge without weakening Account Space isolation — in progress
-[STEP] 10.5 — Push, merge, publish and verify release artifacts — pending
+[STEP] 10.4 — Integrate upstream Chrome migration, bookmark hierarchy and VS Code bridge without weakening Account Space isolation — done
+[STEP] 10.5 — Push, merge, publish and verify release artifacts — in progress
 
 ## Upstream systems incorporated
 
@@ -66,3 +66,13 @@ The authenticated Private Browser VS Code bridge, private extension, project ada
 ## External verification boundary
 
 No real OAuth credential, token, cookie, or private account data will be inspected, committed, logged, or captured. Live Google consent remains conditional on a privately configured Desktop OAuth client ID; all implementation, mocked verification, isolation checks, packaging, and non-Google behavior are in scope now.
+
+## Combined local audit
+
+- Full repository gate: passed after upstream integration — 163 desktop tests, 7 protocol tests, 6 extension tests, 16 Worker tests, 5 browser/Electron UI flows, and 2 real Electron partition tests.
+- Documentation guard: 11 canonical docs, 0 failures, 0 warnings.
+- Secret scan and dependency audit: clean; 0 high/critical vulnerabilities.
+- Production renderer bundle: 69.73 KB gzip.
+- Packaged app: clean-profile launch stayed alive with its VS Code bridge started fail-closed.
+- Installer: `Private-Browser-0.4.0-Setup.exe`, 115,468,752 bytes, SHA-256 `CC667F379A00C2400D662A50DC42686AA87CC3D48A2A0ECAB793F7DD30F98F70`.
+- Private VSIX: `private-browser-bridge-0.4.0.vsix`, 346,742 bytes, SHA-256 `961C2A6BAB5856FB8150AB17CC60C6B8D396454DF8F44D95D60D624E5A67EF36`.
