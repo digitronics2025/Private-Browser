@@ -2,7 +2,7 @@
 system: ai-consent
 sources:
   - electron/ai-provider.ts
-verified_at: f61b0208
+verified_at: 1e9a38cd
 ---
 
 # AI Consent
