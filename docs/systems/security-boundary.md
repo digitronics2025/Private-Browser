@@ -2,7 +2,7 @@
 system: security-boundary
 sources:
   - electron/security.ts
-verified_at: 356e187c
+verified_at: 717bb50e
 ---
 
 # Security Boundary

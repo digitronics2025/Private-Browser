@@ -2,7 +2,7 @@
 system: workspaces-and-state
 sources:
   - electron/state-store.ts
-verified_at: 356e187c
+verified_at: 717bb50e
 ---
 
 # Workspaces and Persisted State

@@ -4,7 +4,7 @@ sources:
   - electron/vault.ts
   - electron/clipboard-guard.ts
   - electron/myvault/**
-verified_at: 356e187c
+verified_at: 717bb50e
 ---
 
 # MyVault broker
