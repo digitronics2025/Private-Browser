@@ -545,7 +545,8 @@ export interface UpdateServiceInput {
 export interface UpdateServiceStatus {
   configured: boolean;
   currentVersion: string;
-  endpoint?: string;
+  source: 'public' | 'private';
+  endpoint: string;
   error?: 'configuration-corrupt' | 'os-encryption-unavailable';
 }
 

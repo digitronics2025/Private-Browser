@@ -102,10 +102,11 @@ plumbing in `electron/main.ts` ([browser-shell.md](browser-shell.md)), and
 Two deployables, one contract. The Worker
 (`private-browser-downloads`) stores release metadata in D1 and installers in R2.
 Its public landing page exposes the active stable release and five prior releases,
-then creates a fresh HMAC-signed installer URL; R2 itself remains private. The
-desktop app stores a separate client token encrypted at rest, calls `/update.json`
-on a schedule, and refuses any manifest that does not match a strict
-field-by-field contract. No release route is cacheable.
+then creates a fresh HMAC-signed installer URL; R2 itself remains private. Every
+desktop app can call the public read-only manifest to compare its installed
+version. An OS-encrypted client token remains an optional override for private
+deployments and calls `/update.json`. Both paths refuse manifests that do not
+match the same strict field-by-field contract. No release route is cacheable.
 
 ## Worker Routes
 
@@ -117,6 +118,7 @@ message and returns 500 `internal_error`.
 | --- | --- | --- | --- |
 | `/health` | GET, HEAD | none | 503 `{status:'degraded'}` if `secretsReady` is false or the D1 query throws. Otherwise 200 `{status:'ok', service, database:'ok', releaseReady}`, where `releaseReady` is whether the newest active release's R2 object exists. `cache-control: no-store`. |
 | `/` | GET, HEAD | none | `handlePublicDownloadPage`. Renders the canonical public page, current release, five previous stable releases and a freshly signed installer URL. |
+| `/api/v1/releases/public/latest` | GET, HEAD | none | `handlePublicLatest`. Returns the active stable signed manifest for installed-app version checks. Requires deployment secrets, returns 404 when no release exists, and never returns a client or administrator credential. |
 | `/api/v1/releases/latest` | GET, HEAD | client bearer | `handleLatest`. 404 on bad token or no release. Returns the signed manifest; HEAD returns the headers with no body. |
 | `/update.json` | GET, HEAD | client bearer | **The same handler.** This is the path the desktop client calls. |
 | `/api/v1/admin/releases` | POST | admin `x-api-key` | `handlePublish`. Registers a release. See below. |
@@ -172,8 +174,9 @@ Two distinct levels, and they never overlap.
 | Install page | `handleStableDownloadPage` | `DOWNLOAD_ACCESS_TOKEN` | final `/download/<token>` path segment | Stable human-facing install page; token is compared in constant time and never rendered into the HTML. |
 | Admin | `isAdminAuthorized` | `ADMIN_API_KEY` | `x-api-key` | `POST /api/v1/admin/releases` |
 
-`/` and `/download` are intentionally public but still require `secretsReady`
-because their installer CTA must be signed. `/download/latest.exe` is authorised
+`/`, `/download` and `/api/v1/releases/public/latest` are intentionally public but
+still require `secretsReady` because their installer links must be signed.
+`/download/latest.exe` is authorised
 only by its signed link. `/download/<token>` is the persistent private entry point:
 it validates `DOWNLOAD_ACCESS_TOKEN` directly, then creates a fresh signed
 binary URL without echoing the token into the HTML. The tokenized URL remains
@@ -576,14 +579,13 @@ leave a half-written config.
 | Method | Behaviour |
 | --- | --- |
 | `configure(input, currentVersion)` | Throws unless `safeStorage.isEncryptionAvailable()`. Normalises the endpoint, requires `isSafeUpdateEndpoint` (public HTTPS, root path, no query or hash), requires the token to be **32-1000 characters**, saves, returns status. |
-| `status(currentVersion)` | `configuration-corrupt` if the stored file could not be read, `os-encryption-unavailable` if the OS cannot encrypt, else `{configured, currentVersion, endpoint}`. **Never returns the access token.** |
+| `status(currentVersion)` | Always returns `{configured, currentVersion, source, endpoint}`. A usable private config sets `source: 'private'`; otherwise the pinned public endpoint is returned with `source: 'public'`. It also reports `configuration-corrupt` or `os-encryption-unavailable` without disabling public checks. **Never returns the access token.** |
 | `bootstrap(input, currentVersion)` | First-run seeding from the installer. Returns `true` (nothing to do) if already configured, corrupt, or `<file>.disabled` exists; `false` if the OS cannot encrypt; otherwise delegates to `configure()`, so every validation above still applies and an invalid bundled endpoint throws. |
 | `clear(currentVersion)` | Forgets the config, deletes the file, **and writes `<file>.disabled` (mode `0600`)** so the next launch does not silently re-seed from the installer. `configure()` deletes that sentinel again. |
 | `check(currentVersion)` | See below. |
 
-`normalizeEndpoint` trims, strips trailing slashes from the path, clears the
-query and fragment, and drops a trailing `/`, so the stored value is a bare
-origin and `${endpoint}/update.json` is always well-formed.
+`normalizeEndpoint` trims, strips trailing slashes, clears query and fragment,
+and produces the bare origin used with either `/update.json` or the public feed.
 
 `load()` treats **any** failure — encryption unavailable, decrypt failure, wrong
 `version`, an endpoint that no longer passes `isSafeUpdateEndpoint`, a token
@@ -635,8 +637,10 @@ committed.
 
 ### check()
 
-1. Throws if not configured.
-2. `fetch(`${endpoint}/update.json`)` with `authorization: Bearer <token>`,
+1. Selects the OS-encrypted private endpoint and `/update.json` when configured;
+   otherwise it selects the pinned production origin and
+   `/api/v1/releases/public/latest` without an authorization header.
+2. The private request uses `authorization: Bearer <token>`; both paths use
    `accept: application/json`, **`redirect: 'error'`** — a redirect is a failure,
    not a hop, so the bearer token can never be replayed to another origin — and
    `signal: AbortSignal.timeout(15_000)`.
@@ -704,10 +708,11 @@ themselves are never compared, so `0.3.0-beta.2` does not beat `0.3.0-beta.1`.
 - `setInterval(… , 24 * 60 * 60_000).unref()` — every 24 hours after that.
 - Both are `.unref()`ed, so neither keeps the Node event loop alive at shutdown.
 
-`checkForUpdatesInBackground` returns early if the service is unconfigured or the
-window is destroyed, swallows every error, and sends `updates:available` to the
-renderer only when the state is `available`. The explicit "Check now" button in
-Settings uses `checkForUpdates` instead, so a user who asks sees the real error.
+`checkForUpdatesInBackground` returns early only when the window is destroyed,
+swallows every error, and sends `updates:available` to the renderer only when the
+state is `available`. It runs for public checks even when no private service has
+been configured. The explicit action on the Updates page uses `checkForUpdates`
+instead, so a user who asks sees the real error.
 `openUpdatePage()` runs a **fresh** `check()` before opening the tab, because the
 signed link inside an older result may already have expired.
 
@@ -723,39 +728,18 @@ signed link inside an older result may already have expired.
 
 ## Gotchas
 
-- **`ReleaseManifest` is declared TWICE.** Once in
-  [types.ts](../../electron/types.ts) and once in
-  [protocol.ts](../../cloudflare/src/protocol.ts). They are structurally
-  identical today and they compile under two separate tsconfigs —
-  `tsconfig.electron.json` (rootDir `electron`) and `cloudflare/tsconfig.json`
-  (include `src/**`, `tests/**`) — and no file ever assigns one to the other. **No
-  compiler ever compares them.** The only thing that catches a drift is
-  `validateManifest` on the client, at runtime, in front of a user, where it
-  surfaces as "Invalid update manifest". Change one, change the other, and add
-  the case to `tests/update-service.test.ts`.
-- **The two validators duplicate rules by hand.** `validateReleaseInput` on the
-  Worker and `validateManifest` on the client both encode the semver regex, the
-  `.exe` filename regex with its `..` check, the 64-hex checksum, the 7-64 hex
-  commit sha and the 10 000-character notes cap. Two copies, no shared module,
-  and they run in different runtimes.
-- **`build_number` is `GITHUB_RUN_NUMBER`.** It is not derived from the version.
-  Because the D1 triggers key on it, resetting or lowering the Actions run
-  counter permanently locks that channel — nothing with a lower number can ever
-  become active again.
-- **`--keep-vars` is not optional.** Without it a `wrangler deploy` drops the
-  secrets installed by the previous run's `secret bulk` step, `secretsReady`
-  turns false, and the Worker starts answering 404 to everything with no error
-  anywhere except a 503 on `/health`.
-- **The download page is built by string concatenation.** Every D1-sourced value
-  in [page.ts](../../cloudflare/src/page.ts) goes through `escapeHtml` by hand;
-  there is no template engine. A new field added to that page must be escaped
-  explicitly, and `cloudflare/tests/worker.test.ts` has a case for it.
-- **Nothing verifies the downloaded file's checksum.** The manifest carries
-  `sha256`, the page displays it, the binary response echoes it as
-  `x-checksum-sha256`, and the client validates that it is 64 hex characters —
-  but the app opens the download page in a tab rather than downloading and
-  installing itself, so no code ever hashes the received bytes and compares. The
-  integrity story currently ends at "HTTPS plus a signed link".
-- **A weak secret produces silence, not an error.** Deploying with a 20-character
-  `SIGNING_SECRET` succeeds; the Worker then returns 404 for every route. Check
-  `/health` first when a working service goes dark.
+- **`ReleaseManifest` exists in both desktop `types.ts` and Worker `protocol.ts`.**
+  No compiler compares them; keep both aligned and cover drift in
+  `tests/update-service.test.ts`.
+- **The validators also duplicate rules.** `validateReleaseInput` and
+  `validateManifest` must agree on version, filename, checksum, commit and notes.
+- **`build_number` is `GITHUB_RUN_NUMBER`.** Lowering that counter locks the
+  channel because D1 rejects lower builds.
+- **`--keep-vars` is mandatory.** Omitting it drops dashboard secrets, making
+  release routes return 404 and `/health` return 503.
+- **The page is string-built.** Escape every new D1 value in `page.ts` and add a
+  Worker XSS test.
+- **Installer verification uses the latest in-memory manifest.** Matching `.exe`
+  downloads are hashed and mismatches cannot open; restart clears the expectation.
+- **Weak secrets fail silently on release routes.** Check `/health` first when
+  every route unexpectedly returns 404.

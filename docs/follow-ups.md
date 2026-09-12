@@ -153,19 +153,6 @@ node scripts/docs-find.mjs --history "<term from the entry>"
   `system:copy` channel writes up to 100,000 characters straight to the clipboard
   with no clear at all. Nothing stops a renderer panel from using the generic
   channel for something sensitive. Symbol: `copySensitiveValue`. *(2026-09-10)*
-## Update integrity
-
-- **The published SHA-256 is never compared against the bytes a user actually
-  receives.** `validateManifest` checks that the manifest carries a well-formed
-  64-character hex digest, and the download page displays it, but nothing in
-  `electron/` ever hashes a file: there is no `createHash` call in the desktop
-  code at all. `openUpdatePage` opens the signed download page in a tab and the
-  user fetches the installer through the browser, so the digest is decoration.
-  Integrity currently rests on TLS plus the expiring signed link. Closing this
-  means the app downloading the installer itself and hashing it before offering
-  to run it, which is a real feature rather than a patch. Symbol: `sha256`.
-  *(2026-09-10)*
-
 ---
 
 ## Owner decisions — not engineering debt

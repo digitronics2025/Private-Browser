@@ -330,7 +330,8 @@ The snapshot also truncates `history` to 100 and `privacyLog` to 50, and adds
 ### Updates
 
 - `UpdateServiceInput` — `endpoint`, `accessToken`.
-- `UpdateServiceStatus` — `configured`, `currentVersion`, `endpoint?`,
+- `UpdateServiceStatus` — `configured`, `currentVersion`,
+  `source: 'public' | 'private'`, `endpoint`,
   `error?: 'configuration-corrupt' | 'os-encryption-unavailable'`.
 - `ReleaseManifest` — `schemaVersion: 1`, `appId: 'private-browser'`, `version`,
   `buildNumber`, `channel: 'stable' | 'beta'`, `publishedAt`, `filename`,

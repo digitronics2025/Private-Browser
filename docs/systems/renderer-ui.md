@@ -113,7 +113,8 @@ All in [App.tsx](../../src/App.tsx).
 | `AutomationPanel` | The three hard-coded routines and the approval-boundary note | `running` (id of the routine in flight) |
 | `DownloadsPanel` | Download progress plus checksum and executable-risk warnings | none |
 | `PrivacyPanel` | Three summary tiles and the `state.privacyLog` feed | none |
-| `SettingsPanel` | Default browser, Chrome import wizard, bookmark-bar toggle, private downloads, security and about | update state plus Chrome profiles, options and result |
+| `SettingsPanel` | Default browser, Chrome import wizard, bookmark-bar toggle, app-update entry, security and about | update state plus Chrome profiles, options and result |
+| `UpdatesPage` | Dedicated installed-versus-latest comparison, release provenance, checksum, developer profile and optional private-service controls | update status, result, error, form and callbacks |
 | `EmptyState` | Icon + one line, used at five call sites across four panels | none |
 
 Module-level helpers: `domainFromUrl` (hostname minus `www.`, falls back to the
@@ -135,7 +136,7 @@ load runs each time the user switches to it.
 | `automations` | `newTab(workspaceId, url)` only |
 | `downloads` | `openDownload`, `showDownload` (the list itself comes from `state.downloads`) |
 | `privacy` | none — pure render of `state.trackerBlocking` and `state.privacyLog` |
-| `settings` | `getDefaultBrowserStatus`, `setDefaultBrowser`, `getUpdateService`, `configureUpdateService`, `clearUpdateService`, `checkForUpdates`, `openUpdatePage` |
+| `settings` | `getDefaultBrowserStatus`, `setDefaultBrowser`, `getUpdateService`, `configureUpdateService`, `clearUpdateService`, `checkForUpdates`, `openUpdatePage`, and `newTab` for the developer website |
 
 The always-mounted chrome (not a sidebar mode) calls `getState`, `setLayout`,
 `navigate`, `back`, `forward`, `reload`, `stop`, `newTab`, `closeTab`,
@@ -147,7 +148,7 @@ three Chrome import methods.
 does not receive raw page content or browser secrets.
 
 Nothing sensitive comes back: `configureAiProvider` and `configureUpdateService`
-return status objects (`configured`, `endpoint`, `model`, `error`), never the key
+return status objects (`configured`, `source`, `endpoint`, `model`, `error`), never the key
 or token that was submitted. The AI flow is two steps by design — `prepareAiPreview`
 reads the page locally, `approveAiPreview` returns a single-use token that `askAi`
 consumes, and the panel clears `approvalToken` immediately after asking.
@@ -352,14 +353,13 @@ preprocessor, no CSS modules. What a future editor needs:
   the sidebar is open. Keep them synchronized when changing chrome geometry.
 - **`PrivacyPanel` hard-codes `5` isolated spaces** instead of reading
   `state.workspaces.length`. Adding a workspace silently leaves it wrong.
-- **`SettingsPanel` falls back to a hard-coded version string** for the about
-  card when `updateStatus` has not loaded yet. It is not read from
-  `package.json`, so it goes stale on every version bump — and already has: the
-  0.3.0 → 0.3.1 release had to edit this literal by hand.
-- **The download button shows even when you are up to date.** It used to render
-  only when a newer version existed; it now always renders once the service is
-  configured, relabelled `Download page`. Both labels call the same
-  `openUpdatePage`, which opens the signed page in a Development-workspace tab.
+- **The Updates page checks on every mount.** Switching away from Settings
+  unmounts it, so returning issues another public or configured-private manifest
+  request. This is deliberate because signed links expire after 15 minutes.
+- **The release page stays available when the app is current.** The up-to-date
+  state uses `Check again` as its primary action and keeps `Release page` as a
+  secondary action. Both available and current flows call `openUpdatePage`, which
+  performs a fresh manifest check and opens the page in a Development tab.
 - **The "LOCAL SUMMARY" text is not AI output.** It is the `summary` `useMemo`:
   collapse whitespace, split on sentence endings, keep sentences longer than 35
   characters, join the first three. Nothing has left the machine at that point.

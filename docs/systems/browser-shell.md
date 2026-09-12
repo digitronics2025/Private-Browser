@@ -515,7 +515,9 @@ event each writes, and any shell-level decision embedded in them.
 Two shell-level details inside that last group belong here: `openUpdatePage`
 hard-codes the `development` workspace for the download page, and
 `checkForUpdatesInBackground` swallows every error on purpose so that only an
-explicit `updates:check` surfaces one.
+explicit `updates:check` surfaces one. Background checks now run against the
+public feed without requiring a configured private service; they return early
+only if the application window has already been destroyed.
 
 ## Key Behaviors and Non-Obvious Patterns
 

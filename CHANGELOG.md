@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.8 — 2026-09-12
+
+- Added a dedicated in-app Updates page that automatically compares the installed
+  version with the latest stable D1 release and clearly reports current,
+  available, loading and retryable-error states.
+- Added a public read-only latest-release manifest while retaining the existing
+  authenticated client routes as an encrypted private override.
+- Added release build, publication time, notes, source commit, SHA-256 and
+  developer details, plus a verified-download action that keeps installer links
+  short-lived and checks the downloaded file before it can be opened.
+
 ## 0.5.7 — 2026-09-12
 
 - Fixed Cloudflare human-verification compatibility by removing Electron and
