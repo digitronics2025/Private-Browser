@@ -2,7 +2,7 @@
 system: chrome-import
 sources:
   - electron/chrome-importer.ts
-verified_at: 7063e89
+verified_at: 659a016
 ---
 
 # Chrome Import
@@ -32,6 +32,9 @@ cross the preload bridge.
 5. Bookmark and history records are created with the explicitly selected opaque
    Account Space ID. The main process verifies that the ID belongs to the named
    non-Banking workspace, and deduplication includes the Account Space ID.
+6. Bookmark size validation and reading use one open file descriptor, so a path
+   swap cannot change the file between validation and parsing. History and its
+   optional WAL/SHM sidecars are copied directly and tolerate only `ENOENT`.
 
 ## Supported Data
 
