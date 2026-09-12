@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { testReportSchema, type TestReport } from '@private-browser/bridge-protocol';
 
@@ -54,7 +54,10 @@ export class ReportStore {
   }
 
   private async readReport(path: string): Promise<TestReport> {
-    if ((await stat(path)).size > MAX_REPORT_BYTES) throw new Error('Stored report is too large');
-    return testReportSchema.parse(JSON.parse(await readFile(path, 'utf8')) as unknown);
+    const file = await open(path, 'r');
+    try {
+      if ((await file.stat()).size > MAX_REPORT_BYTES) throw new Error('Stored report is too large');
+      return testReportSchema.parse(JSON.parse(await file.readFile('utf8')) as unknown);
+    } finally { await file.close(); }
   }
 }
