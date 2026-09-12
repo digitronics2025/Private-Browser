@@ -65,6 +65,33 @@ export interface AccountSpaceSummary {
   grantedScopes: string[];
 }
 
+export interface CreateAccountSpaceRequest {
+  workspaceId: WorkspaceId;
+  label: string;
+  color: AccountSpaceColor;
+}
+
+export interface UpdateAccountSpaceRequest {
+  accountSpaceId: AccountSpaceId;
+  label?: string;
+  color?: AccountSpaceColor;
+}
+
+export interface ReorderAccountSpacesRequest {
+  workspaceId: WorkspaceId;
+  accountSpaceIds: AccountSpaceId[];
+}
+
+export interface OpenInAccountSpaceRequest {
+  accountSpaceId: AccountSpaceId;
+  url: string;
+}
+
+export interface DeleteAccountSpaceRequest {
+  accountSpaceId: AccountSpaceId;
+  confirmation: 'DELETE_ACCOUNT_SPACE';
+}
+
 export interface AccountSpaceHealth {
   accountSpaceId: AccountSpaceId;
   status: GoogleConnectionStatus;

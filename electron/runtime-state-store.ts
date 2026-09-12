@@ -69,6 +69,69 @@ export class RuntimeStateStore {
     this.state.accountSpaces = [...this.records.values()].map((item) => this.accountStore.toSummary(item)).sort(accountSort);
   }
 
+  addAccount(record: AccountSpaceRecord): RuntimeBrowserStateV2 {
+    if (this.records.has(record.id)) throw new Error('Account Space already exists');
+    this.records.set(record.id, structuredClone(record));
+    try {
+      return this.update((state) => {
+        state.accountSpaces.push(this.accountStore.toSummary(record));
+        const tabId = randomUUID();
+        state.tabs.push({
+          id: tabId,
+          accountSpaceId: record.id,
+          workspaceId: record.workspaceId,
+          title: 'New tab',
+          url: 'private://home',
+          isHome: true,
+          loading: false,
+          canGoBack: false,
+          canGoForward: false,
+          developerToolsAllowed: false,
+          developerToolsOpen: false,
+        });
+        state.activeTabByAccountSpace[record.id] = tabId;
+        state.activeAccountSpaceByWorkspace[record.workspaceId] = record.id;
+        state.activeWorkspaceId = record.workspaceId;
+      });
+    } catch (error) {
+      this.records.delete(record.id);
+      throw error;
+    }
+  }
+
+  removeAccount(id: AccountSpaceId): RuntimeBrowserStateV2 {
+    const account = this.state.accountSpaces.find((candidate) => candidate.id === id);
+    if (!account) throw new Error('Account Space was not found');
+    const workspaceAccounts = this.state.accountSpaces.filter((candidate) => candidate.workspaceId === account.workspaceId);
+    if (workspaceAccounts.length <= 1) throw new Error('Create a replacement Account Space before removing the only one in this workspace');
+    const replacement = workspaceAccounts.find((candidate) => candidate.id !== id)!;
+    const result = this.update((state) => {
+      state.accountSpaces = state.accountSpaces.filter((candidate) => candidate.id !== id);
+      state.accountHealth = state.accountHealth.filter((health) => health.accountSpaceId !== id);
+      state.tabs = state.tabs.filter((tab) => tab.accountSpaceId !== id);
+      state.bookmarks = state.bookmarks.filter((bookmark) => bookmark.accountSpaceId !== id);
+      state.history = state.history.filter((entry) => entry.accountSpaceId !== id);
+      delete state.activeTabByAccountSpace[id];
+      if (state.activeAccountSpaceByWorkspace[account.workspaceId] === id) state.activeAccountSpaceByWorkspace[account.workspaceId] = replacement.id;
+    });
+    this.records.delete(id);
+    this.accountStore.remove(id);
+    return result;
+  }
+
+  reorder(workspaceId: WorkspaceId, ids: AccountSpaceId[]): RuntimeBrowserStateV2 {
+    const members = this.state.accountSpaces.filter((account) => account.workspaceId === workspaceId);
+    if (ids.length !== members.length || new Set(ids).size !== ids.length || members.some((account) => !ids.includes(account.id))) {
+      throw new Error('Reorder must contain every Account Space in exactly one workspace');
+    }
+    for (const [order, id] of ids.entries()) {
+      const record = this.accountStore.update(id, (account) => { account.order = order; });
+      this.records.set(id, record);
+    }
+    this.state.accountSpaces = [...this.records.values()].map((record) => this.accountStore.toSummary(record)).sort(accountSort);
+    return this.get();
+  }
+
   private persist(next: RuntimeBrowserStateV2): void {
     const manifest: BrowserStateManifestV2 = {
       version: 2,

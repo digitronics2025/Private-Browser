@@ -16,8 +16,12 @@ This log tracks the approved secure multi-Google-account Account Spaces implemen
 
 [START] System 3 — Runtime session isolation and lifecycle — 2026-09-12
 [STEP] 3.1 — Integrate v2 state and per-account partitions into BrowserController — done
-[STEP] 3.2 — Add lifecycle, lock, clear and removal guarantees — in progress
-[PENDING] System 4 — Exact-origin permissions
+[STEP] 3.2 — Add lifecycle, lock, clear and removal guarantees — done
+[DONE] System 3 — Runtime session isolation and lifecycle — 2026-09-12
+
+[START] System 4 — Exact-origin permissions — 2026-09-12
+[STEP] 4.1 — Add account/origin/capability decision engine — in progress
+[STEP] 4.2 — Wire site and download prompts into Electron sessions — pending
 [PENDING] System 5 — Secure Google OAuth
 [PENDING] System 6 — Google service modules and backup
 [PENDING] System 7 — Typed IPC and AI boundaries

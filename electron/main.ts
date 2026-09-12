@@ -11,6 +11,7 @@ import {
   session,
   shell,
   WebContentsView,
+  type DownloadItem,
   type IpcMainInvokeEvent,
   type Session,
 } from 'electron';
@@ -23,6 +24,7 @@ import { AccountStore } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
 import { RuntimeStateStore } from './runtime-state-store.js';
 import type {
+  AccountSpaceColor,
   AccountSpaceId,
   AiApproval,
   AiPagePreview,
@@ -44,6 +46,7 @@ import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
 import { IpcGuard } from './ipc-guard.js';
+import { clearAndVerifyAccountSession } from './account-session.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -98,6 +101,7 @@ const TRACKER_HOSTS = [
 class BrowserController {
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
   private readonly downloads = new Map<string, DownloadEntry>();
+  private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly configuredSessions = new Set<string>();
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
@@ -109,6 +113,7 @@ class BrowserController {
 
   constructor(
     private readonly store: RuntimeStateStore,
+    private readonly accounts: AccountStore,
     private readonly vault: VaultStore,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
@@ -336,6 +341,133 @@ class BrowserController {
       next.activeAccountSpaceByWorkspace[next.activeWorkspaceId] = accountSpaceId;
     });
     await this.showActiveTab();
+  }
+
+  async addLocalAccountSpace(workspaceId: WorkspaceId, label: string, color: AccountSpaceColor): Promise<void> {
+    const state = this.store.get();
+    if (!WORKSPACES.some((workspace) => workspace.id === workspaceId)) throw new Error('Unknown workspace');
+    const order = state.accountSpaces.filter((account) => account.workspaceId === workspaceId).length;
+    const record = this.accounts.createLocal({ workspaceId, label, color, order });
+    try {
+      this.hideAllViews();
+      this.store.addAccount(record);
+      await this.showActiveTab();
+    } catch (error) {
+      this.accounts.remove(record.id);
+      throw error;
+    }
+  }
+
+  updateAccountSpace(accountSpaceId: AccountSpaceId, label?: string, color?: AccountSpaceColor): void {
+    this.requireAccountMembership(accountSpaceId);
+    const record = this.accounts.update(accountSpaceId, (account) => {
+      if (label !== undefined) account.label = label;
+      if (color !== undefined) account.color = color;
+    });
+    this.store.refreshAccount(record);
+    this.broadcast();
+  }
+
+  reorderAccountSpaces(workspaceId: WorkspaceId, accountSpaceIds: AccountSpaceId[]): void {
+    if (workspaceId !== this.store.get().activeWorkspaceId) throw new Error('Only the active workspace can be reordered');
+    this.store.reorder(workspaceId, accountSpaceIds);
+    this.broadcast();
+  }
+
+  async openInAccountSpace(accountSpaceId: AccountSpaceId, value: string): Promise<void> {
+    const account = this.requireAccountMembership(accountSpaceId);
+    const url = normalizeNavigationInput(value);
+    if (url !== 'private://home' && !isAllowedRemoteUrl(url)) throw new Error('Only HTTP and HTTPS pages are allowed');
+    await this.newTab(account.workspaceId, url, accountSpaceId);
+  }
+
+  async setAccountSpaceLocked(accountSpaceId: AccountSpaceId, locked: boolean): Promise<void> {
+    this.requireAccountMembership(accountSpaceId);
+    if (locked) {
+      this.closeAccountViews(accountSpaceId);
+      this.cancelAccountOperations(accountSpaceId);
+      await session.fromPartition(this.store.partitionFor(accountSpaceId)).closeAllConnections();
+    }
+    const record = this.accounts.update(accountSpaceId, (account) => {
+      account.locked = locked;
+      account.googleConnection = locked ? 'locked' : account.refreshToken ? 'connected' : 'disconnected';
+    });
+    this.store.refreshAccount(record);
+    this.broadcast();
+    if (!locked) await this.showActiveTab();
+  }
+
+  disconnectGoogleAccount(accountSpaceId: AccountSpaceId): void {
+    this.requireAccountMembership(accountSpaceId);
+    this.cancelAccountOperations(accountSpaceId);
+    const record = this.accounts.disconnectGoogle(accountSpaceId);
+    this.store.refreshAccount(record);
+    this.addPrivacyEvent('vault', 'Google API disconnected', 'Local browsing data was retained');
+  }
+
+  async clearAccountSpaceData(accountSpaceId: AccountSpaceId): Promise<void> {
+    const account = this.requireAccountMembership(accountSpaceId);
+    this.closeAccountViews(accountSpaceId);
+    this.cancelAccountOperations(accountSpaceId);
+    const partition = this.store.partitionFor(accountSpaceId);
+    await clearAndVerifyAccountSession(session.fromPartition(partition));
+    this.store.update((state) => {
+      state.history = state.history.filter((entry) => entry.accountSpaceId !== accountSpaceId);
+      for (const tab of state.tabs.filter((candidate) => candidate.accountSpaceId === accountSpaceId)) {
+        tab.title = 'New tab';
+        tab.url = 'private://home';
+        tab.isHome = true;
+      }
+    });
+    this.addPrivacyEvent('vault', 'Account Space data cleared', `${account.label} website data and history were removed`);
+    await this.showActiveTab();
+  }
+
+  async deleteAccountSpace(accountSpaceId: AccountSpaceId, confirmation: string): Promise<void> {
+    if (confirmation !== 'DELETE_ACCOUNT_SPACE') throw new Error('Exact Account Space deletion confirmation is required');
+    const account = this.requireAccountMembership(accountSpaceId);
+    const state = this.store.get();
+    if (state.accountSpaces.filter((candidate) => candidate.workspaceId === account.workspaceId).length <= 1) {
+      throw new Error('Create a replacement Account Space before removing the only one in this workspace');
+    }
+    const partition = this.store.partitionFor(accountSpaceId);
+    this.closeAccountViews(accountSpaceId);
+    this.cancelAccountOperations(accountSpaceId);
+    await clearAndVerifyAccountSession(session.fromPartition(partition));
+    this.configuredSessions.delete(partition);
+    this.store.removeAccount(accountSpaceId);
+    await this.showActiveTab();
+  }
+
+  private requireAccountMembership(accountSpaceId: AccountSpaceId) {
+    const state = this.store.get();
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!account || account.workspaceId !== state.activeWorkspaceId) throw new Error('Account Space does not belong to the active workspace');
+    return account;
+  }
+
+  private closeAccountViews(accountSpaceId: AccountSpaceId): void {
+    const ids = new Set(this.store.get().tabs.filter((tab) => tab.accountSpaceId === accountSpaceId).map((tab) => tab.id));
+    for (const id of ids) {
+      const runtime = this.runtimeTabs.get(id);
+      if (runtime?.view) {
+        this.window.contentView.removeChildView(runtime.view);
+        runtime.view.webContents.close();
+      }
+      this.runtimeTabs.delete(id);
+    }
+    for (const key of [...this.faviconCache.keys()]) if (key.startsWith(`${accountSpaceId}:`)) this.faviconCache.delete(key);
+  }
+
+  private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
+    this.pendingAiPreviews.clear();
+    this.aiApprovals.clear();
+    for (const [id, item] of this.downloadItems) {
+      if (this.downloads.get(id)?.accountSpaceId !== accountSpaceId) continue;
+      item.cancel();
+      this.downloadItems.delete(id);
+      this.downloads.delete(id);
+    }
   }
 
   goBack(): void {
@@ -871,11 +1003,13 @@ class BrowserController {
         risk: downloadRisk(item.getFilename()),
       };
       this.downloads.set(id, entry);
+      this.downloadItems.set(id, item);
       item.on('updated', (_downloadEvent, state) => {
         Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state });
         this.broadcast();
       });
       item.once('done', (_downloadEvent, state) => {
+        this.downloadItems.delete(id);
         Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath() });
         this.broadcast();
         if (state !== 'completed') return;
@@ -1120,7 +1254,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     // convenience of first-launch enrolment is the cheaper failure.
     removeUpdateBootstrap(updateBootstrapPath);
   }
-  controller = new BrowserController(store, vault, aiProvider, updates);
+  controller = new BrowserController(store, accountStore, vault, aiProvider, updates);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -1133,6 +1267,14 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:activate-tab', (_event, id: string) => controller!.activateTab(id));
   handle('browser:switch-workspace', (_event, id: WorkspaceId) => controller!.switchWorkspace(id));
   handle('browser:switch-account-space', (_event, id: AccountSpaceId) => controller!.switchAccountSpace(id));
+  handle('accounts:add-local', (_event, workspaceId: WorkspaceId, label: string, color: AccountSpaceColor) => controller!.addLocalAccountSpace(workspaceId, label, color));
+  handle('accounts:update', (_event, id: AccountSpaceId, label?: string, color?: AccountSpaceColor) => controller!.updateAccountSpace(id, label, color));
+  handle('accounts:reorder', (_event, workspaceId: WorkspaceId, ids: AccountSpaceId[]) => controller!.reorderAccountSpaces(workspaceId, ids));
+  handle('accounts:open-in', (_event, id: AccountSpaceId, url: string) => controller!.openInAccountSpace(id, url));
+  handle('accounts:set-locked', (_event, id: AccountSpaceId, locked: boolean) => controller!.setAccountSpaceLocked(id, locked));
+  handle('accounts:disconnect-google', (_event, id: AccountSpaceId) => controller!.disconnectGoogleAccount(id));
+  handle('accounts:clear-data', (_event, id: AccountSpaceId) => controller!.clearAccountSpaceData(id));
+  handle('accounts:delete', (_event, id: AccountSpaceId, confirmation: string) => controller!.deleteAccountSpace(id, confirmation));
   handle('browser:set-layout', (_event, layout: Layout) => controller!.setLayout(layout));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
