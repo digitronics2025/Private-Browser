@@ -103,6 +103,21 @@ describe('Account Space runtime isolation', () => {
     expect(state.history.some((entry) => entry.id === 'crossed')).toBe(false);
   });
 
+  it('drops globally duplicated tab IDs before runtime views can alias across accounts', () => {
+    const store = runtimeFixture();
+    const first = accountId(IDS.digitronics);
+    const second = accountId(IDS.digitronicsSecond);
+    const existing = store.get().tabs.find((tab) => tab.accountSpaceId === first)!;
+    store.update((state) => {
+      state.tabs.push({ ...existing, accountSpaceId: second });
+      state.activeTabByAccountSpace[second] = existing.id;
+    });
+    const state = store.get();
+    expect(state.tabs.filter((tab) => tab.id === existing.id)).toHaveLength(1);
+    expect(state.tabs.some((tab) => tab.accountSpaceId === second)).toBe(true);
+    expect(state.activeTabByAccountSpace[second]).not.toBe(existing.id);
+  });
+
   it('refuses to cross a workspace when selecting an active account', () => {
     const store = runtimeFixture();
     store.update((state) => {

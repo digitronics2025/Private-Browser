@@ -1,6 +1,6 @@
 # Account Spaces Build Log
 
-This log tracks the approved secure multi-Google-account Account Spaces implementation. The detailed acceptance criteria and decision ledger live in [the implementation plan](docs/plans/secure-multi-google-account-spaces.md).
+This feature-oriented log tracks the approved secure multi-Google-account Account Spaces implementation. Detailed acceptance criteria and decision evidence live in [the implementation plan](docs/plans/secure-multi-google-account-spaces.md).
 
 [START] System 1 — Product direction and implementation ledger — 2026-09-12
 [STEP] 1.1 — Inspect repository, trust boundary, tests, documentation and release workflows — done
@@ -55,24 +55,20 @@ This log tracks the approved secure multi-Google-account Account Spaces implemen
 [START] System 10 — Upstream compatibility, audit, packaging and release — 2026-09-12
 [STEP] 10.1 — Merge canonical Account Spaces and boundary documentation — done
 [STEP] 10.2 — Run two security and same-pattern review passes — done
-[STEP] 10.3 — Pass the full repository gate and build a runnable 0.4.0 installer — done
-[STEP] 10.4 — Integrate upstream Chrome migration, bookmark hierarchy and VS Code bridge without weakening Account Space isolation — done
+[STEP] 10.3 — Pass the full repository gate and build a runnable installer — done
+[STEP] 10.4 — Integrate upstream Chrome import, bookmark hierarchy, VS Code bridge and MyVault without weakening Account Space isolation — in progress
 [STEP] 10.5 — Push, merge, publish and verify release artifacts — in progress
 
 ## Upstream systems incorporated
 
-The authenticated Private Browser VS Code bridge, private extension, project adapters, isolated Playwright checks, local reports, source handoff, reviewed AI edits, Chrome profile import, bookmark hierarchy, bookmark bar and password CSV import landed on `main` while this feature was in flight. They are retained. Chrome bookmark/history import now requires an explicit Account Space destination; the bridge remains Development-only and keeps its original fail-closed security model.
+The authenticated Private Browser VS Code bridge, private extension, project adapters, isolated Playwright checks, local reports, source handoff, reviewed AI edits, Chrome profile import, bookmark hierarchy, bookmark bar, password CSV migration and MyVault broker landed on `main` while this feature was in flight. They are retained. Chrome bookmark/history import requires an explicit Account Space destination. MyVault remains authoritative, is never copied into Google backup, and its internal passkey provider remains disabled behind the upstream release gate. Development-only and Banking-deny policies remain fail closed.
 
 ## External verification boundary
 
-No real OAuth credential, token, cookie, or private account data will be inspected, committed, logged, or captured. Live Google consent remains conditional on a privately configured Desktop OAuth client ID; all implementation, mocked verification, isolation checks, packaging, and non-Google behavior are in scope now.
+No real OAuth credential, token, cookie, or private account data is inspected, committed, logged, or captured. Live Google consent remains conditional on a privately configured Desktop OAuth client ID; all implementation, mocked verification, isolation checks, packaging, and non-Google behavior remain in scope.
 
 ## Combined local audit
 
-- Full repository gate: passed after upstream integration — 163 desktop tests, 7 protocol tests, 6 extension tests, 16 Worker tests, 5 browser/Electron UI flows, and 2 real Electron partition tests.
-- Documentation guard: 11 canonical docs, 0 failures, 0 warnings.
-- Secret scan and dependency audit: clean; 0 high/critical vulnerabilities.
-- Production renderer bundle: 69.73 KB gzip.
-- Packaged app: clean-profile launch stayed alive with its VS Code bridge started fail-closed.
-- Installer: `Private-Browser-0.4.0-Setup.exe`, 115,468,752 bytes, SHA-256 `CC667F379A00C2400D662A50DC42686AA87CC3D48A2A0ECAB793F7DD30F98F70`.
-- Private VSIX: `private-browser-bridge-0.4.0.vsix`, 346,742 bytes, SHA-256 `961C2A6BAB5856FB8150AB17CC60C6B8D396454DF8F44D95D60D624E5A67EF36`.
+- The earlier 0.4.0 integration gate passed 163 desktop tests, 7 protocol tests, 6 extension tests, 16 Worker tests, 5 browser/Electron UI flows, and 2 real Electron partition tests.
+- Documentation guard, secret scan and dependency audit were clean; the renderer bundle was 69.73 KB gzip.
+- The previous 0.4.0 installer and VSIX evidence is superseded by the 0.5.0 MyVault reconciliation and will be replaced after the combined revision passes every gate.

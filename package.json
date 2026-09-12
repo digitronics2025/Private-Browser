@@ -1,6 +1,6 @@
 {
   "name": "private-work-browser",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A private, workspace-first Chromium browser for daily business operations.",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -21,7 +21,7 @@
     "bridge:test": "npm run test --workspace @private-browser/bridge-protocol",
     "extension:compile": "npm run compile --workspace private-browser-bridge",
     "extension:test": "npm run test --workspace private-browser-bridge",
-    "extension:package": "npm run package --workspace private-browser-bridge",
+    "extension:package": "npm run bridge:build && npm run package --workspace private-browser-bridge",
     "extension:validate": "node scripts/stage-vsix.mjs --validate-only",
     "extension:stage": "node scripts/stage-vsix.mjs",
     "build": "npm run bridge:build && npm run typecheck && vite build && npm run electron:compile && npm run extension:compile",
@@ -29,7 +29,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run && npm run bridge:test && npm run extension:test && vitest run --config cloudflare/vitest.config.ts",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:headed": "npm run build && playwright test --headed",
     "test:electron": "npm run build && npm run test:electron:only",
     "test:electron:only": "node scripts/run-electron-tests.mjs",
     "worker:typecheck": "tsc -p cloudflare/tsconfig.json",
@@ -47,6 +48,7 @@
   "dependencies": {
     "@private-browser/bridge-protocol": "*",
     "google-auth-library": "^11.0.2",
+    "hash-wasm": "^4.12.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

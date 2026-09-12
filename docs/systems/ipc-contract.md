@@ -15,8 +15,8 @@ verified_at: f7520fcf
 
 **Scope.** The whole surface between the Electron main process and the React
 renderer: schema-validated channels spanning browser, Account Space, Google,
-backup, VS Code bridge, vault, AI and update groups, plus main-to-renderer event
-subscriptions, and every shared payload type. Defined in
+backup, VS Code bridge, metadata-only `vault:*` intents, Chrome import, AI and
+update groups, plus `vault:state` and other main-to-renderer events. Defined in
 [preload.cts](../../electron/preload.cts) and
 [types.ts](../../electron/types.ts).
 
@@ -45,6 +45,9 @@ trusted-sender check, the browser methods) and in [vault.md](vault.md),
    **The Bridge**
 4. **The three `on*` methods return an unsubscribe function.** Dropping it leaks a
    listener on every re-render. → **Main to Renderer Events**
+5. **The normal preload never accepts or returns vault secrets.** Unlock,
+   pairing, edit and confirmation values travel through a separate one-shot
+   preload whose nonce, sender, kind, size and lifetime are checked in main.
 
 ### Where to look
 

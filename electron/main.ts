@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -52,13 +52,24 @@ import type {
   PermissionCapability,
   PermissionDecision,
   PermissionPrompt,
-  VaultItemInput,
   UpdateServiceInput,
   WorkspaceId,
   StateRecoveryAction,
 } from './types.js';
 import type { ProjectInfo, ProjectSummary } from '@private-browser/bridge-protocol';
-import { VaultStore } from './vault.js';
+import { generateTotp } from './vault.js';
+import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
+import { MyVaultDiskStore } from './myvault/vault-store.js';
+import { SecureVaultDialogs } from './myvault/secure-dialog.js';
+import type { ConfirmDeleteDialogValue, EditLoginDialogValue, UnlockDialogValue } from './myvault/secure-dialog-contract.js';
+import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
+import { captureLoginInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape } from './myvault/isolated-fill.js';
+import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
+import { MyVaultSyncClient } from './myvault/vault-sync.js';
+import { VaultSyncController } from './myvault/sync-controller.js';
+import type { PairDialogValue } from './myvault/secure-dialog-contract.js';
+import { VaultMigrationService } from './myvault/vault-migration.js';
+import { canInstallPasskeyProvider, InternalPasskeyController, type PasskeyOptIns } from './myvault/passkey-controller.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
@@ -75,7 +86,7 @@ import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
 import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
 import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-status.js';
-import { listChromeProfiles, parseChromePasswordCsv, readChromeProfile } from './chrome-importer.js';
+import { listChromeProfiles, readChromeProfile } from './chrome-importer.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
 
 interface RuntimeTab {
@@ -87,6 +98,8 @@ interface RuntimeTab {
   developerToolsOpen: boolean;
   console: Array<DeveloperConsoleEntry & { redactions: number }>;
   network: Array<DeveloperNetworkIssue & { redactions: number }>;
+  navigationGeneration: number;
+  certificateError: boolean;
 }
 
 interface Layout {
@@ -174,6 +187,12 @@ class BrowserController {
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { top: 158, left: 0, right: 366, bottom: 0 };
   private window!: BrowserWindow;
+  private readonly secureDialogs = new SecureVaultDialogs(() => this.window);
+  private readonly fillCapabilities = new FillCapabilityStore();
+  private readonly vaultSync: VaultSyncController;
+  private dirtySyncTimer?: NodeJS.Timeout;
+  private readonly passkeyController = new InternalPasskeyController();
+  private readonly passkeyOptIns: PasskeyOptIns = { global: false, workspaces: {}, sites: {} };
 
   constructor(
     private readonly store: RuntimeStateStore,
@@ -184,7 +203,8 @@ class BrowserController {
     private readonly googleOAuth: GoogleOAuthManager,
     private readonly googleServices: GoogleServices,
     private readonly backups: AccountBackupManager,
-    private readonly vault: VaultStore,
+    private readonly vault: VaultBroker,
+    private readonly migration: VaultMigrationService,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
     private readonly vscodeBridge: VscodeBridgeServer,
@@ -193,6 +213,17 @@ class BrowserController {
     const state = this.store.get();
     const active = this.activeTab(state);
     this.runtimeTabs.set(active.id, this.newRuntimeTab());
+    this.vaultSync = new VaultSyncController(vault, new MyVaultSyncClient());
+    this.vault.subscribe((status) => {
+      if (this.window && !this.window.isDestroyed()) this.window.webContents.send('vault:state');
+      if (status.lifecycle === 'unlocked' && status.dirty && !this.dirtySyncTimer) {
+        this.dirtySyncTimer = setTimeout(() => {
+          this.dirtySyncTimer = undefined;
+          void this.vaultSync.syncNow().catch(() => undefined);
+        }, 45_000);
+        this.dirtySyncTimer.unref();
+      }
+    });
   }
 
   async createWindow(): Promise<void> {
@@ -360,6 +391,7 @@ class BrowserController {
   }
 
   async closeTab(tabId: string): Promise<void> {
+    this.fillCapabilities.invalidateTab(tabId);
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
@@ -387,6 +419,7 @@ class BrowserController {
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
+    this.fillCapabilities.invalidateAll();
     this.hideAllViews();
     this.store.update((next) => {
       next.activeWorkspaceId = tab.workspaceId;
@@ -398,6 +431,7 @@ class BrowserController {
 
   async switchWorkspace(workspaceId: WorkspaceId): Promise<void> {
     if (!WORKSPACES.some((item) => item.id === workspaceId)) return;
+    this.fillCapabilities.invalidateAll();
     this.hideAllViews();
     this.store.update((state) => { state.activeWorkspaceId = workspaceId; });
     await this.showActiveTab();
@@ -873,25 +907,6 @@ class BrowserController {
     return data.result;
   }
 
-  async importChromePasswords(): Promise<ChromeImportResult> {
-    const selection = await dialog.showOpenDialog(this.window, {
-      title: 'Choose a Chrome password export',
-      filters: [{ name: 'CSV files', extensions: ['csv'] }],
-      properties: ['openFile'],
-    });
-    if (selection.canceled || !selection.filePaths[0]) throw new Error('Password import cancelled');
-    const filePath = selection.filePaths[0];
-    if (statSync(filePath).size > 20 * 1024 * 1024) throw new Error('Password CSV is unusually large');
-    const parsed = parseChromePasswordCsv(readFileSync(filePath, 'utf8'));
-    const added = this.vault.addMany(parsed.items);
-    this.addPrivacyEvent('vault', 'Chrome passwords imported', `${added.imported} credentials encrypted in the local vault`);
-    return {
-      imported: { bookmarks: 0, history: 0, passwords: added.imported },
-      skipped: { bookmarks: 0, history: 0, passwords: parsed.skipped + added.skipped },
-      warnings: ['Delete the unencrypted Chrome CSV file after checking the import.'],
-    };
-  }
-
   toggleTrackerBlocking(): void {
     this.store.update((state) => { state.trackerBlocking = !state.trackerBlocking; });
     this.broadcast();
@@ -1110,6 +1125,7 @@ class BrowserController {
   }
 
   async prepareAiPreview(): Promise<AiPagePreview> {
+    if (!workspaceVaultPolicy(this.store.get().activeWorkspaceId).aiExtraction) throw new Error('AI extraction is disabled in this workspace');
     this.pruneAiCapabilities();
     const state = this.store.get();
     const tab = this.activeTab(state);
@@ -1210,41 +1226,163 @@ class BrowserController {
   }
 
   listVault() {
-    return { available: this.vault.isAvailable(), reason: this.vault.reason(), items: this.vault.list() };
+    const status = this.vault.status();
+    const items = status.lifecycle === 'unlocked' && this.activeVaultPolicy().vaultSurface
+      ? this.vault.searchMetadata().map((item) => ({ ...item, label: item.title, url: item.url ?? '' }))
+      : [];
+    return {
+      available: status.credentialPersistenceAvailable && status.lifecycle !== 'recovery-required',
+      reason: !status.credentialPersistenceAvailable
+        ? 'os-encryption-unavailable' as const
+        : status.blockedReason === 'envelope-unsupported'
+          ? 'vault-unsupported' as const
+          : status.blockedReason
+            ? 'vault-corrupt' as const
+            : undefined,
+      items,
+      lifecycle: status.lifecycle,
+      sync: status.sync,
+      dirty: status.dirty,
+      generation: status.generation,
+    };
   }
 
-  addVaultItem(input: VaultItemInput) {
-    if (!input.label.trim() || !input.url.trim() || !input.username.trim() || !input.password) throw new Error('Complete all required fields');
-    if (input.label.length > 200 || input.url.length > 2000 || input.username.length > 500 || input.password.length > 5000 || (input.totpSecret?.length ?? 0) > 500) throw new Error('A vault field is too long');
-    const normalizedUrl = normalizeNavigationInput(input.url);
-    if (!isAllowedRemoteUrl(normalizedUrl)) throw new Error('Enter a valid website');
-    const result = this.vault.add({ ...input, label: input.label.trim(), url: normalizedUrl, username: input.username.trim() });
-    this.addPrivacyEvent('vault', 'Vault entry saved', input.label.trim());
-    return result;
+  async requestVaultUnlock() {
+    this.assertVaultSurface();
+    const value = await this.secureDialogs.open('unlock') as UnlockDialogValue | undefined;
+    if (!value) return this.listVault();
+    await this.vault.unlock(value.password);
+    void this.vaultSync.syncNow().catch(() => undefined);
+    this.addPrivacyEvent('vault', 'MyVault unlocked', 'Decrypted state is held only by the trusted broker');
+    return this.listVault();
   }
 
-  removeVaultItem(id: string): boolean {
-    const removed = this.vault.remove(id);
+  async lockVault() {
+    this.secureDialogs.closeAll();
+    this.fillCapabilities.invalidateAll();
+    if (this.dirtySyncTimer) clearTimeout(this.dirtySyncTimer);
+    this.dirtySyncTimer = undefined;
+    for (const runtime of this.runtimeTabs.values()) if (runtime.view) this.passkeyController.detach(runtime.view.webContents);
+    this.vault.lock();
+    await this.clipboardGuard.flush();
+    this.addPrivacyEvent('vault', 'MyVault locked', 'Pending vault actions and clipboard state were invalidated');
+    return this.listVault();
+  }
+
+  async requestVaultPairing() {
+    this.assertVaultSurface();
+    const value = await this.secureDialogs.open('pair') as PairDialogValue | undefined;
+    if (!value) return this.listVault();
+    await this.vaultSync.pair(value.endpoint, value.enrollmentCode, value.password);
+    this.addPrivacyEvent('vault', 'MyVault device connected', new URL(value.endpoint).origin);
+    return this.listVault();
+  }
+
+  async syncVaultNow() {
+    this.assertVaultSurface();
+    await this.vaultSync.syncNow();
+    return this.listVault();
+  }
+
+  async getVaultConflictReview() {
+    this.assertVaultSurface();
+    const review = await this.vault.conflictReview();
+    const project = (item: (typeof review.local)[number]) => ({ ...item, label: item.title, url: item.url ?? '' });
+    return { local: review.local.map(project), cloud: review.cloud.map(project) };
+  }
+
+  async resolveVaultConflict(choice: 'cloud' | 'local') {
+    this.assertVaultSurface();
+    if (choice === 'cloud') await this.vaultSync.chooseCloud();
+    else if (choice === 'local') await this.vaultSync.chooseLocal();
+    else throw new Error('Choose the cloud or local vault explicitly');
+    return this.listVault();
+  }
+
+  migrationStatus() {
+    return { legacyAvailable: this.migration.isLegacyAvailable() };
+  }
+
+  async migrateLegacyVault() {
+    this.assertVaultSurface();
+    let report = await this.migration.migrateLegacy();
+    if (report.conflicts.length) {
+      const decisions: Record<string, 'replace' | 'skip'> = {};
+      for (const conflict of report.conflicts) {
+        const confirmation = await this.secureDialogs.open('confirm-replace', `${conflict.origin} — ${conflict.username}`) as ConfirmDeleteDialogValue | undefined;
+        decisions[conflict.sourceId] = confirmation?.confirmed ? 'replace' : 'skip';
+      }
+      report = await this.migration.migrateLegacy(decisions);
+    }
+    this.addPrivacyEvent('vault', 'Legacy vault migration completed', `${report.validatedCount} records validated; report contains no secret values`);
+    return { sourceCount: report.sourceCount, importedCount: report.importedCount, skippedCount: report.skippedCount, validatedCount: report.validatedCount, phase: report.journalPhase };
+  }
+
+  async cleanupLegacyVault() {
+    this.assertVaultSurface();
+    const confirmation = await this.secureDialogs.open('confirm-cleanup') as ConfirmDeleteDialogValue | undefined;
+    return this.migration.cleanupLegacyAfterConfirmation(Boolean(confirmation?.confirmed));
+  }
+
+  async importChromePasswords(): Promise<ChromeImportResult> {
+    this.assertVaultSurface();
+    const selected = await dialog.showOpenDialog(this.window, { title: 'Import Chrome passwords into MyVault', properties: ['openFile'], filters: [{ name: 'Chrome password CSV', extensions: ['csv'] }] });
+    if (selected.canceled || !selected.filePaths[0]) throw new Error('Password import cancelled');
+    const report = await this.migration.importChromeCsv(selected.filePaths[0]);
+    this.addPrivacyEvent('vault', 'Chrome passwords imported into MyVault', `${report.validatedCount} rows processed; the source CSV was retained`);
+    return {
+      imported: { bookmarks: 0, history: 0, passwords: report.importedCount },
+      skipped: { bookmarks: 0, history: 0, passwords: report.skippedCount },
+      warnings: ['The plaintext Chrome CSV was retained. Delete it explicitly after verifying MyVault.'],
+    };
+  }
+
+  async openVaultEditor(origin?: string) {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.saveCapture) throw new Error('Saving passwords is disabled in this workspace');
+    const value = await this.secureDialogs.open('edit-login', origin) as EditLoginDialogValue | undefined;
+    if (!value) return undefined;
+    const result = await this.vault.saveLogin({
+      title: value.title,
+      url: value.url,
+      username: value.username,
+      password: value.password,
+      totp: value.totpSecret ? { secret: value.totpSecret, algorithm: 'SHA-1', digits: 6, period: 30 } : undefined,
+    });
+    this.addPrivacyEvent('vault', 'MyVault login saved', value.url);
+    return { ...result, label: result.title, url: result.url ?? '' };
+  }
+
+  async requestVaultDelete(id: string): Promise<boolean> {
+    this.assertVaultSurface();
+    const value = await this.secureDialogs.open('confirm-delete') as ConfirmDeleteDialogValue | undefined;
+    if (!value?.confirmed) return false;
+    const removed = await this.vault.deleteEntry(id);
     if (removed) this.addPrivacyEvent('vault', 'Vault entry removed', 'A credential was deleted');
     return removed;
   }
 
-  resetCorruptVault(): boolean {
-    const reset = this.vault.resetCorrupt();
-    if (reset) this.addPrivacyEvent('vault', 'Corrupt vault reset', 'The unreadable encrypted file was preserved as a backup');
-    return reset;
+  acknowledgeVaultRecovery() {
+    this.vault.acknowledgeRecovery();
+    this.addPrivacyEvent('vault', 'Vault recovery acknowledged', 'The unreadable encrypted file remains preserved');
+    return this.listVault();
   }
 
   copyPassword(id: string): void {
-    this.copySensitiveValue(this.vault.getPassword(id));
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Password clipboard is disabled in this workspace');
+    this.copySensitiveValue(this.vault.resolveSecretForTrustedOperation(id, 'password'));
     this.addPrivacyEvent('vault', 'Password copied', 'Clipboard clears automatically after 30 seconds');
   }
 
   copyTotp(id: string): { secondsRemaining: number } {
-    const result = this.vault.getTotp(id);
-    this.copySensitiveValue(result.code);
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Vault clipboard is disabled in this workspace');
+    const now = Math.floor(Date.now() / 1000);
+    const code = generateTotp(this.vault.resolveSecretForTrustedOperation(id, 'totp-secret'), now);
+    this.copySensitiveValue(code);
     this.addPrivacyEvent('vault', 'Authenticator code copied', 'Generated locally; clipboard auto-clear enabled');
-    return { secondsRemaining: result.secondsRemaining };
+    return { secondsRemaining: 30 - (now % 30) };
   }
 
   /** Clear a still-pending copied secret now — used on quit, so exiting inside
@@ -1254,28 +1392,60 @@ class BrowserController {
   }
 
   async autofill(id: string): Promise<void> {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.manualFill) throw new Error('Vault fill is disabled in this workspace');
+    const initial = this.currentFillContext();
+    if (policy.requireFillConfirmation) {
+      const approval = await this.secureDialogs.open('confirm-fill', initial.origin) as ConfirmDeleteDialogValue | undefined;
+      if (!approval?.confirmed) return;
+      if (JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) throw new Error('Vault fill expired because the page context changed');
+    }
+    const capability = this.fillCapabilities.issue(initial, id, 'fill-login');
+    this.fillCapabilities.redeem(capability, this.currentFillContext(), id, 'fill-login');
+    const match = this.vault.searchMetadata('', initial.origin).find((entry) => entry.id === id);
+    if (!match?.url || !isAutofillTarget(match.url, initial.origin)) throw new Error('This credential belongs to another website, or this page is not secure');
+    const username = this.vault.resolveSecretForTrustedOperation(id, 'username');
+    const password = this.vault.resolveSecretForTrustedOperation(id, 'password');
+    const beforeInjection = this.currentFillContext();
+    if (JSON.stringify(beforeInjection) !== JSON.stringify(initial)) throw new Error('Vault fill expired because the page context changed');
     const contents = this.activeContents();
-    const state = this.store.get();
-    const tab = this.activeTab(state);
-    if (!contents || tab.isHome) throw new Error('Open the saved website first');
-    const credential = this.vault.getForAutofill(id);
-    if (!isAutofillTarget(credential.url, tab.url)) throw new Error('This credential belongs to another website, or this page is not secure');
-    const payload = JSON.stringify({ username: credential.username, password: credential.password });
-    await contents.executeJavaScript(`(() => {
-      const credential = ${payload};
-      const setValue = (element, value) => {
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        setter.call(element, value);
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-      };
-      const password = document.querySelector('input[type="password"]');
-      const username = document.querySelector('input[autocomplete="username"], input[type="email"], input[name*="user" i], input[name*="email" i]');
-      if (username) setValue(username, credential.username);
-      if (password) setValue(password, credential.password);
-      if (!password) throw new Error('No password field found');
-    })()`, true);
-    this.addPrivacyEvent('vault', 'Credential autofilled', new URL(tab.url).hostname);
+    if (!contents || contents.id !== initial.webContentsId) throw new Error('Vault fill expired because the page context changed');
+    await fillLoginInIsolatedWorld(contents, username, password);
+    this.addPrivacyEvent('vault', 'Credential autofilled', new URL(initial.origin).hostname);
+  }
+
+  async inspectVaultFormShape() {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.saveCapture) return { hasUsername: false, hasPassword: false };
+    const contents = this.activeContents();
+    if (!contents) return { hasUsername: false, hasPassword: false };
+    return inspectLoginFormShape(contents);
+  }
+
+  async requestSaveFromPage() {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.saveCapture) throw new Error('Password capture is disabled in this workspace');
+    const initial = this.currentFillContext();
+    const capability = this.fillCapabilities.issue(initial, 'page-capture', 'capture-login');
+    this.fillCapabilities.redeem(capability, this.currentFillContext(), 'page-capture', 'capture-login');
+    const contents = this.activeContents();
+    if (!contents) throw new Error('Open a login page first');
+    const captured = await captureLoginInIsolatedWorld(contents);
+    if (JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) throw new Error('Password capture expired because the page context changed');
+    const approval = await this.secureDialogs.open('confirm-capture', `${initial.origin} — ${captured.username || 'No username detected'}`) as ConfirmDeleteDialogValue | undefined;
+    if (!approval?.confirmed) return undefined;
+    const current = this.vault.searchMetadata('', initial.origin).find((entry) => entry.username === captured.username);
+    const saved = await this.vault.saveLogin({ id: current?.id, title: new URL(initial.origin).hostname, url: initial.origin, username: captured.username, password: captured.password });
+    this.addPrivacyEvent('vault', current ? 'MyVault login updated' : 'MyVault login saved', initial.origin);
+    return { ...saved, label: saved.title, url: saved.url ?? '' };
+  }
+
+  copyGeneratedCredential(kind: GeneratedCredentialKind): void {
+    const policy = this.activeVaultPolicy();
+    if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Credential clipboard is disabled in this workspace');
+    if (!['password', 'passphrase', 'pin'].includes(kind)) throw new Error('Unsupported generator type');
+    this.copySensitiveValue(this.vault.generateCredential(kind));
+    this.addPrivacyEvent('vault', 'Generated credential copied', 'Generated by the broker; clipboard auto-clear enabled');
   }
 
   openDownload(id: string): void {
@@ -1358,7 +1528,41 @@ class BrowserController {
   }
 
   private newRuntimeTab(): RuntimeTab {
-    return { loading: false, canGoBack: false, canGoForward: false, developerToolsOpen: false, console: [], network: [] };
+    return { loading: false, canGoBack: false, canGoForward: false, developerToolsOpen: false, console: [], network: [], navigationGeneration: 0, certificateError: false };
+  }
+
+  markCertificateError(webContentsId: number): void {
+    for (const runtime of this.runtimeTabs.values()) {
+      if (runtime.view?.webContents.id === webContentsId) runtime.certificateError = true;
+    }
+    this.fillCapabilities.invalidateAll();
+  }
+
+  private activeVaultPolicy() {
+    return workspaceVaultPolicy(this.store.get().activeWorkspaceId);
+  }
+
+  private assertVaultSurface(): void {
+    if (!this.activeVaultPolicy().vaultSurface) throw new Error('MyVault is unavailable in this workspace');
+  }
+
+  private currentFillContext(): FillContext {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tab.id);
+    const contents = runtime?.view?.webContents;
+    if (!runtime || !contents || tab.isHome) throw new Error('Open the saved website first');
+    if (runtime.certificateError) throw new Error('Vault fill is blocked after a certificate error');
+    const origin = normalizedWebOrigin(contents.getURL());
+    if (origin !== normalizedWebOrigin(tab.url)) throw new Error('Vault fill expired because the page context changed');
+    return {
+      webContentsId: contents.id,
+      tabId: tab.id,
+      navigationGeneration: runtime.navigationGeneration,
+      workspaceId: tab.workspaceId,
+      accountSpaceId: tab.accountSpaceId,
+      origin,
+    };
   }
 
   private developerTarget(tabId = this.activeTab(this.store.get()).id) {
@@ -1447,6 +1651,9 @@ class BrowserController {
     });
     runtime.view = view;
     this.window.contentView.addChildView(view);
+    if (canInstallPasskeyProvider(tab.workspaceId, normalizedWebOrigin(tab.url === 'private://home' ? 'https://invalid.local' : tab.url), this.passkeyOptIns, false)) {
+      void this.passkeyController.installAtDocumentStart(view.webContents).catch(() => this.passkeyController.detach(view.webContents));
+    }
     view.webContents.setWindowOpenHandler(({ url }) => {
       if (tab.workspaceId === 'banking') {
         this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
@@ -1478,6 +1685,13 @@ class BrowserController {
       }
     });
     view.webContents.on('will-attach-webview', (event) => event.preventDefault());
+    view.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
+      if (!isMainFrame) return;
+      runtime.navigationGeneration += 1;
+      runtime.certificateError = false;
+      this.fillCapabilities.invalidateTab(tabId);
+      this.secureDialogs.closeAll();
+    });
     view.webContents.on('did-start-loading', () => this.updateRuntime(tabId, { loading: true }));
     view.webContents.on('did-stop-loading', () => this.updateRuntime(tabId, { loading: false }));
     view.webContents.on('did-finish-load', () => void this.updateGoogleWebsiteState(tabId, view));
@@ -1492,7 +1706,7 @@ class BrowserController {
       this.broadcast();
     });
     view.webContents.on('page-favicon-updated', (_event, favicons) => void this.updateFavicon(tabId, ses, favicons[0]));
-    view.webContents.on('devtools-opened', () => this.updateRuntime(tabId, { developerToolsOpen: true }));
+    view.webContents.on('devtools-opened', () => { this.passkeyController.detach(view.webContents); this.updateRuntime(tabId, { developerToolsOpen: true }); });
     view.webContents.on('devtools-closed', () => this.updateRuntime(tabId, { developerToolsOpen: false }));
     view.webContents.on('console-message', (details) => this.recordConsoleMessage(tabId, details));
     view.webContents.on('context-menu', (_event, params) => {
@@ -1842,10 +2056,14 @@ let vscodeBridge: VscodeBridgeServer | undefined;
 let pendingLaunchUrl = process.argv.find((argument) => isAllowedRemoteUrl(argument));
 app.enableSandbox();
 app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'default_public_interface_only');
-app.on('certificate-error', (event, _webContents, _url, _error, _certificate, callback) => {
+app.on('certificate-error', (event, webContents, _url, _error, _certificate, callback) => {
   event.preventDefault();
+  controller?.markCertificateError(webContents.id);
   callback(false);
 });
+const e2eUserData = process.env.PRIVATE_BROWSER_E2E_USER_DATA;
+if (!app.isPackaged && e2eUserData) app.setPath('userData', e2eUserData);
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!hasSingleInstanceLock) {
@@ -1899,7 +2117,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     accountStore,
   });
   const store = new RuntimeStateStore(persistedState, accountStore, persistedState.initialize());
-  const vault = new VaultStore(join(userDataPath, 'vault.enc'));
+  const vault = new VaultBroker(new MyVaultDiskStore(userDataPath, safeStorage));
+  vault.initialize();
   const aiProvider = new AiProviderStore(join(userDataPath, 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(userDataPath, 'update-service.enc'));
   const bridgeDataRoot = join(process.env.LOCALAPPDATA ?? userDataPath, 'Private Browser Bridge');
@@ -1925,7 +2144,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     // convenience of first-launch enrolment is the cheaper failure.
     removeUpdateBootstrap(updateBootstrapPath);
   }
-  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, aiProvider, updates, vscodeBridge);
+  const migration = new VaultMigrationService(join(userDataPath, 'vault.enc'), join(userDataPath, 'myvault', 'migration-journal.enc'), safeStorage, vault);
+  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -2001,11 +2221,24 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:ask', (_event, token: string, question: string) => controller!.askAi(token, question));
   handle('ai:revoke', () => controller!.revokeAiContext());
   handle('vault:list', () => controller!.listVault());
-  handle('vault:add', (_event, input: VaultItemInput) => controller!.addVaultItem(input));
-  handle('vault:remove', (_event, id: string) => controller!.removeVaultItem(id));
-  handle('vault:reset-corrupt', () => controller!.resetCorruptVault());
+  handle('vault:request-unlock', () => controller!.requestVaultUnlock());
+  handle('vault:request-pairing', () => controller!.requestVaultPairing());
+  handle('vault:lock', () => controller!.lockVault());
+  handle('vault:sync', () => controller!.syncVaultNow());
+  handle('vault:reconnect', () => controller!.listVault().lifecycle === 'unlocked' ? controller!.syncVaultNow() : undefined);
+  handle('vault:conflict-review', () => controller!.getVaultConflictReview());
+  handle('vault:resolve-conflict', (_event, choice: 'cloud' | 'local') => controller!.resolveVaultConflict(choice));
+  handle('vault:migration-status', () => controller!.migrationStatus());
+  handle('vault:migrate-legacy', () => controller!.migrateLegacyVault());
+  handle('vault:cleanup-legacy', () => controller!.cleanupLegacyVault());
+  handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
+  handle('vault:form-shape', () => controller!.inspectVaultFormShape());
+  handle('vault:save-from-page', () => controller!.requestSaveFromPage());
+  handle('vault:request-delete', (_event, id: string) => controller!.requestVaultDelete(id));
+  handle('vault:acknowledge-recovery', () => controller!.acknowledgeVaultRecovery());
   handle('vault:copy-password', (_event, id: string) => controller!.copyPassword(id));
   handle('vault:copy-totp', (_event, id: string) => controller!.copyTotp(id));
+  handle('vault:copy-generated', (_event, kind: GeneratedCredentialKind) => controller!.copyGeneratedCredential(kind));
   handle('vault:autofill', (_event, id: string) => controller!.autofill(id));
   handle('system:copy', (_event, value: string) => clipboard.writeText(String(value).slice(0, 100_000)));
   handle('system:is-default-browser', () => controller!.isDefaultBrowser());

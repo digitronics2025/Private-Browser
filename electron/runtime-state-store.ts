@@ -235,7 +235,12 @@ function normalizeRuntimeState(state: RuntimeBrowserStateV2): void {
     const active = state.activeAccountSpaceByWorkspace[workspace.id];
     if (!active || !members.some((account) => account.id === active)) state.activeAccountSpaceByWorkspace[workspace.id] = members[0].id;
   }
-  state.tabs = state.tabs.filter((tab) => accountsById.get(tab.accountSpaceId)?.workspaceId === tab.workspaceId);
+  const seenTabIds = new Set<string>();
+  state.tabs = state.tabs.filter((tab) => {
+    if (seenTabIds.has(tab.id) || accountsById.get(tab.accountSpaceId)?.workspaceId !== tab.workspaceId) return false;
+    seenTabIds.add(tab.id);
+    return true;
+  });
   for (const account of state.accountSpaces) {
     let tabs = state.tabs.filter((tab) => tab.accountSpaceId === account.id);
     if (tabs.length === 0) {

@@ -48,6 +48,8 @@ jobs:
         run: npm run bridge:test
       - name: Exercise real Electron Account Space isolation
         run: npm run test:electron
+      - name: Verify Electron MyVault boundary
+        run: npm run test:e2e
       - name: Select the next release version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
@@ -85,8 +87,18 @@ jobs:
           $profile = Join-Path $env:RUNNER_TEMP 'private-browser-vscode-profile'
           $extensions = Join-Path $env:RUNNER_TEMP 'private-browser-vscode-extensions'
           $vsix = Get-ChildItem release\private-browser-bridge-*.vsix | Select-Object -First 1
-          code --install-extension $vsix.FullName --force --user-data-dir $profile --extensions-dir $extensions
-          $installed = code --list-extensions --user-data-dir $profile --extensions-dir $extensions
+          $candidates = @(
+            (Join-Path $env:ProgramFiles 'Microsoft VS Code\bin\code.cmd'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd')
+          )
+          $code = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $code) {
+            choco install vscode --no-progress -y
+            $code = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (-not $code) { throw 'VS Code CLI is unavailable after installation' }
+          & $code --install-extension $vsix.FullName --force --user-data-dir $profile --extensions-dir $extensions
+          $installed = & $code --list-extensions --user-data-dir $profile --extensions-dir $extensions
           if ($installed -notcontains 'digitronics.private-browser-bridge') { throw 'Private Browser Bridge VSIX smoke install failed' }
       - name: Generate release metadata
         shell: pwsh
@@ -149,7 +161,7 @@ jobs:
             echo "Invalid packaged release version: $version" >&2
             exit 1
           fi
-          npm version "$version" --no-git-tag-version
+          npm version "$version" --no-git-tag-version --allow-same-version
       - name: Detect whether this push changes the application
         id: changes
         shell: bash
