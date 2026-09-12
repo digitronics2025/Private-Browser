@@ -2,7 +2,7 @@
 system: chrome-import
 sources:
   - electron/chrome-importer.ts
-verified_at: 8c8d2bee
+verified_at: 34781569
 ---
 
 # Chrome Import
@@ -12,8 +12,8 @@ verified_at: 8c8d2bee
 ## Agent Brief
 
 **Scope.** `chrome-importer.ts` discovers local Google Chrome profiles and reads
-bookmarks and browsing history into typed, sanitized records. It also parses a
-user-selected Chrome password CSV for direct insertion into the encrypted Vault.
+bookmarks and browsing history into typed, sanitized records. Password CSV rows
+are handed directly to the trusted MyVault migration/import service.
 All work is local in the Electron main process; profile paths and secrets never
 cross the preload bridge.
 
@@ -25,7 +25,7 @@ cross the preload bridge.
 2. Imported URLs must pass `isAllowedRemoteUrl`, so `chrome:`, `file:`, `data:`
    and `javascript:` entries are dropped.
 3. Password CSV contents never reach the renderer. The bridge returns counts and
-   warnings only, and the caller writes accepted items directly to `VaultStore`.
+   warnings only, and accepted rows are encrypted by `VaultBroker` immediately.
 4. History is queried from a temporary copy and the temporary directory is
    removed in `finally`, so Chrome's live SQLite database is never opened for
    writing.
@@ -39,9 +39,9 @@ cross the preload bridge.
 - **History:** copies and opens the selected profile's `History` SQLite database
   read-only, selecting up to 10,000 newest visible URLs and converting Chrome's
   1601-based microsecond timestamps to ISO time.
-- **Passwords:** parses Chrome Password Manager's CSV export, validates lengths
-  and web URLs, and caps input at 5,000 credentials. Duplicate `(url, username)`
-  pairs are skipped by `VaultStore.addMany`.
+- **Passwords:** the MyVault import service parses the selected CSV in main,
+  validates origins and bounds, and performs normalized in-memory duplicate
+  comparison. The plaintext source remains until the user deletes it explicitly.
 
 Cookies, sessions, payment cards, extensions, account tokens, search engines and
 autofill profiles are not copied. The current product has no compatible storage

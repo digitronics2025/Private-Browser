@@ -4,7 +4,7 @@ sources:
   - electron/preload.cts
   - electron/types.ts
   - electron/ipc-guard.ts
-verified_at: 6cca869
+verified_at: 34781569
 ---
 
 # IPC Contract

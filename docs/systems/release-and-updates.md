@@ -8,7 +8,7 @@ sources:
   - .github/workflows/**
   - electron/update-service.ts
   - electron/update-bootstrap.ts
-verified_at: 8c8d2bee
+verified_at: 3478156
 ---
 
 # Release and Updates
@@ -398,7 +398,7 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 | Job | Runs on | Does |
 | --- | --- | --- |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
-| `windows-installer` | windows, 25 min, needs `verify` | Selects the next stable version on `main`, writes the bundled update bootstrap (see **Bundled Bootstrap**), runs `npm run dist`, then writes the checksum and `VERSION.txt`; uploads artifact `private-browser-windows` (`if-no-files-found: error`, 30-day retention) |
+| `windows-installer` | windows, 25 min, needs `verify` | Runs the Electron MyVault boundary journey, selects the stable version on `main`, writes the bundled update bootstrap, runs `npm run dist`, then writes checksum, version and CycloneDX SBOM artifacts; uploads `private-browser-windows` for 30 days |
 | `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Restores the artifact's recorded version, skips documentation-only pushes, otherwise uploads the exe to R2, registers metadata in D1, then re-downloads it through the live authenticated route to prove the whole path works ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)) |
 
 ### codeql.yml
@@ -493,8 +493,9 @@ The electron-builder configuration lives **inline in `package.json`**, in the
 - `npm run dist` is `npm run build && electron-builder --win nsis --x64 --publish
   never`. `--publish never` is deliberate: electron-builder uploads nothing, and
   the Cloudflare job is the only publisher.
-- The installer is **not code-signed**, so Windows SmartScreen shows an
-  unknown-publisher warning (see [README.md](../../README.md)).
+- CI signs when both `WINDOWS_CODE_SIGNING_CERTIFICATE` and
+  `WINDOWS_CODE_SIGNING_PASSWORD` exist. Without that pair the build remains
+  verifiable but Windows shows an unknown-publisher warning.
 
 **Why `package.json` is not in `sources`.** 2 of the 7 commits in this repository
 are pure dependency bumps touching only `package.json` and `package-lock.json`.
