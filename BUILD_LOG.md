@@ -56,7 +56,7 @@ This feature-oriented log tracks the approved secure multi-Google-account Accoun
 [STEP] 10.1 — Merge canonical Account Spaces and boundary documentation — done
 [STEP] 10.2 — Run two security and same-pattern review passes — done
 [STEP] 10.3 — Pass the full repository gate and build a runnable installer — done
-[STEP] 10.4 — Integrate upstream Chrome import, bookmark hierarchy, VS Code bridge and MyVault without weakening Account Space isolation — in progress
+[STEP] 10.4 — Integrate upstream Chrome import, bookmark hierarchy, VS Code bridge and MyVault without weakening Account Space isolation — done
 [STEP] 10.5 — Push, merge, publish and verify release artifacts — in progress
 
 ## Upstream systems incorporated
@@ -69,6 +69,10 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 
 ## Combined local audit
 
-- The earlier 0.4.0 integration gate passed 163 desktop tests, 7 protocol tests, 6 extension tests, 16 Worker tests, 5 browser/Electron UI flows, and 2 real Electron partition tests.
-- Documentation guard, secret scan and dependency audit were clean; the renderer bundle was 69.73 KB gzip.
-- The previous 0.4.0 installer and VSIX evidence is superseded by the 0.5.0 MyVault reconciliation and will be replaced after the combined revision passes every gate.
+- Canonical `npm run check`: passed — 212 desktop tests, 7 protocol tests, 6 extension tests, 16 Worker tests, 6 browser/Electron UI flows, and 2 real Electron partition tests.
+- Documentation guard: 11 canonical docs, 0 failures, 0 warnings.
+- Secret scan and dependency audit: clean; 0 known vulnerabilities.
+- Production renderer bundle: 70.87 KB gzip.
+- Packaged app: clean-profile launch stayed alive; the test process was then closed deliberately.
+- Installer: `Private-Browser-0.5.0-Setup.exe`, 115,636,947 bytes, SHA-256 `85D2F72CCF1A2EBECD27597A5AC2BD4922EA7283D9D1C561A6F2346C94E3492E`.
+- Private VSIX: `private-browser-bridge-0.5.0.vsix`, 346,767 bytes, SHA-256 `D9CD5C03FB213203F588D2B8EA159ECCFBCDB5C5CE1A7698D0121B03A1301AAD`.
