@@ -13,6 +13,9 @@
 [DONE] Phase 2 — Trusted broker and secure browser operations — 2026-09-12
 [START] Phase 3 — Synchronization, migration, and imports — 2026-09-12
 [STEP] 3.1 — Device enrollment, CAS sync, reconnect/dirty triggers, and explicit conflicts — done
+[STEP] 3.2 — Recoverable legacy-vault migration and direct Chrome CSV import — done
+[DONE] Phase 3 — Synchronization, migration, and imports — 2026-09-12
+[START] Phase 4 — Gated passkeys — 2026-09-12
 
 [START] System 1 — Private Browser Bridge protocol and security — 2026-09-12
 [STEP] 1.1 — Define the protocol v1 request, response, event, progress, and chunk envelopes — done

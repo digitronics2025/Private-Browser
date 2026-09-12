@@ -1,4 +1,4 @@
-export type SecureDialogKind = 'unlock' | 'edit-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'pair';
+export type SecureDialogKind = 'unlock' | 'edit-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair';
 
 export interface UnlockDialogValue { password: string }
 export interface EditLoginDialogValue { title: string; url: string; username: string; password: string; totpSecret?: string }

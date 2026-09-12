@@ -39,6 +39,7 @@ export interface BrokerItemInput {
   url?: string;
   totp?: TotpConfig;
   notes?: string;
+  updatedAt?: string;
 }
 
 export type TrustedSecretKind = 'username' | 'password' | 'totp-secret';
@@ -175,7 +176,7 @@ export class VaultBroker {
 
   async saveLogin(input: BrokerItemInput): Promise<VaultEntryMetadata> {
     const payload = this.requireUnlocked();
-    const timestamp = new Date().toISOString();
+    const timestamp = input.updatedAt && Number.isFinite(Date.parse(input.updatedAt)) ? input.updatedAt : new Date().toISOString();
     const current = input.id ? payload.items.find((item) => item.id === input.id) : undefined;
     const next: VaultItem = {
       id: current?.id ?? randomUUID(),
