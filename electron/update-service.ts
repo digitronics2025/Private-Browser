@@ -8,6 +8,8 @@ interface StoredUpdateService extends UpdateServiceInput {
   version: 1;
 }
 
+export const PUBLIC_UPDATE_ENDPOINT = 'https://private-browser-downloads.digitronics-electro.workers.dev';
+
 export class UpdateServiceStore {
   private config?: StoredUpdateService;
   private corrupt = false;
@@ -19,11 +21,11 @@ export class UpdateServiceStore {
   }
 
   status(currentVersion: string): UpdateServiceStatus {
-    if (this.corrupt) return { configured: false, currentVersion, error: 'configuration-corrupt' };
-    if (!safeStorage.isEncryptionAvailable()) return { configured: false, currentVersion, error: 'os-encryption-unavailable' };
+    if (this.corrupt) return { configured: false, currentVersion, source: 'public', endpoint: PUBLIC_UPDATE_ENDPOINT, error: 'configuration-corrupt' };
+    if (!safeStorage.isEncryptionAvailable()) return { configured: false, currentVersion, source: 'public', endpoint: PUBLIC_UPDATE_ENDPOINT, error: 'os-encryption-unavailable' };
     return this.config
-      ? { configured: true, currentVersion, endpoint: this.config.endpoint }
-      : { configured: false, currentVersion };
+      ? { configured: true, currentVersion, source: 'private', endpoint: this.config.endpoint }
+      : { configured: false, currentVersion, source: 'public', endpoint: PUBLIC_UPDATE_ENDPOINT };
   }
 
   configure(input: UpdateServiceInput, currentVersion: string): UpdateServiceStatus {
@@ -56,24 +58,7 @@ export class UpdateServiceStore {
   }
 
   async check(currentVersion: string): Promise<UpdateCheckResult> {
-    if (!this.config) throw new Error('Connect the private download service first');
-    const response = await fetch(`${this.config.endpoint}/update.json`, {
-      headers: { authorization: `Bearer ${this.config.accessToken}`, accept: 'application/json' },
-      redirect: 'error',
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (response.status === 404) throw new Error('The download service rejected the access token or has no release');
-    if (!response.ok) throw new Error(`The download service returned ${response.status}`);
-    const length = Number(response.headers.get('content-length') ?? 0);
-    if (Number.isFinite(length) && length > 100_000) throw new Error('The update response is too large');
-    const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > 100_000) throw new Error('The update response is too large');
-    let value: unknown;
-    try { value = JSON.parse(text); }
-    catch { throw new Error('The download service returned invalid JSON'); }
-    const manifest = validateManifest(value, this.config.endpoint);
-    const state = compareVersions(manifest.version, currentVersion) > 0 ? 'available' : 'up-to-date';
-    return { state, currentVersion, latest: manifest, checkedAt: new Date().toISOString() };
+    return checkUpdateEndpoint(currentVersion, this.config?.endpoint, this.config?.accessToken);
   }
 
   private load(): StoredUpdateService | undefined {
@@ -97,6 +82,35 @@ export class UpdateServiceStore {
     writeFileSync(temporaryPath, encrypted.toString('base64'), { mode: 0o600 });
     renameSync(temporaryPath, this.filePath);
   }
+}
+
+export async function checkUpdateEndpoint(currentVersion: string, endpointValue = PUBLIC_UPDATE_ENDPOINT, accessToken?: string): Promise<UpdateCheckResult> {
+  const endpoint = normalizeEndpoint(endpointValue);
+  const privateAccess = accessToken !== undefined;
+  const route = privateAccess ? '/update.json' : '/api/v1/releases/public/latest';
+  const response = await fetch(`${endpoint}${route}`, {
+    headers: privateAccess
+      ? { authorization: `Bearer ${accessToken}`, accept: 'application/json' }
+      : { accept: 'application/json' },
+    redirect: 'error',
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (response.status === 404) {
+    throw new Error(privateAccess
+      ? 'The download service rejected the access token or has no release'
+      : 'The public download service has no stable release');
+  }
+  if (!response.ok) throw new Error(`The download service returned ${response.status}`);
+  const length = Number(response.headers.get('content-length') ?? 0);
+  if (Number.isFinite(length) && length > 100_000) throw new Error('The update response is too large');
+  const text = await response.text();
+  if (Buffer.byteLength(text, 'utf8') > 100_000) throw new Error('The update response is too large');
+  let value: unknown;
+  try { value = JSON.parse(text); }
+  catch { throw new Error('The download service returned invalid JSON'); }
+  const manifest = validateManifest(value, endpoint);
+  const state = compareVersions(manifest.version, currentVersion) > 0 ? 'available' : 'up-to-date';
+  return { state, currentVersion, latest: manifest, checkedAt: new Date().toISOString() };
 }
 
 function normalizeEndpoint(value: string): string {

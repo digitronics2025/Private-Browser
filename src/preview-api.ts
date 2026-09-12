@@ -66,7 +66,34 @@ export function installPreviewApi(): void {
     uploadBackup: async () => ({ status: 'uploaded', etag: 'preview-etag' }),
     getAiProvider: async () => ({ configured: false }),
     getDefaultBrowserStatus: async () => false,
-    getUpdateService: async () => ({ configured: false, currentVersion: '0.3.1' }),
+    getUpdateService: async () => ({ configured: false, currentVersion: '0.5.7', source: 'public' as const, endpoint: 'https://private-browser-downloads.digitronics-electro.workers.dev' }),
+    checkForUpdates: async () => {
+      const updateMode = new URLSearchParams(location.search).get('update');
+      if (updateMode === 'loading') await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+      if (updateMode === 'error') throw new Error('The public update service could not be reached');
+      const latestVersion = updateMode === 'available' ? '0.5.8' : '0.5.7';
+      return {
+        state: updateMode === 'available' ? 'available' as const : 'up-to-date' as const,
+        currentVersion: '0.5.7',
+        latest: {
+          schemaVersion: 1 as const,
+          appId: 'private-browser' as const,
+          version: latestVersion,
+          buildNumber: 83,
+          channel: 'stable' as const,
+          publishedAt: '2026-09-12T18:20:00.000Z',
+          filename: `Private-Browser-${latestVersion}-Setup.exe`,
+          sizeBytes: 115_638_545,
+          sha256: '259a374e199949d72b7fa87c6aed3eef9834340b99ed5dfd17da68038a922eec',
+          commitSha: 'fabad9b310b10efcc7332e88599620db8d437b2a',
+          releaseNotes: 'Latest stable security, privacy, and reliability improvements.',
+          downloadUrl: 'https://private-browser-downloads.digitronics-electro.workers.dev/download/latest.exe?expires=9999999999&signature=preview',
+          downloadPageUrl: 'https://private-browser-downloads.digitronics-electro.workers.dev/download?expires=9999999999&signature=preview',
+          expiresAt: '2286-11-20T17:46:39.000Z',
+        },
+        checkedAt: new Date().toISOString(),
+      };
+    },
     listVault: async () => ({ available: true, items: [], lifecycle: 'unlocked', sync: 'idle', dirty: false, generation: 1 }),
     getVaultMigrationStatus: async () => ({ legacyAvailable: false }),
     inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),

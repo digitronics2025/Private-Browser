@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker, { type Env } from '../src/index';
 import { signValue } from '../src/auth';
-import type { ReleaseRecord } from '../src/protocol';
+import type { ReleaseManifest, ReleaseRecord } from '../src/protocol';
 
 const accessToken = 'download-token-abcdefghijklmnopqrstuvwxyz012345';
 const signingSecret = 'signing-secret-abcdefghijklmnopqrstuvwxyz012345';
@@ -155,6 +155,31 @@ describe('download Worker', () => {
     expect(html).toContain(release.commit_sha.slice(0, 12));
   });
 
+  it('returns the active stable manifest publicly without exposing client credentials', async () => {
+    const response = await request('/api/v1/releases/public/latest');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toContain('no-store');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    const item = await response.json() as ReleaseManifest;
+    expect(item.version).toBe(release.version);
+    expect(item.buildNumber).toBe(release.build_number);
+    expect(item.sha256).toBe(release.sha256);
+    expect(item.commitSha).toBe(release.commit_sha);
+    expect(item.downloadUrl).toMatch(/^https:\/\/downloads\.example\.com\/download\/latest\.exe\?expires=\d+&signature=/);
+    expect(item.downloadPageUrl).toMatch(/^https:\/\/downloads\.example\.com\/download\?expires=\d+&signature=/);
+    expect(JSON.stringify(item)).not.toContain(accessToken);
+
+    const head = await request('/api/v1/releases/public/latest', { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe('');
+  });
+
+  it('restricts the public latest manifest to safe read methods', async () => {
+    const response = await request('/api/v1/releases/public/latest', { method: 'POST' });
+    expect(response.status).toBe(405);
+    expect(response.headers.get('allow')).toBe('GET, HEAD');
+  });
+
   it('serves a stable tokenized install page without exposing the token', async () => {
     const page = await request(`/download/${accessToken}`);
     expect(page.status).toBe(200);
@@ -255,6 +280,7 @@ describe('download Worker', () => {
     database.rows = [];
     expect((await request('/')).status).toBe(404);
     expect((await request('/download')).status).toBe(404);
+    expect((await request('/api/v1/releases/public/latest')).status).toBe(404);
 
     database.rows = [{ ...release }];
     bucket.object = new Uint8Array(0);

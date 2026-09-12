@@ -102,6 +102,18 @@ async function handleLatest(request: Request, env: Env): Promise<Response> {
     : json(manifest, 200, { 'cache-control': PRIVATE_CACHE });
 }
 
+async function handlePublicLatest(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
+  if (!secretsReady(env)) return notFound();
+  const release = await latestRelease(env);
+  if (!release) return notFound();
+  const manifest = await signedManifest(request, env, release);
+  const headers = { ...JSON_HEADERS, 'cache-control': PRIVATE_CACHE };
+  return request.method === 'HEAD'
+    ? new Response(null, { status: 200, headers: responseHeaders(headers) })
+    : json(manifest, 200, { 'cache-control': PRIVATE_CACHE });
+}
+
 async function handlePublicDownloadPage(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
   if (!secretsReady(env)) return notFound();
@@ -255,6 +267,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === '/health') return request.method === 'GET' || request.method === 'HEAD' ? handleHealth(request, env) : methodNotAllowed('GET, HEAD');
+      if (url.pathname === '/api/v1/releases/public/latest') return handlePublicLatest(request, env);
       if (url.pathname === '/api/v1/releases/latest' || url.pathname === '/update.json') return handleLatest(request, env);
       if (url.pathname === '/api/v1/admin/releases') return handlePublish(request, env);
       if (url.pathname === '/' || url.pathname === '/download') return handlePublicDownloadPage(request, env);

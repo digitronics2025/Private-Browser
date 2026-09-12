@@ -1568,7 +1568,7 @@ class BrowserController {
   }
 
   async checkForUpdatesInBackground(): Promise<void> {
-    if (!this.getUpdateService().configured || this.window.isDestroyed()) return;
+    if (this.window.isDestroyed()) return;
     try {
       const result = await this.checkForUpdates();
       if (result.state === 'available') this.window.webContents.send('updates:available', result);

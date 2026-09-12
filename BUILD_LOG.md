@@ -128,3 +128,14 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 - Private Browser `0.5.7` build 82 is active for commit `fabad9b310b10efcc7332e88599620db8d437b2a`; its 115,638,545-byte installer SHA-256 is `259a374e199949d72b7fa87c6aed3eef9834340b99ed5dfd17da68038a922eec`.
 - A separate public signed-route download matched the active D1 size and SHA-256 exactly; live `/health` returned 200 with database `ok` and `releaseReady: true`.
 - The verified installer completed in explicit current-user mode, Windows reports product version `0.5.7.0`, and the launched installed process remained responsive while preserving the existing profile and MyVault data.
+
+[START] System 13 — In-app update status — 2026-09-12
+[STEP] 13.1 — Add a public read-only latest stable release manifest — done
+[STEP] 13.2 — Make credential-free public checks the desktop default while preserving private overrides — done
+[STEP] 13.3 — Build and verify the dedicated in-app Updates page — done
+[STEP] 13.4 — Run the full gate, merge, publish and verify the desktop and Worker releases — in progress
+
+- The Settings surface now opens a focused Updates page with installed and latest versions, release build/time/size/notes/source/checksum, developer details, automatic/manual checks, and explicit current, available, loading and failure states.
+- The Worker adds public GET/HEAD `/api/v1/releases/public/latest`; authenticated `/update.json` and `/api/v1/releases/latest` remain unchanged and private. Every returned installer and page link stays same-origin, signed, expiring and `no-store`.
+- Desktop checks use the public feed when no encrypted private override exists, run ten seconds after launch and every 24 hours, and retain the expected filename/size/SHA-256 so downloaded installers are verified before opening.
+- Playwright passed current, update-available and failure-recovery flows at desktop and 375px with clean console, page-error and failed-network monitors; the same available-state URL was opened visibly in VS Code Integrated Browser.
