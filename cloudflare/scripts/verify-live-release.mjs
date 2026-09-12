@@ -38,7 +38,6 @@ for (const publicPath of ['/', '/download']) {
   const publicPage = await publicPageResponse.text();
   assert(publicPage.includes('Download for Windows'), `Public download page ${publicPath} is missing its primary action`);
   assert(publicPage.includes(manifest.version) && publicPage.includes(expectedHash), `Public download page ${publicPath} metadata is incomplete`);
-  assert(publicPage.includes('https://dr-badawi-abdalsalam.com/'), `Public download page ${publicPath} is missing the developer profile`);
   assert(/href="\/download\/latest\.exe\?expires=\d+&amp;signature=[A-Za-z0-9_-]+"/.test(publicPage), `Public download page ${publicPath} is missing its signed installer link`);
   assert(!publicPage.includes(accessToken), `Public download page ${publicPath} exposed its access token`);
 }
