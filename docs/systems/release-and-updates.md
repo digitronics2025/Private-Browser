@@ -8,7 +8,7 @@ sources:
   - .github/workflows/**
   - electron/update-service.ts
   - electron/update-bootstrap.ts
-verified_at: ef6ba2e8
+verified_at: 8c8d2bee
 ---
 
 # Release and Updates
@@ -325,6 +325,46 @@ gitignored and every deploy command is pointed at it with `--config`. Local
 database. Do not write a real account id, database id or secret value into any
 tracked file or into this doc.
 
+### Local Cloudflare Authentication and Live Verification
+
+Wrangler loads the repository-root `.env` itself. PowerShell does not import
+that file into its parent process, so `$env:CLOUDFLARE_API_TOKEN` can be empty
+while the repository-pinned CLI is fully authenticated. **Do not treat an empty
+PowerShell variable as proof that Cloudflare is unreachable.** Ask Wrangler:
+
+```powershell
+npx wrangler whoami
+npx wrangler deployments status --config cloudflare/wrangler.jsonc
+npx wrangler d1 list --json
+npx wrangler r2 bucket list
+npx wrangler secret list --config cloudflare/wrangler.jsonc
+```
+
+Use `npx wrangler`, not a globally installed copy, so the checked CLI version is
+the version pinned by this repository. `r2 bucket list` has no `--json` option.
+Secret-list commands are for **names only**; never print, echo, source, or call
+`wrangler auth token` in an agent transcript. If the CLI really cannot
+authenticate, the operator must retrieve or rotate the credential through
+MyVault and enter it by hand.
+
+The public Worker origin is the GitHub repository variable
+`PRIVATE_BROWSER_DOWNLOAD_URL`, not a secret and not a value tracked in this
+repository. Retrieve it at check time and probe the unauthenticated health route:
+
+```powershell
+$url = gh variable get PRIVATE_BROWSER_DOWNLOAD_URL
+$response = Invoke-WebRequest -Uri ($url.TrimEnd('/') + '/health') `
+  -UseBasicParsing -TimeoutSec 20
+$response.StatusCode
+$response.Content
+```
+
+Healthy production returns HTTP 200 with `status: "ok"`, `database: "ok"`, and
+`releaseReady: true`. This verifies more than a deployment listing: it proves
+the Worker can query D1 and can find the active release object in R2. Keep `.env`
+ignored and untracked; do not copy its credential into tracked configuration or
+documentation merely to make a raw shell-variable check pass.
+
 ## The Build and Publish Pipeline
 
 ### ci.yml
@@ -360,6 +400,13 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
 | `windows-installer` | windows, 25 min, needs `verify` | Selects the next stable version on `main`, writes the bundled update bootstrap (see **Bundled Bootstrap**), runs `npm run dist`, then writes the checksum and `VERSION.txt`; uploads artifact `private-browser-windows` (`if-no-files-found: error`, 30-day retention) |
 | `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Restores the artifact's recorded version, skips documentation-only pushes, otherwise uploads the exe to R2, registers metadata in D1, then re-downloads it through the live authenticated route to prove the whole path works ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)) |
+
+### codeql.yml
+
+[codeql.yml](../../.github/workflows/codeql.yml) runs GitHub CodeQL's
+`security-extended` JavaScript/TypeScript queries on pushes to `main`, pull
+requests, and every Monday. It has read-only repository access plus the minimum
+`security-events: write` permission required to publish findings.
 
 The publish job validates `VERSION.txt`, applies it to its local package files,
 then uploads with
