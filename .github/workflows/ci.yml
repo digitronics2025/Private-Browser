@@ -94,7 +94,7 @@ jobs:
           "${{ steps.packaged-version.outputs.version }}" | Set-Content release\VERSION.txt -NoNewline
           npm sbom --sbom-format cyclonedx | Out-File -Encoding utf8 release\SBOM.cdx.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: private-browser-windows
           path: |
@@ -104,7 +104,7 @@ jobs:
             release/SBOM.cdx.json
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: private-browser-bridge-vsix
           path: release/private-browser-bridge-*.vsix
