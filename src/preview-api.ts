@@ -48,6 +48,7 @@ export function installPreviewApi(): void {
     onFocusAddress: () => () => undefined,
     onUpdateAvailable: () => () => undefined,
     onGoogleOperationProgress: () => () => undefined,
+    onVaultState: () => () => undefined,
     setLayout: async () => undefined,
     setOverlayOpen: async () => undefined,
     switchAccountSpace: async (value) => { const id = value as AccountSpaceId; const selected = state.accountSpaces.find((item) => item.id === id); if (!selected || selected.locked) throw new Error('Account Space is unavailable'); state.activeAccountSpaceId = id; state.activeWorkspaceId = selected.workspaceId; state.activeTabId = state.tabs.find((tab) => tab.accountSpaceId === id)!.id; publish(); },
@@ -66,7 +67,9 @@ export function installPreviewApi(): void {
     getAiProvider: async () => ({ configured: false }),
     getDefaultBrowserStatus: async () => false,
     getUpdateService: async () => ({ configured: false, currentVersion: '0.3.1' }),
-    listVault: async () => ({ available: true, items: [] }),
+    listVault: async () => ({ available: true, items: [], lifecycle: 'unlocked', sync: 'idle', dirty: false, generation: 1 }),
+    getVaultMigrationStatus: async () => ({ legacyAvailable: false }),
+    inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),
   };
   const api = new Proxy(handlers, { get(target, property) { return target[String(property)] ?? (async () => undefined); } });
   Object.defineProperty(window, 'privateBrowser', { value: api as unknown as PrivateBrowserApi, configurable: true });

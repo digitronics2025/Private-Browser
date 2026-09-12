@@ -4,7 +4,7 @@ sources:
   - electron/vault.ts
   - electron/clipboard-guard.ts
   - electron/myvault/**
-verified_at: 7063e89
+verified_at: af49b2e8
 ---
 
 # MyVault broker
@@ -44,6 +44,11 @@ memory wiping.
 6. Isolated-world fill targets recognized username/password/OTP fields and never
    submits. Downgrade, certificate error, punycode, opaque or cross-origin frame,
    navigation, workspace, lock, timeout and replay all fail closed.
+   In Digitronics, TenTen and Personal, an unlocked vault automatically fills
+   matching normal HTTPS login forms after navigation. It retries briefly for
+   client-rendered forms, never overwrites populated fields, refuses signup,
+   reset and new-password forms, and picks the most recently updated login unless
+   a manual Fill established a preferred login for that origin during the session.
 7. Clipboard writes go broker-to-OS. Only a digest survives for unchanged-value
    clearing; lock and quit flush pending secret content.
 8. Page inspection exposes shape only. Explicit Save/Update reads minimum login
@@ -62,7 +67,8 @@ memory wiping.
 - `vault-store.ts` — envelope, protected connection state and atomic recovery.
 - `vault-sync.ts` / `sync-controller.ts` — redemption, CAS and dirty scheduling.
 - `secure-dialog.ts` / `secure-preload.cts` — isolated one-shot secret UI.
-- `fill-capability.ts` / `isolated-fill.ts` — exact-context browser operations.
+- `fill-capability.ts` / `automatic-fill.ts` / `isolated-fill.ts` — exact-context
+  manual and Chrome-style automatic browser operations.
 - `vault-migration.ts` — verified backup, protected journal, stable duplicates,
   direct Chrome CSV import and explicit cleanup.
 - `passkey-controller.ts` / `security/passkeys/*` — disabled gated provider core.
