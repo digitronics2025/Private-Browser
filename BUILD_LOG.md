@@ -63,6 +63,8 @@ This feature-oriented log tracks the approved secure multi-Google-account Accoun
 
 The authenticated Private Browser VS Code bridge, private extension, project adapters, isolated Playwright checks, local reports, source handoff, reviewed AI edits, Chrome profile import, bookmark hierarchy, bookmark bar, password CSV migration and MyVault broker landed on `main` while this feature was in flight. They are retained. Chrome bookmark/history import requires an explicit Account Space destination. MyVault remains authoritative, is never copied into Google backup, and its internal passkey provider remains disabled behind the upstream release gate. Development-only and Banking-deny policies remain fail closed.
 
+The upstream MyVault production release was also preserved: Private Browser 0.5.0 build 50 and MyVault 1.1.0-rc.1 were independently verified before this feature merge, with active Worker versions and matching CI/R2 installer bytes recorded in the MyVault implementation plan. The Account Spaces release will produce a new exact-revision artifact rather than reusing that pre-feature binary.
+
 ## External verification boundary
 
 No real OAuth credential, token, cookie, or private account data is inspected, committed, logged, or captured. Live Google consent remains conditional on a privately configured Desktop OAuth client ID; all implementation, mocked verification, isolation checks, packaging, and non-Google behavior remain in scope.
