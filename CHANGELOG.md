@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3 — 2026-09-12
+
+- Added Chrome-style automatic MyVault filling for matching normal HTTPS login
+  forms, with delayed-form retries, empty-field protection and no auto-submit.
+- Kept automatic fill disabled in Banking and Development, and excluded signup,
+  password-reset, new-password, insecure and certificate-error pages.
+- Fixed the local browser preview so opening MyVault displays the autofill state
+  without a missing-listener crash.
+
 ## 0.5.0 — 2026-09-12
 
 - Added local Chrome profile detection, selective bookmark/history import and a

@@ -89,3 +89,8 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 - The independently downloaded CI artifact matched the live hash and contains a CycloneDX SBOM with 660 components; CI also verified authenticated full, range and resumed downloads.
 - No repository claims register, scheduled application task or alert sender exists. Equivalent downstream probe due 2026-09-13: re-read the active D1 release row and require the same commit/version/hash tuple; lower traffic is not relevant because publication is deterministic.
 - Live Google OAuth remains intentionally unclaimed until an operator privately configures a Desktop OAuth client ID and consent screen; no client secret is accepted.
+
+[START] System 11 — Chrome-style MyVault autofill — 2026-09-12
+[STEP] 11.1 — Add exact-origin automatic fill policy and safe field injection — done
+[STEP] 11.2 — Verify normal, occupied, signup and workspace-restricted behavior — done
+[STEP] 11.3 — Package, publish and verify the signed desktop release — pending

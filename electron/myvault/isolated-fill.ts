@@ -4,6 +4,7 @@ export const VAULT_ISOLATED_WORLD_ID = 1007;
 
 export interface LoginFormShape { hasUsername: boolean; hasPassword: boolean }
 export interface CapturedLogin { username: string; password: string }
+export type AutomaticFillResult = 'filled' | 'no-login-form' | 'occupied' | 'new-password-form';
 
 function literal(value: string): string {
   return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
@@ -28,6 +29,46 @@ export async function fillLoginInIsolatedWorld(contents: WebContents, username: 
     return true;
   })()` }], true);
   if (result !== true) throw new Error('The page did not accept the credential fill');
+}
+
+/**
+ * Chrome-style fill for normal sign-in forms. Unlike deliberate manual fill,
+ * this refuses new-password/multi-password forms and never overwrites a value
+ * the page or user already placed in either recognized field.
+ */
+export async function fillLoginAutomaticallyInIsolatedWorld(
+  contents: WebContents,
+  username: string,
+  password: string,
+): Promise<AutomaticFillResult> {
+  const result = await contents.executeJavaScriptInIsolatedWorld(VAULT_ISOLATED_WORLD_ID, [{ code: `(() => {
+    const visible = (element) => element instanceof HTMLInputElement
+      && !element.disabled && !element.readOnly && element.getClientRects().length > 0;
+    const newPasswordFields = [...document.querySelectorAll('input[autocomplete="new-password"]')].filter(visible);
+    if (newPasswordFields.length) return 'new-password-form';
+    const passwordFields = [...document.querySelectorAll('input[type="password"], input[autocomplete="current-password"]')]
+      .filter((element) => visible(element) && element.autocomplete !== 'new-password');
+    if (passwordFields.length !== 1) return 'no-login-form';
+    const usernameField = [...document.querySelectorAll('input[autocomplete="username"], input[type="email"], input[name*="user" i], input[name*="email" i]')]
+      .find(visible);
+    const passwordField = passwordFields[0];
+    if (!(passwordField instanceof HTMLInputElement)) return 'no-login-form';
+    if (passwordField.value) return 'occupied';
+    if (usernameField instanceof HTMLInputElement && usernameField.value
+      && usernameField.value.normalize('NFKC').trim() !== ${literal(username.normalize('NFKC').trim())}) return 'occupied';
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+    if (!setter) return 'no-login-form';
+    const setValue = (element, value) => {
+      setter.call(element, value);
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    if (usernameField instanceof HTMLInputElement && !usernameField.value) setValue(usernameField, ${literal(username)});
+    setValue(passwordField, ${literal(password)});
+    return 'filled';
+  })()` }], true) as unknown;
+  if (result === 'filled' || result === 'no-login-form' || result === 'occupied' || result === 'new-password-form') return result;
+  return 'no-login-form';
 }
 
 export async function fillTotpInIsolatedWorld(contents: WebContents, code: string): Promise<void> {

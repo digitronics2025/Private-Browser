@@ -63,8 +63,9 @@ import { MyVaultDiskStore } from './myvault/vault-store.js';
 import { SecureVaultDialogs } from './myvault/secure-dialog.js';
 import type { ConfirmDeleteDialogValue, EditLoginDialogValue, UnlockDialogValue } from './myvault/secure-dialog-contract.js';
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
-import { captureLoginInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape } from './myvault/isolated-fill.js';
+import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape } from './myvault/isolated-fill.js';
 import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
+import { isAutomaticFillPageUrl, selectAutomaticFillEntry } from './myvault/automatic-fill.js';
 import { MyVaultSyncClient } from './myvault/vault-sync.js';
 import { VaultSyncController } from './myvault/sync-controller.js';
 import type { PairDialogValue } from './myvault/secure-dialog-contract.js';
@@ -100,6 +101,8 @@ interface RuntimeTab {
   network: Array<DeveloperNetworkIssue & { redactions: number }>;
   navigationGeneration: number;
   certificateError: boolean;
+  automaticFillGeneration?: number;
+  automaticFillPending: boolean;
 }
 
 interface Layout {
@@ -111,6 +114,7 @@ interface Layout {
 
 const FAVICON_TYPES = new Set(['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_FAVICON_BYTES = 32 * 1024;
+const AUTOMATIC_FILL_RETRY_DELAYS_MS = [0, 300, 1_000, 2_500] as const;
 
 function safeOrigin(value: string): string {
   try { return new URL(value).origin; } catch { return ''; }
@@ -189,6 +193,7 @@ class BrowserController {
   private window!: BrowserWindow;
   private readonly secureDialogs = new SecureVaultDialogs(() => this.window);
   private readonly fillCapabilities = new FillCapabilityStore();
+  private readonly preferredFillEntryByOrigin = new Map<string, string>();
   private readonly vaultSync: VaultSyncController;
   private dirtySyncTimer?: NodeJS.Timeout;
   private readonly passkeyController = new InternalPasskeyController();
@@ -216,6 +221,10 @@ class BrowserController {
     this.vaultSync = new VaultSyncController(vault, new MyVaultSyncClient());
     this.vault.subscribe((status) => {
       if (this.window && !this.window.isDestroyed()) this.window.webContents.send('vault:state');
+      if (status.lifecycle === 'unlocked' && this.window && !this.window.isDestroyed()) {
+        const activeTabId = this.activeTab(this.store.get()).id;
+        this.scheduleAutomaticFill(activeTabId);
+      }
       if (status.lifecycle === 'unlocked' && status.dirty && !this.dirtySyncTimer) {
         this.dirtySyncTimer = setTimeout(() => {
           this.dirtySyncTimer = undefined;
@@ -1411,7 +1420,63 @@ class BrowserController {
     const contents = this.activeContents();
     if (!contents || contents.id !== initial.webContentsId) throw new Error('Vault fill expired because the page context changed');
     await fillLoginInIsolatedWorld(contents, username, password);
+    this.preferredFillEntryByOrigin.set(initial.origin, id);
+    const runtime = this.runtimeTabs.get(initial.tabId);
+    if (runtime) runtime.automaticFillGeneration = initial.navigationGeneration;
     this.addPrivacyEvent('vault', 'Credential autofilled', new URL(initial.origin).hostname);
+  }
+
+  private scheduleAutomaticFill(tabId: string): void {
+    const generation = this.runtimeTabs.get(tabId)?.navigationGeneration;
+    if (generation === undefined) return;
+    for (const delay of AUTOMATIC_FILL_RETRY_DELAYS_MS) {
+      const timer = setTimeout(() => {
+        const runtime = this.runtimeTabs.get(tabId);
+        if (!runtime || runtime.navigationGeneration !== generation || runtime.automaticFillGeneration === generation) return;
+        void this.tryAutomaticFill(tabId, generation);
+      }, delay);
+      timer.unref();
+    }
+  }
+
+  private async tryAutomaticFill(tabId: string, generation: number): Promise<void> {
+    const state = this.store.get();
+    const tab = state.tabs.find((candidate) => candidate.id === tabId);
+    const active = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tabId);
+    const contents = runtime?.view?.webContents;
+    if (!tab || active.id !== tabId || !runtime || !contents || tab.isHome) return;
+    if (!workspaceVaultPolicy(tab.workspaceId).automaticFill || this.vault.status().lifecycle !== 'unlocked') return;
+    if (runtime.navigationGeneration !== generation || runtime.automaticFillGeneration === generation || runtime.automaticFillPending || runtime.certificateError) return;
+    if (!isAutomaticFillPageUrl(contents.getURL())) return;
+
+    runtime.automaticFillPending = true;
+    try {
+      const initial = this.currentFillContext();
+      if (initial.tabId !== tabId || initial.navigationGeneration !== generation || !initial.origin.startsWith('https://')) return;
+      const match = selectAutomaticFillEntry(
+        this.vault.searchMetadata('', initial.origin),
+        this.preferredFillEntryByOrigin.get(initial.origin),
+      );
+      if (!match?.url || !isAutofillTarget(match.url, initial.origin)) return;
+      const capability = this.fillCapabilities.issue(initial, match.id, 'fill-login');
+      this.fillCapabilities.redeem(capability, this.currentFillContext(), match.id, 'fill-login');
+      const username = this.vault.resolveSecretForTrustedOperation(match.id, 'username');
+      const password = this.vault.resolveSecretForTrustedOperation(match.id, 'password');
+      if (JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) return;
+      const result = await fillLoginAutomaticallyInIsolatedWorld(contents, username, password);
+      if (JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) return;
+      if (result === 'no-login-form') return;
+      runtime.automaticFillGeneration = generation;
+      if (result === 'filled') {
+        this.addPrivacyEvent('vault', 'Credential autofilled automatically', new URL(initial.origin).hostname);
+      }
+    } catch {
+      // Locked vaults, disappearing forms and navigations are ordinary races.
+      // Automatic fill stays silent and fail-closed; deliberate Fill reports errors.
+    } finally {
+      runtime.automaticFillPending = false;
+    }
   }
 
   async inspectVaultFormShape() {
@@ -1528,7 +1593,7 @@ class BrowserController {
   }
 
   private newRuntimeTab(): RuntimeTab {
-    return { loading: false, canGoBack: false, canGoForward: false, developerToolsOpen: false, console: [], network: [], navigationGeneration: 0, certificateError: false };
+    return { loading: false, canGoBack: false, canGoForward: false, developerToolsOpen: false, console: [], network: [], navigationGeneration: 0, certificateError: false, automaticFillPending: false };
   }
 
   markCertificateError(webContentsId: number): void {
@@ -1689,14 +1754,23 @@ class BrowserController {
       if (!isMainFrame) return;
       runtime.navigationGeneration += 1;
       runtime.certificateError = false;
+      runtime.automaticFillGeneration = undefined;
+      runtime.automaticFillPending = false;
       this.fillCapabilities.invalidateTab(tabId);
       this.secureDialogs.closeAll();
     });
     view.webContents.on('did-start-loading', () => this.updateRuntime(tabId, { loading: true }));
     view.webContents.on('did-stop-loading', () => this.updateRuntime(tabId, { loading: false }));
-    view.webContents.on('did-finish-load', () => void this.updateGoogleWebsiteState(tabId, view));
+    view.webContents.on('did-finish-load', () => {
+      void this.updateGoogleWebsiteState(tabId, view);
+      this.scheduleAutomaticFill(tabId);
+    });
     view.webContents.on('did-navigate', (_event, url) => this.commitNavigation(tabId, url));
-    view.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => { if (isMainFrame) this.commitNavigation(tabId, url, false); });
+    view.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+      if (!isMainFrame) return;
+      this.commitNavigation(tabId, url, false);
+      this.scheduleAutomaticFill(tabId);
+    });
     view.webContents.on('page-title-updated', (event, title) => {
       event.preventDefault();
       this.store.update((state) => {
@@ -1902,6 +1976,7 @@ class BrowserController {
       view.setVisible(true);
       this.applyLayout();
       if (!view.webContents.getURL()) await view.webContents.loadURL(tab.url);
+      this.scheduleAutomaticFill(tab.id);
     }
     this.broadcast();
   }
