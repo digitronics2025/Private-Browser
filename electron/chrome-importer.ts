@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -119,21 +119,35 @@ export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, 
 
 function readBookmarks(directory: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId) {
   const filePath = join(directory, 'Bookmarks');
-  if (!existsSync(filePath)) return { bookmarks: [] as Bookmark[], skipped: 0, truncated: false };
-  if (statSync(filePath).size > MAX_BOOKMARK_FILE_BYTES) throw new Error('Chrome bookmarks file is unusually large');
-  return parseChromeBookmarks(readFileSync(filePath, 'utf8'), workspaceId, accountSpaceId);
+  let descriptor: number;
+  try {
+    descriptor = openSync(filePath, 'r');
+  } catch (error: unknown) {
+    if (isMissingFile(error)) return { bookmarks: [] as Bookmark[], skipped: 0, truncated: false };
+    throw error;
+  }
+  try {
+    if (fstatSync(descriptor).size > MAX_BOOKMARK_FILE_BYTES) throw new Error('Chrome bookmarks file is unusually large');
+    return parseChromeBookmarks(readFileSync(descriptor, 'utf8'), workspaceId, accountSpaceId);
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function readHistory(directory: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): { history: HistoryEntry[]; skipped: number } {
   const source = join(directory, 'History');
-  if (!existsSync(source)) return { history: [], skipped: 0 };
   const scratch = join(tmpdir(), `private-browser-chrome-${randomUUID()}`);
   mkdirSync(scratch, { mode: 0o700 });
   const copy = join(scratch, 'History');
   try {
-    copyFileSync(source, copy);
-    if (existsSync(`${source}-wal`)) copyFileSync(`${source}-wal`, `${copy}-wal`);
-    if (existsSync(`${source}-shm`)) copyFileSync(`${source}-shm`, `${copy}-shm`);
+    try {
+      copyFileSync(source, copy);
+    } catch (error: unknown) {
+      if (isMissingFile(error)) return { history: [], skipped: 0 };
+      throw error;
+    }
+    copyIfPresent(`${source}-wal`, `${copy}-wal`);
+    copyIfPresent(`${source}-shm`, `${copy}-shm`);
     const db = new DatabaseSync(copy, { readOnly: true });
     try {
       const rows = db.prepare('SELECT url, title, last_visit_time FROM urls WHERE hidden = 0 AND last_visit_time > 0 ORDER BY last_visit_time DESC LIMIT ?').all(MAX_IMPORTED_HISTORY) as Array<{ url: string; title: string; last_visit_time: number }>;
@@ -149,6 +163,18 @@ function readHistory(directory: string, workspaceId: WorkspaceId, accountSpaceId
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+function copyIfPresent(source: string, destination: string): void {
+  try {
+    copyFileSync(source, destination);
+  } catch (error: unknown) {
+    if (!isMissingFile(error)) throw error;
+  }
+}
+
+function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 export function readChromeProfile(profileId: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId, includeBookmarks: boolean, includeHistory: boolean, userDataDirectory?: string): ChromeProfileData {
