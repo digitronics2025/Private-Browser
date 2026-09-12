@@ -203,4 +203,3 @@ describe('cross-language envelope vectors', () => {
     expect(payload.items[0].password).toBe('Tr0ub4dor&3xK');
   });
 });
-

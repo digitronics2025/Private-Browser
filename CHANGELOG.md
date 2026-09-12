@@ -1,12 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-12
 
-- Added local Chrome profile detection and selective bookmark/history import.
-- Added a Chrome-style bookmarks bar with preserved folders, ordering, Other
-  bookmarks, overflow menus, and the Ctrl+Shift+B visibility shortcut.
-- Added secure Chrome Password Manager CSV import directly into the OS-encrypted
-  Vault, with duplicate and unsafe-entry filtering.
+- Added local Chrome profile detection, selective bookmark/history import and a
+  Chrome-style bookmarks bar that preserves folders, ordering and overflow.
+- Replaced the independent browser credential store with a brokered MyVault
+  envelope, offline editing, scoped device pairing and explicit CAS conflicts.
+- Added hardened one-shot secret dialogs and metadata-only renderer IPC; master
+  passwords, device tokens, decrypted payloads and entry secrets stay trusted.
+- Replaced page-world autofill with exact-origin, navigation-bound, single-use
+  isolated-world fills that recognize login fields and never submit.
+- Added deliberate Save/Update capture, recoverable legacy migration, direct
+  Chrome CSV import and central Banking/Development workspace policy.
+- Ported the reviewed passkey ceremony core behind a disabled release gate; OS
+  WebAuthn remains unchanged until packaged first-script interception is proven.
 
 ## 0.3.4 — 2026-09-10
 

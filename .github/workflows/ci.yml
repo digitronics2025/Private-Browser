@@ -39,6 +39,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify Electron MyVault boundary
+        run: npm run test:e2e
       - name: Select the next release version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
