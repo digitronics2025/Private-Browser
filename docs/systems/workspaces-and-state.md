@@ -4,7 +4,7 @@ sources:
   - electron/state-store.ts
   - electron/account-space-state.ts
   - electron/runtime-state-store.ts
-verified_at: f7520fcf
+verified_at: 78f08e4
 ---
 
 # Workspaces and Persisted State
@@ -75,6 +75,8 @@ input. Banking does not write ordinary browsing history.
 
 - Every workspace has at least one account and every account has at least one tab
   after validation.
+- Tab IDs are globally unique; malformed duplicates are discarded before
+  `BrowserController` can map a tab ID to a live `WebContentsView`.
 - A manifest is written last during migration and atomically replaced on updates.
 - Migration IDs are stable for a source fingerprint, so a retry cannot create a
   second set of legacy partitions.

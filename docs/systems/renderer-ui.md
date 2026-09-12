@@ -5,7 +5,7 @@ sources:
   - src/styles.css
   - src/preview-api.ts
   - index.html
-verified_at: 71b50ac
+verified_at: 78f08e4
 ---
 
 # Renderer UI

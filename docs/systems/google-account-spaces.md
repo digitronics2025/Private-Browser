@@ -19,7 +19,7 @@ sources:
   - electron/ipc-contracts.ts
   - electron/oauth-loopback.ts
   - electron/runtime-state-store.ts
-verified_at: f7520fcf
+verified_at: 78f08e4
 ---
 
 # Google Account Spaces
@@ -46,7 +46,8 @@ key, refresh token or Google subject to the renderer.
    both the UUID and membership before reading state, opening a tab or selecting
    a session.
 3. A workspace always has at least one Account Space, and an Account Space always
-   has at least one tab. The sole account cannot be deleted.
+   has at least one tab. Tab IDs are globally unique before runtime views are
+   materialized. The sole account cannot be deleted.
 4. Banking policy is evaluated before stored grants. Banking denies AI,
    DevTools, popups, downloads and all site permissions. Development alone keeps
    controlled DevTools.

@@ -3,7 +3,7 @@ system: ai-consent
 sources:
   - electron/ai-provider.ts
   - electron/ai-account-spaces.ts
-verified_at: f7520fcf
+verified_at: 78f08e4
 ---
 
 # AI Consent
