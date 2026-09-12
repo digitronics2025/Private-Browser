@@ -24,7 +24,7 @@ jobs:
     # Secrets are attached per step, never to the job, so `npm ci` and the test
     # suite never run with production credentials in their environment.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2
       - uses: actions/setup-node@v5
