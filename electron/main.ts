@@ -51,6 +51,7 @@ import { MyVaultSyncClient } from './myvault/vault-sync.js';
 import { VaultSyncController } from './myvault/sync-controller.js';
 import type { PairDialogValue } from './myvault/secure-dialog-contract.js';
 import { VaultMigrationService } from './myvault/vault-migration.js';
+import { canInstallPasskeyProvider, InternalPasskeyController, type PasskeyOptIns } from './myvault/passkey-controller.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
@@ -124,6 +125,8 @@ class BrowserController {
   private readonly fillCapabilities = new FillCapabilityStore();
   private readonly vaultSync: VaultSyncController;
   private dirtySyncTimer?: NodeJS.Timeout;
+  private readonly passkeyController = new InternalPasskeyController();
+  private readonly passkeyOptIns: PasskeyOptIns = { global: false, workspaces: {}, sites: {} };
 
   constructor(
     private readonly store: StateStore,
@@ -616,6 +619,7 @@ class BrowserController {
     this.fillCapabilities.invalidateAll();
     if (this.dirtySyncTimer) clearTimeout(this.dirtySyncTimer);
     this.dirtySyncTimer = undefined;
+    for (const runtime of this.runtimeTabs.values()) if (runtime.view) this.passkeyController.detach(runtime.view.webContents);
     this.vault.lock();
     await this.clipboardGuard.flush();
     this.addPrivacyEvent('vault', 'MyVault locked', 'Pending vault actions and clipboard state were invalidated');
@@ -972,6 +976,9 @@ class BrowserController {
     });
     runtime.view = view;
     this.window.contentView.addChildView(view);
+    if (canInstallPasskeyProvider(tab.workspaceId, normalizedWebOrigin(tab.url === 'private://home' ? 'https://invalid.local' : tab.url), this.passkeyOptIns, false)) {
+      void this.passkeyController.installAtDocumentStart(view.webContents).catch(() => this.passkeyController.detach(view.webContents));
+    }
     view.webContents.setWindowOpenHandler(({ url }) => {
       if (tab.workspaceId === 'banking') {
         this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
@@ -1023,7 +1030,7 @@ class BrowserController {
       this.broadcast();
     });
     view.webContents.on('page-favicon-updated', (_event, favicons) => void this.updateFavicon(tabId, ses, favicons[0]));
-    view.webContents.on('devtools-opened', () => this.updateRuntime(tabId, { developerToolsOpen: true }));
+    view.webContents.on('devtools-opened', () => { this.passkeyController.detach(view.webContents); this.updateRuntime(tabId, { developerToolsOpen: true }); });
     view.webContents.on('devtools-closed', () => this.updateRuntime(tabId, { developerToolsOpen: false }));
     view.webContents.on('console-message', (details) => this.recordConsoleMessage(tabId, details));
     view.webContents.on('context-menu', (_event, params) => {
