@@ -3,7 +3,7 @@ system: browser-shell
 sources:
   - electron/main.ts
   - electron/developer-tools.ts
-verified_at: 7063e89
+verified_at: cc0420c
 ---
 
 # Browser Shell
@@ -365,8 +365,12 @@ workspace reuses the same `Session` object, and without it `onBeforeRequest` and
 
 What it configures, once per partition:
 
-- **User agent** — the default string with any ` Electron/<version>` and
-  ` Private Browser/<version>` token stripped out.
+- **User agent** — `browserCompatibleUserAgent` removes both Electron's product
+  token and every space/hyphen/underscore spelling of the packaged application
+  token. The legacy header therefore stays aligned with Chromium's User-Agent
+  Client Hints; strict browser-integrity checks do not see the packaged
+  `private-work-browser/<version>` token that the former literal-only cleanup
+  missed.
 - **Permissions** — both handlers allow only top-frame `fullscreen` and
   `clipboard-sanitized-write` from HTTPS or localhost. Banking denies everything.
   Camera, microphone, geolocation, notifications and the rest are denied without
