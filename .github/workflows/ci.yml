@@ -156,7 +156,7 @@ jobs:
             echo "Invalid packaged release version: $version" >&2
             exit 1
           fi
-          npm version "$version" --no-git-tag-version
+          npm version "$version" --no-git-tag-version --allow-same-version
       - name: Detect whether this push changes the application
         id: changes
         shell: bash
