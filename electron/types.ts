@@ -8,6 +8,173 @@ export interface Workspace {
   protected: boolean;
 }
 
+/** Opaque application identifier. It must never be derived from Google identity data. */
+export type AccountSpaceId = string & { readonly __accountSpaceId: unique symbol };
+
+export type AccountSpaceKind = 'local' | 'google';
+export type AccountSpaceColor = 'indigo' | 'sky' | 'emerald' | 'amber' | 'rose' | 'violet' | 'slate';
+
+export type GoogleModule =
+  | 'identity'
+  | 'gmail-metadata'
+  | 'gmail-read'
+  | 'gmail-send'
+  | 'drive-files'
+  | 'drive-metadata'
+  | 'drive-read'
+  | 'calendar-read'
+  | 'calendar-write'
+  | 'contacts-read'
+  | 'encrypted-backup';
+
+export type GoogleConnectionStatus =
+  | 'not-configured'
+  | 'disconnected'
+  | 'connecting'
+  | 'connected'
+  | 'partial-scopes'
+  | 'offline'
+  | 'quota-limited'
+  | 'revocation-pending'
+  | 'reconnect-required'
+  | 'locked'
+  | 'account-corrupt';
+
+export type GoogleWebsiteStatus =
+  | 'not-visited'
+  | 'session-data-present'
+  | 'sign-in-blocked'
+  | 'unknown';
+
+export interface AccountSpaceSummary {
+  id: AccountSpaceId;
+  workspaceId: WorkspaceId;
+  label: string;
+  color: AccountSpaceColor;
+  order: number;
+  kind: AccountSpaceKind;
+  email?: string;
+  displayName?: string;
+  avatarDataUrl?: string;
+  createdAt: string;
+  lastUsedAt: string;
+  locked: boolean;
+  googleConnection: GoogleConnectionStatus;
+  websiteStatus: GoogleWebsiteStatus;
+  enabledModules: GoogleModule[];
+  grantedScopes: string[];
+}
+
+export interface AccountSpaceHealth {
+  accountSpaceId: AccountSpaceId;
+  status: GoogleConnectionStatus;
+  checkedAt: string;
+  retryAfter?: string;
+  detailCode?:
+    | 'configuration-required'
+    | 'testing-token-expired'
+    | 'permission-revoked'
+    | 'quota-exhausted'
+    | 'network-unavailable'
+    | 'record-unreadable';
+}
+
+export type PermissionCapability =
+  | 'notifications'
+  | 'microphone'
+  | 'camera'
+  | 'display-capture'
+  | 'geolocation'
+  | 'clipboard-read'
+  | 'clipboard-write'
+  | 'file-system'
+  | 'download';
+
+export type PermissionDecision = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
+
+export interface PermissionPrompt {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  workspaceId: WorkspaceId;
+  origin: string;
+  capability: PermissionCapability;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface PermissionPromptResponse {
+  promptId: string;
+  decision: PermissionDecision;
+}
+
+export interface GoogleOperationResult<T = unknown> {
+  ok: boolean;
+  data?: T;
+  error?: {
+    code:
+      | 'GOOGLE_CONFIGURATION_REQUIRED'
+      | 'GOOGLE_CANCELLED'
+      | 'GOOGLE_OFFLINE'
+      | 'GOOGLE_QUOTA'
+      | 'GOOGLE_REVOKED'
+      | 'GOOGLE_SCOPE_MISSING'
+      | 'GOOGLE_POLICY_DENIED'
+      | 'GOOGLE_CONFIRMATION_REQUIRED'
+      | 'GOOGLE_INVALID_RESPONSE'
+      | 'GOOGLE_INTERNAL';
+    message: string;
+    requestId: string;
+    retryAfterSeconds?: number;
+  };
+}
+
+export type StateRecoveryScope = 'browser-state' | 'account-space';
+export type StateRecoveryReason =
+  | 'unsupported-version'
+  | 'invalid-state'
+  | 'migration-interrupted'
+  | 'account-corrupt';
+
+export interface StateRecoveryStatus {
+  readOnly: boolean;
+  scope: StateRecoveryScope;
+  reason: StateRecoveryReason;
+  accountSpaceId?: AccountSpaceId;
+  backupAvailable: boolean;
+  actions: Array<'retry' | 'open-backup-location' | 'restore-v1' | 'fresh-start'>;
+}
+
+export interface AccountSpaceBrowserTab extends BrowserTab {
+  accountSpaceId: AccountSpaceId;
+}
+
+export interface AccountSpaceBookmark extends Bookmark {
+  accountSpaceId: AccountSpaceId;
+}
+
+export interface AccountSpaceHistoryEntry extends HistoryEntry {
+  accountSpaceId: AccountSpaceId;
+}
+
+export interface AccountBrowsingStateV2 {
+  version: 2;
+  accountSpaceId: AccountSpaceId;
+  workspaceId: WorkspaceId;
+  tabs: Array<Pick<AccountSpaceBrowserTab, 'id' | 'workspaceId' | 'accountSpaceId' | 'title' | 'url' | 'isHome'>>;
+  activeTabId: string;
+  bookmarks: AccountSpaceBookmark[];
+  history: AccountSpaceHistoryEntry[];
+}
+
+export interface BrowserStateManifestV2 {
+  version: 2;
+  activeWorkspaceId: WorkspaceId;
+  accountSpaceIds: AccountSpaceId[];
+  activeAccountSpaceByWorkspace: Partial<Record<WorkspaceId, AccountSpaceId>>;
+  trackerBlocking: boolean;
+  privacyLog: PrivacyEvent[];
+}
+
 export interface BrowserTab {
   id: string;
   workspaceId: WorkspaceId;
@@ -69,6 +236,12 @@ export interface BrowserSnapshot {
   downloads: DownloadEntry[];
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
+  /** Present after Account Spaces initialization; contains renderer-safe data only. */
+  activeAccountSpaceId?: AccountSpaceId;
+  accountSpaces?: AccountSpaceSummary[];
+  accountHealth?: AccountSpaceHealth[];
+  recovery?: StateRecoveryStatus;
+  pendingPermission?: PermissionPrompt;
 }
 
 export interface PersistedState {
