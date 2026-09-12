@@ -3,8 +3,9 @@ system: renderer-ui
 sources:
   - src/App.tsx
   - src/styles.css
+  - src/preview-api.ts
   - index.html
-verified_at: e306e59a
+verified_at: 7063e89
 ---
 
 # Renderer UI
@@ -174,6 +175,29 @@ deliberately never send, buy, publish or delete — the panel says so on screen
 and that boundary is the point of the feature, not a limitation to fix.
 
 ## Main-Process Subscriptions
+
+### Account switcher and manager
+
+The former `DR` shortcut is an accessible Account Space switcher. It shows the
+current avatar/label/email and independent website/API state, lists only accounts
+in the active workspace, and supports `Ctrl+Shift+Left/Right` cycling. The active
+account also appears in the address chip and tab accent; the visible tab strip,
+bookmarks and history are filtered by the active account.
+
+The modal manager supports local/Google add, rename, recolour, reorder, module
+re-consent, service launch, operational lock/reopen, data clear, API disconnect
+and destructive deletion confirmation. Backup upload is unavailable until the
+one-time recovery code has been verified. Recovery and exact-origin permission
+dialogs are trusted renderer overlays; the main process hides native page views
+while they are open and focus is restored on close.
+
+The Chrome import wizard lists Account Spaces only from the active workspace and
+disables bookmark/history import entirely in Banking. The selected opaque ID is
+sent with the workspace ID so the main process can reject mismatched ownership.
+
+`src/preview-api.ts` exists only under Vite development mode and supplies
+credential-free data for visible review and browser E2E. Production Electron
+always supplies the context-isolated preload bridge.
 
 Three push channels, each set up in its own `useEffect` in `App`. Each preload
 method returns an unsubscribe function, and each effect returns it directly, so

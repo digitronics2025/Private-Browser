@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { WorkspaceId } from '../types.js';
+import type { AccountSpaceId, WorkspaceId } from '../types.js';
 
 export type VaultOperation = 'fill-login' | 'fill-totp' | 'capture-login';
 
@@ -8,6 +8,7 @@ export interface FillContext {
   tabId: string;
   navigationGeneration: number;
   workspaceId: WorkspaceId;
+  accountSpaceId: AccountSpaceId;
   origin: string;
 }
 
@@ -45,7 +46,8 @@ export class FillCapabilityStore {
       || capability.entryId !== entryId || capability.operation !== operation
       || capability.webContentsId !== current.webContentsId || capability.tabId !== current.tabId
       || capability.navigationGeneration !== current.navigationGeneration
-      || capability.workspaceId !== current.workspaceId || capability.origin !== current.origin) {
+      || capability.workspaceId !== current.workspaceId || capability.accountSpaceId !== current.accountSpaceId
+      || capability.origin !== current.origin) {
       throw new Error('Vault fill expired because the page context changed');
     }
   }

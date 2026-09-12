@@ -2,7 +2,7 @@
 system: security-boundary
 sources:
   - electron/security.ts
-verified_at: e306e59a
+verified_at: 7063e89
 ---
 
 # Security Boundary
@@ -305,6 +305,20 @@ would let a manifest be served from an attacker-chosen location on an otherwise
 trusted host, and would undermine that origin comparison.
 
 ## Consumers
+
+### Account Space enforcement
+
+Account Space isolation is defense in depth around these pure URL predicates.
+Opaque UUID validation, workspace membership, encrypted partition lookup and
+exact-origin capability decisions are documented in
+[google-account-spaces.md](google-account-spaces.md). Banking remains a hard deny
+before any persisted permission lookup. Google website state is classified
+locally and never equates cookie presence with authentication.
+
+OAuth authorization URLs can be launched only through discovered Edge, Chrome
+or Firefox executables with `shell: false`. Callback and ID-token validation,
+bounded Google responses, magic-byte avatar checks and single-use mutation
+capabilities provide the additional Google-specific boundary.
 
 Four modules import from this file. Trace them before changing a signature.
 

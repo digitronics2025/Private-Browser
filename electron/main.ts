@@ -7,6 +7,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  desktopCapturer,
   dialog,
   ipcMain,
   Menu,
@@ -14,6 +15,7 @@ import {
   session,
   shell,
   WebContentsView,
+  type DownloadItem,
   type IpcMainInvokeEvent,
   type Session,
 } from 'electron';
@@ -21,8 +23,15 @@ import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTa
 import { ClipboardGuard } from './clipboard-guard.js';
 import { verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { AiProviderStore } from './ai-provider.js';
-import { StateStore, WORKSPACES } from './state-store.js';
+import { WORKSPACES } from './state-store.js';
+import { AccountStore } from './account-store.js';
+import { AccountSpaceStateStore } from './account-space-state.js';
+import { RuntimeStateStore } from './runtime-state-store.js';
 import type {
+  AccountSpaceColor,
+  AccountSpaceId,
+  ExternalBrowserId,
+  GoogleModule,
   AiApproval,
   AiPagePreview,
   AiProviderInput,
@@ -38,10 +47,14 @@ import type {
   DeveloperNetworkIssue,
   DevToolsMode,
   DownloadEntry,
-  PersistedState,
   PrivacyEvent,
+  RuntimeBrowserStateV2,
+  PermissionCapability,
+  PermissionDecision,
+  PermissionPrompt,
   UpdateServiceInput,
   WorkspaceId,
+  StateRecoveryAction,
 } from './types.js';
 import type { ProjectInfo, ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
@@ -61,6 +74,18 @@ import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
 import { IpcGuard } from './ipc-guard.js';
+import { clearAndVerifyAccountSession } from './account-session.js';
+import { AccountPermissionManager } from './account-permissions.js';
+import { GoogleConfigurationStore } from './google-config.js';
+import { ExternalBrowserLauncher } from './external-browser.js';
+import { GoogleOAuthManager } from './google-oauth.js';
+import { GoogleTokenBroker } from './google-token-broker.js';
+import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailSendInput } from './google-services.js';
+import { AccountBackupManager, type BackupWriteResult } from './account-backup.js';
+import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
+import { validateIpcArguments } from './ipc-contracts.js';
+import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
+import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-status.js';
 import { listChromeProfiles, readChromeProfile } from './chrome-importer.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
 
@@ -86,6 +111,33 @@ interface Layout {
 
 const FAVICON_TYPES = new Set(['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_FAVICON_BYTES = 32 * 1024;
+
+function safeOrigin(value: string): string {
+  try { return new URL(value).origin; } catch { return ''; }
+}
+
+function permissionCapability(
+  permission: string,
+  details: unknown,
+): PermissionCapability | undefined {
+  if (permission === 'notifications') return 'notifications';
+  if (permission === 'media') {
+    const mediaTypes = details && typeof details === 'object' && 'mediaTypes' in details && Array.isArray(details.mediaTypes)
+      ? details.mediaTypes
+      : [];
+    const audio = mediaTypes.includes('audio');
+    const video = mediaTypes.includes('video');
+    if (audio && video) return 'camera-and-microphone';
+    if (audio) return 'microphone';
+    if (video) return 'camera';
+    return undefined;
+  }
+  if (permission === 'clipboard-read') return 'clipboard-read';
+  if (permission === 'clipboard-sanitized-write') return 'clipboard-write';
+  if (permission === 'fileSystem') return 'file-system';
+  if (permission === 'geolocation') return 'geolocation';
+  return undefined;
+}
 
 const TRACKER_HOSTS = [
   '2mdn.net',
@@ -119,11 +171,19 @@ const TRACKER_HOSTS = [
 class BrowserController {
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
   private readonly downloads = new Map<string, DownloadEntry>();
+  private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly configuredSessions = new Set<string>();
-  private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
-  private readonly aiApprovals = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
+  private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
+  private readonly aiApprovals = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
   private readonly clipboardGuard = new ClipboardGuard(clipboard);
+  private readonly permissions: AccountPermissionManager;
+  private pendingPermission?: {
+    prompt: PermissionPrompt;
+    respond: (allowed: boolean, displaySourceId?: string) => void;
+    retainAllowOnce: boolean;
+  };
   private readonly faviconCache = new Map<string, string>();
+  private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { top: 158, left: 0, right: 366, bottom: 0 };
   private window!: BrowserWindow;
@@ -135,17 +195,25 @@ class BrowserController {
   private readonly passkeyOptIns: PasskeyOptIns = { global: false, workspaces: {}, sites: {} };
 
   constructor(
-    private readonly store: StateStore,
+    private readonly store: RuntimeStateStore,
+    private readonly persistedState: AccountSpaceStateStore,
+    private readonly accounts: AccountStore,
+    private readonly googleConfiguration: GoogleConfigurationStore,
+    private readonly externalBrowsers: ExternalBrowserLauncher,
+    private readonly googleOAuth: GoogleOAuthManager,
+    private readonly googleServices: GoogleServices,
+    private readonly backups: AccountBackupManager,
     private readonly vault: VaultBroker,
     private readonly migration: VaultMigrationService,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
     private readonly vscodeBridge: VscodeBridgeServer,
   ) {
+    this.permissions = new AccountPermissionManager(accounts);
+    const state = this.store.get();
+    const active = this.activeTab(state);
+    this.runtimeTabs.set(active.id, this.newRuntimeTab());
     this.vaultSync = new VaultSyncController(vault, new MyVaultSyncClient());
-    for (const tab of this.store.get().tabs) {
-      this.runtimeTabs.set(tab.id, this.newRuntimeTab());
-    }
     this.vault.subscribe((status) => {
       if (this.window && !this.window.isDestroyed()) this.window.webContents.send('vault:state');
       if (status.lifecycle === 'unlocked' && status.dirty && !this.dirtySyncTimer) {
@@ -226,6 +294,13 @@ class BrowserController {
       downloads: [...this.downloads.values()],
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
+      activeAccountSpaceId: this.activeAccountSpaceId(persisted),
+      accountSpaces: persisted.accountSpaces,
+      accountHealth: persisted.accountHealth,
+      recovery: persisted.recovery,
+      pendingPermission: this.pendingPermission?.prompt,
+      googleConfiguration: this.googleConfiguration.status(),
+      externalBrowsers: this.externalBrowsers.discover().map(({ id, name }) => ({ id, name })),
       bookmarkBarVisible: persisted.bookmarkBarVisible,
     };
   }
@@ -283,15 +358,32 @@ class BrowserController {
     this.broadcast();
   }
 
-  async newTab(workspaceId?: WorkspaceId, url = 'private://home'): Promise<void> {
+  async newTab(workspaceId?: WorkspaceId, url = 'private://home', accountSpaceId?: AccountSpaceId): Promise<void> {
     const state = this.store.get();
     const targetWorkspace = WORKSPACES.some((item) => item.id === workspaceId) ? workspaceId! : state.activeWorkspaceId;
+    const targetAccount = accountSpaceId ?? state.activeAccountSpaceByWorkspace[targetWorkspace];
+    if (!targetAccount || !state.accountSpaces.some((account) => account.id === targetAccount && account.workspaceId === targetWorkspace)) {
+      throw new Error('Account Space does not belong to the selected workspace');
+    }
     const id = randomUUID();
     this.hideAllViews();
     this.store.update((next) => {
       next.activeWorkspaceId = targetWorkspace;
-      next.tabs.push({ id, workspaceId: targetWorkspace, title: 'New tab', url: 'private://home', isHome: true });
-      next.activeTabByWorkspace[targetWorkspace] = id;
+      next.activeAccountSpaceByWorkspace[targetWorkspace] = targetAccount;
+      next.tabs.push({
+        id,
+        accountSpaceId: targetAccount,
+        workspaceId: targetWorkspace,
+        title: 'New tab',
+        url: 'private://home',
+        isHome: true,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        developerToolsAllowed: false,
+        developerToolsOpen: false,
+      });
+      next.activeTabByAccountSpace[targetAccount] = id;
     });
     this.runtimeTabs.set(id, this.newRuntimeTab());
     this.broadcast();
@@ -303,11 +395,11 @@ class BrowserController {
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
-    const workspaceTabs = state.tabs.filter((candidate) => candidate.workspaceId === tab.workspaceId);
-    const closedIndex = workspaceTabs.findIndex((candidate) => candidate.id === tabId);
-    const siblings = workspaceTabs.filter((candidate) => candidate.id !== tab.id);
+    const accountTabs = state.tabs.filter((candidate) => candidate.accountSpaceId === tab.accountSpaceId);
+    const closedIndex = accountTabs.findIndex((candidate) => candidate.id === tabId);
+    const siblings = accountTabs.filter((candidate) => candidate.id !== tab.id);
     const nextId = siblings[Math.min(closedIndex, siblings.length - 1)]?.id;
-    const wasActive = state.activeTabByWorkspace[tab.workspaceId] === tabId;
+    const wasActive = state.activeTabByAccountSpace[tab.accountSpaceId] === tabId;
     const runtime = this.runtimeTabs.get(tabId);
     if (runtime?.view) {
       this.window.contentView.removeChildView(runtime.view);
@@ -316,9 +408,9 @@ class BrowserController {
     this.runtimeTabs.delete(tabId);
     this.store.update((next) => {
       next.tabs = next.tabs.filter((candidate) => candidate.id !== tabId);
-      if (wasActive && nextId) next.activeTabByWorkspace[tab.workspaceId] = nextId;
+      if (wasActive && nextId) next.activeTabByAccountSpace[tab.accountSpaceId] = nextId;
     });
-    if (!nextId) await this.newTab(tab.workspaceId);
+    if (!nextId) await this.newTab(tab.workspaceId, 'private://home', tab.accountSpaceId);
     else if (wasActive) await this.activateTab(nextId);
     else this.broadcast();
   }
@@ -331,7 +423,8 @@ class BrowserController {
     this.hideAllViews();
     this.store.update((next) => {
       next.activeWorkspaceId = tab.workspaceId;
-      next.activeTabByWorkspace[tab.workspaceId] = tab.id;
+      next.activeAccountSpaceByWorkspace[tab.workspaceId] = tab.accountSpaceId;
+      next.activeTabByAccountSpace[tab.accountSpaceId] = tab.id;
     });
     await this.showActiveTab();
   }
@@ -342,6 +435,403 @@ class BrowserController {
     this.hideAllViews();
     this.store.update((state) => { state.activeWorkspaceId = workspaceId; });
     await this.showActiveTab();
+  }
+
+  async setOverlayOpen(open: boolean): Promise<void> {
+    if (open) this.hideAllViews();
+    else await this.showActiveTab();
+  }
+
+  async recoveryAction(action: StateRecoveryAction, confirmation?: string): Promise<void> {
+    const recovery = this.store.get().recovery;
+    if (!recovery || !recovery.actions.includes(action)) throw new Error('Recovery action is not available');
+    if (action === 'open-backup-location') {
+      shell.showItemInFolder(this.persistedState.recoveryTargetPath(recovery.accountSpaceId));
+      return;
+    }
+    if (action === 'restore-v1') {
+      if (confirmation !== 'RESTORE_V1') throw new Error('Exact restore confirmation is required');
+      this.persistedState.prepareRestoreV1();
+    } else if (action === 'fresh-start') {
+      if (confirmation !== 'FRESH_START') throw new Error('Exact fresh-start confirmation is required');
+      this.persistedState.prepareFreshStart(recovery.accountSpaceId);
+    }
+    app.relaunch();
+    app.exit(0);
+  }
+
+  async switchAccountSpace(accountSpaceId: AccountSpaceId): Promise<void> {
+    const state = this.store.get();
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!account || account.workspaceId !== state.activeWorkspaceId) {
+      throw new Error('Account Space does not belong to the active workspace');
+    }
+    if (account.locked || state.recovery?.accountSpaceId === accountSpaceId) {
+      throw new Error('Account Space is locked or unavailable');
+    }
+    this.hideAllViews();
+    this.store.update((next) => {
+      next.activeAccountSpaceByWorkspace[next.activeWorkspaceId] = accountSpaceId;
+    });
+    await this.showActiveTab();
+  }
+
+  async addLocalAccountSpace(workspaceId: WorkspaceId, label: string, color: AccountSpaceColor): Promise<AccountSpaceId> {
+    const state = this.store.get();
+    if (!WORKSPACES.some((workspace) => workspace.id === workspaceId)) throw new Error('Unknown workspace');
+    const order = state.accountSpaces.filter((account) => account.workspaceId === workspaceId).length;
+    const record = this.accounts.createLocal({ workspaceId, label, color, order });
+    try {
+      this.hideAllViews();
+      this.store.addAccount(record);
+      await this.showActiveTab();
+    } catch (error) {
+      this.accounts.remove(record.id);
+      throw error;
+    }
+    return record.id;
+  }
+
+  updateAccountSpace(accountSpaceId: AccountSpaceId, label?: string, color?: AccountSpaceColor): void {
+    this.requireAccountMembership(accountSpaceId);
+    const record = this.accounts.update(accountSpaceId, (account) => {
+      if (label !== undefined) account.label = label;
+      if (color !== undefined) account.color = color;
+    });
+    this.store.refreshAccount(record);
+    this.broadcast();
+  }
+
+  reorderAccountSpaces(workspaceId: WorkspaceId, accountSpaceIds: AccountSpaceId[]): void {
+    if (workspaceId !== this.store.get().activeWorkspaceId) throw new Error('Only the active workspace can be reordered');
+    this.store.reorder(workspaceId, accountSpaceIds);
+    this.broadcast();
+  }
+
+  async openInAccountSpace(accountSpaceId: AccountSpaceId, value: string): Promise<void> {
+    const account = this.requireAccountMembership(accountSpaceId);
+    const url = normalizeNavigationInput(value);
+    if (url !== 'private://home' && !isAllowedRemoteUrl(url)) throw new Error('Only HTTP and HTTPS pages are allowed');
+    await this.newTab(account.workspaceId, url, accountSpaceId);
+  }
+
+  async setAccountSpaceLocked(accountSpaceId: AccountSpaceId, locked: boolean): Promise<void> {
+    this.requireAccountMembership(accountSpaceId);
+    if (locked) {
+      this.closeAccountViews(accountSpaceId);
+      this.cancelAccountOperations(accountSpaceId);
+      await session.fromPartition(this.store.partitionFor(accountSpaceId)).closeAllConnections();
+    }
+    const record = this.accounts.update(accountSpaceId, (account) => {
+      account.locked = locked;
+      account.googleConnection = locked ? 'locked' : account.refreshToken ? 'connected' : 'disconnected';
+    });
+    this.store.refreshAccount(record);
+    this.broadcast();
+    if (!locked) await this.showActiveTab();
+  }
+
+  configureGoogle(clientId: string) {
+    const status = this.googleConfiguration.configure(clientId);
+    this.broadcast();
+    return status;
+  }
+
+  clearGoogleConfiguration() {
+    const status = this.googleConfiguration.clear();
+    this.broadcast();
+    return status;
+  }
+
+  async connectGoogleAccount(accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) {
+    this.requireAccountMembership(accountSpaceId);
+    const connecting = this.accounts.update(accountSpaceId, (account) => { account.googleConnection = 'connecting'; });
+    this.store.refreshAccount(connecting);
+    this.broadcast();
+    const allAccountIds = this.store.get().accountSpaces.map((account) => account.id);
+    const result = await this.googleOAuth.connect(accountSpaceId, modules, browserId, allAccountIds);
+    if (!result.ok) {
+      const status = result.error?.code === 'GOOGLE_CONFIGURATION_REQUIRED' ? 'not-configured'
+        : result.error?.code === 'GOOGLE_SCOPE_MISSING' ? 'partial-scopes'
+          : result.error?.code === 'GOOGLE_RECONNECT_REQUIRED' ? 'reconnect-required'
+            : result.error?.code === 'GOOGLE_OFFLINE' ? 'offline'
+              : 'disconnected';
+      this.accounts.update(accountSpaceId, (account) => { account.googleConnection = status; });
+    }
+    this.store.refreshAccount(this.accounts.require(accountSpaceId));
+    this.broadcast();
+    return result;
+  }
+
+  cancelGoogleConnection(accountSpaceId: AccountSpaceId): boolean {
+    this.requireAccountMembership(accountSpaceId);
+    const cancelled = this.googleOAuth.cancel(accountSpaceId);
+    if (cancelled) {
+      const record = this.accounts.update(accountSpaceId, (account) => { account.googleConnection = 'disconnected'; });
+      this.store.refreshAccount(record);
+      this.broadcast();
+    }
+    return cancelled;
+  }
+
+  async disconnectGoogleAccount(accountSpaceId: AccountSpaceId, revoke = false) {
+    this.requireAccountMembership(accountSpaceId);
+    this.cancelAccountOperations(accountSpaceId);
+    const result = await this.googleOAuth.disconnect(accountSpaceId, revoke);
+    const record = this.accounts.require(accountSpaceId);
+    this.store.refreshAccount(record);
+    this.addPrivacyEvent('vault', revoke ? 'Google access revoked' : 'Google API disconnected', revoke ? 'Google grant was revoked; local website data was retained' : 'Local browsing data was retained');
+    return result;
+  }
+
+  async clearAccountSpaceData(accountSpaceId: AccountSpaceId): Promise<void> {
+    const account = this.requireAccountMembership(accountSpaceId);
+    this.closeAccountViews(accountSpaceId);
+    this.cancelAccountOperations(accountSpaceId);
+    const partition = this.store.partitionFor(accountSpaceId);
+    await clearAndVerifyAccountSession(session.fromPartition(partition));
+    this.store.update((state) => {
+      state.history = state.history.filter((entry) => entry.accountSpaceId !== accountSpaceId);
+      for (const tab of state.tabs.filter((candidate) => candidate.accountSpaceId === accountSpaceId)) {
+        tab.title = 'New tab';
+        tab.url = 'private://home';
+        tab.isHome = true;
+      }
+    });
+    this.addPrivacyEvent('vault', 'Account Space data cleared', `${account.label} website data and history were removed`);
+    await this.showActiveTab();
+  }
+
+  async deleteAccountSpace(accountSpaceId: AccountSpaceId, confirmation: string): Promise<void> {
+    if (confirmation !== 'DELETE_ACCOUNT_SPACE') throw new Error('Exact Account Space deletion confirmation is required');
+    const account = this.requireAccountMembership(accountSpaceId);
+    const state = this.store.get();
+    if (state.accountSpaces.filter((candidate) => candidate.workspaceId === account.workspaceId).length <= 1) {
+      throw new Error('Create a replacement Account Space before removing the only one in this workspace');
+    }
+    const partition = this.store.partitionFor(accountSpaceId);
+    this.closeAccountViews(accountSpaceId);
+    this.cancelAccountOperations(accountSpaceId);
+    if (this.accounts.require(accountSpaceId).refreshToken) {
+      const revoked = await this.googleOAuth.disconnect(accountSpaceId, true);
+      if (!revoked.ok) throw new Error(revoked.error?.message ?? 'Google revocation must complete before deletion');
+    }
+    await clearAndVerifyAccountSession(session.fromPartition(partition));
+    this.configuredSessions.delete(partition);
+    this.store.removeAccount(accountSpaceId);
+    await this.showActiveTab();
+  }
+
+  async respondToPermissionPrompt(promptId: string, decision: PermissionDecision, displaySourceId?: string): Promise<void> {
+    const pending = this.pendingPermission;
+    if (!pending || pending.prompt.id !== promptId) throw new Error('Permission prompt is no longer active');
+    this.pendingPermission = undefined;
+    let allowed = false;
+    try {
+      allowed = this.permissions.applyDecision(pending.prompt, decision, pending.retainAllowOnce);
+      if (allowed && pending.prompt.capability === 'display-capture'
+        && !pending.prompt.displaySources?.some((source) => source.id === displaySourceId)) {
+        allowed = false;
+      }
+    } finally {
+      pending.respond(allowed, displaySourceId);
+      this.broadcast();
+      await this.showActiveTab();
+      this.activeContents()?.focus();
+    }
+  }
+
+  prepareGmailSend(accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) {
+    this.requireAccountMembership(accountSpaceId);
+    return this.googleServices.prepareGmailSend(accountSpaceId, input, sourceRevision);
+  }
+
+  gmailOverview(accountSpaceId: AccountSpaceId, operationId: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.gmailOverview(accountSpaceId, signal));
+  }
+
+  searchGmail(accountSpaceId: AccountSpaceId, operationId: string, query?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.searchGmail(accountSpaceId, query ?? '', signal));
+  }
+
+  sendGmail(accountSpaceId: AccountSpaceId, operationId: string, input: GmailSendInput, confirmationToken: string, sourceRevision?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.sendGmail(accountSpaceId, input, confirmationToken, sourceRevision, signal));
+  }
+
+  listDriveFiles(accountSpaceId: AccountSpaceId, operationId: string, query?: string, wholeDrive?: boolean) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'drive', (signal) => this.googleServices.listDriveFiles(accountSpaceId, query ?? '', wholeDrive === true, signal));
+  }
+
+  createDriveFile(accountSpaceId: AccountSpaceId, operationId: string, input: DriveCreateInput) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'drive', (signal) => this.googleServices.createDriveFile(accountSpaceId, input, signal));
+  }
+
+  prepareDriveShare(accountSpaceId: AccountSpaceId, fileId: string, email: string, role: 'reader' | 'writer', sourceRevision?: string) {
+    this.requireAccountMembership(accountSpaceId);
+    return this.googleServices.prepareDriveShare(accountSpaceId, fileId, email, role, sourceRevision);
+  }
+
+  shareDriveFile(accountSpaceId: AccountSpaceId, operationId: string, fileId: string, email: string, role: 'reader' | 'writer', confirmationToken: string, sourceRevision?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'drive', (signal) => this.googleServices.shareDriveFile(accountSpaceId, fileId, email, role, confirmationToken, sourceRevision, signal));
+  }
+
+  listCalendarEvents(accountSpaceId: AccountSpaceId, operationId: string, query?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'calendar', (signal) => this.googleServices.upcomingCalendarEvents(accountSpaceId, query ?? '', signal));
+  }
+
+  prepareCalendarWrite(accountSpaceId: AccountSpaceId, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, sourceRevision?: string) {
+    this.requireAccountMembership(accountSpaceId);
+    return this.googleServices.prepareCalendarWrite(accountSpaceId, action, input, sourceRevision);
+  }
+
+  writeCalendarEvent(accountSpaceId: AccountSpaceId, operationId: string, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, confirmationToken: string, sourceRevision?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'calendar', (signal) => this.googleServices.writeCalendarEvent(accountSpaceId, action, input, confirmationToken, sourceRevision, signal));
+  }
+
+  listContacts(accountSpaceId: AccountSpaceId, operationId: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'contacts', (signal) => this.googleServices.listContacts(accountSpaceId, signal));
+  }
+
+  createBackupRecoveryCode(accountSpaceId: AccountSpaceId): string {
+    this.requireAccountMembership(accountSpaceId);
+    return this.backups.createRecoveryCode(accountSpaceId);
+  }
+
+  verifyAndEnableBackup(accountSpaceId: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean): void {
+    this.requireAccountMembership(accountSpaceId);
+    this.backups.verifyAndEnable(accountSpaceId, recoveryCode, includeOpenTabs, includeHistory);
+    this.store.refreshAccount(this.accounts.require(accountSpaceId));
+    this.broadcast();
+  }
+
+  disableBackup(accountSpaceId: AccountSpaceId): void {
+    this.requireAccountMembership(accountSpaceId);
+    this.backups.disable(accountSpaceId);
+    this.store.refreshAccount(this.accounts.require(accountSpaceId));
+    this.broadcast();
+  }
+
+  uploadBackup(accountSpaceId: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite'): Promise<BackupWriteResult> {
+    const state = this.store.get();
+    const payload = this.backups.buildPayload(accountSpaceId, {
+      bookmarks: state.bookmarks,
+      trackerBlocking: state.trackerBlocking,
+      openTabs: state.tabs,
+      history: state.history,
+    });
+    return this.runGoogleOperation(accountSpaceId, operationId, 'backup', (signal) => this.backups.upload(accountSpaceId, payload, conflictResolution, signal));
+  }
+
+  restoreBackup(accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<void> {
+    const account = this.requireAccountMembership(accountSpaceId);
+    return this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
+      const restored = await this.backups.restore(accountSpaceId, recoveryCode, signal);
+      const validBookmark = (item: { accountSpaceId: AccountSpaceId; workspaceId: WorkspaceId }) => item.accountSpaceId === accountSpaceId && item.workspaceId === account.workspaceId;
+      if (!restored.bookmarks.every(validBookmark) || restored.history?.some((item) => !validBookmark(item)) || restored.openTabs?.some((item) => !validBookmark(item))) {
+        throw new Error('Backup belongs to another Account Space');
+      }
+      this.closeAccountViews(accountSpaceId);
+      this.store.update((state) => {
+        state.bookmarks = [...state.bookmarks.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.bookmarks];
+        if (restored.history) state.history = [...state.history.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.history];
+        if (restored.openTabs?.length) {
+          state.tabs = [...state.tabs.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.openTabs.map((tab) => ({ ...tab, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false }))];
+          state.activeTabByAccountSpace[accountSpaceId] = restored.openTabs[0].id;
+        }
+        state.trackerBlocking = restored.settings.trackerBlocking;
+      });
+      this.broadcast();
+    });
+  }
+
+  cancelOperation(operationId: string): boolean {
+    const operation = this.operations.get(operationId);
+    if (!operation) return false;
+    operation.controller.abort();
+    return true;
+  }
+
+  private async runGoogleOperation<T>(
+    accountSpaceId: AccountSpaceId,
+    operationId: string,
+    service: 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup',
+    task: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    this.requireAccountMembership(accountSpaceId);
+    if (this.operations.has(operationId)) throw new Error('Operation identifier is already active');
+    const operation = new AbortController();
+    this.operations.set(operationId, { accountSpaceId, controller: operation });
+    this.sendOperationProgress(operationId, accountSpaceId, service, 'started');
+    try {
+      const result = await task(operation.signal);
+      this.sendOperationProgress(operationId, accountSpaceId, service, operation.signal.aborted ? 'cancelled' : 'completed');
+      return result;
+    } catch (error) {
+      this.sendOperationProgress(operationId, accountSpaceId, service, operation.signal.aborted ? 'cancelled' : 'failed');
+      throw error;
+    } finally {
+      this.operations.delete(operationId);
+    }
+  }
+
+  private sendOperationProgress(operationId: string, accountSpaceId: AccountSpaceId, service: 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup', phase: 'started' | 'completed' | 'cancelled' | 'failed'): void {
+    if (!this.window.isDestroyed()) this.window.webContents.send('google:operation-progress', { operationId, accountSpaceId, service, phase });
+  }
+
+  private requireAccountMembership(accountSpaceId: AccountSpaceId) {
+    const state = this.store.get();
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!account || account.workspaceId !== state.activeWorkspaceId) throw new Error('Account Space does not belong to the active workspace');
+    return account;
+  }
+
+  private closeAccountViews(accountSpaceId: AccountSpaceId): void {
+    const ids = new Set(this.store.get().tabs.filter((tab) => tab.accountSpaceId === accountSpaceId).map((tab) => tab.id));
+    for (const id of ids) {
+      const runtime = this.runtimeTabs.get(id);
+      if (runtime?.view) {
+        this.window.contentView.removeChildView(runtime.view);
+        runtime.view.webContents.close();
+      }
+      this.runtimeTabs.delete(id);
+    }
+    for (const key of [...this.faviconCache.keys()]) if (key.startsWith(`${accountSpaceId}:`)) this.faviconCache.delete(key);
+  }
+
+  private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
+    this.pendingAiPreviews.clear();
+    this.aiApprovals.clear();
+    this.permissions.clearAccount(accountSpaceId);
+    this.googleOAuth.clearMemory(accountSpaceId);
+    this.googleServices.clearAccount(accountSpaceId);
+    this.backups.clearAccount(accountSpaceId);
+    for (const [operationId, operation] of this.operations) {
+      if (operation.accountSpaceId !== accountSpaceId) continue;
+      operation.controller.abort();
+      this.operations.delete(operationId);
+    }
+    if (this.pendingPermission?.prompt.accountSpaceId === accountSpaceId) {
+      const pending = this.pendingPermission;
+      this.pendingPermission = undefined;
+      pending.respond(false);
+    }
+    for (const [id, item] of this.downloadItems) {
+      if (this.downloads.get(id)?.accountSpaceId !== accountSpaceId) continue;
+      item.cancel();
+      this.downloadItems.delete(id);
+      this.downloads.delete(id);
+    }
+  }
+
+  private queuePermissionPrompt(prompt: PermissionPrompt, respond: (allowed: boolean, displaySourceId?: string) => void, retainAllowOnce = false): void {
+    if (this.pendingPermission) {
+      respond(false);
+      return;
+    }
+    this.pendingPermission = { prompt, respond, retainAllowOnce };
+    const active = this.activeTab(this.store.get());
+    this.runtimeTabs.get(active.id)?.view?.setVisible(false);
+    this.broadcast();
   }
 
   goBack(): void {
@@ -367,9 +857,12 @@ class BrowserController {
     const tab = this.activeTab(state);
     if (tab.isHome) return;
     this.store.update((next) => {
-      const existing = next.bookmarks.findIndex((item) => item.url === tab.url && item.workspaceId === tab.workspaceId);
+      const existing = next.bookmarks.findIndex((item) => item.url === tab.url && item.accountSpaceId === tab.accountSpaceId);
       if (existing >= 0) next.bookmarks.splice(existing, 1);
-      else next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order: next.bookmarks.length, orderPath: [next.bookmarks.length] });
+      else {
+        const order = next.bookmarks.filter((item) => item.accountSpaceId === tab.accountSpaceId && item.location === 'bar').length;
+        next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order, orderPath: [order] });
+      }
     });
     this.broadcast();
   }
@@ -377,7 +870,7 @@ class BrowserController {
   async openBookmark(id: string): Promise<void> {
     const bookmark = this.store.get().bookmarks.find((item) => item.id === id);
     if (!bookmark) return;
-    await this.newTab(bookmark.workspaceId, bookmark.url);
+    await this.newTab(bookmark.workspaceId, bookmark.url, bookmark.accountSpaceId);
   }
 
   toggleBookmarkBar(): void {
@@ -391,17 +884,19 @@ class BrowserController {
 
   importChrome(options: ChromeImportOptions): ChromeImportResult {
     if (!options || typeof options.profileId !== 'string') throw new Error('Choose a Chrome profile');
-    const data = readChromeProfile(options.profileId, options.workspaceId, options.bookmarks === true, options.history === true);
+    const account = this.requireAccountMembership(options.accountSpaceId);
+    if (account.workspaceId !== options.workspaceId) throw new Error('Chrome imports cannot cross workspace boundaries');
+    const data = readChromeProfile(options.profileId, options.workspaceId, options.accountSpaceId, options.bookmarks === true, options.history === true);
     this.store.update((state) => {
-      const bookmarkKeys = new Set(state.bookmarks.map((item) => `${item.workspaceId}\u0000${item.location}\u0000${item.folderPath.join('\u0001')}\u0000${item.title}\u0000${item.url}`));
+      const bookmarkKeys = new Set(state.bookmarks.map((item) => `${item.accountSpaceId}\u0000${item.location}\u0000${item.folderPath.join('\u0001')}\u0000${item.title}\u0000${item.url}`));
       for (const bookmark of data.bookmarks) {
-        const key = `${bookmark.workspaceId}\u0000${bookmark.location}\u0000${bookmark.folderPath.join('\u0001')}\u0000${bookmark.title}\u0000${bookmark.url}`;
+        const key = `${bookmark.accountSpaceId}\u0000${bookmark.location}\u0000${bookmark.folderPath.join('\u0001')}\u0000${bookmark.title}\u0000${bookmark.url}`;
         if (bookmarkKeys.has(key) || state.bookmarks.length >= 25_000) data.result.skipped.bookmarks += 1;
         else { state.bookmarks.push(bookmark); bookmarkKeys.add(key); data.result.imported.bookmarks += 1; }
       }
-      const historyKeys = new Set(state.history.map((item) => `${item.workspaceId}\u0000${item.url}\u0000${item.visitedAt}`));
+      const historyKeys = new Set(state.history.map((item) => `${item.accountSpaceId}\u0000${item.url}\u0000${item.visitedAt}`));
       for (const entry of data.history) {
-        const key = `${entry.workspaceId}\u0000${entry.url}\u0000${entry.visitedAt}`;
+        const key = `${entry.accountSpaceId}\u0000${entry.url}\u0000${entry.visitedAt}`;
         if (historyKeys.has(key) || state.history.length >= 10_000) data.result.skipped.history += 1;
         else { state.history.push(entry); historyKeys.add(key); data.result.imported.history += 1; }
       }
@@ -594,8 +1089,23 @@ class BrowserController {
         await contents.removeInsertedCSS(mask);
       }
     }
-    const preview: AiPagePreview = { id: randomUUID(), title: `Developer diagnosis - ${sanitizeDiagnosticText(tab.title, 200).text}`, url: sanitizeDiagnosticUrl(tab.url).text, text: text.text.slice(0, 12_000), redactions: report.redactions + text.redactions, protectedPage: false, ...(dom ? { dom } : {}), ...(screenshotDataUrl ? { screenshotDataUrl } : {}) };
-    this.pendingAiPreviews.set(preview.id, { preview, sourceUrl: tab.url, expiresAt: Date.now() + 5 * 60_000 });
+    const previewText = text.text.slice(0, 12_000);
+    const preview: AiPagePreview = {
+      id: randomUUID(),
+      accountSpaceId: tab.accountSpaceId,
+      tabId: tab.id,
+      service: 'browser',
+      sourceRevision: aiSourceRevision(tab.accountSpaceId, tab, previewText),
+      sourceUrl: tab.url,
+      title: `Developer diagnosis - ${sanitizeDiagnosticText(tab.title, 200).text}`,
+      url: sanitizeDiagnosticUrl(tab.url).text,
+      text: previewText,
+      redactions: report.redactions + text.redactions,
+      protectedPage: false,
+      ...(dom ? { dom } : {}),
+      ...(screenshotDataUrl ? { screenshotDataUrl } : {}),
+    };
+    this.pendingAiPreviews.set(preview.id, { preview, expiresAt: Date.now() + 5 * 60_000 });
     return preview;
   }
 
@@ -630,8 +1140,21 @@ class BrowserController {
     const result = redactSensitiveText(rawText);
     this.addPrivacyEvent('local-read', 'Local page preview', `${tab.title} · ${result.redactions} redaction(s)`);
     const safeTitle = redactSensitiveText(tab.title);
-    const preview: AiPagePreview = { id: randomUUID(), title: safeTitle.text, url: urlOriginForSharing(tab.url), text: result.text.slice(0, 12000), redactions: result.redactions + safeTitle.redactions, protectedPage: false };
-    this.pendingAiPreviews.set(preview.id, { preview, sourceUrl: tab.url, expiresAt: Date.now() + 5 * 60_000 });
+    const text = result.text.slice(0, 12000);
+    const preview: AiPagePreview = {
+      id: randomUUID(),
+      accountSpaceId: tab.accountSpaceId,
+      tabId: tab.id,
+      service: classifyAiSource(tab.url),
+      sourceRevision: aiSourceRevision(tab.accountSpaceId, tab, text),
+      sourceUrl: tab.url,
+      title: safeTitle.text,
+      url: urlOriginForSharing(tab.url),
+      text,
+      redactions: result.redactions + safeTitle.redactions,
+      protectedPage: false,
+    };
+    this.pendingAiPreviews.set(preview.id, { preview, expiresAt: Date.now() + 5 * 60_000 });
     return preview;
   }
 
@@ -642,9 +1165,11 @@ class BrowserController {
     const preview = pending.preview;
     const state = this.store.get();
     const tab = this.activeTab(state);
-    if (tab.url !== pending.sourceUrl || isProtectedPage(tab.url)) throw new Error('The page changed or is protected');
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    if (!sameAiSource(preview, accountSpaceId, tab) || isProtectedPage(tab.url)) throw new Error('The page, tab, or Account Space changed or is protected');
+    if (!maySendAiPreviewToCloud(preview)) throw new Error('Mailbox contents never leave this device or enter an AI model');
     const token = randomUUID();
-    this.aiApprovals.set(token, { preview, sourceUrl: pending.sourceUrl, expiresAt: Date.now() + 5 * 60_000 });
+    this.aiApprovals.set(token, { preview, expiresAt: Date.now() + 5 * 60_000 });
     this.addPrivacyEvent('cloud-approved', 'Cloud context approved', `${preview.title} · ${preview.redactions} redaction(s)`);
     return { token, preview };
   }
@@ -678,8 +1203,10 @@ class BrowserController {
     const approval = this.aiApprovals.get(token);
     this.aiApprovals.delete(token);
     if (!approval || approval.expiresAt < Date.now()) throw new Error('AI approval expired; approve the page again');
-    const tab = this.activeTab(this.store.get());
-    if (tab.url !== approval.sourceUrl || isProtectedPage(tab.url)) throw new Error('The page changed or is protected');
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    if (!sameAiSource(approval.preview, accountSpaceId, tab) || isProtectedPage(tab.url)) throw new Error('The page, tab, or Account Space changed or is protected');
     return approval.preview;
   }
 
@@ -985,9 +1512,19 @@ class BrowserController {
     }
   }
 
-  private activeTab(state: PersistedState) {
-    const id = state.activeTabByWorkspace[state.activeWorkspaceId];
-    return state.tabs.find((tab) => tab.id === id) ?? state.tabs.find((tab) => tab.workspaceId === state.activeWorkspaceId) ?? state.tabs[0];
+  private activeAccountSpaceId(state: RuntimeBrowserStateV2): AccountSpaceId {
+    const id = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+    if (!id) throw new Error('The active workspace has no Account Space');
+    return id;
+  }
+
+  private activeTab(state: RuntimeBrowserStateV2) {
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    const id = state.activeTabByAccountSpace[accountSpaceId];
+    const tab = state.tabs.find((candidate) => candidate.id === id && candidate.accountSpaceId === accountSpaceId)
+      ?? state.tabs.find((candidate) => candidate.accountSpaceId === accountSpaceId);
+    if (!tab) throw new Error('The active Account Space has no tab');
+    return tab;
   }
 
   private newRuntimeTab(): RuntimeTab {
@@ -1018,7 +1555,14 @@ class BrowserController {
     if (runtime.certificateError) throw new Error('Vault fill is blocked after a certificate error');
     const origin = normalizedWebOrigin(contents.getURL());
     if (origin !== normalizedWebOrigin(tab.url)) throw new Error('Vault fill expired because the page context changed');
-    return { webContentsId: contents.id, tabId: tab.id, navigationGeneration: runtime.navigationGeneration, workspaceId: tab.workspaceId, origin };
+    return {
+      webContentsId: contents.id,
+      tabId: tab.id,
+      navigationGeneration: runtime.navigationGeneration,
+      workspaceId: tab.workspaceId,
+      accountSpaceId: tab.accountSpaceId,
+      origin,
+    };
   }
 
   private developerTarget(tabId = this.activeTab(this.store.get()).id) {
@@ -1085,12 +1629,16 @@ class BrowserController {
   }
 
   private ensureView(tabId: string): WebContentsView {
-    const runtime = this.runtimeTabs.get(tabId)!;
+    let runtime = this.runtimeTabs.get(tabId);
+    if (!runtime) {
+      runtime = this.newRuntimeTab();
+      this.runtimeTabs.set(tabId, runtime);
+    }
     if (runtime.view) return runtime.view;
     const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId)!;
-    const partition = `persist:private-browser-${tab.workspaceId}`;
+    const partition = this.store.partitionFor(tab.accountSpaceId);
     const ses = session.fromPartition(partition);
-    this.configureSession(ses, partition, tab.workspaceId);
+    this.configureSession(ses, partition, tab.workspaceId, tab.accountSpaceId);
     const view = new WebContentsView({
       webPreferences: {
         session: ses,
@@ -1110,7 +1658,7 @@ class BrowserController {
       if (tab.workspaceId === 'banking') {
         this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
       } else if (isAllowedRemoteUrl(url)) {
-        void this.newTab(tab.workspaceId, stripTrackingParameters(url));
+        void this.newTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
       }
       return { action: 'deny' };
     });
@@ -1146,6 +1694,7 @@ class BrowserController {
     });
     view.webContents.on('did-start-loading', () => this.updateRuntime(tabId, { loading: true }));
     view.webContents.on('did-stop-loading', () => this.updateRuntime(tabId, { loading: false }));
+    view.webContents.on('did-finish-load', () => void this.updateGoogleWebsiteState(tabId, view));
     view.webContents.on('did-navigate', (_event, url) => this.commitNavigation(tabId, url));
     view.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => { if (isMainFrame) this.commitNavigation(tabId, url, false); });
     view.webContents.on('page-title-updated', (event, title) => {
@@ -1176,17 +1725,95 @@ class BrowserController {
     return view;
   }
 
-  private configureSession(ses: Session, partition: string, workspaceId: WorkspaceId): void {
+  private async updateGoogleWebsiteState(tabId: string, view: WebContentsView): Promise<void> {
+    const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+    if (!tab || !isKnownGoogleWebHost(tab.url)) return;
+    try {
+      const [cookies, pageText] = await Promise.all([
+        view.webContents.session.cookies.get({ domain: '.google.com' }),
+        view.webContents.executeJavaScript(`document.body ? document.body.innerText.slice(0, 20000) : ''`, true) as Promise<string>,
+      ]);
+      const status = googleWebsiteStatus(typeof pageText === 'string' ? pageText : '', cookies.length > 0);
+      const record = this.accounts.update(tab.accountSpaceId, (account) => { account.websiteStatus = status; });
+      this.store.refreshAccount(record);
+      this.broadcast();
+    } catch {
+      const record = this.accounts.update(tab.accountSpaceId, (account) => { account.websiteStatus = 'unknown'; });
+      this.store.refreshAccount(record);
+      this.broadcast();
+    }
+  }
+
+  private configureSession(ses: Session, partition: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): void {
     if (this.configuredSessions.has(partition)) return;
     this.configuredSessions.add(partition);
     ses.setUserAgent(ses.getUserAgent().replace(/\sElectron\/\S+/g, '').replace(/\sPrivate Browser\/\S+/g, ''));
     const protectedWorkspace = WORKSPACES.find((workspace) => workspace.id === workspaceId)!.protected;
     ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-      callback(isAllowedSitePermission(permission, details.requestingUrl, protectedWorkspace, details.isMainFrame));
+      if (protectedWorkspace || !details.isMainFrame) {
+        callback(false);
+        return;
+      }
+      const capability = permissionCapability(permission, details);
+      if (!capability) {
+        callback(isAllowedSitePermission(permission, details.requestingUrl, false, details.isMainFrame));
+        return;
+      }
+      const origin = safeOrigin(details.requestingUrl);
+      const evaluation = this.permissions.evaluate(accountSpaceId, workspaceId, origin, capability);
+      if (evaluation !== 'prompt') {
+        callback(evaluation === 'granted');
+        return;
+      }
+      try {
+        this.queuePermissionPrompt(this.permissions.createPrompt(accountSpaceId, workspaceId, origin, capability), callback);
+      } catch {
+        callback(false);
+      }
     });
-    ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => (
-      isAllowedSitePermission(permission, details.requestingUrl ?? requestingOrigin, protectedWorkspace, details.isMainFrame)
-    ));
+    ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
+      if (protectedWorkspace || !details.isMainFrame) return false;
+      const capability = permissionCapability(permission, details);
+      if (!capability) return isAllowedSitePermission(permission, details.requestingUrl ?? requestingOrigin, false, details.isMainFrame);
+      const origin = safeOrigin(details.requestingUrl ?? requestingOrigin);
+      return this.permissions.evaluate(accountSpaceId, workspaceId, origin, capability, false) === 'granted';
+    });
+    ses.setDisplayMediaRequestHandler(async (request, callback) => {
+      const deny = () => callback({});
+      const state = this.store.get();
+      const active = this.activeTab(state);
+      const activeView = this.runtimeTabs.get(active.id)?.view;
+      const origin = safeOrigin(request.securityOrigin);
+      if (protectedWorkspace
+        || active.accountSpaceId !== accountSpaceId
+        || origin !== 'https://meet.google.com'
+        || !request.userGesture
+        || !request.videoRequested
+        || !activeView?.getVisible()
+        || request.frame !== activeView.webContents.mainFrame) {
+        deny();
+        return;
+      }
+      if (this.permissions.evaluate(accountSpaceId, workspaceId, origin, 'display-capture', false) === 'denied') {
+        deny();
+        return;
+      }
+      try {
+        const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false });
+        if (sources.length === 0) {
+          deny();
+          return;
+        }
+        const prompt = this.permissions.createPrompt(accountSpaceId, workspaceId, origin, 'display-capture');
+        prompt.displaySources = sources.slice(0, 100).map((source) => ({ id: source.id, name: source.name.slice(0, 200) }));
+        this.queuePermissionPrompt(prompt, (allowed, sourceId) => {
+          const source = allowed ? sources.find((candidate) => candidate.id === sourceId) : undefined;
+          callback(source ? { video: source } : {});
+        });
+      } catch {
+        deny();
+      }
+    }, { useSystemPicker: false });
     ses.webRequest.onBeforeRequest((details, callback) => {
       const blocking = this.store.get().trackerBlocking;
       let blocked = false;
@@ -1205,15 +1832,35 @@ class BrowserController {
       if (details.statusCode >= 400) this.recordNetworkIssue(details);
     });
     ses.webRequest.onErrorOccurred((details) => this.recordNetworkIssue(details));
-    ses.on('will-download', (event, item) => {
+    ses.on('will-download', (event, item, sourceContents) => {
       if (protectedWorkspace) {
         event.preventDefault();
         this.addPrivacyEvent('blocked', 'Download blocked in Banking', item.getFilename().slice(0, 300));
         return;
       }
+      const downloadOrigin = safeOrigin(item.getURL());
+      const evaluation = this.permissions.evaluate(accountSpaceId, workspaceId, downloadOrigin, 'download');
+      if (evaluation === 'denied') {
+        event.preventDefault();
+        return;
+      }
+      if (evaluation === 'prompt') {
+        event.preventDefault();
+        try {
+          const prompt = this.permissions.createPrompt(accountSpaceId, workspaceId, downloadOrigin, 'download');
+          const downloadUrl = item.getURL();
+          this.queuePermissionPrompt(prompt, (allowed) => {
+            if (allowed && !sourceContents.isDestroyed()) sourceContents.downloadURL(downloadUrl);
+          }, true);
+        } catch {
+          // Invalid and untrustworthy download origins fail closed.
+        }
+        return;
+      }
       const id = randomUUID();
       const entry: DownloadEntry = {
         id,
+        accountSpaceId,
         filename: item.getFilename(),
         receivedBytes: 0,
         totalBytes: item.getTotalBytes(),
@@ -1221,11 +1868,13 @@ class BrowserController {
         risk: downloadRisk(item.getFilename()),
       };
       this.downloads.set(id, entry);
+      this.downloadItems.set(id, item);
       item.on('updated', (_downloadEvent, state) => {
         Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state });
         this.broadcast();
       });
       item.once('done', (_downloadEvent, state) => {
+        this.downloadItems.delete(id);
         Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath() });
         this.broadcast();
         if (state !== 'completed') return;
@@ -1295,7 +1944,10 @@ class BrowserController {
       this.updateRuntime(tabId, { favicon: undefined });
       return;
     }
-    const cached = this.faviconCache.get(url);
+    const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    const cacheKey = `${tab.accountSpaceId}:${url}`;
+    const cached = this.faviconCache.get(cacheKey);
     if (cached) {
       this.updateRuntime(tabId, { favicon: cached });
       return;
@@ -1311,7 +1963,7 @@ class BrowserController {
       if (!bytes.byteLength || bytes.byteLength > MAX_FAVICON_BYTES) return;
       const dataUrl = `data:${type};base64,${bytes.toString('base64')}`;
       if (this.faviconCache.size >= 200) this.faviconCache.delete(this.faviconCache.keys().next().value!);
-      this.faviconCache.set(url, dataUrl);
+      this.faviconCache.set(cacheKey, dataUrl);
       this.updateRuntime(tabId, { favicon: dataUrl });
     } catch {
       // A site without a reachable icon is ordinary, not an error worth showing.
@@ -1339,8 +1991,8 @@ class BrowserController {
       tab.url = sanitizedUrl;
       tab.isHome = false;
       if (addHistory && tab.workspaceId !== 'banking') {
-        state.history.unshift({ id: randomUUID(), title: tab.title, url: sanitizedUrl, workspaceId: tab.workspaceId, visitedAt: new Date().toISOString() });
-        state.history = state.history.slice(0, 10_000);
+        state.history.unshift({ id: randomUUID(), title: tab.title, url: sanitizedUrl, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, visitedAt: new Date().toISOString() });
+        state.history = state.history.slice(0, 2500);
       }
     });
     this.updateRuntime(tabId, {});
@@ -1348,7 +2000,8 @@ class BrowserController {
 
   private addPrivacyEvent(kind: PrivacyEvent['kind'], title: string, detail: string): void {
     this.store.update((state) => {
-      state.privacyLog.unshift({ id: randomUUID(), at: new Date().toISOString(), kind, title, detail });
+      const accountSpaceId = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+      state.privacyLog.unshift({ id: randomUUID(), at: new Date().toISOString(), kind, title, detail, accountSpaceId, service: kind === 'vault' ? 'vault' : 'browser' });
       state.privacyLog = state.privacyLog.slice(0, 100);
     });
     this.broadcast();
@@ -1436,22 +2089,40 @@ function assertTrusted(event: IpcMainInvokeEvent): void {
 
 const ipcGuard = new IpcGuard();
 
-function handle(channel: string, callback: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
+function handle<TArgs extends unknown[], TResult>(channel: string, callback: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>): void {
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrusted(event);
-    ipcGuard.check(event.sender.id, args);
-    return callback(event, ...args);
+    ipcGuard.check(event.sender.id, channel, args);
+    validateIpcArguments(channel, args);
+    return callback(event, ...args as TArgs);
   });
 }
 
 if (hasSingleInstanceLock) void app.whenReady().then(async () => {
-  const store = new StateStore(join(app.getPath('userData'), 'browser-state.json'));
-  const vault = new VaultBroker(new MyVaultDiskStore(app.getPath('userData'), safeStorage));
+  const userDataPath = app.getPath('userData');
+  const accountStore = new AccountStore(join(userDataPath, 'account-spaces'), safeStorage);
+  const googleConfiguration = new GoogleConfigurationStore(join(userDataPath, 'google-configuration.enc'), safeStorage);
+  const externalBrowsers = new ExternalBrowserLauncher();
+  const googleOAuth = new GoogleOAuthManager(googleConfiguration, accountStore, externalBrowsers);
+  const googleTokens = new GoogleTokenBroker(googleConfiguration, accountStore);
+  const googleServices = new GoogleServices(googleTokens);
+  const backups = new AccountBackupManager(accountStore, safeStorage, new GoogleDriveAppDataTransport(googleTokens));
+  const persistedState = new AccountSpaceStateStore({
+    paths: {
+      legacyFilePath: join(userDataPath, 'browser-state.json'),
+      manifestFilePath: join(userDataPath, 'browser-state-v2.json'),
+      accountStateDirectory: join(userDataPath, 'account-browsing'),
+      migrationJournalPath: join(userDataPath, 'browser-state-v2.migration.json'),
+    },
+    accountStore,
+  });
+  const store = new RuntimeStateStore(persistedState, accountStore, persistedState.initialize());
+  const vault = new VaultBroker(new MyVaultDiskStore(userDataPath, safeStorage));
   vault.initialize();
-  const aiProvider = new AiProviderStore(join(app.getPath('userData'), 'ai-provider.enc'));
-  const updates = new UpdateServiceStore(join(app.getPath('userData'), 'update-service.enc'));
-  const bridgeDataRoot = join(process.env.LOCALAPPDATA ?? app.getPath('userData'), 'Private Browser Bridge');
-  vscodeBridge = new VscodeBridgeServer(join(app.getPath('userData'), 'vscode-bridge.enc'), join(bridgeDataRoot, 'rendezvous.json'), app.getVersion(), () => controller?.broadcast());
+  const aiProvider = new AiProviderStore(join(userDataPath, 'ai-provider.enc'));
+  const updates = new UpdateServiceStore(join(userDataPath, 'update-service.enc'));
+  const bridgeDataRoot = join(process.env.LOCALAPPDATA ?? userDataPath, 'Private Browser Bridge');
+  vscodeBridge = new VscodeBridgeServer(join(userDataPath, 'vscode-bridge.enc'), join(bridgeDataRoot, 'rendezvous.json'), app.getVersion(), () => controller?.broadcast());
   try {
     await vscodeBridge.start();
   } catch (error) {
@@ -1473,8 +2144,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     // convenience of first-launch enrolment is the cheaper failure.
     removeUpdateBootstrap(updateBootstrapPath);
   }
-  const migration = new VaultMigrationService(join(app.getPath('userData'), 'vault.enc'), join(app.getPath('userData'), 'myvault', 'migration-journal.enc'), safeStorage, vault);
-  controller = new BrowserController(store, vault, migration, aiProvider, updates, vscodeBridge);
+  const migration = new VaultMigrationService(join(userDataPath, 'vault.enc'), join(userDataPath, 'myvault', 'migration-journal.enc'), safeStorage, vault);
+  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -1482,11 +2153,45 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:forward', () => controller!.goForward());
   handle('browser:reload', () => controller!.reload());
   handle('browser:stop', () => controller!.stop());
-  handle('browser:new-tab', (_event, workspaceId?: WorkspaceId, url?: string) => controller!.newTab(workspaceId, url));
+  handle('browser:new-tab', (_event, workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId) => controller!.newTab(workspaceId, url, accountSpaceId));
   handle('browser:close-tab', (_event, id: string) => controller!.closeTab(id));
   handle('browser:activate-tab', (_event, id: string) => controller!.activateTab(id));
   handle('browser:switch-workspace', (_event, id: WorkspaceId) => controller!.switchWorkspace(id));
+  handle('browser:switch-account-space', (_event, id: AccountSpaceId) => controller!.switchAccountSpace(id));
+  handle('accounts:add-local', (_event, workspaceId: WorkspaceId, label: string, color: AccountSpaceColor) => controller!.addLocalAccountSpace(workspaceId, label, color));
+  handle('accounts:update', (_event, id: AccountSpaceId, label?: string, color?: AccountSpaceColor) => controller!.updateAccountSpace(id, label, color));
+  handle('accounts:reorder', (_event, workspaceId: WorkspaceId, ids: AccountSpaceId[]) => controller!.reorderAccountSpaces(workspaceId, ids));
+  handle('accounts:open-in', (_event, id: AccountSpaceId, url: string) => controller!.openInAccountSpace(id, url));
+  handle('accounts:set-locked', (_event, id: AccountSpaceId, locked: boolean) => controller!.setAccountSpaceLocked(id, locked));
+  handle('accounts:disconnect-google', (_event, id: AccountSpaceId, revoke?: boolean) => controller!.disconnectGoogleAccount(id, revoke));
+  handle('accounts:clear-data', (_event, id: AccountSpaceId) => controller!.clearAccountSpaceData(id));
+  handle('accounts:delete', (_event, id: AccountSpaceId, confirmation: string) => controller!.deleteAccountSpace(id, confirmation));
+  handle('permissions:respond', (_event, promptId: string, decision: PermissionDecision, displaySourceId?: string) => controller!.respondToPermissionPrompt(promptId, decision, displaySourceId));
+  handle('google:configure', (_event, clientId: string) => controller!.configureGoogle(clientId));
+  handle('google:clear-configuration', () => controller!.clearGoogleConfiguration());
+  handle('google:connect', (_event, id: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) => controller!.connectGoogleAccount(id, modules, browserId));
+  handle('google:cancel', (_event, id: AccountSpaceId) => controller!.cancelGoogleConnection(id));
+  handle('google:gmail-overview-run', (_event, id: AccountSpaceId, operationId: string) => controller!.gmailOverview(id, operationId));
+  handle('google:gmail-search-run', (_event, id: AccountSpaceId, operationId: string, query?: string) => controller!.searchGmail(id, operationId, query));
+  handle('google:gmail-prepare-send', (_event, id: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) => controller!.prepareGmailSend(id, input, sourceRevision));
+  handle('google:gmail-send', (_event, id: AccountSpaceId, operationId: string, input: GmailSendInput, confirmationToken: string, sourceRevision?: string) => controller!.sendGmail(id, operationId, input, confirmationToken, sourceRevision));
+  handle('google:drive-list-run', (_event, id: AccountSpaceId, operationId: string, query?: string, wholeDrive?: boolean) => controller!.listDriveFiles(id, operationId, query, wholeDrive));
+  handle('google:drive-create', (_event, id: AccountSpaceId, operationId: string, input: DriveCreateInput) => controller!.createDriveFile(id, operationId, input));
+  handle('google:drive-prepare-share', (_event, id: AccountSpaceId, fileId: string, email: string, role: 'reader' | 'writer', sourceRevision?: string) => controller!.prepareDriveShare(id, fileId, email, role, sourceRevision));
+  handle('google:drive-share', (_event, id: AccountSpaceId, operationId: string, fileId: string, email: string, role: 'reader' | 'writer', confirmationToken: string, sourceRevision?: string) => controller!.shareDriveFile(id, operationId, fileId, email, role, confirmationToken, sourceRevision));
+  handle('google:calendar-list-run', (_event, id: AccountSpaceId, operationId: string, query?: string) => controller!.listCalendarEvents(id, operationId, query));
+  handle('google:calendar-prepare-write', (_event, id: AccountSpaceId, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, sourceRevision?: string) => controller!.prepareCalendarWrite(id, action, input, sourceRevision));
+  handle('google:calendar-write', (_event, id: AccountSpaceId, operationId: string, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, confirmationToken: string, sourceRevision?: string) => controller!.writeCalendarEvent(id, operationId, action, input, confirmationToken, sourceRevision));
+  handle('google:contacts-list-run', (_event, id: AccountSpaceId, operationId: string) => controller!.listContacts(id, operationId));
+  handle('backup:create-recovery', (_event, id: AccountSpaceId) => controller!.createBackupRecoveryCode(id));
+  handle('backup:verify-enable', (_event, id: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean) => controller!.verifyAndEnableBackup(id, recoveryCode, includeOpenTabs, includeHistory));
+  handle('backup:upload', (_event, id: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite') => controller!.uploadBackup(id, operationId, conflictResolution));
+  handle('backup:restore', (_event, id: AccountSpaceId, operationId: string, recoveryCode?: string) => controller!.restoreBackup(id, operationId, recoveryCode));
+  handle('backup:disable', (_event, id: AccountSpaceId) => controller!.disableBackup(id));
+  handle('operations:cancel', (_event, operationId: string) => controller!.cancelOperation(operationId));
+  handle('recovery:act', (_event, action: StateRecoveryAction, confirmation?: string) => controller!.recoveryAction(action, confirmation));
   handle('browser:set-layout', (_event, layout: Layout) => controller!.setLayout(layout));
+  handle('browser:set-overlay-open', (_event, open: boolean) => controller!.setOverlayOpen(open));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());

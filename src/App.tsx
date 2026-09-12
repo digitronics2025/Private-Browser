@@ -12,6 +12,7 @@ import {
   Cloud,
   Code2,
   Copy,
+  CalendarDays,
   Download,
   ExternalLink,
   Eye,
@@ -20,10 +21,13 @@ import {
   Folder,
   Globe2,
   Gauge,
+  HardDrive,
   Home,
   KeyRound,
   LoaderCircle,
+  LogOut,
   LockKeyhole,
+  Mail,
   MoreHorizontal,
   Network,
   PanelBottom,
@@ -44,10 +48,11 @@ import {
   Trash2,
   TriangleAlert,
   UserRound,
+  UsersRound,
   X,
   Zap,
 } from 'lucide-react';
-import type { AiPagePreview, AiProviderInput, AiProviderStatus, Bookmark as BookmarkItem, BridgeStatus, BrowserSnapshot, BrowserTab, ChromeImportResult, ChromeProfileSource, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, ProjectInfo, ProjectSummary, TestKind, TestReport, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from '../electron/types';
+import type { AccountSpaceColor, AccountSpaceId, AccountSpaceSummary, AiPagePreview, AiProviderInput, AiProviderStatus, Bookmark as BookmarkItem, BridgeStatus, BrowserSnapshot, BrowserTab, ChromeImportResult, ChromeProfileSource, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, GoogleModule, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, TestKind, TestReport, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemMeta, VaultStatus, WorkspaceId } from '../electron/types';
 
 type SidebarMode = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings';
 
@@ -134,14 +139,19 @@ export default function App() {
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('assistant');
   const [vaultFullOpen, setVaultFullOpen] = useState(false);
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [accountManagerOpen, setAccountManagerOpen] = useState(false);
   // Refusals are the moments the app is protecting a secret; they must not
   // look identical to a success. Default 'ok', explicit 'error' on every catch.
   const showToast = (text: string, kind: 'ok' | 'error' = 'ok') => setToast({ text, kind });
   const addressRef = useRef<HTMLInputElement>(null);
+  const accountButtonRef = useRef<HTMLButtonElement>(null);
 
   const activeTab = state?.tabs.find((tab) => tab.id === state.activeTabId);
   const workspace = state?.workspaces.find((item) => item.id === state.activeWorkspaceId);
-  const workspaceTabs = state?.tabs.filter((tab) => tab.workspaceId === state.activeWorkspaceId) ?? [];
+  const activeAccount = state?.accountSpaces.find((account) => account.id === state.activeAccountSpaceId);
+  const workspaceTabs = state?.tabs.filter((tab) => tab.accountSpaceId === state.activeAccountSpaceId) ?? [];
+  const modalOpen = accountMenuOpen || accountManagerOpen || Boolean(state?.pendingPermission) || Boolean(state?.recovery);
 
   useEffect(() => {
     void window.privateBrowser.getState().then(setState);
@@ -165,6 +175,11 @@ export default function App() {
     if (!state) return;
     void window.privateBrowser.setLayout({ top: state.bookmarkBarVisible ? 158 : 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
   }, [sidebarOpen, state?.bookmarkBarVisible]);
+
+  useEffect(() => {
+    void window.privateBrowser.setOverlayOpen(modalOpen);
+    return () => { void window.privateBrowser.setOverlayOpen(false); };
+  }, [modalOpen]);
 
   useEffect(() => {
     if (!toast) return;
@@ -194,6 +209,13 @@ export default function App() {
       } else if (key === 'r' && activeTab && !activeTab.isHome) {
         event.preventDefault();
         void window.privateBrowser.reload();
+      } else if (event.shiftKey && (event.key === 'ArrowRight' || event.key === 'ArrowLeft') && state) {
+        event.preventDefault();
+        const accounts = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && !account.locked);
+        const index = accounts.findIndex((account) => account.id === state.activeAccountSpaceId);
+        const direction = event.key === 'ArrowRight' ? 1 : -1;
+        const target = accounts[(index + direction + accounts.length) % accounts.length];
+        if (target) void act(() => window.privateBrowser.switchAccountSpace(target.id));
       } else if (event.shiftKey && key === 'b') {
         event.preventDefault();
         void window.privateBrowser.toggleBookmarkBar();
@@ -201,7 +223,7 @@ export default function App() {
     };
     window.addEventListener('keydown', listener);
     return () => window.removeEventListener('keydown', listener);
-  }, [activeTab?.id, activeTab?.isHome]);
+  }, [activeTab?.id, activeTab?.isHome, state?.activeAccountSpaceId, state?.activeWorkspaceId, state?.accountSpaces]);
 
   const act = async (action: () => Promise<unknown> | unknown, success?: string) => {
     try {
@@ -218,7 +240,7 @@ export default function App() {
     addressRef.current?.blur();
   };
 
-  if (!state || !activeTab || !workspace) {
+  if (!state || !activeTab || !workspace || !activeAccount) {
     return <div className="boot"><ShieldCheck size={34} /><LoaderCircle className="spin" size={22} /> Opening your private workspace</div>;
   }
 
@@ -254,16 +276,20 @@ export default function App() {
           <input ref={addressRef} value={address} onChange={(event) => setAddress(event.target.value)} placeholder="Search privately or enter address" spellCheck={false} />
           {activeTab.securityWarning && <span className="security-warning" title={activeTab.securityWarning === 'idn' ? 'Internationalized domain: verify this address carefully' : 'Connection is not encrypted'}>{activeTab.securityWarning === 'idn' ? 'Check domain' : 'Not secure'}</span>}
           {!activeTab.isHome && <span className="address-domain">{domainFromUrl(activeTab.url)}</span>}
+          <span className={`address-account account-${activeAccount.color}`} title={`Browsing in ${activeAccount.label}`}>{accountInitials(activeAccount)}</span>
         </form>
         {state.activeWorkspaceId !== 'development' && <button className={`icon-button ${sidebarMode === 'vault' && sidebarOpen ? 'selected' : ''}`} aria-label="Open MyVault" title="MyVault" onClick={() => { setSidebarMode('vault'); setSidebarOpen(true); }}><KeyRound size={18} /></button>}
         <button className={`icon-button ${bookmarked ? 'selected' : ''}`} title="Bookmark" onClick={() => void act(() => window.privateBrowser.toggleBookmark())}><Star size={17} fill={bookmarked ? 'currentColor' : 'none'} /></button>
         <button className={`icon-button shield-button ${state.trackerBlocking ? 'selected' : ''}`} title="Tracker blocking" onClick={() => void act(() => window.privateBrowser.toggleTrackerBlocking(), state.trackerBlocking ? 'Tracker blocking paused' : 'Tracker blocking enabled')}><Shield size={18} /></button>
         <button className={`icon-button ${sidebarMode === 'developer' && sidebarOpen ? 'selected' : ''}`} title="Developer cockpit" onClick={() => { setSidebarMode('developer'); setSidebarOpen(true); }}><Code2 size={18} /></button>
         <button className="icon-button" onClick={() => setSidebarOpen((value) => !value)}>{sidebarOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}</button>
-        <button className="avatar" title="Personal workspace" onClick={() => void act(() => window.privateBrowser.switchWorkspace('personal'))}>DR</button>
+        <button ref={accountButtonRef} className={`account-switcher-button account-${activeAccount.color}`} aria-haspopup="menu" aria-expanded={accountMenuOpen} aria-label={`Account Space: ${activeAccount.label}`} onClick={() => setAccountMenuOpen((value) => !value)}>
+          <AccountAvatar account={activeAccount} /><span><strong>{activeAccount.label}</strong><small>{activeAccount.email ?? 'Local Account Space'}</small></span><ChevronDown size={14} />
+        </button>
         <button className="icon-button" title="Settings" onClick={() => { setSidebarMode('settings'); setSidebarOpen(true); }}><MoreHorizontal size={18} /></button>
       </nav>
 
+      {accountMenuOpen && <AccountMenu state={state} onClose={() => { setAccountMenuOpen(false); accountButtonRef.current?.focus(); }} onManage={() => { setAccountMenuOpen(false); setAccountManagerOpen(true); }} onSwitch={(id) => void act(async () => { await window.privateBrowser.switchAccountSpace(id); setAccountMenuOpen(false); accountButtonRef.current?.focus(); })} />}
       {state.bookmarkBarVisible && <BookmarkBar state={state} openBookmark={(id) => void act(() => window.privateBrowser.openBookmark(id))} />}
 
       {activeTab.isHome && <Dashboard state={state} open={(url) => void act(() => window.privateBrowser.navigate(url))} openBookmark={(id) => void act(() => window.privateBrowser.openBookmark(id))} />}
@@ -286,6 +312,9 @@ export default function App() {
         </aside>
       )}
 
+      {state.pendingPermission && <PermissionOverlay state={state} onRespond={(decision, sourceId) => void act(() => window.privateBrowser.respondToPermissionPrompt(state.pendingPermission!.id, decision, sourceId))} />}
+      {state.recovery && <RecoveryOverlay state={state} />}
+      {accountManagerOpen && <AccountManager state={state} onClose={() => { setAccountManagerOpen(false); accountButtonRef.current?.focus(); }} onToast={showToast} />}
       {vaultFullOpen && <div className="vault-full-overlay" role="dialog" aria-modal="true" aria-label="MyVault metadata"><div className="vault-full-shell"><button className="icon-button vault-full-close" aria-label="Close full MyVault view" onClick={() => setVaultFullOpen(false)}><X size={18} /></button><VaultPanel workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></div></div>}
 
       {toast && <div className={`toast ${toast.kind}`}>{toast.kind === 'error' ? <X size={15} /> : <Check size={15} />} {toast.text}</div>}
@@ -308,6 +337,151 @@ function WorkspaceSwitcher({ state, onSwitch }: { state: BrowserSnapshot; onSwit
       </div>
     </section>
   );
+}
+
+const ACCOUNT_COLORS: AccountSpaceColor[] = ['indigo', 'sky', 'emerald', 'amber', 'rose', 'violet', 'slate'];
+const GOOGLE_MODULE_OPTIONS: Array<{ id: GoogleModule; label: string; detail: string; highRisk?: boolean }> = [
+  { id: 'gmail-metadata', label: 'Gmail overview', detail: 'Unread count and recent headers' },
+  { id: 'gmail-read', label: 'Gmail search & read', detail: 'Read mail when you explicitly search', highRisk: true },
+  { id: 'gmail-send', label: 'Gmail send', detail: 'Compose locally; confirm every send', highRisk: true },
+  { id: 'drive-files', label: 'Drive app files', detail: 'Files created or opened by this app' },
+  { id: 'drive-metadata', label: 'Whole-Drive metadata', detail: 'Recent files and search', highRisk: true },
+  { id: 'drive-read', label: 'Whole-Drive read', detail: 'Read ordinary Drive files', highRisk: true },
+  { id: 'calendar-read', label: 'Calendar read', detail: 'Upcoming events and search' },
+  { id: 'calendar-write', label: 'Calendar write', detail: 'Confirm every event change', highRisk: true },
+  { id: 'contacts-read', label: 'Contacts', detail: 'Memory-only recipient picker' },
+  { id: 'encrypted-backup', label: 'Encrypted backup', detail: 'Ciphertext in Drive app data' },
+];
+
+function accountInitials(account: AccountSpaceSummary): string {
+  return (account.displayName ?? account.label).split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || 'AS';
+}
+
+function AccountAvatar({ account }: { account: AccountSpaceSummary }) {
+  return account.avatarDataUrl
+    ? <img className="account-avatar-image" src={account.avatarDataUrl} alt="" />
+    : <span className={`account-avatar-fallback account-${account.color}`}>{accountInitials(account)}</span>;
+}
+
+function AccountMenu({ state, onClose, onManage, onSwitch }: { state: BrowserSnapshot; onClose: () => void; onManage: () => void; onSwitch: (id: AccountSpaceSummary['id']) => void }) {
+  const accounts = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId).sort((a, b) => a.order - b.order);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    menuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, []);
+  return <div className="account-menu" ref={menuRef} role="menu" aria-label="Account Spaces">
+    <div className="account-menu-heading"><span>Account Spaces</span><small>Ctrl + Shift + ← / →</small></div>
+    {accounts.map((account) => <button role="menuitemradio" aria-checked={account.id === state.activeAccountSpaceId} disabled={account.locked} className={account.id === state.activeAccountSpaceId ? 'active' : ''} key={account.id} onClick={() => onSwitch(account.id)}>
+      <AccountAvatar account={account} />
+      <span><strong>{account.label}</strong><small>{account.email ?? (account.locked ? 'Operationally locked' : 'Local browsing only')}</small></span>
+      <i className={`connection-dot status-${account.googleConnection}`} aria-label={account.googleConnection} />
+    </button>)}
+    <button className="manage-accounts" role="menuitem" onClick={onManage}><Settings size={15} /><span><strong>Manage Account Spaces</strong><small>Identity, access, backup and isolation</small></span><ChevronRight size={14} /></button>
+  </div>;
+}
+
+function AccountManager({ state, onClose, onToast }: { state: BrowserSnapshot; onClose: () => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+  const accounts = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId).sort((a, b) => a.order - b.order);
+  const [selectedId, setSelectedId] = useState(state.activeAccountSpaceId);
+  const selected = accounts.find((account) => account.id === selectedId) ?? accounts[0];
+  const [newLabel, setNewLabel] = useState('');
+  const [newColor, setNewColor] = useState<AccountSpaceColor>('indigo');
+  const [editLabel, setEditLabel] = useState(selected?.label ?? '');
+  const [modules, setModules] = useState<GoogleModule[]>(selected?.enabledModules ?? []);
+  const [browserId, setBrowserId] = useState(state.externalBrowsers[0]?.id ?? 'edge');
+  const [clientId, setClientId] = useState('');
+  const [recoveryCode, setRecoveryCode] = useState('');
+  const [recoveryVerification, setRecoveryVerification] = useState('');
+  const [busy, setBusy] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { dialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus(); }, []);
+  useEffect(() => { if (selected) { setEditLabel(selected.label); setModules(selected.enabledModules); } }, [selected?.id, selected?.label]);
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, []);
+  const run = async (action: () => Promise<unknown>, success?: string) => {
+    setBusy(true);
+    try { await action(); if (success) onToast(success); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setBusy(false); }
+  };
+  const requireGoogleSuccess = async (operation: Promise<GoogleOperationResult>) => {
+    const result = await operation;
+    if (!result.ok) throw new Error(result.error?.message ?? 'Google operation failed');
+    return result;
+  };
+  const addLocal = (event: FormEvent) => {
+    event.preventDefault();
+    void run(async () => { await window.privateBrowser.addLocalAccountSpace(state.activeWorkspaceId, newLabel, newColor); setNewLabel(''); }, 'Local Account Space added');
+  };
+  const addGoogle = () => {
+    void run(async () => {
+      const id = await window.privateBrowser.addLocalAccountSpace(state.activeWorkspaceId, newLabel, newColor);
+      setSelectedId(id);
+      setNewLabel('');
+      await requireGoogleSuccess(window.privateBrowser.connectGoogleAccount(id, ['identity'], browserId));
+    }, 'Google Account Space added');
+  };
+  const reorder = (direction: -1 | 1) => {
+    if (!selected) return;
+    const index = accounts.findIndex((account) => account.id === selected.id);
+    const target = index + direction;
+    if (target < 0 || target >= accounts.length) return;
+    const ids = accounts.map((account) => account.id);
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    void run(() => window.privateBrowser.reorderAccountSpaces(state.activeWorkspaceId, ids), 'Account order updated');
+  };
+  if (!selected) return null;
+  return <div className="modal-backdrop" role="presentation">
+    <div className="account-manager" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="account-manager-title">
+      <header><div><span>PRIVATE CONTAINERS</span><h2 id="account-manager-title">Account Spaces</h2><p>Independent website sessions and Google grants inside {state.workspaces.find((item) => item.id === state.activeWorkspaceId)?.name}.</p></div><button className="icon-button" aria-label="Close Account Space manager" onClick={onClose}><X size={18} /></button></header>
+      <div className="manager-body">
+        <aside className="account-rail">
+          {accounts.map((account) => <button className={account.id === selected.id ? 'active' : ''} key={account.id} onClick={() => setSelectedId(account.id)}><AccountAvatar account={account} /><span><strong>{account.label}</strong><small>{account.email ?? 'Local only'}</small></span>{account.locked && <LockKeyhole size={13} />}</button>)}
+          <form className="add-account-form" onSubmit={addLocal}><label>New Account Space<input aria-label="New Account Space label" maxLength={80} required value={newLabel} onChange={(event) => setNewLabel(event.target.value)} placeholder="e.g. Client account" /></label><div className="color-row">{ACCOUNT_COLORS.map((color) => <button aria-label={`Use ${color}`} aria-pressed={newColor === color} type="button" className={`color-swatch account-${color} ${newColor === color ? 'active' : ''}`} key={color} onClick={() => setNewColor(color)} />)}</div><div className="add-account-actions"><button className="secondary-button" type="submit" disabled={busy}><Plus size={14} /> Add local</button><button className="secondary-button" type="button" disabled={busy || !state.googleConfiguration.configured || !state.externalBrowsers.length || !newLabel.trim()} onClick={addGoogle}><ExternalLink size={14} /> Add Google</button></div></form>
+        </aside>
+        <main className="account-detail">
+          <section className="account-identity"><AccountAvatar account={selected} /><div><span>{selected.kind === 'google' ? 'GOOGLE ACCOUNT SPACE' : 'LOCAL ACCOUNT SPACE'}</span><h2>{selected.displayName ?? selected.label}</h2><p>{selected.email ?? 'No Google API connection. Website sessions remain independent.'}</p></div><span className={`status-chip status-${selected.googleConnection}`}>{selected.googleConnection.replaceAll('-', ' ')}</span></section>
+          <section className="manager-section"><div className="manager-section-heading"><div><h3>Identity & appearance</h3><p>The label and colour are local and never enter plaintext browser state.</p></div><div className="reorder-actions"><button aria-label="Move Account Space earlier" onClick={() => reorder(-1)}>↑</button><button aria-label="Move Account Space later" onClick={() => reorder(1)}>↓</button></div></div><form className="identity-form" onSubmit={(event) => { event.preventDefault(); void run(() => window.privateBrowser.updateAccountSpace(selected.id, editLabel, selected.color), 'Account Space renamed'); }}><input aria-label="Account Space label" maxLength={80} value={editLabel} onChange={(event) => setEditLabel(event.target.value)} /><button className="secondary-button" disabled={busy || editLabel.trim() === selected.label}>Save</button></form><div className="edit-color-row" aria-label="Account Space colour">{ACCOUNT_COLORS.map((color) => <button aria-label={`Change colour to ${color}`} aria-pressed={selected.color === color} type="button" className={`color-swatch account-${color} ${selected.color === color ? 'active' : ''}`} key={color} onClick={() => void run(() => window.privateBrowser.updateAccountSpace(selected.id, undefined, color), 'Account colour updated')} />)}</div></section>
+          <section className="manager-section"><div className="manager-section-heading"><div><h3>Google API connection</h3><p>Website status: {selected.websiteStatus.replaceAll('-', ' ')} · API status: {selected.googleConnection.replaceAll('-', ' ')}.</p></div></div>
+            {!state.googleConfiguration.configured && <form className="google-config" onSubmit={(event) => { event.preventDefault(); void run(async () => { await window.privateBrowser.configureGoogle(clientId); setClientId(''); }, 'Desktop OAuth client configured'); }}><TriangleAlert size={16} /><p>Google integration needs configuration. Enter only a Desktop OAuth client ID—never a client secret.</p><input aria-label="Google Desktop OAuth client ID" value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder="Desktop client ID" required /><button className="secondary-button" disabled={busy}>Save</button></form>}
+            <div className="module-grid">{GOOGLE_MODULE_OPTIONS.map((module) => <label key={module.id} className={module.highRisk ? 'high-risk' : ''}><input type="checkbox" checked={modules.includes(module.id)} onChange={(event) => setModules((current) => event.target.checked ? [...new Set([...current, module.id])] : current.filter((item) => item !== module.id))} /><span><strong>{module.label}{module.highRisk ? ' · expanded access' : ''}</strong><small>{module.detail}</small></span></label>)}</div>
+            <div className="google-actions"><select aria-label="External browser" value={browserId} onChange={(event) => setBrowserId(event.target.value as typeof browserId)}>{state.externalBrowsers.map((browser) => <option value={browser.id} key={browser.id}>{browser.name}</option>)}</select><button className="primary-button" disabled={busy || !state.googleConfiguration.configured || !state.externalBrowsers.length} onClick={() => void run(() => requireGoogleSuccess(window.privateBrowser.connectGoogleAccount(selected.id, ['identity', ...modules.filter((item) => item !== 'identity')], browserId)), 'Google consent completed')}>{busy ? <LoaderCircle className="spin" size={14} /> : <ExternalLink size={14} />} {selected.googleConnection === 'connected' ? 'Reconnect with selected access' : 'Connect in external browser'}</button>{selected.kind === 'google' && <button className="secondary-button danger-text" disabled={busy} onClick={() => { if (window.confirm(`Disconnect Google API access for ${selected.email ?? selected.label}? Website cookies will stay.`)) void run(() => requireGoogleSuccess(window.privateBrowser.disconnectGoogleAccount(selected.id, false)), 'Google API disconnected'); }}><LogOut size={14} /> Disconnect API</button>}</div>
+          </section>
+          <section className="manager-section"><div className="manager-section-heading"><div><h3>Open Google services</h3><p>Each launcher stays inside this Account Space’s isolated website partition.</p></div></div><div className="service-launchers"><button onClick={() => void run(() => window.privateBrowser.openInAccountSpace(selected.id, 'https://mail.google.com/'))}><Mail size={16} /> Gmail</button><button onClick={() => void run(() => window.privateBrowser.openInAccountSpace(selected.id, 'https://drive.google.com/'))}><HardDrive size={16} /> Drive</button><button onClick={() => void run(() => window.privateBrowser.openInAccountSpace(selected.id, 'https://calendar.google.com/'))}><CalendarDays size={16} /> Calendar</button><button onClick={() => void run(() => window.privateBrowser.openInAccountSpace(selected.id, 'https://contacts.google.com/'))}><UsersRound size={16} /> Contacts</button></div></section>
+          {selected.enabledModules.includes('encrypted-backup') && <section className="manager-section"><div className="manager-section-heading"><div><h3>Encrypted app-data backup</h3><p>Google receives AES-256-GCM ciphertext only. My Vault, cookies, tokens, bodies, attachments, downloads and privacy logs are excluded.</p></div></div>{!recoveryCode ? <div className="backup-actions">{!selected.backupEnabled && <button className="secondary-button" onClick={() => void run(async () => setRecoveryCode(await window.privateBrowser.createBackupRecoveryCode(selected.id)))}><KeyRound size={14} /> Create recovery code</button>}{selected.backupEnabled && <button className="secondary-button" onClick={() => void run(() => window.privateBrowser.uploadBackup(selected.id, crypto.randomUUID()), 'Encrypted backup uploaded')}><Cloud size={14} /> Back up now</button>}</div> : <div className="recovery-code"><strong>Save this once-only recovery code</strong><code>{recoveryCode}</code><p>Verify it before backup is enabled. It cannot be recovered by Google or Digitronics.</p><input aria-label="Verify recovery code" value={recoveryVerification} onChange={(event) => setRecoveryVerification(event.target.value)} placeholder="Enter the complete recovery code" /><button className="primary-button" disabled={recoveryVerification !== recoveryCode} onClick={() => void run(async () => { await window.privateBrowser.verifyAndEnableBackup(selected.id, recoveryVerification, true, false); setRecoveryCode(''); setRecoveryVerification(''); }, 'Encrypted backup enabled')}>Verify and enable</button></div>}</section>}
+          <section className="manager-section danger-zone"><div><h3>Operational privacy</h3><p>Lock closes live views and connections. It is not a second Windows authentication boundary.</p></div><div className="danger-actions"><button onClick={() => void run(() => window.privateBrowser.setAccountSpaceLocked(selected.id, !selected.locked), selected.locked ? 'Account Space reopened' : 'Account Space locked')}>{selected.locked ? <RefreshCw size={14} /> : <LockKeyhole size={14} />} {selected.locked ? 'Reopen' : 'Lock'}</button><button onClick={() => { if (window.confirm(`Clear website data and history for “${selected.label}” only?`)) void run(() => window.privateBrowser.clearAccountSpaceData(selected.id), 'Account Space data cleared'); }}><Shield size={14} /> Clear data</button><button className="destructive-button" disabled={accounts.length <= 1} onClick={() => { if (window.confirm(`Delete Account Space “${selected.label}”? This removes its tabs, history, permissions and Google grant after session erasure.`)) void run(() => window.privateBrowser.deleteAccountSpace(selected.id, 'DELETE_ACCOUNT_SPACE'), 'Account Space deleted'); }}><Trash2 size={14} /> Delete</button></div></section>
+        </main>
+      </div>
+    </div>
+  </div>;
+}
+
+function PermissionOverlay({ state, onRespond }: { state: BrowserSnapshot; onRespond: (decision: PermissionDecision, sourceId?: string) => void }) {
+  const prompt = state.pendingPermission!;
+  const account = state.accountSpaces.find((item) => item.id === prompt.accountSpaceId);
+  const [sourceId, setSourceId] = useState(prompt.displaySources?.[0]?.id);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { ref.current?.querySelector<HTMLButtonElement>('button')?.focus(); }, []);
+  return <div className="modal-backdrop permission-backdrop"><div className="permission-dialog" ref={ref} role="alertdialog" aria-modal="true" aria-labelledby="permission-title"><span className="permission-icon"><Shield size={23} /></span><small>{account?.label ?? 'Account Space'} · exact origin</small><h2 id="permission-title">Allow {prompt.capability.replaceAll('-', ' ')}?</h2><p><strong>{prompt.origin}</strong> requested this capability. The choice applies only to this Account Space and exact origin.</p>{prompt.displaySources && <select aria-label="Display source" value={sourceId} onChange={(event) => setSourceId(event.target.value)}>{prompt.displaySources.map((source) => <option value={source.id} key={source.id}>{source.name}</option>)}</select>}<div className="permission-actions"><button onClick={() => onRespond('deny')}>Deny</button><button onClick={() => onRespond('allow-once', sourceId)}>Allow once</button><button onClick={() => onRespond('allow-session', sourceId)}>This session</button><button className="primary-button" onClick={() => onRespond('allow-always', sourceId)}>Always here</button></div></div></div>;
+}
+
+function RecoveryOverlay({ state }: { state: BrowserSnapshot }) {
+  const recovery = state.recovery!;
+  const act = (action: typeof recovery.actions[number]) => {
+    let confirmation: string | undefined;
+    if (action === 'restore-v1' && !window.confirm('Restore the preserved version-1 browser state? The current unreadable v2 manifest will be preserved separately.')) return;
+    if (action === 'restore-v1') confirmation = 'RESTORE_V1';
+    if (action === 'fresh-start' && !window.confirm(`Fresh start ${recovery.scope === 'account-space' ? 'this corrupt Account Space' : 'the browser state'}? Existing unreadable files will be preserved, but a new empty state will open.`)) return;
+    if (action === 'fresh-start') confirmation = 'FRESH_START';
+    void window.privateBrowser.performRecoveryAction(action, confirmation);
+  };
+  return <div className="modal-backdrop recovery-backdrop"><div className="permission-dialog recovery-dialog" role="alertdialog" aria-modal="true"><span className="permission-icon danger"><TriangleAlert size={23} /></span><small>READ-ONLY RECOVERY</small><h2>Browser data needs attention</h2><p>The original data was preserved{recovery.backupAvailable ? ' with a timestamped backup' : ''}. Writes stay disabled so one bad file cannot damage other Account Spaces.</p><div className="recovery-options">{recovery.actions.map((action) => <button key={action} onClick={() => act(action)}>{action.replaceAll('-', ' ')}</button>)}</div><p className="recovery-note">Retry restarts without replacing anything. Restore and fresh start always require explicit confirmation.</p></div></div>;
 }
 
 function bookmarkOrder(item: BookmarkItem, depth: number): number {
@@ -353,7 +527,7 @@ function BookmarkTree({ items, path = [], limit, openBookmark }: { items: Bookma
 }
 
 function BookmarkBar({ state, openBookmark }: { state: BrowserSnapshot; openBookmark: (id: string) => void }) {
-  const workspaceItems = state.bookmarks.filter((item) => item.workspaceId === state.activeWorkspaceId);
+  const workspaceItems = state.bookmarks.filter((item) => item.workspaceId === state.activeWorkspaceId && item.accountSpaceId === state.activeAccountSpaceId);
   const barItems = workspaceItems.filter((item) => item.location === 'bar');
   const otherItems = workspaceItems.filter((item) => item.location === 'other');
   return <nav className="bookmark-bar" aria-label="Bookmarks bar">
@@ -364,8 +538,8 @@ function BookmarkBar({ state, openBookmark }: { state: BrowserSnapshot; openBook
 
 function Dashboard({ state, open, openBookmark }: { state: BrowserSnapshot; open: (url: string) => void; openBookmark: (id: string) => void }) {
   const workspace = state.workspaces.find((item) => item.id === state.activeWorkspaceId)!;
-  const recent = state.history.filter((item) => item.workspaceId === state.activeWorkspaceId).slice(0, 5);
-  const bookmarks = state.bookmarks.filter((item) => item.workspaceId === state.activeWorkspaceId).slice(0, 5);
+  const recent = state.history.filter((item) => item.accountSpaceId === state.activeAccountSpaceId).slice(0, 5);
+  const bookmarks = state.bookmarks.filter((item) => item.accountSpaceId === state.activeAccountSpaceId).slice(0, 5);
   const quickLinks = QUICK_LINKS[state.activeWorkspaceId];
   return (
     <main className="dashboard" style={{ '--accent': workspace.color } as React.CSSProperties}>
@@ -742,12 +916,16 @@ function SettingsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (m
   const [updateForm, setUpdateForm] = useState<UpdateServiceInput>({ endpoint: '', accessToken: '' });
   const [chromeProfiles, setChromeProfiles] = useState<ChromeProfileSource[]>([]);
   const [chromeProfileId, setChromeProfileId] = useState('');
-  const [chromeWorkspace, setChromeWorkspace] = useState<WorkspaceId>(state.activeWorkspaceId === 'banking' ? 'personal' : state.activeWorkspaceId);
+  const [chromeAccountSpaceId, setChromeAccountSpaceId] = useState(() => {
+    const active = state.accountSpaces.find((account) => account.id === state.activeAccountSpaceId && account.workspaceId !== 'banking');
+    return active?.id ?? state.accountSpaces.find((account) => account.workspaceId !== 'banking')?.id ?? state.activeAccountSpaceId;
+  });
   const [chromeBookmarks, setChromeBookmarks] = useState(true);
   const [chromeHistory, setChromeHistory] = useState(true);
   const [chromeImportOpen, setChromeImportOpen] = useState(false);
   const [chromeLoading, setChromeLoading] = useState(false);
   const [chromeResult, setChromeResult] = useState<ChromeImportResult | null>(null);
+  const chromeDestinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && account.workspaceId !== 'banking');
   // null while the first status is still in flight — better than claiming
   // 'Active' before anything has been checked, which is what it used to do.
   const encryptionAvailable = updateStatus ? updateStatus.error !== 'os-encryption-unavailable' : null;
@@ -758,6 +936,9 @@ function SettingsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (m
       setUpdateForm((value) => ({ ...value, endpoint: status.endpoint ?? '' }));
     }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'));
   }, []);
+  useEffect(() => {
+    if (!chromeDestinations.some((account) => account.id === chromeAccountSpaceId) && chromeDestinations[0]) setChromeAccountSpaceId(chromeDestinations[0].id);
+  }, [state.activeWorkspaceId, state.activeAccountSpaceId, state.accountSpaces]);
   const makeDefault = async () => {
     try {
       const result = await window.privateBrowser.setDefaultBrowser();
@@ -810,7 +991,9 @@ function SettingsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (m
   const importChrome = async () => {
     setChromeLoading(true);
     try {
-      const result = await window.privateBrowser.importChrome({ profileId: chromeProfileId, workspaceId: chromeWorkspace, bookmarks: chromeBookmarks, history: chromeHistory });
+      const destination = state.accountSpaces.find((account) => account.id === chromeAccountSpaceId);
+      if (!destination || destination.workspaceId === 'banking') throw new Error('Choose a non-Banking Account Space');
+      const result = await window.privateBrowser.importChrome({ profileId: chromeProfileId, workspaceId: destination.workspaceId, accountSpaceId: destination.id, bookmarks: chromeBookmarks, history: chromeHistory });
       setChromeResult(result);
       onToast(`Imported ${result.imported.bookmarks} bookmarks and ${result.imported.history} history entries`);
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
@@ -833,12 +1016,13 @@ function SettingsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (m
       {chromeImportOpen && <div className="chrome-import-form">
         {chromeLoading && !chromeProfiles.length ? <div className="import-loading"><LoaderCircle className="spin" size={15} /> Detecting Chrome profiles…</div> : chromeProfiles.length > 0 ? <>
           <label><span>Chrome profile</span><select value={chromeProfileId} onChange={(event) => setChromeProfileId(event.target.value)}>{chromeProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}{profile.isDefault ? ' (Default)' : ''}</option>)}</select></label>
-          <label><span>Import into workspace</span><select value={chromeWorkspace} onChange={(event) => setChromeWorkspace(event.target.value as WorkspaceId)}>{state.workspaces.filter((item) => !item.protected).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+          <label><span>Import into Account Space</span><select disabled={!chromeDestinations.length} value={chromeAccountSpaceId} onChange={(event) => setChromeAccountSpaceId(event.target.value as AccountSpaceId)}>{chromeDestinations.map((account) => <option value={account.id} key={account.id}>{account.label}</option>)}</select></label>
+          {!chromeDestinations.length && <p className="import-note">Chrome data cannot be imported into Banking. Switch to another workspace first.</p>}
           <div className="import-checks">
             <label><input type="checkbox" checked={chromeBookmarks} onChange={(event) => setChromeBookmarks(event.target.checked)} /> <span><strong>Bookmarks</strong><small>Includes the full Chrome bookmarks bar and folder hierarchy.</small></span></label>
             <label><input type="checkbox" checked={chromeHistory} onChange={(event) => setChromeHistory(event.target.checked)} /> <span><strong>Browsing history</strong><small>Up to 10,000 recent Chrome pages.</small></span></label>
           </div>
-          <button className="primary-button full" disabled={chromeLoading || (!chromeBookmarks && !chromeHistory)} onClick={() => void importChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Import selected data</button>
+          <button className="primary-button full" disabled={chromeLoading || !chromeDestinations.length || (!chromeBookmarks && !chromeHistory)} onClick={() => void importChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Import selected data</button>
         </> : !chromeLoading ? <p className="import-note">Install or open Chrome once so a local profile exists, then try again.</p> : null}
         <div className="password-import-row"><div><strong>Saved passwords</strong><small>Chrome protects direct access. Export passwords as CSV, then select that file here. Secrets go straight into MyVault and never enter the page.</small></div><button disabled={chromeLoading} onClick={() => void importChromePasswords()}>Choose CSV</button></div>
         <p className="import-limit"><Shield size={13} /> Cookies, signed-in sessions, payment cards, extensions and Chrome account tokens are intentionally not copied.</p>

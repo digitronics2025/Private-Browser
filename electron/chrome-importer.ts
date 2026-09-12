@@ -1,9 +1,9 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import type { Bookmark, ChromeImportResult, ChromeProfileSource, HistoryEntry, VaultItemInput, WorkspaceId } from './types.js';
+import type { AccountSpaceId, Bookmark, ChromeImportResult, ChromeProfileSource, HistoryEntry, VaultItemInput, WorkspaceId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
 
 const MAX_BOOKMARK_FILE_BYTES = 32 * 1024 * 1024;
@@ -79,7 +79,7 @@ function chromeTime(value?: string | number): string {
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
-export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId): { bookmarks: Bookmark[]; skipped: number; truncated: boolean } {
+export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): { bookmarks: Bookmark[]; skipped: number; truncated: boolean } {
   const parsed = JSON.parse(content) as ChromeBookmarksFile;
   const bookmarks: Bookmark[] = [];
   let skipped = 0;
@@ -94,6 +94,7 @@ export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId):
         title: (node.name || node.url).slice(0, 500),
         url: node.url,
         workspaceId,
+        accountSpaceId,
         createdAt: chromeTime(node.date_added),
         location,
         folderPath,
@@ -116,30 +117,44 @@ export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId):
   return { bookmarks, skipped, truncated };
 }
 
-function readBookmarks(directory: string, workspaceId: WorkspaceId) {
+function readBookmarks(directory: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId) {
   const filePath = join(directory, 'Bookmarks');
-  if (!existsSync(filePath)) return { bookmarks: [] as Bookmark[], skipped: 0, truncated: false };
-  if (statSync(filePath).size > MAX_BOOKMARK_FILE_BYTES) throw new Error('Chrome bookmarks file is unusually large');
-  return parseChromeBookmarks(readFileSync(filePath, 'utf8'), workspaceId);
+  let descriptor: number;
+  try {
+    descriptor = openSync(filePath, 'r');
+  } catch (error: unknown) {
+    if (isMissingFile(error)) return { bookmarks: [] as Bookmark[], skipped: 0, truncated: false };
+    throw error;
+  }
+  try {
+    if (fstatSync(descriptor).size > MAX_BOOKMARK_FILE_BYTES) throw new Error('Chrome bookmarks file is unusually large');
+    return parseChromeBookmarks(readFileSync(descriptor, 'utf8'), workspaceId, accountSpaceId);
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
-function readHistory(directory: string, workspaceId: WorkspaceId): { history: HistoryEntry[]; skipped: number } {
+function readHistory(directory: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): { history: HistoryEntry[]; skipped: number } {
   const source = join(directory, 'History');
-  if (!existsSync(source)) return { history: [], skipped: 0 };
   const scratch = join(tmpdir(), `private-browser-chrome-${randomUUID()}`);
   mkdirSync(scratch, { mode: 0o700 });
   const copy = join(scratch, 'History');
   try {
-    copyFileSync(source, copy);
-    if (existsSync(`${source}-wal`)) copyFileSync(`${source}-wal`, `${copy}-wal`);
-    if (existsSync(`${source}-shm`)) copyFileSync(`${source}-shm`, `${copy}-shm`);
+    try {
+      copyFileSync(source, copy);
+    } catch (error: unknown) {
+      if (isMissingFile(error)) return { history: [], skipped: 0 };
+      throw error;
+    }
+    copyIfPresent(`${source}-wal`, `${copy}-wal`);
+    copyIfPresent(`${source}-shm`, `${copy}-shm`);
     const db = new DatabaseSync(copy, { readOnly: true });
     try {
       const rows = db.prepare('SELECT url, title, last_visit_time FROM urls WHERE hidden = 0 AND last_visit_time > 0 ORDER BY last_visit_time DESC LIMIT ?').all(MAX_IMPORTED_HISTORY) as Array<{ url: string; title: string; last_visit_time: number }>;
       let skipped = 0;
       const history = rows.flatMap((row) => {
         if (!isAllowedRemoteUrl(row.url)) { skipped += 1; return [] as HistoryEntry[]; }
-        return [{ id: randomUUID(), title: String(row.title || row.url).slice(0, 500), url: row.url, workspaceId, visitedAt: chromeTime(row.last_visit_time) }];
+        return [{ id: randomUUID(), title: String(row.title || row.url).slice(0, 500), url: row.url, workspaceId, accountSpaceId, visitedAt: chromeTime(row.last_visit_time) }];
       });
       return { history, skipped };
     } finally {
@@ -150,7 +165,19 @@ function readHistory(directory: string, workspaceId: WorkspaceId): { history: Hi
   }
 }
 
-export function readChromeProfile(profileId: string, workspaceId: WorkspaceId, includeBookmarks: boolean, includeHistory: boolean, userDataDirectory?: string): ChromeProfileData {
+function copyIfPresent(source: string, destination: string): void {
+  try {
+    copyFileSync(source, destination);
+  } catch (error: unknown) {
+    if (!isMissingFile(error)) throw error;
+  }
+}
+
+function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+export function readChromeProfile(profileId: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId, includeBookmarks: boolean, includeHistory: boolean, userDataDirectory?: string): ChromeProfileData {
   if (!['digitronics', 'tenten', 'development', 'personal'].includes(workspaceId)) throw new Error('Choose a non-banking workspace for imported Chrome data');
   const profile = detectProfileRecords(userDataDirectory).find((candidate) => candidate.id === profileId);
   if (!profile) throw new Error('Chrome profile was not found');
@@ -159,11 +186,11 @@ export function readChromeProfile(profileId: string, workspaceId: WorkspaceId, i
   let bookmarkData = { bookmarks: [] as Bookmark[], skipped: 0, truncated: false };
   let historyData = { history: [] as HistoryEntry[], skipped: 0 };
   if (includeBookmarks) {
-    try { bookmarkData = readBookmarks(profile.directory, workspaceId); }
+    try { bookmarkData = readBookmarks(profile.directory, workspaceId, accountSpaceId); }
     catch { warnings.push('Chrome bookmarks could not be read. Close Chrome and try again.'); }
   }
   if (includeHistory) {
-    try { historyData = readHistory(profile.directory, workspaceId); }
+    try { historyData = readHistory(profile.directory, workspaceId, accountSpaceId); }
     catch { warnings.push('Chrome history could not be read. Close Chrome and try again.'); }
   }
   if (bookmarkData.truncated) warnings.push(`Only the first ${MAX_IMPORTED_BOOKMARKS.toLocaleString()} bookmarks were accepted for safety.`);

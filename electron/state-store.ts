@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import type { PersistedState, Workspace, WorkspaceId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
 
@@ -31,41 +29,6 @@ export function createDefaultState(): PersistedState {
     trackerBlocking: true,
     bookmarkBarVisible: true,
   };
-}
-
-export class StateStore {
-  private state: PersistedState;
-
-  constructor(private readonly filePath: string) {
-    this.state = this.load();
-  }
-
-  get(): PersistedState {
-    return structuredClone(this.state);
-  }
-
-  update(mutator: (state: PersistedState) => void): PersistedState {
-    mutator(this.state);
-    this.save();
-    return this.get();
-  }
-
-  private load(): PersistedState {
-    try {
-      const parsed = JSON.parse(readFileSync(this.filePath, 'utf8')) as PersistedState;
-      if (parsed.version !== 1 || !Array.isArray(parsed.tabs)) throw new Error('Unsupported state');
-      return sanitizeState(parsed);
-    } catch {
-      return createDefaultState();
-    }
-  }
-
-  private save(): void {
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const temporaryPath = `${this.filePath}.tmp`;
-    writeFileSync(temporaryPath, JSON.stringify(this.state, null, 2), { mode: 0o600 });
-    renameSync(temporaryPath, this.filePath);
-  }
 }
 
 export function sanitizeState(input: PersistedState): PersistedState {

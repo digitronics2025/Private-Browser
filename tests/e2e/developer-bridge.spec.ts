@@ -8,8 +8,10 @@ function snapshot(workspaceId: 'development' | 'banking') {
     { id: 'personal', name: 'Personal', color: '#4fd1a5', icon: 'P', protected: false },
     { id: 'banking', name: 'Banking', color: '#ff6b7a', icon: '$', protected: true },
   ];
-  const tabs = workspaces.map((workspace) => ({ id: workspace.id, workspaceId: workspace.id, title: 'New tab', url: 'private://home', loading: false, canGoBack: false, canGoForward: false, isHome: true, developerToolsAllowed: false, developerToolsOpen: false }));
-  return { workspaces, activeWorkspaceId: workspaceId, activeTabId: workspaceId, tabs, bookmarks: [], history: [], downloads: [], privacyLog: [], trackerBlocking: true };
+  const accounts = workspaces.map((workspace, index) => ({ id: `00000000-0000-4000-8000-00000000000${index}`, workspaceId: workspace.id, label: workspace.name, color: 'indigo', order: 0, kind: 'local', createdAt: '2026-09-12T10:00:00Z', lastUsedAt: '2026-09-12T10:00:00Z', locked: false, googleConnection: 'disconnected', websiteStatus: 'not-visited', enabledModules: [], grantedScopes: [], backupEnabled: false, backupIncludesOpenTabs: false, backupIncludesHistory: false }));
+  const tabs = workspaces.map((workspace, index) => ({ id: workspace.id, workspaceId: workspace.id, accountSpaceId: accounts[index].id, title: 'New tab', url: 'private://home', loading: false, canGoBack: false, canGoForward: false, isHome: true, developerToolsAllowed: false, developerToolsOpen: false }));
+  const active = accounts.find((account) => account.workspaceId === workspaceId)!;
+  return { workspaces, activeWorkspaceId: workspaceId, activeAccountSpaceId: active.id, activeTabId: workspaceId, tabs, bookmarks: [], history: [], downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true, accountSpaces: accounts, accountHealth: accounts.map((account) => ({ accountSpaceId: account.id, status: account.googleConnection, checkedAt: '2026-09-12T10:00:00Z' })), googleConfiguration: { configured: false }, externalBrowsers: [] };
 }
 
 async function installMock(page: import('@playwright/test').Page, workspaceId: 'development' | 'banking') {

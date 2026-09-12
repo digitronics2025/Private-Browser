@@ -3,7 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from '../electron/myvault/fill-capability';
 import { workspaceVaultPolicy } from '../electron/myvault/workspace-policy';
 
-const context: FillContext = { webContentsId: 4, tabId: 'tab-a', navigationGeneration: 2, workspaceId: 'personal', origin: 'https://example.test' };
+const context: FillContext = {
+  webContentsId: 4,
+  tabId: 'tab-a',
+  navigationGeneration: 2,
+  workspaceId: 'personal',
+  accountSpaceId: '0c29cc4b-accc-448f-a7f3-8e985a83a38e' as FillContext['accountSpaceId'],
+  origin: 'https://example.test',
+};
 
 describe('single-use exact-origin vault fill capabilities', () => {
   it('binds to tab, WebContents, navigation, workspace, exact origin, entry, operation, and expiry', () => {
@@ -14,6 +21,8 @@ describe('single-use exact-origin vault fill capabilities', () => {
     expect(() => store.redeem(valid, context, 'entry-a', 'fill-login')).toThrow('expired');
     const changed = store.issue(context, 'entry-a', 'fill-login');
     expect(() => store.redeem(changed, { ...context, navigationGeneration: 3 }, 'entry-a', 'fill-login')).toThrow('changed');
+    const crossedAccount = store.issue(context, 'entry-a', 'fill-login');
+    expect(() => store.redeem(crossedAccount, { ...context, accountSpaceId: '6ba2c705-9ba8-4f4a-9af2-46f8a36f9fc4' as FillContext['accountSpaceId'] }, 'entry-a', 'fill-login')).toThrow('changed');
     const expired = store.issue(context, 'entry-a', 'fill-login');
     now += 10_001;
     expect(() => store.redeem(expired, context, 'entry-a', 'fill-login')).toThrow('expired');

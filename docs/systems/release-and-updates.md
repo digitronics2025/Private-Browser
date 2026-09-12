@@ -10,7 +10,7 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: c70dbad
+verified_at: b3cc4cb
 ---
 
 # Release and Updates
@@ -369,6 +369,13 @@ documentation merely to make a raw shell-variable check pass.
 
 ## The Build and Publish Pipeline
 
+Account Spaces adds two CI gates before publication. Ubuntu installs Playwright
+Chromium and runs credential-free renderer E2E as part of `npm run check`;
+`scripts/run-electron-tests.mjs` wraps the Electron suite in `xvfb-run` on Linux.
+The Windows installer job also runs the real Electron suite before packaging, so
+the published artifact is gated by actual partition-isolation and workspace-policy
+checks in addition to unit and Worker tests.
+
 ### ci.yml
 
 [ci.yml](../../.github/workflows/ci.yml) — on every push to `main` and every pull
@@ -521,7 +528,11 @@ The electron-builder configuration lives **inline in `package.json`**, in the
   verifiable but Windows shows an unknown-publisher warning.
 - `loadBrowserProcessSpecificV8Snapshot` stays disabled: enabling it without a
   matching packaged browser-process snapshot makes Electron fail before startup.
-  The other sandbox, cookie, Node/inspection and ASAR-integrity fuses remain on.
+  This is a compatibility fuse, not a privilege boundary; the other sandbox,
+  cookie, Node/inspection and ASAR-integrity fuses remain on.
+- `electronDist` points at the pinned `node_modules/electron/dist`. Windows uses
+  the lockfile-installed, checksum-verified distribution directly; this avoids a
+  second extraction/rename pass that antivirus scanners can lock mid-build.
 
 **Why `package.json` is not in `sources`.** 2 of the 7 commits in this repository
 are pure dependency bumps touching only `package.json` and `package-lock.json`.

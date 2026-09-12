@@ -27,6 +27,7 @@ jobs:
       - name: Verify bridge protocol (Windows transport is skipped here)
         run: npm run bridge:test
       - run: npm audit --audit-level=high
+      - run: npx playwright install --with-deps chromium
       - run: npm run check
 
   windows-installer:
@@ -45,6 +46,8 @@ jobs:
       - run: npx playwright install chromium
       - name: Exercise the real Windows named-pipe transport
         run: npm run bridge:test
+      - name: Exercise real Electron Account Space isolation
+        run: npm run test:electron
       - name: Verify Electron MyVault boundary
         run: npm run test:e2e
       - name: Select the next release version

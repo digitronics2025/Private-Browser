@@ -3,7 +3,7 @@ system: browser-shell
 sources:
   - electron/main.ts
   - electron/developer-tools.ts
-verified_at: e306e59a
+verified_at: 7063e89
 ---
 
 # Browser Shell
@@ -470,6 +470,21 @@ The full channel-to-method-to-type table is in
 [ipc-contract.md](ipc-contract.md).
 
 ## Facades Owned by Other Docs
+
+### Account Space runtime facade
+
+`BrowserController` now delegates encrypted account records, v2 persistence,
+Google clients, confirmations, permissions and backup to the modules documented
+in [google-account-spaces.md](google-account-spaces.md). The shell owns their
+integration with live `WebContentsView` instances: it resolves every view from
+the account's main-process-only partition, restores only the active account,
+keeps popups/favicons/downloads/history on the originating account, hides native
+content below trusted overlays, and re-focuses the active page after a prompt.
+
+Account lock closes views and operations. Account deletion additionally verifies
+that Chromium cookies, cache and storage are cleared before metadata is removed.
+Workspace policy is still authoritative: Banking denies before account grants,
+and Development alone can open controlled DevTools.
 
 These methods live in `main.ts` but their behaviour is documented elsewhere. What
 this doc owns about them is the wiring: the channel each sits behind, the privacy

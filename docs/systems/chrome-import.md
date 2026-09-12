@@ -2,7 +2,7 @@
 system: chrome-import
 sources:
   - electron/chrome-importer.ts
-verified_at: e306e59a
+verified_at: 659a016
 ---
 
 # Chrome Import
@@ -29,6 +29,12 @@ cross the preload bridge.
 4. History is queried from a temporary copy and the temporary directory is
    removed in `finally`, so Chrome's live SQLite database is never opened for
    writing.
+5. Bookmark and history records are created with the explicitly selected opaque
+   Account Space ID. The main process verifies that the ID belongs to the named
+   non-Banking workspace, and deduplication includes the Account Space ID.
+6. Bookmark size validation and reading use one open file descriptor, so a path
+   swap cannot change the file between validation and parsing. History and its
+   optional WAL/SHM sidecars are copied directly and tolerate only `ENOENT`.
 
 ## Supported Data
 
@@ -51,7 +57,7 @@ browser's session-isolation boundary.
 ## Public Functions
 
 - `listChromeProfiles(userDataDirectory?)` returns display-safe profile metadata.
-- `readChromeProfile(...)` validates the profile id and non-Banking target,
+- `readChromeProfile(...)` validates the profile id and non-Banking Account Space target,
   returning accepted bookmarks/history plus result counters.
 - `parseChromeBookmarks(...)` and `parseChromePasswordCsv(...)` are pure parsers
   exported for unit tests.

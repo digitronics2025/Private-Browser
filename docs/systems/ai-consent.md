@@ -2,7 +2,8 @@
 system: ai-consent
 sources:
   - electron/ai-provider.ts
-verified_at: 1e9a38cd
+  - electron/ai-account-spaces.ts
+verified_at: 7063e89
 ---
 
 # AI Consent
@@ -95,6 +96,16 @@ one question at a time. The design goal is that a person can answer "what did
 this app send, and when did I agree to it?" from the privacy log alone.
 
 ## The Consent Protocol
+
+### Account-bound consent
+
+Every preview and approval now binds the opaque Account Space ID, exact tab,
+classified service and a SHA-256 revision of account/tab/source/text. Spending a
+capability re-checks that binding, preventing consent from one account, tab or
+page revision from authorizing another. Google data defaults to local processing.
+Mailbox content is categorically excluded from cloud model input; the existing
+sanitized preview and explicit one-request approval remain required elsewhere.
+Banking continues to deny before extraction.
 
 Implemented in `electron/main.ts` (owned by
 [browser-shell.md](browser-shell.md)). Three IPC calls in order —

@@ -8,6 +8,7 @@ node_modules/
 dist/
 dist-electron/
 release/
+release-*/
 build/private-browser-update.json
 build/private-browser-bridge.vsix
 test-results/

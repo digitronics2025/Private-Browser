@@ -12,7 +12,9 @@ test('Electron exposes pairing only after switching to Development', async () =>
   try {
     const page = await app.firstWindow();
     await expect(page.getByText('Private Browser', { exact: true }).first()).toBeVisible();
-    await page.getByLabel('Switch to Development').click();
+    const development = page.getByLabel('Switch to Development');
+    await development.click();
+    await expect(development).toHaveAttribute('aria-pressed', 'true');
     await page.getByTitle('Developer cockpit').click();
     await expect(page.getByRole('heading', { name: 'Developer Bridge' })).toBeVisible();
     await page.getByRole('button', { name: 'Pair', exact: true }).click();

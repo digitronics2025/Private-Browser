@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { parseChromeBookmarks, parseChromePasswordCsv } from '../electron/chrome-importer';
+import type { AccountSpaceId } from '../electron/types';
+
+const ACCOUNT_ID = '00000000-0000-4000-8000-000000000001' as AccountSpaceId;
 
 describe('Chrome data importer', () => {
   it('preserves bookmark-bar placement, nested folders and Chrome order', () => {
@@ -20,13 +23,14 @@ describe('Chrome data importer', () => {
       },
     });
 
-    const result = parseChromeBookmarks(input, 'personal');
+    const result = parseChromeBookmarks(input, 'personal', ACCOUNT_ID);
     expect(result.skipped).toBe(0);
     expect(result.bookmarks).toHaveLength(4);
     expect(result.bookmarks[0]).toEqual(expect.objectContaining({ title: 'First', location: 'bar', folderPath: [], orderPath: [0] }));
     expect(result.bookmarks[1]).toEqual(expect.objectContaining({ title: 'Orders', location: 'bar', folderPath: ['Work'], orderPath: [1, 0] }));
     expect(result.bookmarks[2]).toEqual(expect.objectContaining({ title: 'Shop', folderPath: ['Work', 'Stores'], orderPath: [1, 1, 0] }));
     expect(result.bookmarks[3]).toEqual(expect.objectContaining({ title: 'Later', location: 'other' }));
+    expect(result.bookmarks.every((item) => item.accountSpaceId === ACCOUNT_ID)).toBe(true);
   });
 
   it('drops Chrome internal and unsafe bookmark URLs', () => {
@@ -35,7 +39,7 @@ describe('Chrome data importer', () => {
       { type: 'url', name: 'Script', url: 'javascript:alert(1)' },
       { type: 'url', name: 'Good', url: 'https://example.com' },
     ] } } });
-    const result = parseChromeBookmarks(input, 'personal');
+    const result = parseChromeBookmarks(input, 'personal', ACCOUNT_ID);
     expect(result.bookmarks.map((item) => item.title)).toEqual(['Good']);
     expect(result.skipped).toBe(2);
   });

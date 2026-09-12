@@ -1,5 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
-import type { BridgeStatus, BrowserSnapshot } from '../electron/types';
+import type { AccountSpaceId, BridgeStatus, BrowserSnapshot } from '../electron/types';
 
 export function installLocalBridgePreview(): void {
   if (window.privateBrowser || !['127.0.0.1', 'localhost'].includes(location.hostname) || new URLSearchParams(location.search).get('preview') !== 'bridge') return;
@@ -10,8 +10,10 @@ export function installLocalBridgePreview(): void {
     { id: 'personal' as const, name: 'Personal', color: '#4fd1a5', icon: 'P', protected: false },
     { id: 'banking' as const, name: 'Banking', color: '#ff6b7a', icon: '$', protected: true },
   ];
-  const tabs = workspaces.map((workspace) => ({ id: workspace.id, workspaceId: workspace.id, title: workspace.id === 'development' ? 'Developer Preview' : 'New tab', url: workspace.id === 'development' ? 'http://127.0.0.1:4173/' : 'private://home', loading: false, canGoBack: false, canGoForward: false, isHome: workspace.id !== 'development', developerToolsAllowed: workspace.id === 'development', developerToolsOpen: false }));
-  const snapshot: BrowserSnapshot = { workspaces, activeWorkspaceId: 'development', activeTabId: 'development', tabs, bookmarks: [], history: [], downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true };
+  const accounts = workspaces.map((workspace, order) => ({ id: `00000000-0000-4000-8000-00000000000${order}` as AccountSpaceId, workspaceId: workspace.id, label: workspace.name, color: 'indigo' as const, order: 0, kind: 'local' as const, createdAt: '2026-09-12T10:00:00Z', lastUsedAt: '2026-09-12T10:00:00Z', locked: false, googleConnection: 'disconnected' as const, websiteStatus: 'not-visited' as const, enabledModules: [], grantedScopes: [], backupEnabled: false, backupIncludesOpenTabs: false, backupIncludesHistory: false }));
+  const tabs = workspaces.map((workspace, index) => ({ id: workspace.id, workspaceId: workspace.id, accountSpaceId: accounts[index].id, title: workspace.id === 'development' ? 'Developer Preview' : 'New tab', url: workspace.id === 'development' ? 'http://127.0.0.1:4173/' : 'private://home', loading: false, canGoBack: false, canGoForward: false, isHome: workspace.id !== 'development', developerToolsAllowed: workspace.id === 'development', developerToolsOpen: false }));
+  const developmentAccount = accounts.find((account) => account.workspaceId === 'development')!;
+  const snapshot: BrowserSnapshot = { workspaces, activeWorkspaceId: 'development', activeAccountSpaceId: developmentAccount.id, activeTabId: 'development', tabs, bookmarks: [], history: [], downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true, accountSpaces: accounts, accountHealth: accounts.map((account) => ({ accountSpaceId: account.id, status: 'disconnected', checkedAt: '2026-09-12T10:00:00Z' })), googleConfiguration: { configured: false }, externalBrowsers: [] };
   let bridge: BridgeStatus = { state: 'disconnected', browserVersion: '0.4.0' };
   const target = {
     getState: async () => snapshot,

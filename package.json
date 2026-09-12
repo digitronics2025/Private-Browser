@@ -16,6 +16,7 @@
   },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && npm run electron:compile && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js\"",
+    "dev:preview": "vite --host 127.0.0.1",
     "bridge:build": "npm run build --workspace @private-browser/bridge-protocol",
     "bridge:test": "npm run test --workspace @private-browser/bridge-protocol",
     "extension:compile": "npm run compile --workspace private-browser-bridge",
@@ -30,6 +31,9 @@
     "test:watch": "vitest",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:headed": "npm run build && playwright test --headed",
+    "test:electron": "npm run build && npm run test:electron:only",
+    "test:electron:only": "node scripts/run-electron-tests.mjs",
+    "test:electron:ci": "node scripts/run-electron-tests-if-supported.mjs",
     "worker:typecheck": "tsc -p cloudflare/tsconfig.json",
     "scripts:typecheck": "tsc -p cloudflare/tsconfig.scripts.json",
     "worker:build": "wrangler deploy --dry-run --config cloudflare/wrangler.jsonc --outdir .wrangler-dist",
@@ -38,12 +42,13 @@
     "secrets:check": "node scripts/secret-guard.mjs",
     "docs:find": "node scripts/docs-find.mjs",
     "docs:stale": "node scripts/docs-guard.mjs stale",
-    "check": "npm run secrets:check && npm run docs:check && npm run bridge:build && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run extension:package && npm run extension:validate && npm run build && npm run test:e2e && npm run worker:build",
+    "check": "npm run secrets:check && npm run docs:check && npm run bridge:build && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run extension:package && npm run extension:validate && npm run build && npm run test:e2e && npm run test:electron:ci && npm run worker:build",
     "dist": "npm run extension:package && npm run build && electron-builder --win nsis --x64 --publish never && npm run extension:stage",
     "start": "electron dist-electron/main.js"
   },
   "dependencies": {
     "@private-browser/bridge-protocol": "*",
+    "google-auth-library": "^11.0.2",
     "hash-wasm": "^4.12.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
@@ -72,6 +77,7 @@
     "appId": "ma.digitronics.privatebrowser",
     "productName": "Private Browser",
     "asar": true,
+    "electronDist": "node_modules/electron/dist",
     "electronFuses": {
       "runAsNode": false,
       "enableCookieEncryption": true,
@@ -111,5 +117,8 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-linux-x64-gnu": "4.63.1"
   }
 }

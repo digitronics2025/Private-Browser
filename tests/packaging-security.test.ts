@@ -14,6 +14,7 @@ describe('packaged application security', () => {
       enableNodeCliInspectArguments: false,
       enableEmbeddedAsarIntegrityValidation: true,
       onlyLoadAppFromAsar: true,
+      loadBrowserProcessSpecificV8Snapshot: false,
     }));
   });
 });

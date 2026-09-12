@@ -4,7 +4,7 @@ sources:
   - electron/vault.ts
   - electron/clipboard-guard.ts
   - electron/myvault/**
-verified_at: e306e59a
+verified_at: 7063e89
 ---
 
 # MyVault broker
@@ -39,8 +39,8 @@ memory wiping.
 4. Pairing takes a ten-minute single-use enrollment code in secure UI. The
    returned `mvd_...` token never reaches React and is stored only by `safeStorage`.
 5. Fill capabilities are single-use and bind WebContents, tab, navigation
-   generation, workspace, exact scheme/host/effective port, entry, operation and
-   expiry. Context is revalidated around broker resolution and injection.
+   generation, workspace, Account Space, exact scheme/host/effective port, entry,
+   operation and expiry. Context is revalidated around broker resolution and injection.
 6. Isolated-world fill targets recognized username/password/OTP fields and never
    submits. Downgrade, certificate error, punycode, opaque or cross-origin frame,
    navigation, workspace, lock, timeout and replay all fail closed.
@@ -73,6 +73,12 @@ memory wiping.
 fixture digest. Envelope v1, payload schema v2, Argon2id 64 MiB/3/1,
 AES-256-GCM, 12-byte IVs and 128-bit tags require coordinated additive fixtures
 before change.
+
+## Account Space backup boundary
+
+MyVault remains authoritative and is never included in Google Drive app-data
+Account Space backup. Account backup uses separate recovery material and excludes
+vault records, credentials, keys, tokens, passwords, passkeys, and TOTP secrets.
 
 ## Verification
 
