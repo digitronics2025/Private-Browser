@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
+import { browserCompatibleUserAgent, downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
 import { createDefaultState, sanitizeState } from '../electron/state-store';
 import { generateTotp } from '../electron/vault';
 
@@ -42,6 +42,18 @@ describe('navigation security', () => {
     expect(isAllowedSitePermission('fullscreen', 'http://example.com', false, true)).toBe(false);
     expect(isAllowedSitePermission('fullscreen', 'https://video.example/watch', true, true)).toBe(false);
     expect(isAllowedSitePermission('fullscreen', 'https://video.example/watch', false, false)).toBe(false);
+  });
+
+  it('keeps the browser user agent consistent with Chromium client hints', () => {
+    const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) private-work-browser/0.5.0 Chrome/152.0.7977.78 Electron/44.3.0 Safari/537.36';
+    expect(browserCompatibleUserAgent(userAgent, ['private-work-browser', 'Private Browser'])).toBe(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.78 Safari/537.36',
+    );
+  });
+
+  it('does not remove unrelated browser product tokens', () => {
+    const userAgent = 'Mozilla/5.0 ExampleBrowser/7.1 Chrome/152.0.7977.78 Safari/537.36';
+    expect(browserCompatibleUserAgent(userAgent, ['Private Browser'])).toBe(userAgent);
   });
 
   it('classifies executable and deceptive downloads', () => {

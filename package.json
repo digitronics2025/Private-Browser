@@ -1,6 +1,6 @@
 {
   "name": "private-work-browser",
-  "version": "0.5.3",
+  "version": "0.5.6",
   "description": "A private, workspace-first Chromium browser for daily business operations.",
   "type": "module",
   "main": "dist-electron/main.js",

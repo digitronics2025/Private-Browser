@@ -2,7 +2,7 @@
 system: security-boundary
 sources:
   - electron/security.ts
-verified_at: 7063e89
+verified_at: 1e3a6f0
 ---
 
 # Security Boundary
@@ -12,7 +12,7 @@ verified_at: 7063e89
 ## Agent Brief
 
 **Scope.** [electron/security.ts](../../electron/security.ts) holds pure URL,
-permission and download policy helpers. Every untrusted URL entering a
+browser-identity, permission and download policy helpers. Every untrusted URL entering a
 navigation, a stored record or an outbound `fetch` passes one of them. They hold
 no state and import nothing, which is why they are cheap to call twice.
 
@@ -56,7 +56,6 @@ context and fail closed on downgrade, certificate, IDN, frame or replay ambiguit
 6. **The SSRF guard checks a URL, so redirects must be refused.** Both callers
    pass `redirect: 'error'`; without it a 302 relocates the request after the
    check has already passed. → **isSafeAiEndpoint**
-
 ### Where to look
 
 <!-- routing:start -->
@@ -64,7 +63,7 @@ context and fail closed on downgrade, certificate, IDN, frame or replay ambiguit
 | You are changing… | Section |
 | --- | --- |
 | what the address bar does with typed text | [normalizeNavigationInput](#normalizenavigationinput) |
-| campaign identifiers or address warnings | [Tracking and runtime policy](#tracking-and-runtime-policy) |
+| campaign identifiers, address warnings or browser identity tokens | [Tracking and runtime policy](#tracking-and-runtime-policy) |
 | site permission or download risk policy | [Tracking and runtime policy](#tracking-and-runtime-policy) |
 | which schemes may load, or be written to disk | [isAllowedRemoteUrl](#isallowedremoteurl) |
 | a secret pattern, or the redaction count shown to the user | [redactSensitiveText](#redactsensitivetext) |
@@ -109,6 +108,13 @@ usable. `isAllowedSitePermission` permits only top-frame fullscreen and sanitize
 clipboard writes from trustworthy origins, and denies every permission in
 Banking. `downloadRisk` detects executable/script extensions and deceptive names
 such as `invoice.pdf.exe` so the shell can refuse to open them.
+
+`browserCompatibleUserAgent` removes Electron's product token plus exact
+space-, hyphen- or underscore-separated spellings of the packaged application
+name. It leaves unrelated product tokens untouched. `configureSession` passes
+both `app.getName()` and the visible product name, so the HTTP header and
+`navigator.userAgent` remain aligned with Chromium's `navigator.userAgentData`
+brands on packaged builds.
 
 ## normalizeNavigationInput
 
@@ -323,7 +329,7 @@ capabilities provide the additional Google-specific boundary.
 Four modules import from this file. Trace them before changing a signature.
 
 - **[electron/main.ts](../../electron/main.ts)** (owned by
-  [browser-shell.md](browser-shell.md)) imports `isAllowedRemoteUrl`,
+  [browser-shell.md](browser-shell.md)) imports `browserCompatibleUserAgent`, `isAllowedRemoteUrl`,
   `isProtectedPage`, `normalizeNavigationInput`, `redactSensitiveText` and
   `urlOriginForSharing`. Calls: `navigate()` normalises then re-checks
   (`main.ts:165`, `:178`); `prepareAiPreview` refuses protected pages, redacts and
@@ -344,7 +350,9 @@ Four modules import from this file. Trace them before changing a signature.
   [release-and-updates.md](release-and-updates.md)) imports
   `isSafeUpdateEndpoint` and calls it in `configure()` and again in `load()`.
 
-[tests/security.test.ts](../../tests/security.test.ts) exercises all seven.
+[tests/security.test.ts](../../tests/security.test.ts) exercises all eight, and
+the Electron suite checks the actual packaged-session header against the
+renderer identity.
 
 ## Related Systems
 

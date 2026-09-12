@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.3 — 2026-09-12
+## 0.5.6 — 2026-09-12
 
 - Added Chrome-style automatic MyVault filling for matching normal HTTPS login
   forms, with delayed-form retries, empty-field protection and no auto-submit.
