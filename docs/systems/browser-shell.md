@@ -3,7 +3,7 @@ system: browser-shell
 sources:
   - electron/main.ts
   - electron/developer-tools.ts
-verified_at: dbe0133
+verified_at: 0f2626a1
 ---
 
 # Browser Shell

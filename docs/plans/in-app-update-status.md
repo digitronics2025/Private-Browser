@@ -2,7 +2,7 @@
 title: Private Browser verifies the latest cloud release in-app
 source: conversation 2026-09-12
 created: 2026-09-12
-status: in-progress
+status: done
 ---
 
 # Private Browser verifies the latest cloud release in-app
@@ -28,9 +28,9 @@ The approved public-download plan requires a public Cloudflare landing page back
 - [x] T2. Similar-issue sweep — done when: sibling update routes, preload/IPC surfaces, background checks, preview handlers, signed links and mobile styles were searched for the same pattern — check: `manual: record the searches and findings in the Ledger`
 - [x] T3. Full quality and security gates green — done when: dependency audit and the canonical repository check both exit 0 — check: `npm audit --audit-level=high && npm run check`
 - [x] T4. Docs synced per the repo's rules — done when: the system docs, BUILD_LOG, CHANGELOG and this implementation ledger reflect the final behavior — check: `npm run docs:check && git diff --stat docs/ BUILD_LOG.md CHANGELOG.md`
-- [ ] T5. Committed path-scoped and pushed through the PR flow — done when: the feature PR is merged to main and the exact merged commit is available on origin — check: `git fetch origin && git branch --contains origin/main`
-- [ ] T6. Direct Cloudflare and desktop release verified — done when: the exact merged commit is deployed with pinned Wrangler and `--keep-vars`, Worker health and public manifest are live, CI publishes the newer desktop version, and the installed-app update journey is verified — check: `manual: record Worker version, live route evidence, CI release version/hash and app result in BUILD_LOG.md`
-- [ ] T7. Downstream claim recorded — done when: the build log names the live D1-to-public-feed-to-desktop comparison and its next-release verification deadline — check: `manual: record the claim and deadline in BUILD_LOG.md`
+- [x] T5. Committed path-scoped and pushed through the PR flow — done when: the feature PR is merged to main and the exact merged commit is available on origin — check: `git fetch origin && git branch --contains origin/main`
+- [x] T6. Direct Cloudflare and desktop release verified — done when: the exact merged commit is deployed with pinned Wrangler and `--keep-vars`, Worker health and public manifest are live, CI publishes the newer desktop version, and the installed-app update journey is verified — check: `manual: record Worker version, live route evidence, CI release version/hash and app result in BUILD_LOG.md`
+- [x] T7. Downstream claim recorded — done when: the build log names the live D1-to-public-feed-to-desktop comparison and its next-release verification deadline — check: `manual: record the claim and deadline in BUILD_LOG.md`
 
 ## Ledger
 
@@ -44,3 +44,8 @@ The approved public-download plan requires a public Cloudflare landing page back
 - 2026-09-12 20:52 — T2 — searched all `updates:*`, `UpdateServiceStatus`, manifest, background-poll, preview and checksum consumers. The sweep found stale IPC/browser-shell/status documentation and a resolved checksum follow-up; all were corrected, while preload and guarded IPC signatures required no code change.
 - 2026-09-12 20:55 — T3 — `npm audit --audit-level=high` found zero vulnerabilities; `npm run check` passed 220 desktop, 7 protocol, 6 extension, 23 Worker, 10 browser and 4 real Electron tests, plus secret/docs/type/build/package/VSIX and Worker dry-deploy gates.
 - 2026-09-12 20:55 — T4 — all four source-owning system docs, BUILD_LOG, CHANGELOG, the resolved follow-up and this ledger are synchronized; the documentation guard passed with zero failures and warnings.
+- 2026-09-12 20:56 — T5 — PR #29 merged to `main` as `0f2626a1a9054e0f474183a3d382cdbb16279f8c`; the exact revision is present on `origin/main` and the feature worktree is clean.
+- 2026-09-12 20:57 — T6 deviation — the first direct deploy was rejected before upload because the tracked Wrangler template deliberately contains a zero D1 placeholder. The repository renderer resolved the account's existing D1 identifier into the ignored deployment config; no production traffic changed during the failed attempt.
+- 2026-09-12 21:01 — T6 — pinned Wrangler 4.131.1 with `--keep-vars` activated Worker `58dcb765-ed74-4d53-982d-e3ef729890d7`, tagged `git-0f2626a`. Run `34712446005` then passed Linux verification, real Windows Electron isolation, hardened packaging, R2/D1 publication and authenticated full/range/resume verification.
+- 2026-09-12 21:03 — T6 — D1's public feed reports Private Browser `0.5.8` build 89 for the exact merge. A separate public signed-route download resumed from one MiB to 115,640,788 bytes and matched SHA-256 `a820b01e8de7fb62caee70efd04cd8ff0a8c20cc57618c25f4698cc4b164436f`; HEAD and a 1,024-byte range also matched. The current-user installer exited 0, Windows reports product version `0.5.8.0`, and the installed process remained responsive. Renderer verification proved the `0.5.7` → `0.5.8` available state and the installed `0.5.8` current state.
+- 2026-09-12 21:03 — T7 — downstream probe due 2026-09-13: read the active D1 version/build/commit/size/hash tuple through `/api/v1/releases/public/latest`, require the same tuple from the signed R2 bytes, and require the desktop comparison to resolve older versions as `available` and `0.5.8` as `current`.

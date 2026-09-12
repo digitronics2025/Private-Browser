@@ -133,9 +133,16 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 [STEP] 13.1 — Add a public read-only latest stable release manifest — done
 [STEP] 13.2 — Make credential-free public checks the desktop default while preserving private overrides — done
 [STEP] 13.3 — Build and verify the dedicated in-app Updates page — done
-[STEP] 13.4 — Run the full gate, merge, publish and verify the desktop and Worker releases — in progress
+[STEP] 13.4 — Run the full gate, merge, publish and verify the desktop and Worker releases — done
+[DONE] System 13 — In-app update status — 2026-09-12
 
 - The Settings surface now opens a focused Updates page with installed and latest versions, release build/time/size/notes/source/checksum, developer details, automatic/manual checks, and explicit current, available, loading and failure states.
 - The Worker adds public GET/HEAD `/api/v1/releases/public/latest`; authenticated `/update.json` and `/api/v1/releases/latest` remain unchanged and private. Every returned installer and page link stays same-origin, signed, expiring and `no-store`.
 - Desktop checks use the public feed when no encrypted private override exists, run ten seconds after launch and every 24 hours, and retain the expected filename/size/SHA-256 so downloaded installers are verified before opening.
 - Playwright passed current, update-available and failure-recovery flows at desktop and 375px with clean console, page-error and failed-network monitors; the same available-state URL was opened visibly in VS Code Integrated Browser.
+- PR #29 merged to `main` as `0f2626a1a9054e0f474183a3d382cdbb16279f8c`. The canonical local gate passed 220 desktop, 7 protocol, 6 extension, 23 Worker, 10 browser and 4 real Electron tests; the dependency audit found zero vulnerabilities.
+- Direct publication with pinned Wrangler 4.131.1 and `--keep-vars` activated Worker `58dcb765-ed74-4d53-982d-e3ef729890d7`, tagged `git-0f2626a`; D1 had no pending migrations and live `/health` returned 200 with database `ok` and `releaseReady: true`.
+- GitHub run `34712446005` passed verification, Windows packaging and smoke checks, publication, and authenticated download verification. D1/R2 now expose Private Browser `0.5.8` build 89 for the exact merge, filename `Private-Browser-0.5.8-Setup.exe`, size 115,640,788 bytes, and SHA-256 `a820b01e8de7fb62caee70efd04cd8ff0a8c20cc57618c25f4698cc4b164436f`.
+- An independent public signed-route proof returned HEAD 200 and range 206, resumed from one MiB to the exact byte count, and recomputed the same SHA-256. The current-user installer exited 0, Windows reports product version `0.5.8.0`, and the launched installed app remained responsive.
+- The in-app state matrix is verified: installed `0.5.7` versus live `0.5.8` shows **Update available**; installed `0.5.8` versus live `0.5.8` shows **Private Browser is up to date**. The page also passed loading, failure/retry, developer-link and 375px CTA checks.
+- Downstream claim due 2026-09-13: the active D1 tuple `(0.5.8, 89, 0f2626a, 115640788, a820b01…)` must equal the public feed and signed R2 bytes, and the desktop comparison must continue resolving older/current versions correctly.
