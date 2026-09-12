@@ -110,4 +110,14 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 [START] System 11 — Chrome-style MyVault autofill — 2026-09-12
 [STEP] 11.1 — Add exact-origin automatic fill policy and safe field injection — done
 [STEP] 11.2 — Verify normal, occupied, signup and workspace-restricted behavior — done
-[STEP] 11.3 — Package, publish and verify the signed desktop release — pending
+[STEP] 11.3 — Package, publish and verify the signed desktop release — done
+[DONE] System 11 — Chrome-style MyVault autofill — 2026-09-12
+
+[FINAL AUDIT] Chrome-style MyVault autofill production release passed — 2026-09-12
+- PR #25 merged to `main` as `d43fcf0f1f30a691dca3a4578dfde9edbf569a22`; the final combined local gate passed 217 desktop tests, 7 protocol tests, 6 extension tests, 21 Worker tests, 7 browser UI flows and 4 real Electron tests.
+- Automatic fill was proven on delayed normal HTTPS login forms without submission; occupied credentials, signup/reset/new-password routes, certificate failures, HTTP pages, Banking and Development remain untouched.
+- Direct Wrangler release applied no pending D1 migrations and activated revision-tagged Worker version `f448f2af-6333-407c-b7ad-fa2c4045f3f2` for the autofill merge; the current superseding exact-main Worker is `3e220d74-5243-49dc-af9b-f617f9f1c688` tagged `git-fabad9b`.
+- Main run `34705898039` passed Linux verification, Windows Electron/package verification, R2 upload, D1 registration and the authenticated end-to-end download verifier.
+- Private Browser `0.5.7` build 82 is active for commit `fabad9b310b10efcc7332e88599620db8d437b2a`; its 115,638,545-byte installer SHA-256 is `259a374e199949d72b7fa87c6aed3eef9834340b99ed5dfd17da68038a922eec`.
+- A separate public signed-route download matched the active D1 size and SHA-256 exactly; live `/health` returned 200 with database `ok` and `releaseReady: true`.
+- The verified installer completed in explicit current-user mode, Windows reports product version `0.5.7.0`, and the launched installed process remained responsive while preserving the existing profile and MyVault data.
