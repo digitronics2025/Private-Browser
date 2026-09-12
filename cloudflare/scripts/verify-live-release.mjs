@@ -33,7 +33,7 @@ assert(page.includes(manifest.version) && page.includes(expectedHash), 'Download
 for (const publicPath of ['/', '/download']) {
   const publicPageResponse = await fetch(`${endpoint}${publicPath}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
   assert(publicPageResponse.status === 200, `Public download page ${publicPath} returned ${publicPageResponse.status}`);
-  assert(publicPageResponse.headers.get('cache-control') === 'no-store', `Public download page ${publicPath} is cacheable`);
+  assert(hasCacheDirective(publicPageResponse.headers, 'no-store'), `Public download page ${publicPath} is cacheable`);
   assert(publicPageResponse.headers.get('x-robots-tag') === 'index, follow', `Public download page ${publicPath} is not indexable`);
   const publicPage = await publicPageResponse.text();
   assert(publicPage.includes('Download for Windows'), `Public download page ${publicPath} is missing its primary action`);
@@ -119,6 +119,13 @@ async function expectRange(url, range, start, end, size) {
 async function expectStatus(url, status, headers = {}) {
   const response = await fetch(url, { headers, redirect: 'error', signal: AbortSignal.timeout(30_000) });
   assert(response.status === status, `${new URL(url).pathname} returned ${response.status}, expected ${status}`);
+}
+
+function hasCacheDirective(headers, expectedDirective) {
+  return (headers.get('cache-control') ?? '')
+    .split(',')
+    .map((directive) => directive.trim().toLowerCase())
+    .includes(expectedDirective.toLowerCase());
 }
 
 /**
