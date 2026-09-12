@@ -5,7 +5,15 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 ## What is included
 
 - Real Chromium browsing in native Electron `WebContentsView` tabs.
-- Five persistent, cookie-isolated workspaces: Digitronics, TenTen, Development, Personal and Banking.
+- Five fixed policy workspaces—Digitronics, TenTen, Development, Personal and
+  Banking—with dynamic Account Spaces for independently isolated local and
+  Google accounts.
+- Encrypted per-account metadata, independent browser partitions, safe v1 state
+  migration/recovery, and an accessible account switcher and manager.
+- Optional least-privilege Gmail, Drive, Calendar and Contacts modules through
+  external-browser Google Desktop OAuth with PKCE; no embedded client secret.
+- Optional AES-256-GCM Drive app-data backup with a user-verified recovery code;
+  Google receives ciphertext and My Vault is never included.
 - Chrome-style tabs, address/search bar, navigation, bookmarks, history and download management.
 - Tracker blocking for common analytics, advertising and session-replay hosts,
   tracking-parameter removal, DNT/GPC, and WebRTC private-address protection.
@@ -33,6 +41,9 @@ npm run dev
 ```
 
 The development command launches Vite on localhost and opens the Electron application.
+
+For a credential-free visual review of Account Spaces, run `npm run dev:preview`.
+Real partition isolation is verified separately with `npm run test:electron`.
 
 Open a webpage in the **Development** workspace, then select **Dev** in the right sidebar or press **F12** / **Ctrl+Shift+I**. Right-click a page element for exact inspection. The diagnostic report deliberately excludes page text, form values, cookies, storage, headers, request bodies, query strings and fragments, and developer access is blocked for Banking and detected payment pages.
 
@@ -64,12 +75,26 @@ After deployment, open **Settings → Private downloads** in the desktop app to 
 
 ## Privacy model
 
-Local browser state never includes passwords, form contents, cookies or AI page text. Workspace cookies live in distinct Electron session partitions. Vault values are encrypted using Electron `safeStorage`, which uses the operating system's credential protection.
+Local browser state never includes passwords, form contents, cookies or AI page
+text. Account Space cookies live in distinct Electron session partitions.
+Account labels, Google identity, grants, permission decisions, partition keys and
+refresh tokens live in separate `safeStorage`-encrypted files. Plaintext v2 state
+contains only opaque account references plus the URLs/titles users expect browser
+history, bookmarks and open tabs to retain.
 
 The AI panel first extracts visible page text locally. It removes common credentials, tokens, card numbers, JWTs and authenticator secrets, strips the page URL down to its origin, and protects banking/payment pages. The sanitized preview must be approved for one request. You can connect any public HTTPS OpenAI-compatible endpoint; its API key is stored with operating-system encryption.
 
 ## Current scope
 
-This is a functional desktop browser, not a Chromium fork. It is optimized for a private single-user Windows workflow. Android, extension compatibility, a passkey-management UI and encrypted cross-device sync remain future modules; Chromium's ordinary website WebAuthn/passkey flow remains available where supported by the host OS.
+This is a functional desktop browser, not a Chromium fork. It is optimized for a
+private single-user Windows workflow. Chrome Sync/import, bookmark folders and a
+bookmark bar are not implemented or advertised. Account-Space-aware destination
+contracts are ready for future import work. Android, extension compatibility and
+a passkey-management UI remain future modules; Chromium's ordinary website
+WebAuthn/passkey flow remains available where supported by the host OS.
+
+Google API access requires a privately configured Desktop OAuth client ID. See
+[Google Account Spaces](docs/systems/google-account-spaces.md#operator-setup-and-verification)
+for Google Cloud setup, testing-mode expiry, recovery and deletion behavior.
 
 See [SECURITY.md](SECURITY.md) before expanding privileged features.

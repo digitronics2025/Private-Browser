@@ -13,7 +13,11 @@ size-bounded and rate-limited after a main-frame trusted-sender check. The chrom
 renderer is pinned to its packaged file (or the configured local dev origin), so
 a remote page cannot navigate the privileged window and inherit its preload API.
 
-Each workspace uses a separate persistent Electron session partition, preventing cookies and authenticated sessions from crossing workspace boundaries.
+Each Account Space uses a separate persistent Electron session partition,
+preventing cookies and authenticated sessions from crossing accounts. Fixed
+workspaces remain policy boundaries: Banking denies privileged behavior before
+any Account Space grant is consulted, while Development retains controlled
+DevTools. New partition names and Google subjects never cross the preload bridge.
 
 ## Vault
 
@@ -23,16 +27,27 @@ If the vault cannot be decrypted, writes are disabled to prevent silent data los
 
 Autofill is deliberately manual and restricted to an exact hostname and port match. The scheme is checked asymmetrically: a credential saved for `https` is never filled into an `http` page, while a page served over `https` is always acceptable. A website can still observe credentials entered into its own form, just as it can in any password manager; users must verify the domain before filling.
 
-## Local browsing data
+## Account Spaces and local browsing data
 
-Saved credentials, the AI provider key and the download-service token are
-encrypted with Electron `safeStorage`. **Browsing history, bookmarks, open tab
-URLs and the privacy log are not** — they are written as plaintext JSON in the
-application's own data directory, so the app can still start when the operating
-system keychain is unavailable. The file is created with owner-only permissions
-where the OS supports them, which on Windows is largely advisory. Anyone with an
-account on the machine, or any process running as the user, can read that file.
-Nothing in it leaves the device.
+Saved credentials, Account Space metadata and grants, the AI provider key and the
+download-service token are encrypted with Electron `safeStorage`. Each account
+has an independent encrypted file so corruption is quarantined. **Browsing
+history, bookmarks, open-tab URLs and the privacy log are not encrypted**; they
+are split into a minimal v2 manifest and per-account JSON. Anyone running as the
+Windows user may read those URLs and titles. Plaintext state contains only opaque
+account/workspace IDs, never email, Google subject, partition key or OAuth data.
+
+Version-1 migration preserves the source and a timestamped byte-for-byte backup,
+stages per-account files first and publishes the manifest last. Unknown/corrupt
+state opens read-only recovery. A fresh start or restore requires explicit
+confirmation and preserves the unreadable input.
+
+Google OAuth uses external allowlisted browser executables, PKCE S256 and an
+exact single-use loopback callback. The official library verifies ID-token
+signatures; issuer, audience, expiry, nonce, verified email and unique stable
+subject are checked before encrypted storage. Refresh tokens are encrypted;
+access/ID tokens, codes and PKCE values remain memory-only. Avatar downloads are
+Google-host-only, redirect-free, bounded and magic-byte validated.
 
 ## AI data controls
 
@@ -44,13 +59,26 @@ Nothing in it leaves the device.
 - Sensitive-pattern redaction runs locally before preview.
 - Query parameters, URL paths and fragments are never shared; only the page origin is included.
 - The user approves the exact sanitized preview through a five-minute, single-use capability token.
+- Approval also binds the opaque Account Space, exact tab, Google-service class
+  and source revision. Mailbox content is never cloud-model input.
 - Every local read, approval, denial and vault access is logged without secret values.
 - Cloud AI is disabled until the user configures a public HTTPS OpenAI-compatible provider. The API key is OS-encrypted and never returned to the renderer.
 - Provider redirects are rejected to prevent HTTPS-to-local-network request pivots.
 
 ## Permissions
 
-Remote sites are denied sensitive Electron permissions by default. Fullscreen and sanitized clipboard writes are the only allowed permissions in the initial release. Popups are converted to ordinary sandboxed tabs. Non-HTTP(S) navigation is blocked.
+Remote sites are denied sensitive Electron permissions by default. Decisions are
+keyed by Account Space, exact origin and capability, with deny/once/session/always
+choices. Notifications are restricted to exact Gmail, Calendar and Meet origins;
+camera/microphone and display capture are Meet-only, and display capture requires
+the active visible tab plus a source picker every time. Banking denies before
+saved grants. Popups become tabs in the originating account.
+
+Google service access uses narrow main-process clients, bounded ten-second
+requests and scope checks. Gmail sends, calendar mutations, Drive permission
+changes and AI-initiated writes require payload-bound single-use confirmations.
+Encrypted Drive backup uses AES-256-GCM and `drive.appdata`; it excludes cookies,
+tokens, mail/file contents, downloads, AI logs and My Vault.
 
 Those two permissions require a top-level HTTPS page (or localhost development
 page). Banking denies every site permission, popup and download. Common campaign

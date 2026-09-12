@@ -3,7 +3,7 @@ system: vault
 sources:
   - electron/vault.ts
   - electron/clipboard-guard.ts
-verified_at: b7407463
+verified_at: f6f0c96
 ---
 
 # Vault
@@ -263,6 +263,13 @@ A site can still observe what is typed into its own form — see
 trigger are the whole of the protection here.
 
 ## Related Systems
+
+### Account Space backup boundary
+
+My Vault remains authoritative and is never copied into Google Drive app data.
+Account Space backup has a separate random recovery key and `safeStorage`
+wrapper; it excludes passwords, TOTP/passkeys and every vault record. See
+[google-account-spaces.md](google-account-spaces.md#encrypted-drive-backup).
 
 - [security-boundary.md](security-boundary.md) — URL normalisation applied to a
   saved entry, and the base32 pattern in `redactSensitiveText` that keeps a TOTP

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 — 2026-09-12
+
+- Added dynamic Account Spaces beneath the five existing workspaces with opaque
+  partitions, account-scoped tabs/bookmarks/history/permissions and independent
+  encrypted records.
+- Added byte-preserving, retry-safe version-1 migration and read-only recovery
+  for global or per-account corruption.
+- Added secure external-browser Google Desktop OAuth with PKCE, verified identity
+  claims, least-privilege Gmail/Drive/Calendar/Contacts modules and narrow APIs.
+- Added payload-bound confirmations for Google mutations and account-bound AI
+  consent that keeps Google data local by default.
+- Added AES-256-GCM Drive app-data backup with verified recovery codes, ETag
+  conflict handling and strict exclusions.
+- Replaced the avatar shortcut with an accessible account switcher and responsive
+  manager, plus account-scoped permission and recovery overlays.
+- Added browser and real Electron Playwright coverage proving partition isolation
+  and retained Banking/Development policy.
+
 ## 0.3.4 — 2026-09-10
 
 - Hardened packaged Electron executables with sandbox, cookie-encryption,

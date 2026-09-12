@@ -52,7 +52,10 @@ node scripts/docs-guard.mjs ratchet --write # tighten allowances that gained sla
 - [ipc-contract.md](ipc-contract.md) — the complete channel surface between the
   two halves of the app, and every shared payload type.
 - [workspaces-and-state.md](workspaces-and-state.md) — the five cookie-isolated
-  workspaces and the on-disk state file that survives a restart.
+  workspaces and the versioned on-disk state that survives a restart.
+- [google-account-spaces.md](google-account-spaces.md) — dynamic per-account
+  containers, encrypted records, migration/recovery, Google OAuth and APIs,
+  exact-origin permissions, session isolation and encrypted Drive backup.
 
 **The desktop app — security-critical**
 

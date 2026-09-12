@@ -8,7 +8,7 @@ sources:
   - .github/workflows/**
   - electron/update-service.ts
   - electron/update-bootstrap.ts
-verified_at: 8c8d2bee
+verified_at: f6f0c96
 ---
 
 # Release and Updates
@@ -366,6 +366,13 @@ ignored and untracked; do not copy its credential into tracked configuration or
 documentation merely to make a raw shell-variable check pass.
 
 ## The Build and Publish Pipeline
+
+Account Spaces adds two CI gates before publication. Ubuntu installs Playwright
+Chromium and runs credential-free renderer E2E as part of `npm run check`;
+`scripts/run-electron-tests.mjs` wraps the Electron suite in `xvfb-run` on Linux.
+The Windows installer job also runs the real Electron suite before packaging, so
+the published artifact is gated by actual partition-isolation and workspace-policy
+checks in addition to unit and Worker tests.
 
 ### ci.yml
 

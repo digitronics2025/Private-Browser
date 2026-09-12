@@ -4,7 +4,7 @@ sources:
   - electron/preload.cts
   - electron/types.ts
   - electron/ipc-guard.ts
-verified_at: 3f68afed
+verified_at: f6f0c96
 ---
 
 # IPC Contract
@@ -14,7 +14,7 @@ verified_at: 3f68afed
 ## Agent Brief
 
 **Scope.** The whole surface between the Electron main process and the React
-renderer: 40 `invoke` channels in six namespaces, three main-to-renderer event
+renderer: 75 `invoke` channels and four main-to-renderer event
 subscriptions, and every shared payload type. Defined in
 [preload.cts](../../electron/preload.cts) and
 [types.ts](../../electron/types.ts).
@@ -214,6 +214,26 @@ no acknowledgement. `browser:focus-address` carries no payload; the renderer
 decides what focusing means.
 
 ## Shared Payload Types
+
+### Account Space additions
+
+The bridge exposes typed groups for account lifecycle and switching, Google
+configuration/OAuth, narrow Gmail/Drive/Calendar/Contacts operations, encrypted
+backup, permission responses, operation cancellation and recovery. It deliberately
+has no arbitrary URL fetch method. `google:operation-progress` is the fourth
+main-to-renderer subscription.
+
+`BrowserSnapshot` carries the active opaque Account Space ID, sanitized
+`AccountSpaceSummary[]`, account health, recovery status and any pending
+permission prompt. Summaries may contain UI identity and backup-enabled flags but
+never partition keys, Google subjects, refresh/access tokens or wrapped recovery
+keys. Account-aware tab/bookmark/history types carry both workspace and account
+IDs.
+
+Every Account Space channel passes a declarative validator from
+`ipc-contracts.ts`, then the trusted-main-frame guard and global/per-channel rate
+budgets. Validators cap UUIDs, labels, arrays, messages, search strings and write
+bodies; controller membership checks are a second boundary.
 
 All in [types.ts](../../electron/types.ts), imported by the main process, the
 preload and the renderer.
