@@ -8,6 +8,7 @@ node_modules/
 dist/
 dist-electron/
 release/
+release-*/
 build/private-browser-update.json
 .wrangler/
 .wrangler-dist/

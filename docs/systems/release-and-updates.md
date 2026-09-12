@@ -502,6 +502,14 @@ The electron-builder configuration lives **inline in `package.json`**, in the
   the Cloudflare job is the only publisher.
 - The installer is **not code-signed**, so Windows SmartScreen shows an
   unknown-publisher warning (see [README.md](../../README.md)).
+- The browser-process-specific V8 snapshot fuse is disabled. Stock Electron does
+  not ship the required `browser_v8_context_snapshot.bin`; enabling that fuse
+  makes the packaged executable exit before app startup. This is a runtime
+  compatibility fuse, not a privilege boundary. The Node/inspection, cookie
+  encryption, ASAR integrity and ASAR-only security fuses remain enforced.
+- `electronDist` points at the pinned `node_modules/electron/dist`. Windows uses
+  the lockfile-installed, checksum-verified distribution directly; this avoids a
+  second extraction/rename pass that antivirus scanners can lock mid-build.
 
 **Why `package.json` is not in `sources`.** 2 of the 7 commits in this repository
 are pure dependency bumps touching only `package.json` and `package-lock.json`.
