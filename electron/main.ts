@@ -50,6 +50,7 @@ import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
 import { MyVaultSyncClient } from './myvault/vault-sync.js';
 import { VaultSyncController } from './myvault/sync-controller.js';
 import type { PairDialogValue } from './myvault/secure-dialog-contract.js';
+import { VaultMigrationService } from './myvault/vault-migration.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
@@ -127,6 +128,7 @@ class BrowserController {
   constructor(
     private readonly store: StateStore,
     private readonly vault: VaultBroker,
+    private readonly migration: VaultMigrationService,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
   ) {
@@ -648,6 +650,40 @@ class BrowserController {
     else if (choice === 'local') await this.vaultSync.chooseLocal();
     else throw new Error('Choose the cloud or local vault explicitly');
     return this.listVault();
+  }
+
+  migrationStatus() {
+    return { legacyAvailable: this.migration.isLegacyAvailable() };
+  }
+
+  async migrateLegacyVault() {
+    this.assertVaultSurface();
+    let report = await this.migration.migrateLegacy();
+    if (report.conflicts.length) {
+      const decisions: Record<string, 'replace' | 'skip'> = {};
+      for (const conflict of report.conflicts) {
+        const confirmation = await this.secureDialogs.open('confirm-replace', `${conflict.origin} — ${conflict.username}`) as ConfirmDeleteDialogValue | undefined;
+        decisions[conflict.sourceId] = confirmation?.confirmed ? 'replace' : 'skip';
+      }
+      report = await this.migration.migrateLegacy(decisions);
+    }
+    this.addPrivacyEvent('vault', 'Legacy vault migration completed', `${report.validatedCount} records validated; report contains no secret values`);
+    return { sourceCount: report.sourceCount, importedCount: report.importedCount, skippedCount: report.skippedCount, validatedCount: report.validatedCount, phase: report.journalPhase };
+  }
+
+  async cleanupLegacyVault() {
+    this.assertVaultSurface();
+    const confirmation = await this.secureDialogs.open('confirm-cleanup') as ConfirmDeleteDialogValue | undefined;
+    return this.migration.cleanupLegacyAfterConfirmation(Boolean(confirmation?.confirmed));
+  }
+
+  async importChromePasswords() {
+    this.assertVaultSurface();
+    const selected = await dialog.showOpenDialog(this.window, { title: 'Import Chrome passwords into MyVault', properties: ['openFile'], filters: [{ name: 'Chrome password CSV', extensions: ['csv'] }] });
+    if (selected.canceled || !selected.filePaths[0]) return undefined;
+    const report = await this.migration.importChromeCsv(selected.filePaths[0]);
+    this.addPrivacyEvent('vault', 'Chrome passwords imported into MyVault', `${report.validatedCount} rows processed; the source CSV was retained`);
+    return report;
   }
 
   async openVaultEditor(origin?: string) {
@@ -1290,7 +1326,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     // convenience of first-launch enrolment is the cheaper failure.
     removeUpdateBootstrap(updateBootstrapPath);
   }
-  controller = new BrowserController(store, vault, aiProvider, updates);
+  const migration = new VaultMigrationService(join(app.getPath('userData'), 'vault.enc'), join(app.getPath('userData'), 'myvault', 'migration-journal.enc'), safeStorage, vault);
+  controller = new BrowserController(store, vault, migration, aiProvider, updates);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -1330,6 +1367,10 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:reconnect', () => controller!.listVault().lifecycle === 'unlocked' ? controller!.syncVaultNow() : undefined);
   handle('vault:conflict-review', () => controller!.getVaultConflictReview());
   handle('vault:resolve-conflict', (_event, choice: 'cloud' | 'local') => controller!.resolveVaultConflict(choice));
+  handle('vault:migration-status', () => controller!.migrationStatus());
+  handle('vault:migrate-legacy', () => controller!.migrateLegacyVault());
+  handle('vault:cleanup-legacy', () => controller!.cleanupLegacyVault());
+  handle('vault:import-chrome', () => controller!.importChromePasswords());
   handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
   handle('vault:form-shape', () => controller!.inspectVaultFormShape());
   handle('vault:save-from-page', () => controller!.requestSaveFromPage());
