@@ -8,7 +8,7 @@ sources:
   - .github/workflows/**
   - electron/update-service.ts
   - electron/update-bootstrap.ts
-verified_at: 14943cb
+verified_at: 4a97607
 ---
 
 # Release and Updates
@@ -446,13 +446,20 @@ account id and D1 database id are all non-empty **and** all three Worker secrets
 are at least 32 characters — the same threshold `secretsReady` enforces at
 runtime, so a deploy that would fail closed never happens.
 
+Push runs fetch both sides of the push and compare the Cloudflare tree plus the
+root package manifests. A workflow-only repair therefore completes without
+redeploying an unchanged Worker; manual dispatches remain an explicit request to
+release. When the production target did change, CI installs Playwright Chromium
+before `npm run check`, because that full gate includes the renderer E2E suite.
+
 Steps, in order, all gated:
 
-1. `npm run worker:typecheck`
-2. `node cloudflare/scripts/render-config.mjs` — writes `wrangler.deploy.jsonc`
-3. `wrangler d1 migrations apply DB --remote --config cloudflare/wrangler.deploy.jsonc`
-4. `wrangler deploy --config cloudflare/wrangler.deploy.jsonc --keep-vars`
-5. `wrangler secret bulk` fed a JSON object of the three secrets on stdin
+1. `npx playwright install --with-deps chromium`
+2. `npm run check`
+3. `node cloudflare/scripts/render-config.mjs` — writes `wrangler.deploy.jsonc`
+4. `wrangler d1 migrations apply DB --remote --config cloudflare/wrangler.deploy.jsonc`
+5. `wrangler deploy --config cloudflare/wrangler.deploy.jsonc --keep-vars`
+6. `wrangler secret bulk` fed a JSON object of the three secrets on stdin
 
 Migrations run before the deploy; secrets are installed after it.
 
