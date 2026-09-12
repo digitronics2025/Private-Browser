@@ -172,6 +172,54 @@ export interface GoogleOperationResult<T = unknown> {
   };
 }
 
+export type GoogleService = 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup';
+
+export interface GoogleMutationConfirmation {
+  token: string;
+  accountSpaceId: AccountSpaceId;
+  service: GoogleService;
+  action: string;
+  target: string;
+  sourceRevision?: string;
+  expiresAt: string;
+}
+
+export interface GmailMessageHeader {
+  id: string;
+  threadId: string;
+  from: string;
+  subject: string;
+  date: string;
+}
+
+export interface GmailOverview {
+  unreadCount: number;
+  recent: GmailMessageHeader[];
+}
+
+export interface DriveFileSummary {
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime?: string;
+  webViewLink?: string;
+}
+
+export interface CalendarEventSummary {
+  id: string;
+  summary: string;
+  start: string;
+  end?: string;
+  htmlLink?: string;
+  meetLink?: string;
+}
+
+export interface ContactSummary {
+  resourceName: string;
+  displayName: string;
+  email: string;
+}
+
 export type StateRecoveryScope = 'browser-state' | 'account-space';
 export type StateRecoveryReason =
   | 'unsupported-version'
