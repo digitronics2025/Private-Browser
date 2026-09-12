@@ -83,15 +83,15 @@
   },
   "devDependencies": {
     "@private-browser/bridge-protocol": "*",
-    "@types/node": "^22.10.2",
+    "@types/node": "^26.5.0",
     "@types/pngjs": "^6.0.5",
     "@types/vscode": "^1.95.0",
     "@vscode/vsce": "^3.6.0",
     "axe-core": "^4.10.3",
-    "esbuild": "^0.25.9",
+    "esbuild": "^0.28.2",
     "pixelmatch": "^7.1.0",
     "pngjs": "^7.0.0",
-    "typescript": "^5.7.2",
+    "typescript": "^7.0.2",
     "vitest": "^5.0.0"
   }
 }
