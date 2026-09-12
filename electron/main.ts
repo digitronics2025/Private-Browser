@@ -52,6 +52,9 @@ import type { ConfirmDeleteDialogValue, EditLoginDialogValue, UnlockDialogValue 
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
 import { captureLoginInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape } from './myvault/isolated-fill.js';
 import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
+import { MyVaultSyncClient } from './myvault/vault-sync.js';
+import { VaultSyncController } from './myvault/sync-controller.js';
+import type { PairDialogValue } from './myvault/secure-dialog-contract.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
@@ -124,6 +127,8 @@ class BrowserController {
   private window!: BrowserWindow;
   private readonly secureDialogs = new SecureVaultDialogs(() => this.window);
   private readonly fillCapabilities = new FillCapabilityStore();
+  private readonly vaultSync: VaultSyncController;
+  private dirtySyncTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly store: StateStore,
@@ -132,11 +137,19 @@ class BrowserController {
     private readonly updates: UpdateServiceStore,
     private readonly vscodeBridge: VscodeBridgeServer,
   ) {
+    this.vaultSync = new VaultSyncController(vault, new MyVaultSyncClient());
     for (const tab of this.store.get().tabs) {
       this.runtimeTabs.set(tab.id, this.newRuntimeTab());
     }
-    this.vault.subscribe(() => {
+    this.vault.subscribe((status) => {
       if (this.window && !this.window.isDestroyed()) this.window.webContents.send('vault:state');
+      if (status.lifecycle === 'unlocked' && status.dirty && !this.dirtySyncTimer) {
+        this.dirtySyncTimer = setTimeout(() => {
+          this.dirtySyncTimer = undefined;
+          void this.vaultSync.syncNow().catch(() => undefined);
+        }, 45_000);
+        this.dirtySyncTimer.unref();
+      }
     });
   }
 
@@ -726,6 +739,7 @@ class BrowserController {
     const value = await this.secureDialogs.open('unlock') as UnlockDialogValue | undefined;
     if (!value) return this.listVault();
     await this.vault.unlock(value.password);
+    void this.vaultSync.syncNow().catch(() => undefined);
     this.addPrivacyEvent('vault', 'MyVault unlocked', 'Decrypted state is held only by the trusted broker');
     return this.listVault();
   }
@@ -733,9 +747,41 @@ class BrowserController {
   async lockVault() {
     this.secureDialogs.closeAll();
     this.fillCapabilities.invalidateAll();
+    if (this.dirtySyncTimer) clearTimeout(this.dirtySyncTimer);
+    this.dirtySyncTimer = undefined;
     this.vault.lock();
     await this.clipboardGuard.flush();
     this.addPrivacyEvent('vault', 'MyVault locked', 'Pending vault actions and clipboard state were invalidated');
+    return this.listVault();
+  }
+
+  async requestVaultPairing() {
+    this.assertVaultSurface();
+    const value = await this.secureDialogs.open('pair') as PairDialogValue | undefined;
+    if (!value) return this.listVault();
+    await this.vaultSync.pair(value.endpoint, value.enrollmentCode, value.password);
+    this.addPrivacyEvent('vault', 'MyVault device connected', new URL(value.endpoint).origin);
+    return this.listVault();
+  }
+
+  async syncVaultNow() {
+    this.assertVaultSurface();
+    await this.vaultSync.syncNow();
+    return this.listVault();
+  }
+
+  async getVaultConflictReview() {
+    this.assertVaultSurface();
+    const review = await this.vault.conflictReview();
+    const project = (item: (typeof review.local)[number]) => ({ ...item, label: item.title, url: item.url ?? '' });
+    return { local: review.local.map(project), cloud: review.cloud.map(project) };
+  }
+
+  async resolveVaultConflict(choice: 'cloud' | 'local') {
+    this.assertVaultSurface();
+    if (choice === 'cloud') await this.vaultSync.chooseCloud();
+    else if (choice === 'local') await this.vaultSync.chooseLocal();
+    else throw new Error('Choose the cloud or local vault explicitly');
     return this.listVault();
   }
 
@@ -1439,7 +1485,12 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:revoke', () => controller!.revokeAiContext());
   handle('vault:list', () => controller!.listVault());
   handle('vault:request-unlock', () => controller!.requestVaultUnlock());
+  handle('vault:request-pairing', () => controller!.requestVaultPairing());
   handle('vault:lock', () => controller!.lockVault());
+  handle('vault:sync', () => controller!.syncVaultNow());
+  handle('vault:reconnect', () => controller!.listVault().lifecycle === 'unlocked' ? controller!.syncVaultNow() : undefined);
+  handle('vault:conflict-review', () => controller!.getVaultConflictReview());
+  handle('vault:resolve-conflict', (_event, choice: 'cloud' | 'local') => controller!.resolveVaultConflict(choice));
   handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
   handle('vault:form-shape', () => controller!.inspectVaultFormShape());
   handle('vault:save-from-page', () => controller!.requestSaveFromPage());

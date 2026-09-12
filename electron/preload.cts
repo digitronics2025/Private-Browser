@@ -43,7 +43,11 @@ const api = {
   revokeAiContext: (): Promise<void> => ipcRenderer.invoke('ai:revoke'),
   listVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:list'),
   requestVaultUnlock: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-unlock'),
+  requestVaultPairing: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-pairing'),
   lockVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:lock'),
+  syncVaultNow: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:sync'),
+  getVaultConflictReview: (): Promise<{ local: VaultItemMeta[]; cloud: VaultItemMeta[] }> => ipcRenderer.invoke('vault:conflict-review'),
+  resolveVaultConflict: (choice: 'cloud' | 'local'): Promise<VaultStatus> => ipcRenderer.invoke('vault:resolve-conflict', choice),
   openVaultEditor: (origin?: string): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:open-editor', origin),
   inspectVaultFormShape: (): Promise<{ hasUsername: boolean; hasPassword: boolean }> => ipcRenderer.invoke('vault:form-shape'),
   requestSaveFromPage: (): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:save-from-page'),
@@ -84,5 +88,7 @@ const api = {
 };
 
 contextBridge.exposeInMainWorld('privateBrowser', api);
+
+window.addEventListener('online', () => { void ipcRenderer.invoke('vault:reconnect').catch(() => undefined); });
 
 export type PrivateBrowserApi = typeof api;

@@ -1,5 +1,5 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { encryptVaultPayload, unlockVault, type VaultSession } from './security/vault-crypto.js';
+import { decryptWithSession, encryptVaultPayload, unlockVault, type VaultSession } from './security/vault-crypto.js';
 import type { TotpConfig, VaultEnvelope, VaultItem, VaultPayload } from './types.js';
 import { MyVaultDiskStore, type BrokerConnectionState, type StoreBlockReason } from './vault-store.js';
 
@@ -86,6 +86,7 @@ export class VaultBroker {
   private blockedReason?: StoreBlockReason;
   private recoveryPath?: string;
   private generation = 0;
+  private conflictRemote?: { envelope: VaultEnvelope; version: number; updatedAt: string };
   private readonly listeners = new Set<(status: BrokerStatus) => void>();
 
   constructor(private readonly store: MyVaultDiskStore) {}
@@ -234,6 +235,67 @@ export class VaultBroker {
     this.syncState = 'conflict';
     this.lifecycle = 'conflict';
     this.changed();
+  }
+
+  trustedSyncSnapshot(): { envelope: VaultEnvelope; connection: BrokerConnectionState } {
+    if (!this.payload || !this.session || !this.envelope || !this.connection) throw new Error('MyVault is not connected and unlocked');
+    return { envelope: this.envelope, connection: { ...this.connection } };
+  }
+
+  markSyncing(): void {
+    if (!this.payload || !this.session) throw new Error('MyVault is locked');
+    this.syncState = 'syncing';
+    this.changed();
+  }
+
+  markSyncError(): void {
+    if (this.lifecycle === 'unlocked') this.syncState = 'error';
+    this.changed();
+  }
+
+  async acceptRemote(envelope: VaultEnvelope, version: number, syncedAt = new Date().toISOString()): Promise<void> {
+    if (!this.session || !this.connection || !this.envelope) throw new Error('MyVault is locked');
+    const payload = await decryptWithSession(envelope, this.session);
+    const connection = { ...this.connection, remoteVersion: version, dirty: false, lastSyncAt: syncedAt };
+    this.store.writeEnvelope(envelope);
+    this.store.writeConnection(connection);
+    this.envelope = envelope;
+    this.payload = payload;
+    this.connection = connection;
+    this.lifecycle = 'unlocked';
+    this.syncState = 'synced';
+    this.conflictRemote = undefined;
+    this.changed();
+  }
+
+  markPushSucceeded(pushedEnvelope: VaultEnvelope, version: number, syncedAt = new Date().toISOString()): void {
+    if (!this.connection || !this.envelope) throw new Error('MyVault is not connected');
+    const changedDuringSync = this.envelope.payload.ciphertext !== pushedEnvelope.payload.ciphertext;
+    const connection = { ...this.connection, remoteVersion: version, dirty: changedDuringSync, lastSyncAt: syncedAt };
+    this.store.writeConnection(connection);
+    this.connection = connection;
+    this.lifecycle = 'unlocked';
+    this.syncState = changedDuringSync ? 'dirty' : 'synced';
+    this.conflictRemote = undefined;
+    this.changed();
+  }
+
+  setConflict(remote: { envelope: VaultEnvelope; version: number; updatedAt: string }): void {
+    this.conflictRemote = remote;
+    this.markConflict();
+  }
+
+  async conflictReview(): Promise<{ local: VaultEntryMetadata[]; cloud: VaultEntryMetadata[] }> {
+    if (!this.conflictRemote || !this.session) throw new Error('No MyVault conflict is pending');
+    const cloud = await decryptWithSession(this.conflictRemote.envelope, this.session);
+    const local = this.payload;
+    if (!local) throw new Error('MyVault is locked');
+    return { local: local.items.map(metadata), cloud: cloud.items.map(metadata) };
+  }
+
+  pendingConflict() {
+    if (!this.conflictRemote) throw new Error('No MyVault conflict is pending');
+    return this.conflictRemote;
   }
 
   private async persistMutation(payload: VaultPayload): Promise<void> {
