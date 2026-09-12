@@ -16,6 +16,8 @@
   WebAuthn remains unchanged until packaged first-script interception is proven.
 - Fixed the hardened package fuse set so the installed application loads its
   shipped V8 snapshot and starts successfully.
+- Fixed standalone VSIX naming so browser releases retain the extension's own
+  `0.4.0` package version.
 
 ## 0.4.0 — 2026-09-12
 
