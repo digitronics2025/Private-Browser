@@ -11,7 +11,7 @@ export function installLocalBridgePreview(): void {
     { id: 'banking' as const, name: 'Banking', color: '#ff6b7a', icon: '$', protected: true },
   ];
   const tabs = workspaces.map((workspace) => ({ id: workspace.id, workspaceId: workspace.id, title: workspace.id === 'development' ? 'Developer Preview' : 'New tab', url: workspace.id === 'development' ? 'http://127.0.0.1:4173/' : 'private://home', loading: false, canGoBack: false, canGoForward: false, isHome: workspace.id !== 'development', developerToolsAllowed: workspace.id === 'development', developerToolsOpen: false }));
-  const snapshot: BrowserSnapshot = { workspaces, activeWorkspaceId: 'development', activeTabId: 'development', tabs, bookmarks: [], history: [], downloads: [], privacyLog: [], trackerBlocking: true };
+  const snapshot: BrowserSnapshot = { workspaces, activeWorkspaceId: 'development', activeTabId: 'development', tabs, bookmarks: [], history: [], downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true };
   let bridge: BridgeStatus = { state: 'disconnected', browserVersion: '0.4.0' };
   const target = {
     getState: async () => snapshot,
