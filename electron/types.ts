@@ -221,8 +221,12 @@ export interface VaultItemMeta {
 
 export interface VaultStatus {
   available: boolean;
-  reason?: 'os-encryption-unavailable' | 'vault-corrupt';
+  reason?: 'os-encryption-unavailable' | 'vault-corrupt' | 'vault-unsupported';
   items: VaultItemMeta[];
+  lifecycle?: 'unconfigured' | 'locked' | 'unlocked' | 'conflict' | 'recovery-required';
+  sync?: 'disabled' | 'idle' | 'dirty' | 'syncing' | 'synced' | 'conflict' | 'error';
+  dirty?: boolean;
+  generation?: number;
 }
 
 export interface UpdateServiceInput {

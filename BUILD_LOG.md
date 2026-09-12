@@ -7,6 +7,7 @@
 
 [START] Phase 2 — Trusted broker and secure operations — 2026-09-12
 [STEP] 2.1 — Encrypted envelope, OS-protected connection state, and in-memory broker — done
+[STEP] 2.2 — Metadata-only IPC and one-shot secure dialogs — done
 
 [START] System 1 — Private Browser Bridge protocol and security — 2026-09-12
 [STEP] 1.1 — Define the protocol v1 request, response, event, progress, and chunk envelopes — done
