@@ -8,7 +8,7 @@ sources:
   - .github/workflows/**
   - electron/update-service.ts
   - electron/update-bootstrap.ts
-verified_at: 4a97607
+verified_at: 35a20f1
 ---
 
 # Release and Updates
@@ -408,8 +408,9 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 requests, and every Monday. It has read-only repository access plus the minimum
 `security-events: write` permission required to publish findings.
 
-The publish job validates `VERSION.txt`, applies it to its local package files,
-then uploads with
+The publish job validates `VERSION.txt`, applies it to its local package files
+with npm's same-version mode enabled (the selected stable version may already be
+declared), then uploads with
 `wrangler r2 object put private-browser-releases/releases/<version>/<run-number>/<basename> --file <exe> --content-type application/vnd.microsoft.portable-executable --remote`,
 then runs
 [publish-release.mjs](../../cloudflare/scripts/publish-release.mjs), which reads
