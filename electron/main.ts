@@ -45,10 +45,12 @@ import type {
 } from './types.js';
 import type { ProjectInfo, ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
-import { VaultBroker } from './myvault/vault-broker.js';
+import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
 import { MyVaultDiskStore } from './myvault/vault-store.js';
 import { SecureVaultDialogs } from './myvault/secure-dialog.js';
 import type { ConfirmDeleteDialogValue, EditLoginDialogValue, UnlockDialogValue } from './myvault/secure-dialog-contract.js';
+import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
+import { fillLoginInIsolatedWorld } from './myvault/isolated-fill.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
@@ -65,6 +67,8 @@ interface RuntimeTab {
   developerToolsOpen: boolean;
   console: Array<DeveloperConsoleEntry & { redactions: number }>;
   network: Array<DeveloperNetworkIssue & { redactions: number }>;
+  navigationGeneration: number;
+  certificateError: boolean;
 }
 
 interface Layout {
@@ -118,6 +122,7 @@ class BrowserController {
   private layout: Layout = { top: 158, left: 0, right: 366, bottom: 0 };
   private window!: BrowserWindow;
   private readonly secureDialogs = new SecureVaultDialogs(() => this.window);
+  private readonly fillCapabilities = new FillCapabilityStore();
 
   constructor(
     private readonly store: StateStore,
@@ -129,6 +134,9 @@ class BrowserController {
     for (const tab of this.store.get().tabs) {
       this.runtimeTabs.set(tab.id, this.newRuntimeTab());
     }
+    this.vault.subscribe(() => {
+      if (this.window && !this.window.isDestroyed()) this.window.webContents.send('vault:state');
+    });
   }
 
   async createWindow(): Promise<void> {
@@ -272,6 +280,7 @@ class BrowserController {
   }
 
   async closeTab(tabId: string): Promise<void> {
+    this.fillCapabilities.invalidateTab(tabId);
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
@@ -299,6 +308,7 @@ class BrowserController {
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
+    this.fillCapabilities.invalidateAll();
     this.hideAllViews();
     this.store.update((next) => {
       next.activeWorkspaceId = tab.workspaceId;
@@ -309,6 +319,7 @@ class BrowserController {
 
   async switchWorkspace(workspaceId: WorkspaceId): Promise<void> {
     if (!WORKSPACES.some((item) => item.id === workspaceId)) return;
+    this.fillCapabilities.invalidateAll();
     this.hideAllViews();
     this.store.update((state) => { state.activeWorkspaceId = workspaceId; });
     await this.showActiveTab();
@@ -718,6 +729,7 @@ class BrowserController {
 
   async lockVault() {
     this.secureDialogs.closeAll();
+    this.fillCapabilities.invalidateAll();
     this.vault.lock();
     await this.clipboardGuard.flush();
     this.addPrivacyEvent('vault', 'MyVault locked', 'Pending vault actions and clipboard state were invalidated');
@@ -772,28 +784,25 @@ class BrowserController {
   }
 
   async autofill(id: string): Promise<void> {
+    const initial = this.currentFillContext();
+    const capability = this.fillCapabilities.issue(initial, id, 'fill-login');
+    this.fillCapabilities.redeem(capability, this.currentFillContext(), id, 'fill-login');
+    const match = this.vault.searchMetadata('', initial.origin).find((entry) => entry.id === id);
+    if (!match?.url || !isAutofillTarget(match.url, initial.origin)) throw new Error('This credential belongs to another website, or this page is not secure');
+    const username = this.vault.resolveSecretForTrustedOperation(id, 'username');
+    const password = this.vault.resolveSecretForTrustedOperation(id, 'password');
+    const beforeInjection = this.currentFillContext();
+    if (JSON.stringify(beforeInjection) !== JSON.stringify(initial)) throw new Error('Vault fill expired because the page context changed');
     const contents = this.activeContents();
-    const state = this.store.get();
-    const tab = this.activeTab(state);
-    if (!contents || tab.isHome) throw new Error('Open the saved website first');
-    const match = this.vault.searchMetadata('', tab.url).find((entry) => entry.id === id);
-    if (!match?.url || !isAutofillTarget(match.url, tab.url)) throw new Error('This credential belongs to another website, or this page is not secure');
-    const payload = JSON.stringify({ username: this.vault.resolveSecretForTrustedOperation(id, 'username'), password: this.vault.resolveSecretForTrustedOperation(id, 'password') });
-    await contents.executeJavaScript(`(() => {
-      const credential = ${payload};
-      const setValue = (element, value) => {
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        setter.call(element, value);
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-      };
-      const password = document.querySelector('input[type="password"]');
-      const username = document.querySelector('input[autocomplete="username"], input[type="email"], input[name*="user" i], input[name*="email" i]');
-      if (username) setValue(username, credential.username);
-      if (password) setValue(password, credential.password);
-      if (!password) throw new Error('No password field found');
-    })()`, true);
-    this.addPrivacyEvent('vault', 'Credential autofilled', new URL(tab.url).hostname);
+    if (!contents || contents.id !== initial.webContentsId) throw new Error('Vault fill expired because the page context changed');
+    await fillLoginInIsolatedWorld(contents, username, password);
+    this.addPrivacyEvent('vault', 'Credential autofilled', new URL(initial.origin).hostname);
+  }
+
+  copyGeneratedCredential(kind: GeneratedCredentialKind): void {
+    if (!['password', 'passphrase', 'pin'].includes(kind)) throw new Error('Unsupported generator type');
+    this.copySensitiveValue(this.vault.generateCredential(kind));
+    this.addPrivacyEvent('vault', 'Generated credential copied', 'Generated by the broker; clipboard auto-clear enabled');
   }
 
   openDownload(id: string): void {
@@ -866,7 +875,26 @@ class BrowserController {
   }
 
   private newRuntimeTab(): RuntimeTab {
-    return { loading: false, canGoBack: false, canGoForward: false, developerToolsOpen: false, console: [], network: [] };
+    return { loading: false, canGoBack: false, canGoForward: false, developerToolsOpen: false, console: [], network: [], navigationGeneration: 0, certificateError: false };
+  }
+
+  markCertificateError(webContentsId: number): void {
+    for (const runtime of this.runtimeTabs.values()) {
+      if (runtime.view?.webContents.id === webContentsId) runtime.certificateError = true;
+    }
+    this.fillCapabilities.invalidateAll();
+  }
+
+  private currentFillContext(): FillContext {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tab.id);
+    const contents = runtime?.view?.webContents;
+    if (!runtime || !contents || tab.isHome) throw new Error('Open the saved website first');
+    if (runtime.certificateError) throw new Error('Vault fill is blocked after a certificate error');
+    const origin = normalizedWebOrigin(contents.getURL());
+    if (origin !== normalizedWebOrigin(tab.url)) throw new Error('Vault fill expired because the page context changed');
+    return { webContentsId: contents.id, tabId: tab.id, navigationGeneration: runtime.navigationGeneration, workspaceId: tab.workspaceId, origin };
   }
 
   private developerTarget(tabId = this.activeTab(this.store.get()).id) {
@@ -982,6 +1010,13 @@ class BrowserController {
       }
     });
     view.webContents.on('will-attach-webview', (event) => event.preventDefault());
+    view.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
+      if (!isMainFrame) return;
+      runtime.navigationGeneration += 1;
+      runtime.certificateError = false;
+      this.fillCapabilities.invalidateTab(tabId);
+      this.secureDialogs.closeAll();
+    });
     view.webContents.on('did-start-loading', () => this.updateRuntime(tabId, { loading: true }));
     view.webContents.on('did-stop-loading', () => this.updateRuntime(tabId, { loading: false }));
     view.webContents.on('did-navigate', (_event, url) => this.commitNavigation(tabId, url));
@@ -1241,8 +1276,9 @@ let vscodeBridge: VscodeBridgeServer | undefined;
 let pendingLaunchUrl = process.argv.find((argument) => isAllowedRemoteUrl(argument));
 app.enableSandbox();
 app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'default_public_interface_only');
-app.on('certificate-error', (event, _webContents, _url, _error, _certificate, callback) => {
+app.on('certificate-error', (event, webContents, _url, _error, _certificate, callback) => {
   event.preventDefault();
+  controller?.markCertificateError(webContents.id);
   callback(false);
 });
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -1356,6 +1392,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:acknowledge-recovery', () => controller!.acknowledgeVaultRecovery());
   handle('vault:copy-password', (_event, id: string) => controller!.copyPassword(id));
   handle('vault:copy-totp', (_event, id: string) => controller!.copyTotp(id));
+  handle('vault:copy-generated', (_event, kind: GeneratedCredentialKind) => controller!.copyGeneratedCredential(kind));
   handle('vault:autofill', (_event, id: string) => controller!.autofill(id));
   handle('system:copy', (_event, value: string) => clipboard.writeText(String(value).slice(0, 100_000)));
   handle('system:is-default-browser', () => controller!.isDefaultBrowser());

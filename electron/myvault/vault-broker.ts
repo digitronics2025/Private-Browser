@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { encryptVaultPayload, unlockVault, type VaultSession } from './security/vault-crypto.js';
 import type { TotpConfig, VaultEnvelope, VaultItem, VaultPayload } from './types.js';
 import { MyVaultDiskStore, type BrokerConnectionState, type StoreBlockReason } from './vault-store.js';
@@ -42,6 +42,9 @@ export interface BrokerItemInput {
 }
 
 export type TrustedSecretKind = 'username' | 'password' | 'totp-secret';
+export type GeneratedCredentialKind = 'password' | 'passphrase' | 'pin';
+
+const PASSPHRASE_WORDS = ['amber', 'anchor', 'atlas', 'birch', 'canyon', 'cedar', 'cobalt', 'coral', 'ember', 'falcon', 'fjord', 'harbor', 'indigo', 'juniper', 'lantern', 'maple', 'meadow', 'nebula', 'olive', 'orbit', 'pebble', 'quartz', 'river', 'saffron', 'summit', 'tulip', 'velvet', 'willow', 'zephyr'];
 
 function metadata(item: VaultItem): VaultEntryMetadata {
   return {
@@ -210,6 +213,21 @@ export class VaultBroker {
     if (kind === 'password' && item.password) return item.password;
     if (kind === 'totp-secret' && item.totp) return item.totp.secret;
     throw new Error('Requested secret is not available');
+  }
+
+  generateCredential(kind: GeneratedCredentialKind): string {
+    this.requireUnlocked();
+    if (kind === 'pin') return Array.from({ length: 8 }, () => randomInt(10)).join('');
+    if (kind === 'passphrase') return Array.from({ length: 6 }, () => PASSPHRASE_WORDS[randomInt(PASSPHRASE_WORDS.length)]).join('-');
+    const groups = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '!@#$%^&*_-+='];
+    const required = groups.map((group) => group[randomInt(group.length)]);
+    const alphabet = groups.join('');
+    const value = [...required, ...Array.from({ length: 20 }, () => alphabet[randomInt(alphabet.length)])];
+    for (let index = value.length - 1; index > 0; index -= 1) {
+      const swap = randomInt(index + 1);
+      [value[index], value[swap]] = [value[swap], value[index]];
+    }
+    return value.join('');
   }
 
   markConflict(): void {
