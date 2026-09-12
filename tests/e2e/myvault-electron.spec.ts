@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 
+test.skip(process.platform !== 'win32', 'The hardened Electron boundary is exercised by the Windows installer job.');
+
 test('MyVault renderer stays metadata-only and secrets use an isolated window', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'private-browser-e2e-'));
   const launchEnv: Record<string, string> = Object.fromEntries(
