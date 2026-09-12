@@ -62,6 +62,7 @@ import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type Gm
 import { AccountBackupManager, type BackupWriteResult } from './account-backup.js';
 import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
+import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -145,8 +146,8 @@ class BrowserController {
   private readonly downloads = new Map<string, DownloadEntry>();
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly configuredSessions = new Set<string>();
-  private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
-  private readonly aiApprovals = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
+  private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
+  private readonly aiApprovals = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
   private readonly clipboardGuard = new ClipboardGuard(clipboard);
   private readonly permissions: AccountPermissionManager;
   private pendingPermission?: {
@@ -886,8 +887,21 @@ class BrowserController {
     const result = redactSensitiveText(rawText);
     this.addPrivacyEvent('local-read', 'Local page preview', `${tab.title} · ${result.redactions} redaction(s)`);
     const safeTitle = redactSensitiveText(tab.title);
-    const preview: AiPagePreview = { id: randomUUID(), title: safeTitle.text, url: urlOriginForSharing(tab.url), text: result.text.slice(0, 12000), redactions: result.redactions + safeTitle.redactions, protectedPage: false };
-    this.pendingAiPreviews.set(preview.id, { preview, sourceUrl: tab.url, expiresAt: Date.now() + 5 * 60_000 });
+    const text = result.text.slice(0, 12000);
+    const preview: AiPagePreview = {
+      id: randomUUID(),
+      accountSpaceId: tab.accountSpaceId,
+      tabId: tab.id,
+      service: classifyAiSource(tab.url),
+      sourceRevision: aiSourceRevision(tab.accountSpaceId, tab, text),
+      sourceUrl: tab.url,
+      title: safeTitle.text,
+      url: urlOriginForSharing(tab.url),
+      text,
+      redactions: result.redactions + safeTitle.redactions,
+      protectedPage: false,
+    };
+    this.pendingAiPreviews.set(preview.id, { preview, expiresAt: Date.now() + 5 * 60_000 });
     return preview;
   }
 
@@ -898,9 +912,11 @@ class BrowserController {
     const preview = pending.preview;
     const state = this.store.get();
     const tab = this.activeTab(state);
-    if (tab.url !== pending.sourceUrl || isProtectedPage(tab.url)) throw new Error('The page changed or is protected');
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    if (!sameAiSource(preview, accountSpaceId, tab) || isProtectedPage(tab.url)) throw new Error('The page, tab, or Account Space changed or is protected');
+    if (!maySendAiPreviewToCloud(preview)) throw new Error('Mailbox contents never leave this device or enter an AI model');
     const token = randomUUID();
-    this.aiApprovals.set(token, { preview, sourceUrl: pending.sourceUrl, expiresAt: Date.now() + 5 * 60_000 });
+    this.aiApprovals.set(token, { preview, expiresAt: Date.now() + 5 * 60_000 });
     this.addPrivacyEvent('cloud-approved', 'Cloud context approved', `${preview.title} · ${preview.redactions} redaction(s)`);
     return { token, preview };
   }
@@ -929,7 +945,8 @@ class BrowserController {
     if (!question || question.length > 2000) throw new Error('Enter a question under 2,000 characters');
     const state = this.store.get();
     const tab = this.activeTab(state);
-    if (tab.url !== approval.sourceUrl || isProtectedPage(tab.url)) throw new Error('The page changed or is protected');
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    if (!sameAiSource(approval.preview, accountSpaceId, tab) || isProtectedPage(tab.url)) throw new Error('The page, tab, or Account Space changed or is protected');
     const answer = await this.aiProvider.ask(approval.preview, question);
     this.addPrivacyEvent('cloud-approved', 'Cloud AI request completed', approval.preview.title);
     return answer;

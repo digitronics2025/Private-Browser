@@ -37,7 +37,11 @@ This log tracks the approved secure multi-Google-account Account Spaces implemen
 
 [START] System 7 — Typed IPC and AI boundaries — 2026-09-12
 [STEP] 7.1 — Add schema-validated channel-limited Account Space IPC — done
-[STEP] 7.2 — Bind AI consent to Account Space, tab, service and source revision — in progress
+[STEP] 7.2 — Bind AI consent to Account Space, tab, service and source revision — done
+[DONE] System 7 — Typed IPC and AI boundaries — 2026-09-12
+
+[START] System 8 — Account switcher and management experience — 2026-09-12
+[STEP] 8.1 — Build accessible switcher, account manager and permission surfaces — in progress
 [PENDING] System 8 — Account switcher and management experience
 [PENDING] System 9 — Electron integration and regression coverage
 [PENDING] System 10 — Documentation, audit, packaging and release

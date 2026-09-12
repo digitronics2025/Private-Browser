@@ -60,10 +60,14 @@ export class AiProviderStore {
         ],
       }),
       redirect: 'error',
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) throw new Error(`AI provider returned ${response.status}`);
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+    const declared = Number(response.headers.get('content-length') ?? 0);
+    if (declared > 256 * 1024) throw new Error('AI provider response exceeded its size limit');
+    const body = await response.text();
+    if (Buffer.byteLength(body, 'utf8') > 256 * 1024) throw new Error('AI provider response exceeded its size limit');
+    const data = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
     const answer = data.choices?.[0]?.message?.content?.trim();
     if (!answer) throw new Error('AI provider returned an empty response');
     return answer.slice(0, 30_000);

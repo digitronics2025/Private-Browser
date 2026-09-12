@@ -379,6 +379,11 @@ export interface RuntimeBrowserStateV2 {
 
 export interface AiPagePreview {
   id: string;
+  accountSpaceId: AccountSpaceId;
+  tabId: string;
+  service: 'browser' | 'gmail' | 'drive' | 'calendar' | 'contacts';
+  sourceRevision: string;
+  sourceUrl: string;
   title: string;
   url: string;
   text: string;
