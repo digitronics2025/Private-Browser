@@ -5,6 +5,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  desktopCapturer,
   ipcMain,
   Menu,
   safeStorage,
@@ -37,6 +38,9 @@ import type {
   DownloadEntry,
   PrivacyEvent,
   RuntimeBrowserStateV2,
+  PermissionCapability,
+  PermissionDecision,
+  PermissionPrompt,
   VaultItemInput,
   UpdateServiceInput,
   WorkspaceId,
@@ -47,6 +51,7 @@ import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.j
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
 import { IpcGuard } from './ipc-guard.js';
 import { clearAndVerifyAccountSession } from './account-session.js';
+import { AccountPermissionManager } from './account-permissions.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -68,6 +73,33 @@ interface Layout {
 
 const FAVICON_TYPES = new Set(['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_FAVICON_BYTES = 32 * 1024;
+
+function safeOrigin(value: string): string {
+  try { return new URL(value).origin; } catch { return ''; }
+}
+
+function permissionCapability(
+  permission: string,
+  details: unknown,
+): PermissionCapability | undefined {
+  if (permission === 'notifications') return 'notifications';
+  if (permission === 'media') {
+    const mediaTypes = details && typeof details === 'object' && 'mediaTypes' in details && Array.isArray(details.mediaTypes)
+      ? details.mediaTypes
+      : [];
+    const audio = mediaTypes.includes('audio');
+    const video = mediaTypes.includes('video');
+    if (audio && video) return 'camera-and-microphone';
+    if (audio) return 'microphone';
+    if (video) return 'camera';
+    return undefined;
+  }
+  if (permission === 'clipboard-read') return 'clipboard-read';
+  if (permission === 'clipboard-sanitized-write') return 'clipboard-write';
+  if (permission === 'fileSystem') return 'file-system';
+  if (permission === 'geolocation') return 'geolocation';
+  return undefined;
+}
 
 const TRACKER_HOSTS = [
   '2mdn.net',
@@ -106,6 +138,12 @@ class BrowserController {
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; sourceUrl: string; expiresAt: number }>();
   private readonly clipboardGuard = new ClipboardGuard(clipboard);
+  private readonly permissions: AccountPermissionManager;
+  private pendingPermission?: {
+    prompt: PermissionPrompt;
+    respond: (allowed: boolean, displaySourceId?: string) => void;
+    retainAllowOnce: boolean;
+  };
   private readonly faviconCache = new Map<string, string>();
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { top: 128, left: 0, right: 366, bottom: 0 };
@@ -118,6 +156,7 @@ class BrowserController {
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
   ) {
+    this.permissions = new AccountPermissionManager(accounts);
     const state = this.store.get();
     const active = this.activeTab(state);
     this.runtimeTabs.set(active.id, this.newRuntimeTab());
@@ -195,6 +234,7 @@ class BrowserController {
       accountSpaces: persisted.accountSpaces,
       accountHealth: persisted.accountHealth,
       recovery: persisted.recovery,
+      pendingPermission: this.pendingPermission?.prompt,
     };
   }
 
@@ -439,6 +479,24 @@ class BrowserController {
     await this.showActiveTab();
   }
 
+  async respondToPermissionPrompt(promptId: string, decision: PermissionDecision, displaySourceId?: string): Promise<void> {
+    const pending = this.pendingPermission;
+    if (!pending || pending.prompt.id !== promptId) throw new Error('Permission prompt is no longer active');
+    this.pendingPermission = undefined;
+    let allowed = false;
+    try {
+      allowed = this.permissions.applyDecision(pending.prompt, decision, pending.retainAllowOnce);
+      if (allowed && pending.prompt.capability === 'display-capture'
+        && !pending.prompt.displaySources?.some((source) => source.id === displaySourceId)) {
+        allowed = false;
+      }
+    } finally {
+      pending.respond(allowed, displaySourceId);
+      this.broadcast();
+      await this.showActiveTab();
+    }
+  }
+
   private requireAccountMembership(accountSpaceId: AccountSpaceId) {
     const state = this.store.get();
     const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
@@ -462,12 +520,29 @@ class BrowserController {
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
     this.pendingAiPreviews.clear();
     this.aiApprovals.clear();
+    this.permissions.clearAccount(accountSpaceId);
+    if (this.pendingPermission?.prompt.accountSpaceId === accountSpaceId) {
+      const pending = this.pendingPermission;
+      this.pendingPermission = undefined;
+      pending.respond(false);
+    }
     for (const [id, item] of this.downloadItems) {
       if (this.downloads.get(id)?.accountSpaceId !== accountSpaceId) continue;
       item.cancel();
       this.downloadItems.delete(id);
       this.downloads.delete(id);
     }
+  }
+
+  private queuePermissionPrompt(prompt: PermissionPrompt, respond: (allowed: boolean, displaySourceId?: string) => void, retainAllowOnce = false): void {
+    if (this.pendingPermission) {
+      respond(false);
+      return;
+    }
+    this.pendingPermission = { prompt, respond, retainAllowOnce };
+    const active = this.activeTab(this.store.get());
+    this.runtimeTabs.get(active.id)?.view?.setVisible(false);
+    this.broadcast();
   }
 
   goBack(): void {
@@ -963,11 +1038,70 @@ class BrowserController {
     ses.setUserAgent(ses.getUserAgent().replace(/\sElectron\/\S+/g, '').replace(/\sPrivate Browser\/\S+/g, ''));
     const protectedWorkspace = WORKSPACES.find((workspace) => workspace.id === workspaceId)!.protected;
     ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-      callback(isAllowedSitePermission(permission, details.requestingUrl, protectedWorkspace, details.isMainFrame));
+      if (protectedWorkspace || !details.isMainFrame) {
+        callback(false);
+        return;
+      }
+      const capability = permissionCapability(permission, details);
+      if (!capability) {
+        callback(isAllowedSitePermission(permission, details.requestingUrl, false, details.isMainFrame));
+        return;
+      }
+      const origin = safeOrigin(details.requestingUrl);
+      const evaluation = this.permissions.evaluate(accountSpaceId, workspaceId, origin, capability);
+      if (evaluation !== 'prompt') {
+        callback(evaluation === 'granted');
+        return;
+      }
+      try {
+        this.queuePermissionPrompt(this.permissions.createPrompt(accountSpaceId, workspaceId, origin, capability), callback);
+      } catch {
+        callback(false);
+      }
     });
-    ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => (
-      isAllowedSitePermission(permission, details.requestingUrl ?? requestingOrigin, protectedWorkspace, details.isMainFrame)
-    ));
+    ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
+      if (protectedWorkspace || !details.isMainFrame) return false;
+      const capability = permissionCapability(permission, details);
+      if (!capability) return isAllowedSitePermission(permission, details.requestingUrl ?? requestingOrigin, false, details.isMainFrame);
+      const origin = safeOrigin(details.requestingUrl ?? requestingOrigin);
+      return this.permissions.evaluate(accountSpaceId, workspaceId, origin, capability, false) === 'granted';
+    });
+    ses.setDisplayMediaRequestHandler(async (request, callback) => {
+      const deny = () => callback({});
+      const state = this.store.get();
+      const active = this.activeTab(state);
+      const activeView = this.runtimeTabs.get(active.id)?.view;
+      const origin = safeOrigin(request.securityOrigin);
+      if (protectedWorkspace
+        || active.accountSpaceId !== accountSpaceId
+        || origin !== 'https://meet.google.com'
+        || !request.userGesture
+        || !request.videoRequested
+        || !activeView?.getVisible()
+        || request.frame !== activeView.webContents.mainFrame) {
+        deny();
+        return;
+      }
+      if (this.permissions.evaluate(accountSpaceId, workspaceId, origin, 'display-capture', false) === 'denied') {
+        deny();
+        return;
+      }
+      try {
+        const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false });
+        if (sources.length === 0) {
+          deny();
+          return;
+        }
+        const prompt = this.permissions.createPrompt(accountSpaceId, workspaceId, origin, 'display-capture');
+        prompt.displaySources = sources.slice(0, 100).map((source) => ({ id: source.id, name: source.name.slice(0, 200) }));
+        this.queuePermissionPrompt(prompt, (allowed, sourceId) => {
+          const source = allowed ? sources.find((candidate) => candidate.id === sourceId) : undefined;
+          callback(source ? { video: source } : {});
+        });
+      } catch {
+        deny();
+      }
+    }, { useSystemPicker: false });
     ses.webRequest.onBeforeRequest((details, callback) => {
       const blocking = this.store.get().trackerBlocking;
       let blocked = false;
@@ -986,10 +1120,29 @@ class BrowserController {
       if (details.statusCode >= 400) this.recordNetworkIssue(details);
     });
     ses.webRequest.onErrorOccurred((details) => this.recordNetworkIssue(details));
-    ses.on('will-download', (event, item) => {
+    ses.on('will-download', (event, item, sourceContents) => {
       if (protectedWorkspace) {
         event.preventDefault();
         this.addPrivacyEvent('blocked', 'Download blocked in Banking', item.getFilename().slice(0, 300));
+        return;
+      }
+      const downloadOrigin = safeOrigin(item.getURL());
+      const evaluation = this.permissions.evaluate(accountSpaceId, workspaceId, downloadOrigin, 'download');
+      if (evaluation === 'denied') {
+        event.preventDefault();
+        return;
+      }
+      if (evaluation === 'prompt') {
+        event.preventDefault();
+        try {
+          const prompt = this.permissions.createPrompt(accountSpaceId, workspaceId, downloadOrigin, 'download');
+          const downloadUrl = item.getURL();
+          this.queuePermissionPrompt(prompt, (allowed) => {
+            if (allowed && !sourceContents.isDestroyed()) sourceContents.downloadURL(downloadUrl);
+          }, true);
+        } catch {
+          // Invalid and untrustworthy download origins fail closed.
+        }
         return;
       }
       const id = randomUUID();
@@ -1275,6 +1428,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('accounts:disconnect-google', (_event, id: AccountSpaceId) => controller!.disconnectGoogleAccount(id));
   handle('accounts:clear-data', (_event, id: AccountSpaceId) => controller!.clearAccountSpaceData(id));
   handle('accounts:delete', (_event, id: AccountSpaceId, confirmation: string) => controller!.deleteAccountSpace(id, confirmation));
+  handle('permissions:respond', (_event, promptId: string, decision: PermissionDecision, displaySourceId?: string) => controller!.respondToPermissionPrompt(promptId, decision, displaySourceId));
   handle('browser:set-layout', (_event, layout: Layout) => controller!.setLayout(layout));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));

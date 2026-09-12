@@ -110,6 +110,7 @@ export type PermissionCapability =
   | 'notifications'
   | 'microphone'
   | 'camera'
+  | 'camera-and-microphone'
   | 'display-capture'
   | 'geolocation'
   | 'clipboard-read'
@@ -127,11 +128,13 @@ export interface PermissionPrompt {
   capability: PermissionCapability;
   createdAt: string;
   expiresAt: string;
+  displaySources?: Array<{ id: string; name: string }>;
 }
 
 export interface PermissionPromptResponse {
   promptId: string;
   decision: PermissionDecision;
+  displaySourceId?: string;
 }
 
 export interface GoogleOperationResult<T = unknown> {

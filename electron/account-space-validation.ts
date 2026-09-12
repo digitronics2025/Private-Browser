@@ -27,6 +27,7 @@ const PERMISSION_CAPABILITIES = new Set<PermissionCapability>([
   'notifications',
   'microphone',
   'camera',
+  'camera-and-microphone',
   'display-capture',
   'geolocation',
   'clipboard-read',
