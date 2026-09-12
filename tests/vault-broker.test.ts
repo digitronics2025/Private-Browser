@@ -69,6 +69,15 @@ describe('VaultBroker', () => {
     expect(readFileSync(store.envelopePath, 'utf8')).toBe(before);
   });
 
+  it('appends each immutable passkey record exactly once', async () => {
+    const { broker } = await setup();
+    await broker.unlock(PASSWORD);
+    const record = { id: 'credential-id', rpId: 'example.test', rpName: 'Example', createdAtOrigin: 'https://example.test', userHandle: 'AQ', userName: 'alice', userDisplayName: 'Alice', algorithm: -7, privateKeyPkcs8: 'private-fixture', publicKeySpki: 'public-fixture', createdAt: new Date().toISOString() };
+    await broker.appendImmutablePasskey(record);
+    await expect(broker.appendImmutablePasskey(record)).rejects.toThrow('immutable id');
+    expect(broker.passkeysForRpId('example.test')).toHaveLength(1);
+  });
+
   it('unlocks and edits from local ciphertext without network access', async () => {
     const { store } = await setup();
     const restarted = new VaultBroker(new MyVaultDiskStore(dirname(dirname(store.envelopePath)), safeStorage()));

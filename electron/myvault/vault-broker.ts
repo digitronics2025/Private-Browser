@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { decryptWithSession, encryptVaultPayload, unlockVault, type VaultSession } from './security/vault-crypto.js';
 import type { TotpConfig, VaultEnvelope, VaultItem, VaultPayload } from './types.js';
+import type { PasskeyCredential } from './security/passkeys/types.js';
 import { MyVaultDiskStore, type BrokerConnectionState, type StoreBlockReason } from './vault-store.js';
 
 export type BrokerLifecycle = 'unconfigured' | 'locked' | 'unlocked' | 'conflict' | 'recovery-required';
@@ -230,6 +231,16 @@ export class VaultBroker {
       [value[index], value[swap]] = [value[swap], value[index]];
     }
     return value.join('');
+  }
+
+  passkeysForRpId(rpId: string): readonly PasskeyCredential[] {
+    return this.requireUnlocked().passkeys.filter((passkey) => passkey.rpId === rpId);
+  }
+
+  async appendImmutablePasskey(record: PasskeyCredential): Promise<void> {
+    const payload = this.requireUnlocked();
+    if (payload.passkeys.some((passkey) => passkey.id === record.id)) throw new Error('A passkey with this immutable id already exists');
+    await this.persistMutation({ ...payload, passkeys: [...payload.passkeys, Object.freeze({ ...record })], updatedAt: new Date().toISOString() });
   }
 
   markConflict(): void {
