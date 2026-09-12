@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { signValue, verifySignedValue, isLiveExpiry } from '../cloudflare/src/auth';
 import { parseSingleRange, validateReleaseInput } from '../cloudflare/src/protocol';
-import { renderDownloadPage } from '../cloudflare/src/page';
+import { DEVELOPER_PROFILE, renderDownloadPage } from '../cloudflare/src/page';
 
 const release = {
   id: 'stable-0.3.0-3', app_id: 'private-browser', version: '0.3.0', build_number: 3, channel: 'stable' as const,
@@ -39,7 +39,14 @@ describe('Cloudflare release protocol', () => {
   });
 
   it('escapes D1-controlled content in the download page', () => {
-    const html = renderDownloadPage(release, '/download?x=1&y=2');
+    const html = renderDownloadPage({
+      release,
+      history: [],
+      downloadUrl: '/download?x=1&y=2',
+      canonicalUrl: 'https://downloads.example.com/',
+      renderedAt: '2026-09-12T00:00:00.000Z',
+      developer: DEVELOPER_PROFILE,
+    });
     expect(html).toContain('&lt;safe &amp; private&gt;');
     expect(html).toContain('/download?x=1&amp;y=2');
     expect(html).not.toContain('<safe & private>');
