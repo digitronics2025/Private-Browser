@@ -57,6 +57,11 @@ import { AccountPermissionManager } from './account-permissions.js';
 import { GoogleConfigurationStore } from './google-config.js';
 import { ExternalBrowserLauncher } from './external-browser.js';
 import { GoogleOAuthManager } from './google-oauth.js';
+import { GoogleTokenBroker } from './google-token-broker.js';
+import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailSendInput } from './google-services.js';
+import { AccountBackupManager, type BackupWriteResult } from './account-backup.js';
+import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
+import { validateIpcArguments } from './ipc-contracts.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -150,6 +155,7 @@ class BrowserController {
     retainAllowOnce: boolean;
   };
   private readonly faviconCache = new Map<string, string>();
+  private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { top: 128, left: 0, right: 366, bottom: 0 };
   private window!: BrowserWindow;
@@ -160,6 +166,8 @@ class BrowserController {
     private readonly googleConfiguration: GoogleConfigurationStore,
     private readonly externalBrowsers: ExternalBrowserLauncher,
     private readonly googleOAuth: GoogleOAuthManager,
+    private readonly googleServices: GoogleServices,
+    private readonly backups: AccountBackupManager,
     private readonly vault: VaultStore,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
@@ -556,6 +564,143 @@ class BrowserController {
     }
   }
 
+  prepareGmailSend(accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) {
+    this.requireAccountMembership(accountSpaceId);
+    return this.googleServices.prepareGmailSend(accountSpaceId, input, sourceRevision);
+  }
+
+  gmailOverview(accountSpaceId: AccountSpaceId, operationId: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.gmailOverview(accountSpaceId, signal));
+  }
+
+  searchGmail(accountSpaceId: AccountSpaceId, operationId: string, query?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.searchGmail(accountSpaceId, query ?? '', signal));
+  }
+
+  sendGmail(accountSpaceId: AccountSpaceId, operationId: string, input: GmailSendInput, confirmationToken: string, sourceRevision?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.sendGmail(accountSpaceId, input, confirmationToken, sourceRevision, signal));
+  }
+
+  listDriveFiles(accountSpaceId: AccountSpaceId, operationId: string, query?: string, wholeDrive?: boolean) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'drive', (signal) => this.googleServices.listDriveFiles(accountSpaceId, query ?? '', wholeDrive === true, signal));
+  }
+
+  createDriveFile(accountSpaceId: AccountSpaceId, operationId: string, input: DriveCreateInput) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'drive', (signal) => this.googleServices.createDriveFile(accountSpaceId, input, signal));
+  }
+
+  prepareDriveShare(accountSpaceId: AccountSpaceId, fileId: string, email: string, role: 'reader' | 'writer', sourceRevision?: string) {
+    this.requireAccountMembership(accountSpaceId);
+    return this.googleServices.prepareDriveShare(accountSpaceId, fileId, email, role, sourceRevision);
+  }
+
+  shareDriveFile(accountSpaceId: AccountSpaceId, operationId: string, fileId: string, email: string, role: 'reader' | 'writer', confirmationToken: string, sourceRevision?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'drive', (signal) => this.googleServices.shareDriveFile(accountSpaceId, fileId, email, role, confirmationToken, sourceRevision, signal));
+  }
+
+  listCalendarEvents(accountSpaceId: AccountSpaceId, operationId: string, query?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'calendar', (signal) => this.googleServices.upcomingCalendarEvents(accountSpaceId, query ?? '', signal));
+  }
+
+  prepareCalendarWrite(accountSpaceId: AccountSpaceId, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, sourceRevision?: string) {
+    this.requireAccountMembership(accountSpaceId);
+    return this.googleServices.prepareCalendarWrite(accountSpaceId, action, input, sourceRevision);
+  }
+
+  writeCalendarEvent(accountSpaceId: AccountSpaceId, operationId: string, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, confirmationToken: string, sourceRevision?: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'calendar', (signal) => this.googleServices.writeCalendarEvent(accountSpaceId, action, input, confirmationToken, sourceRevision, signal));
+  }
+
+  listContacts(accountSpaceId: AccountSpaceId, operationId: string) {
+    return this.runGoogleOperation(accountSpaceId, operationId, 'contacts', (signal) => this.googleServices.listContacts(accountSpaceId, signal));
+  }
+
+  createBackupRecoveryCode(accountSpaceId: AccountSpaceId): string {
+    this.requireAccountMembership(accountSpaceId);
+    return this.backups.createRecoveryCode(accountSpaceId);
+  }
+
+  verifyAndEnableBackup(accountSpaceId: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean): void {
+    this.requireAccountMembership(accountSpaceId);
+    this.backups.verifyAndEnable(accountSpaceId, recoveryCode, includeOpenTabs, includeHistory);
+    this.store.refreshAccount(this.accounts.require(accountSpaceId));
+    this.broadcast();
+  }
+
+  disableBackup(accountSpaceId: AccountSpaceId): void {
+    this.requireAccountMembership(accountSpaceId);
+    this.backups.disable(accountSpaceId);
+    this.store.refreshAccount(this.accounts.require(accountSpaceId));
+    this.broadcast();
+  }
+
+  uploadBackup(accountSpaceId: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite'): Promise<BackupWriteResult> {
+    const state = this.store.get();
+    const payload = this.backups.buildPayload(accountSpaceId, {
+      bookmarks: state.bookmarks,
+      trackerBlocking: state.trackerBlocking,
+      openTabs: state.tabs,
+      history: state.history,
+    });
+    return this.runGoogleOperation(accountSpaceId, operationId, 'backup', (signal) => this.backups.upload(accountSpaceId, payload, conflictResolution, signal));
+  }
+
+  restoreBackup(accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<void> {
+    const account = this.requireAccountMembership(accountSpaceId);
+    return this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
+      const restored = await this.backups.restore(accountSpaceId, recoveryCode, signal);
+      const validBookmark = (item: { accountSpaceId: AccountSpaceId; workspaceId: WorkspaceId }) => item.accountSpaceId === accountSpaceId && item.workspaceId === account.workspaceId;
+      if (!restored.bookmarks.every(validBookmark) || restored.history?.some((item) => !validBookmark(item)) || restored.openTabs?.some((item) => !validBookmark(item))) {
+        throw new Error('Backup belongs to another Account Space');
+      }
+      this.closeAccountViews(accountSpaceId);
+      this.store.update((state) => {
+        state.bookmarks = [...state.bookmarks.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.bookmarks];
+        if (restored.history) state.history = [...state.history.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.history];
+        if (restored.openTabs?.length) {
+          state.tabs = [...state.tabs.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.openTabs.map((tab) => ({ ...tab, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false }))];
+          state.activeTabByAccountSpace[accountSpaceId] = restored.openTabs[0].id;
+        }
+        state.trackerBlocking = restored.settings.trackerBlocking;
+      });
+      this.broadcast();
+    });
+  }
+
+  cancelOperation(operationId: string): boolean {
+    const operation = this.operations.get(operationId);
+    if (!operation) return false;
+    operation.controller.abort();
+    return true;
+  }
+
+  private async runGoogleOperation<T>(
+    accountSpaceId: AccountSpaceId,
+    operationId: string,
+    service: 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup',
+    task: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    this.requireAccountMembership(accountSpaceId);
+    if (this.operations.has(operationId)) throw new Error('Operation identifier is already active');
+    const operation = new AbortController();
+    this.operations.set(operationId, { accountSpaceId, controller: operation });
+    this.sendOperationProgress(operationId, accountSpaceId, service, 'started');
+    try {
+      const result = await task(operation.signal);
+      this.sendOperationProgress(operationId, accountSpaceId, service, operation.signal.aborted ? 'cancelled' : 'completed');
+      return result;
+    } catch (error) {
+      this.sendOperationProgress(operationId, accountSpaceId, service, operation.signal.aborted ? 'cancelled' : 'failed');
+      throw error;
+    } finally {
+      this.operations.delete(operationId);
+    }
+  }
+
+  private sendOperationProgress(operationId: string, accountSpaceId: AccountSpaceId, service: 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup', phase: 'started' | 'completed' | 'cancelled' | 'failed'): void {
+    if (!this.window.isDestroyed()) this.window.webContents.send('google:operation-progress', { operationId, accountSpaceId, service, phase });
+  }
+
   private requireAccountMembership(accountSpaceId: AccountSpaceId) {
     const state = this.store.get();
     const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
@@ -581,6 +726,13 @@ class BrowserController {
     this.aiApprovals.clear();
     this.permissions.clearAccount(accountSpaceId);
     this.googleOAuth.clearMemory(accountSpaceId);
+    this.googleServices.clearAccount(accountSpaceId);
+    this.backups.clearAccount(accountSpaceId);
+    for (const [operationId, operation] of this.operations) {
+      if (operation.accountSpaceId !== accountSpaceId) continue;
+      operation.controller.abort();
+      this.operations.delete(operationId);
+    }
     if (this.pendingPermission?.prompt.accountSpaceId === accountSpaceId) {
       const pending = this.pendingPermission;
       this.pendingPermission = undefined;
@@ -1429,11 +1581,12 @@ function assertTrusted(event: IpcMainInvokeEvent): void {
 
 const ipcGuard = new IpcGuard();
 
-function handle(channel: string, callback: (event: IpcMainInvokeEvent, ...args: any[]) => unknown): void {
+function handle<TArgs extends unknown[], TResult>(channel: string, callback: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>): void {
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrusted(event);
-    ipcGuard.check(event.sender.id, args);
-    return callback(event, ...args);
+    ipcGuard.check(event.sender.id, channel, args);
+    validateIpcArguments(channel, args);
+    return callback(event, ...args as TArgs);
   });
 }
 
@@ -1443,6 +1596,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const googleConfiguration = new GoogleConfigurationStore(join(userDataPath, 'google-configuration.enc'), safeStorage);
   const externalBrowsers = new ExternalBrowserLauncher();
   const googleOAuth = new GoogleOAuthManager(googleConfiguration, accountStore, externalBrowsers);
+  const googleTokens = new GoogleTokenBroker(googleConfiguration, accountStore);
+  const googleServices = new GoogleServices(googleTokens);
+  const backups = new AccountBackupManager(accountStore, safeStorage, new GoogleDriveAppDataTransport(googleTokens));
   const persistedState = new AccountSpaceStateStore({
     paths: {
       legacyFilePath: join(userDataPath, 'browser-state.json'),
@@ -1470,7 +1626,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     // convenience of first-launch enrolment is the cheaper failure.
     removeUpdateBootstrap(updateBootstrapPath);
   }
-  controller = new BrowserController(store, accountStore, googleConfiguration, externalBrowsers, googleOAuth, vault, aiProvider, updates);
+  controller = new BrowserController(store, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, aiProvider, updates);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -1496,6 +1652,24 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('google:clear-configuration', () => controller!.clearGoogleConfiguration());
   handle('google:connect', (_event, id: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) => controller!.connectGoogleAccount(id, modules, browserId));
   handle('google:cancel', (_event, id: AccountSpaceId) => controller!.cancelGoogleConnection(id));
+  handle('google:gmail-overview-run', (_event, id: AccountSpaceId, operationId: string) => controller!.gmailOverview(id, operationId));
+  handle('google:gmail-search-run', (_event, id: AccountSpaceId, operationId: string, query?: string) => controller!.searchGmail(id, operationId, query));
+  handle('google:gmail-prepare-send', (_event, id: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) => controller!.prepareGmailSend(id, input, sourceRevision));
+  handle('google:gmail-send', (_event, id: AccountSpaceId, operationId: string, input: GmailSendInput, confirmationToken: string, sourceRevision?: string) => controller!.sendGmail(id, operationId, input, confirmationToken, sourceRevision));
+  handle('google:drive-list-run', (_event, id: AccountSpaceId, operationId: string, query?: string, wholeDrive?: boolean) => controller!.listDriveFiles(id, operationId, query, wholeDrive));
+  handle('google:drive-create', (_event, id: AccountSpaceId, operationId: string, input: DriveCreateInput) => controller!.createDriveFile(id, operationId, input));
+  handle('google:drive-prepare-share', (_event, id: AccountSpaceId, fileId: string, email: string, role: 'reader' | 'writer', sourceRevision?: string) => controller!.prepareDriveShare(id, fileId, email, role, sourceRevision));
+  handle('google:drive-share', (_event, id: AccountSpaceId, operationId: string, fileId: string, email: string, role: 'reader' | 'writer', confirmationToken: string, sourceRevision?: string) => controller!.shareDriveFile(id, operationId, fileId, email, role, confirmationToken, sourceRevision));
+  handle('google:calendar-list-run', (_event, id: AccountSpaceId, operationId: string, query?: string) => controller!.listCalendarEvents(id, operationId, query));
+  handle('google:calendar-prepare-write', (_event, id: AccountSpaceId, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, sourceRevision?: string) => controller!.prepareCalendarWrite(id, action, input, sourceRevision));
+  handle('google:calendar-write', (_event, id: AccountSpaceId, operationId: string, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, confirmationToken: string, sourceRevision?: string) => controller!.writeCalendarEvent(id, operationId, action, input, confirmationToken, sourceRevision));
+  handle('google:contacts-list-run', (_event, id: AccountSpaceId, operationId: string) => controller!.listContacts(id, operationId));
+  handle('backup:create-recovery', (_event, id: AccountSpaceId) => controller!.createBackupRecoveryCode(id));
+  handle('backup:verify-enable', (_event, id: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean) => controller!.verifyAndEnableBackup(id, recoveryCode, includeOpenTabs, includeHistory));
+  handle('backup:upload', (_event, id: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite') => controller!.uploadBackup(id, operationId, conflictResolution));
+  handle('backup:restore', (_event, id: AccountSpaceId, operationId: string, recoveryCode?: string) => controller!.restoreBackup(id, operationId, recoveryCode));
+  handle('backup:disable', (_event, id: AccountSpaceId) => controller!.disableBackup(id));
+  handle('operations:cancel', (_event, operationId: string) => controller!.cancelOperation(operationId));
   handle('browser:set-layout', (_event, layout: Layout) => controller!.setLayout(layout));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));

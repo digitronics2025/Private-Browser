@@ -174,6 +174,13 @@ export interface GoogleOperationResult<T = unknown> {
 
 export type GoogleService = 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup';
 
+export interface GoogleOperationProgress {
+  operationId: string;
+  accountSpaceId: AccountSpaceId;
+  service: GoogleService;
+  phase: 'started' | 'completed' | 'cancelled' | 'failed';
+}
+
 export interface GoogleMutationConfirmation {
   token: string;
   accountSpaceId: AccountSpaceId;
