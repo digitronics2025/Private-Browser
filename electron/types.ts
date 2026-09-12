@@ -46,6 +46,19 @@ export type GoogleWebsiteStatus =
   | 'sign-in-blocked'
   | 'unknown';
 
+export type ExternalBrowserId = 'edge' | 'chrome' | 'firefox';
+
+export interface ExternalBrowserSummary {
+  id: ExternalBrowserId;
+  name: string;
+}
+
+export interface GoogleConfigurationStatus {
+  configured: boolean;
+  source?: 'environment' | 'encrypted-settings';
+  error?: 'os-encryption-unavailable' | 'configuration-corrupt';
+}
+
 export interface AccountSpaceSummary {
   id: AccountSpaceId;
   workspaceId: WorkspaceId;
@@ -147,6 +160,7 @@ export interface GoogleOperationResult<T = unknown> {
       | 'GOOGLE_OFFLINE'
       | 'GOOGLE_QUOTA'
       | 'GOOGLE_REVOKED'
+      | 'GOOGLE_RECONNECT_REQUIRED'
       | 'GOOGLE_SCOPE_MISSING'
       | 'GOOGLE_POLICY_DENIED'
       | 'GOOGLE_CONFIRMATION_REQUIRED'
@@ -276,6 +290,8 @@ export interface BrowserSnapshot {
   activeAccountSpaceId: AccountSpaceId;
   accountSpaces: AccountSpaceSummary[];
   accountHealth: AccountSpaceHealth[];
+  googleConfiguration: GoogleConfigurationStatus;
+  externalBrowsers: ExternalBrowserSummary[];
   recovery?: StateRecoveryStatus;
   pendingPermission?: PermissionPrompt;
 }

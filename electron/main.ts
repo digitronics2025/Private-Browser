@@ -27,6 +27,8 @@ import { RuntimeStateStore } from './runtime-state-store.js';
 import type {
   AccountSpaceColor,
   AccountSpaceId,
+  ExternalBrowserId,
+  GoogleModule,
   AiApproval,
   AiPagePreview,
   AiProviderInput,
@@ -52,6 +54,9 @@ import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sani
 import { IpcGuard } from './ipc-guard.js';
 import { clearAndVerifyAccountSession } from './account-session.js';
 import { AccountPermissionManager } from './account-permissions.js';
+import { GoogleConfigurationStore } from './google-config.js';
+import { ExternalBrowserLauncher } from './external-browser.js';
+import { GoogleOAuthManager } from './google-oauth.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -152,6 +157,9 @@ class BrowserController {
   constructor(
     private readonly store: RuntimeStateStore,
     private readonly accounts: AccountStore,
+    private readonly googleConfiguration: GoogleConfigurationStore,
+    private readonly externalBrowsers: ExternalBrowserLauncher,
+    private readonly googleOAuth: GoogleOAuthManager,
     private readonly vault: VaultStore,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
@@ -235,6 +243,8 @@ class BrowserController {
       accountHealth: persisted.accountHealth,
       recovery: persisted.recovery,
       pendingPermission: this.pendingPermission?.prompt,
+      googleConfiguration: this.googleConfiguration.status(),
+      externalBrowsers: this.externalBrowsers.discover().map(({ id, name }) => ({ id, name })),
     };
   }
 
@@ -437,12 +447,57 @@ class BrowserController {
     if (!locked) await this.showActiveTab();
   }
 
-  disconnectGoogleAccount(accountSpaceId: AccountSpaceId): void {
+  configureGoogle(clientId: string) {
+    const status = this.googleConfiguration.configure(clientId);
+    this.broadcast();
+    return status;
+  }
+
+  clearGoogleConfiguration() {
+    const status = this.googleConfiguration.clear();
+    this.broadcast();
+    return status;
+  }
+
+  async connectGoogleAccount(accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) {
+    this.requireAccountMembership(accountSpaceId);
+    const connecting = this.accounts.update(accountSpaceId, (account) => { account.googleConnection = 'connecting'; });
+    this.store.refreshAccount(connecting);
+    this.broadcast();
+    const allAccountIds = this.store.get().accountSpaces.map((account) => account.id);
+    const result = await this.googleOAuth.connect(accountSpaceId, modules, browserId, allAccountIds);
+    if (!result.ok) {
+      const status = result.error?.code === 'GOOGLE_CONFIGURATION_REQUIRED' ? 'not-configured'
+        : result.error?.code === 'GOOGLE_SCOPE_MISSING' ? 'partial-scopes'
+          : result.error?.code === 'GOOGLE_RECONNECT_REQUIRED' ? 'reconnect-required'
+            : result.error?.code === 'GOOGLE_OFFLINE' ? 'offline'
+              : 'disconnected';
+      this.accounts.update(accountSpaceId, (account) => { account.googleConnection = status; });
+    }
+    this.store.refreshAccount(this.accounts.require(accountSpaceId));
+    this.broadcast();
+    return result;
+  }
+
+  cancelGoogleConnection(accountSpaceId: AccountSpaceId): boolean {
+    this.requireAccountMembership(accountSpaceId);
+    const cancelled = this.googleOAuth.cancel(accountSpaceId);
+    if (cancelled) {
+      const record = this.accounts.update(accountSpaceId, (account) => { account.googleConnection = 'disconnected'; });
+      this.store.refreshAccount(record);
+      this.broadcast();
+    }
+    return cancelled;
+  }
+
+  async disconnectGoogleAccount(accountSpaceId: AccountSpaceId, revoke = false) {
     this.requireAccountMembership(accountSpaceId);
     this.cancelAccountOperations(accountSpaceId);
-    const record = this.accounts.disconnectGoogle(accountSpaceId);
+    const result = await this.googleOAuth.disconnect(accountSpaceId, revoke);
+    const record = this.accounts.require(accountSpaceId);
     this.store.refreshAccount(record);
-    this.addPrivacyEvent('vault', 'Google API disconnected', 'Local browsing data was retained');
+    this.addPrivacyEvent('vault', revoke ? 'Google access revoked' : 'Google API disconnected', revoke ? 'Google grant was revoked; local website data was retained' : 'Local browsing data was retained');
+    return result;
   }
 
   async clearAccountSpaceData(accountSpaceId: AccountSpaceId): Promise<void> {
@@ -473,6 +528,10 @@ class BrowserController {
     const partition = this.store.partitionFor(accountSpaceId);
     this.closeAccountViews(accountSpaceId);
     this.cancelAccountOperations(accountSpaceId);
+    if (this.accounts.require(accountSpaceId).refreshToken) {
+      const revoked = await this.googleOAuth.disconnect(accountSpaceId, true);
+      if (!revoked.ok) throw new Error(revoked.error?.message ?? 'Google revocation must complete before deletion');
+    }
     await clearAndVerifyAccountSession(session.fromPartition(partition));
     this.configuredSessions.delete(partition);
     this.store.removeAccount(accountSpaceId);
@@ -521,6 +580,7 @@ class BrowserController {
     this.pendingAiPreviews.clear();
     this.aiApprovals.clear();
     this.permissions.clearAccount(accountSpaceId);
+    this.googleOAuth.clearMemory(accountSpaceId);
     if (this.pendingPermission?.prompt.accountSpaceId === accountSpaceId) {
       const pending = this.pendingPermission;
       this.pendingPermission = undefined;
@@ -1380,6 +1440,9 @@ function handle(channel: string, callback: (event: IpcMainInvokeEvent, ...args: 
 if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const userDataPath = app.getPath('userData');
   const accountStore = new AccountStore(join(userDataPath, 'account-spaces'), safeStorage);
+  const googleConfiguration = new GoogleConfigurationStore(join(userDataPath, 'google-configuration.enc'), safeStorage);
+  const externalBrowsers = new ExternalBrowserLauncher();
+  const googleOAuth = new GoogleOAuthManager(googleConfiguration, accountStore, externalBrowsers);
   const persistedState = new AccountSpaceStateStore({
     paths: {
       legacyFilePath: join(userDataPath, 'browser-state.json'),
@@ -1407,7 +1470,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     // convenience of first-launch enrolment is the cheaper failure.
     removeUpdateBootstrap(updateBootstrapPath);
   }
-  controller = new BrowserController(store, accountStore, vault, aiProvider, updates);
+  controller = new BrowserController(store, accountStore, googleConfiguration, externalBrowsers, googleOAuth, vault, aiProvider, updates);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -1425,10 +1488,14 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('accounts:reorder', (_event, workspaceId: WorkspaceId, ids: AccountSpaceId[]) => controller!.reorderAccountSpaces(workspaceId, ids));
   handle('accounts:open-in', (_event, id: AccountSpaceId, url: string) => controller!.openInAccountSpace(id, url));
   handle('accounts:set-locked', (_event, id: AccountSpaceId, locked: boolean) => controller!.setAccountSpaceLocked(id, locked));
-  handle('accounts:disconnect-google', (_event, id: AccountSpaceId) => controller!.disconnectGoogleAccount(id));
+  handle('accounts:disconnect-google', (_event, id: AccountSpaceId, revoke?: boolean) => controller!.disconnectGoogleAccount(id, revoke));
   handle('accounts:clear-data', (_event, id: AccountSpaceId) => controller!.clearAccountSpaceData(id));
   handle('accounts:delete', (_event, id: AccountSpaceId, confirmation: string) => controller!.deleteAccountSpace(id, confirmation));
   handle('permissions:respond', (_event, promptId: string, decision: PermissionDecision, displaySourceId?: string) => controller!.respondToPermissionPrompt(promptId, decision, displaySourceId));
+  handle('google:configure', (_event, clientId: string) => controller!.configureGoogle(clientId));
+  handle('google:clear-configuration', () => controller!.clearGoogleConfiguration());
+  handle('google:connect', (_event, id: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) => controller!.connectGoogleAccount(id, modules, browserId));
+  handle('google:cancel', (_event, id: AccountSpaceId) => controller!.cancelGoogleConnection(id));
   handle('browser:set-layout', (_event, layout: Layout) => controller!.setLayout(layout));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));

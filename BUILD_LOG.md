@@ -25,9 +25,14 @@ This log tracks the approved secure multi-Google-account Account Spaces implemen
 [DONE] System 4 — Exact-origin permissions — 2026-09-12
 
 [START] System 5 — Secure Google OAuth — 2026-09-12
-[STEP] 5.1 — Add scope matrix, PKCE and validated loopback callback — in progress
-[STEP] 5.2 — Add allowlisted external browser and encrypted token grant lifecycle — pending
-[PENDING] System 6 — Google service modules and backup
+[STEP] 5.1 — Add scope matrix, PKCE and validated loopback callback — done
+[STEP] 5.2 — Add allowlisted external browser and encrypted token grant lifecycle — done
+[DONE] System 5 — Secure Google OAuth — 2026-09-12
+
+[START] System 6 — Google service modules and backup — 2026-09-12
+[STEP] 6.1 — Add resilient token broker and narrow service clients — in progress
+[STEP] 6.2 — Add single-use mutation confirmations — pending
+[STEP] 6.3 — Add authenticated encrypted Drive app-data backup — pending
 [PENDING] System 7 — Typed IPC and AI boundaries
 [PENDING] System 8 — Account switcher and management experience
 [PENDING] System 9 — Electron integration and regression coverage
