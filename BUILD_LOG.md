@@ -69,7 +69,13 @@ This feature-oriented log tracks the approved secure multi-Google-account Accoun
 [START] System 12 — Cloudflare human-verification compatibility — 2026-09-12
 [STEP] 12.1 — Reproduce packaged User-Agent and Client Hints mismatch — done
 [STEP] 12.2 — Normalize Electron and packaged application identity tokens — done
-[STEP] 12.3 — Run regression, browser and packaged-release verification — in progress
+[STEP] 12.3 — Run regression, browser and packaged-release verification — done
+[DONE] System 12 — Cloudflare human-verification compatibility — 2026-09-12
+
+- PR #24 merged as `884cf940f618dfbb911febb743f6921c2001790c`; the exact revision passed 214 desktop tests, 7 protocol tests, 6 extension tests, 21 Worker tests, 6 browser UI flows and 3 real Electron tests.
+- Direct Cloudflare deployment activated Worker version `c5dafe02-1a63-4bba-a911-218f758ec5f3` with tag `git-884cf94`; D1 had no pending migrations and live `/health` returned 200 with `database: ok` and `releaseReady: true`.
+- Private Browser 0.5.6 build 77 was independently uploaded and verified at 115,637,668 bytes with SHA-256 `8c1aa82037cf9b0031d16f8a2aaff4eb20c348f8028ba2916307e5ad5459bfce`. The current superseding 0.5.7 build 82 release also passed the corrected end-to-end verifier.
+- Cloudflare's production human challenge remains a deliberate manual boundary; automation verifies browser identity consistency without solving or bypassing the challenge.
 
 ## Upstream systems incorporated
 

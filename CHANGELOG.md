@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.7 — 2026-09-12
+
+- Fixed Cloudflare human-verification compatibility by removing Electron and
+  packaged application identity tokens from the Chromium user agent while
+  keeping network headers, JavaScript and client hints aligned.
+- Added real Electron regression coverage for the packaged browser identity.
+
 ## 0.5.6 — 2026-09-12
 
 - Added Chrome-style automatic MyVault filling for matching normal HTTPS login
