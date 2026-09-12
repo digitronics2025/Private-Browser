@@ -68,6 +68,29 @@ Chromium DevTools attach only to non-home pages in the Development workspace. Th
 
 Developer diagnostics are process-memory-only, bounded per tab, and collect only console warnings/errors, failed-request method/status/type, sanitized source URLs, and aggregate document counts. They never collect page text, input values, cookies, local or session storage, headers, request or response bodies. URL credentials, queries and fragments are removed, high-entropy path segments and sensitive text patterns are redacted, and the user explicitly copies the resulting report before it can reach another tool.
 
+## VS Code bridge
+
+The VS Code companion does not expose TCP, remote debugging, a renderer socket,
+or a webpage API. Electron main owns a random per-launch Windows named pipe and
+an owner-local rendezvous file. Ed25519 device identities are stored with
+Electron `safeStorage` and VS Code `SecretStorage`; ephemeral X25519/HKDF keys
+protect 15-minute AES-256-GCM sessions with signed negotiation, sequence-bound
+frames, replay rejection, strict size limits, and automatic reconnect/rekey.
+
+VS Code Workspace Trust and a separate modal folder grant are both mandatory.
+Every path is canonicalized and kept beneath that folder; traversal, symlinks,
+UNC escapes, secret names, and browser profiles are refused. Commands are
+detected from trusted files, executed without a browser-supplied shell string,
+and require an exact executable/argument/cwd approval keyed to a fingerprint.
+Live checks are passive and origin-approved; payment, banking, checkout, crawl,
+attack, and credential-guessing targets are blocked.
+
+Page tests use new Playwright contexts without imported cookies, storage,
+passwords, or headers. Reports remain in extension-local storage. AI diagnostic
+bundles are double-redacted; DOM metadata and screenshots default off. Model
+edits require workspace containment, a matching current file hash, a visible
+VS Code review, and modal approval before `WorkspaceEdit` can apply them.
+
 ## Release service
 
 Installer binaries are private R2 objects. D1 contains only release metadata and the R2 object key. Desktop checks use a client-only bearer token stored through Electron `safeStorage`; the renderer receives status and signed URLs, never the token. Publishing uses a separate administrator key.

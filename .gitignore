@@ -9,6 +9,9 @@ dist/
 dist-electron/
 release/
 build/private-browser-update.json
+build/private-browser-bridge.vsix
+test-results/
+playwright-report/
 .wrangler/
 .wrangler-dist/
 

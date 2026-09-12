@@ -116,6 +116,13 @@ export interface AiPagePreview {
   text: string;
   redactions: number;
   protectedPage: boolean;
+  dom?: string;
+  screenshotDataUrl?: string;
+}
+
+export interface DeveloperAiPreviewOptions {
+  includeDom: boolean;
+  includeScreenshot: boolean;
 }
 
 export interface AiApproval {
@@ -177,6 +184,24 @@ export interface DeveloperDiagnosticReport {
   formatted: string;
 }
 
+export type DeveloperBridgeAction =
+  | 'project.open' | 'source.open'
+  | 'server.discover' | 'server.start' | 'server.stop' | 'server.restart'
+  | 'inspect.page' | 'inspect.open-source'
+  | 'test.run' | 'test.cancel' | 'test.rerun' | 'test.save-artifact'
+  | 'ai.handoff' | 'ai.apply-edits'
+  | 'reports.list' | 'reports.get' | 'reports.delete' | 'reports.clear' | 'reports.open' | 'reports.retention';
+
+export interface DeveloperPageInfo {
+  route: string;
+  framework: string;
+  viewport: string;
+  selector?: string;
+  element?: string;
+  sourcePath?: string;
+  confidence?: 'exact' | 'source-map' | 'nearest';
+}
+
 export interface VaultItemInput {
   label: string;
   url: string;
@@ -235,3 +260,4 @@ export interface UpdateCheckResult {
   latest: ReleaseManifest;
   checkedAt: string;
 }
+export type { BridgeStatus, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';

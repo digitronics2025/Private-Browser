@@ -23,6 +23,7 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - A Cloudflare-native private release service with D1 metadata, R2 installers, a protected download page and resumable downloads.
 - OS-encrypted update-service configuration with startup and daily release checks.
 - A Development-workspace cockpit with native Chromium Elements, Console, Sources, Network, Performance, Application and Recorder tools; F12/Ctrl+Shift+I shortcuts; right-click element inspection; and sanitized AI-ready diagnostic reports.
+- A private VS Code companion with authenticated named-pipe pairing, explicit workspace/command grants, project adapters, isolated Playwright checks, local reports, source handoff, and reviewed AI edits.
 - Hardened Electron fuses, explicit certificate/webview denial, bounded IPC,
   strict site permissions, risky-download blocking and a locked-down Banking workspace.
 
@@ -45,6 +46,8 @@ extensions and account tokens are not copied.
 
 Open a webpage in the **Development** workspace, then select **Dev** in the right sidebar or press **F12** / **Ctrl+Shift+I**. Right-click a page element for exact inspection. The diagnostic report deliberately excludes page text, form values, cookies, storage, headers, request bodies, query strings and fragments, and developer access is blocked for Banking and detected payment pages.
 
+Open **Development → Dev**. The Project, Inspect, Test, and AI Fix tabs guide you through installing the bundled VSIX, entering the browser's single-use pairing code in VS Code, granting one local workspace, and approving exact commands. See the [ten-step walkthrough](docs/systems/vscode-bridge.md#ten-step-non-developer-walkthrough).
+
 ## Verify and build
 
 ```bash
@@ -57,7 +60,7 @@ Create the Windows installer on a Windows machine:
 npm run dist
 ```
 
-The installer is written to `release/Private-Browser-<version>-Setup.exe`. GitHub Actions also creates a downloadable Windows artifact and CycloneDX SBOM for every push to `main`.
+The installer is written to `release/Private-Browser-<version>-Setup.exe` and the private extension to `release/private-browser-bridge-<version>.vsix`. The VSIX is also embedded in the installer; it is never published to Marketplace.
 
 The release workflow automatically code-signs when the two Windows signing
 secrets documented in `SECURITY.md` are configured. Until then, Windows
