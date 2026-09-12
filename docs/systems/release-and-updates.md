@@ -496,6 +496,9 @@ The electron-builder configuration lives **inline in `package.json`**, in the
 - CI signs when both `WINDOWS_CODE_SIGNING_CERTIFICATE` and
   `WINDOWS_CODE_SIGNING_PASSWORD` exist. Without that pair the build remains
   verifiable but Windows shows an unknown-publisher warning.
+- `loadBrowserProcessSpecificV8Snapshot` stays disabled: enabling it without a
+  matching packaged browser-process snapshot makes Electron fail before startup.
+  The other sandbox, cookie, Node/inspection and ASAR-integrity fuses remain on.
 
 **Why `package.json` is not in `sources`.** 2 of the 7 commits in this repository
 are pure dependency bumps touching only `package.json` and `package-lock.json`.

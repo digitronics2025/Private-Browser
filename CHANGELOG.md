@@ -14,6 +14,8 @@
   Chrome CSV import and central Banking/Development workspace policy.
 - Ported the reviewed passkey ceremony core behind a disabled release gate; OS
   WebAuthn remains unchanged until packaged first-script interception is proven.
+- Fixed the hardened package fuse set so the installed application loads its
+  shipped V8 snapshot and starts successfully.
 
 ## 0.3.4 — 2026-09-10
 

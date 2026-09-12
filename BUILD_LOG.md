@@ -22,3 +22,4 @@
 [STEP] 5.1 — Security audit and similar-boundary sweep — done
 [STEP] 5.2 — Full check after rebase: 139 desktop tests, 16 Worker tests, builds and dry-run — done
 [STEP] 5.3 — Electron Playwright: metadata-only UI, isolated pairing dialog, disabled dialog DevTools, Development isolation — done
+[STEP] 5.4 — Installed smoke found browser-specific V8 snapshot fuse crash; fuse corrected — done
