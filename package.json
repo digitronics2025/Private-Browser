@@ -12,11 +12,15 @@
   },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && npm run electron:compile && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js\"",
+    "dev:preview": "vite --host 127.0.0.1",
     "build": "npm run typecheck && vite build && npm run electron:compile",
     "electron:compile": "tsc -p tsconfig.electron.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && vitest run --config cloudflare/vitest.config.ts",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:electron": "npm run build && npm run test:electron:only",
+    "test:electron:only": "node scripts/run-electron-tests.mjs",
     "worker:typecheck": "tsc -p cloudflare/tsconfig.json",
     "scripts:typecheck": "tsc -p cloudflare/tsconfig.scripts.json",
     "worker:build": "wrangler deploy --dry-run --config cloudflare/wrangler.jsonc --outdir .wrangler-dist",
@@ -25,7 +29,7 @@
     "secrets:check": "node scripts/secret-guard.mjs",
     "docs:find": "node scripts/docs-find.mjs",
     "docs:stale": "node scripts/docs-guard.mjs stale",
-    "check": "npm run secrets:check && npm run docs:check && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run build && npm run worker:build",
+    "check": "npm run secrets:check && npm run docs:check && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run test:e2e && npm run build && npm run test:electron:only && npm run worker:build",
     "dist": "npm run build && electron-builder --win nsis --x64 --publish never",
     "start": "electron dist-electron/main.js"
   },
@@ -38,6 +42,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260910.1",
     "@electron/fuses": "1.8.0",
+    "@playwright/test": "^1.63.0",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",

@@ -149,6 +149,15 @@ export class AccountStore {
     return structuredClone(record);
   }
 
+  replaceCorrupt(input: CreateAccountSpaceInput): AccountSpaceRecord {
+    const id = input.id;
+    if (!id || !this.corruptRecords.has(id)) throw new Error('Account Space is not in corruption recovery');
+    const filePath = this.recordPath(id);
+    if (existsSync(filePath)) rmSync(filePath, { force: true });
+    this.corruptRecords.delete(id);
+    return this.createLocal(input);
+  }
+
   load(id: AccountSpaceId): AccountRecordLoadResult {
     if (!isAccountSpaceId(id)) throw new Error('Invalid Account Space identifier');
     const knownBackup = this.corruptRecords.get(id);
@@ -243,6 +252,9 @@ export class AccountStore {
       websiteStatus: record.websiteStatus,
       enabledModules: [...record.enabledModules],
       grantedScopes: [...record.grantedScopes],
+      backupEnabled: record.backup.enabled,
+      backupIncludesOpenTabs: record.backup.includeOpenTabs,
+      backupIncludesHistory: record.backup.includeHistory,
     };
   }
 

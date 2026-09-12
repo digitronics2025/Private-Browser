@@ -41,9 +41,17 @@ This log tracks the approved secure multi-Google-account Account Spaces implemen
 [DONE] System 7 — Typed IPC and AI boundaries — 2026-09-12
 
 [START] System 8 — Account switcher and management experience — 2026-09-12
-[STEP] 8.1 — Build accessible switcher, account manager and permission surfaces — in progress
-[PENDING] System 8 — Account switcher and management experience
-[PENDING] System 9 — Electron integration and regression coverage
+[STEP] 8.1 — Build accessible switcher, account manager and permission surfaces — done
+[STEP] 8.2 — Add recovery, Google module, service and encrypted-backup controls — done
+[STEP] 8.3 — Verify desktop and mobile interaction in an independent browser context — done
+[DONE] System 8 — Account switcher and management experience — 2026-09-12
+
+[START] System 9 — Electron integration and regression coverage — 2026-09-12
+[STEP] 9.1 — Add credential-free renderer preview and browser E2E — done
+[STEP] 9.2 — Prove real Electron partition cookie isolation — done
+[STEP] 9.3 — Preserve Banking and Development workspace policy — done
+[DONE] System 9 — Electron integration and regression coverage — 2026-09-12
+
 [PENDING] System 10 — Documentation, audit, packaging and release
 
 ## External verification boundary

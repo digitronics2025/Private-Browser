@@ -46,6 +46,7 @@ import type {
   VaultItemInput,
   UpdateServiceInput,
   WorkspaceId,
+  StateRecoveryAction,
 } from './types.js';
 import { VaultStore } from './vault.js';
 import { UpdateServiceStore } from './update-service.js';
@@ -63,6 +64,7 @@ import { AccountBackupManager, type BackupWriteResult } from './account-backup.j
 import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
 import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
+import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-status.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -163,6 +165,7 @@ class BrowserController {
 
   constructor(
     private readonly store: RuntimeStateStore,
+    private readonly persistedState: AccountSpaceStateStore,
     private readonly accounts: AccountStore,
     private readonly googleConfiguration: GoogleConfigurationStore,
     private readonly externalBrowsers: ExternalBrowserLauncher,
@@ -386,6 +389,29 @@ class BrowserController {
     await this.showActiveTab();
   }
 
+  async setOverlayOpen(open: boolean): Promise<void> {
+    if (open) this.hideAllViews();
+    else await this.showActiveTab();
+  }
+
+  async recoveryAction(action: StateRecoveryAction, confirmation?: string): Promise<void> {
+    const recovery = this.store.get().recovery;
+    if (!recovery || !recovery.actions.includes(action)) throw new Error('Recovery action is not available');
+    if (action === 'open-backup-location') {
+      shell.showItemInFolder(this.persistedState.recoveryTargetPath(recovery.accountSpaceId));
+      return;
+    }
+    if (action === 'restore-v1') {
+      if (confirmation !== 'RESTORE_V1') throw new Error('Exact restore confirmation is required');
+      this.persistedState.prepareRestoreV1();
+    } else if (action === 'fresh-start') {
+      if (confirmation !== 'FRESH_START') throw new Error('Exact fresh-start confirmation is required');
+      this.persistedState.prepareFreshStart(recovery.accountSpaceId);
+    }
+    app.relaunch();
+    app.exit(0);
+  }
+
   async switchAccountSpace(accountSpaceId: AccountSpaceId): Promise<void> {
     const state = this.store.get();
     const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
@@ -402,7 +428,7 @@ class BrowserController {
     await this.showActiveTab();
   }
 
-  async addLocalAccountSpace(workspaceId: WorkspaceId, label: string, color: AccountSpaceColor): Promise<void> {
+  async addLocalAccountSpace(workspaceId: WorkspaceId, label: string, color: AccountSpaceColor): Promise<AccountSpaceId> {
     const state = this.store.get();
     if (!WORKSPACES.some((workspace) => workspace.id === workspaceId)) throw new Error('Unknown workspace');
     const order = state.accountSpaces.filter((account) => account.workspaceId === workspaceId).length;
@@ -415,6 +441,7 @@ class BrowserController {
       this.accounts.remove(record.id);
       throw error;
     }
+    return record.id;
   }
 
   updateAccountSpace(accountSpaceId: AccountSpaceId, label?: string, color?: AccountSpaceColor): void {
@@ -562,6 +589,7 @@ class BrowserController {
       pending.respond(allowed, displaySourceId);
       this.broadcast();
       await this.showActiveTab();
+      this.activeContents()?.focus();
     }
   }
 
@@ -1231,6 +1259,7 @@ class BrowserController {
     view.webContents.on('will-attach-webview', (event) => event.preventDefault());
     view.webContents.on('did-start-loading', () => this.updateRuntime(tabId, { loading: true }));
     view.webContents.on('did-stop-loading', () => this.updateRuntime(tabId, { loading: false }));
+    view.webContents.on('did-finish-load', () => void this.updateGoogleWebsiteState(tabId, view));
     view.webContents.on('did-navigate', (_event, url) => this.commitNavigation(tabId, url));
     view.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => { if (isMainFrame) this.commitNavigation(tabId, url, false); });
     view.webContents.on('page-title-updated', (event, title) => {
@@ -1259,6 +1288,25 @@ class BrowserController {
     view.webContents.on('before-input-event', (event, input) => this.handleShortcut(event, input));
     view.webContents.on('render-process-gone', () => this.updateRuntime(tabId, { loading: false }));
     return view;
+  }
+
+  private async updateGoogleWebsiteState(tabId: string, view: WebContentsView): Promise<void> {
+    const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+    if (!tab || !isKnownGoogleWebHost(tab.url)) return;
+    try {
+      const [cookies, pageText] = await Promise.all([
+        view.webContents.session.cookies.get({ domain: '.google.com' }),
+        view.webContents.executeJavaScript(`document.body ? document.body.innerText.slice(0, 20000) : ''`, true) as Promise<string>,
+      ]);
+      const status = googleWebsiteStatus(typeof pageText === 'string' ? pageText : '', cookies.length > 0);
+      const record = this.accounts.update(tab.accountSpaceId, (account) => { account.websiteStatus = status; });
+      this.store.refreshAccount(record);
+      this.broadcast();
+    } catch {
+      const record = this.accounts.update(tab.accountSpaceId, (account) => { account.websiteStatus = 'unknown'; });
+      this.store.refreshAccount(record);
+      this.broadcast();
+    }
   }
 
   private configureSession(ses: Session, partition: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): void {
@@ -1643,7 +1691,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     // convenience of first-launch enrolment is the cheaper failure.
     removeUpdateBootstrap(updateBootstrapPath);
   }
-  controller = new BrowserController(store, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, aiProvider, updates);
+  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, aiProvider, updates);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -1687,7 +1735,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('backup:restore', (_event, id: AccountSpaceId, operationId: string, recoveryCode?: string) => controller!.restoreBackup(id, operationId, recoveryCode));
   handle('backup:disable', (_event, id: AccountSpaceId) => controller!.disableBackup(id));
   handle('operations:cancel', (_event, operationId: string) => controller!.cancelOperation(operationId));
+  handle('recovery:act', (_event, action: StateRecoveryAction, confirmation?: string) => controller!.recoveryAction(action, confirmation));
   handle('browser:set-layout', (_event, layout: Layout) => controller!.setLayout(layout));
+  handle('browser:set-overlay-open', (_event, open: boolean) => controller!.setOverlayOpen(open));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());

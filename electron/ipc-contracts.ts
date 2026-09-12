@@ -85,6 +85,13 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); if (args[2] !== undefined) requireBoundedText(args[2], 'recovery code', 64); return;
     case 'operations:cancel':
       exact(args, 1); requireUuid(args[0], 'operation'); return;
+    case 'browser:set-overlay-open':
+      exact(args, 1); requireBoolean(args[0]); return;
+    case 'recovery:act':
+      between(args, 1, 2);
+      if (!['retry', 'open-backup-location', 'restore-v1', 'fresh-start'].includes(String(args[0]))) throw new Error('Invalid recovery action');
+      if (args[1] !== undefined) requireBoundedText(args[1], 'recovery confirmation', 64);
+      return;
     default:
       return;
   }

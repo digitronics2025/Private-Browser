@@ -76,6 +76,9 @@ export interface AccountSpaceSummary {
   websiteStatus: GoogleWebsiteStatus;
   enabledModules: GoogleModule[];
   grantedScopes: string[];
+  backupEnabled: boolean;
+  backupIncludesOpenTabs: boolean;
+  backupIncludesHistory: boolean;
 }
 
 export interface CreateAccountSpaceRequest {
@@ -242,6 +245,8 @@ export interface StateRecoveryStatus {
   backupAvailable: boolean;
   actions: Array<'retry' | 'open-backup-location' | 'restore-v1' | 'fresh-start'>;
 }
+
+export type StateRecoveryAction = 'retry' | 'open-backup-location' | 'restore-v1' | 'fresh-start';
 
 export interface AccountSpaceBrowserTab extends BrowserTab {
   accountSpaceId: AccountSpaceId;

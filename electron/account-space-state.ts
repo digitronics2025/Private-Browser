@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -77,6 +78,44 @@ export class AccountSpaceStateStore {
   saveAccountState(state: AccountBrowsingStateV2): void {
     const sanitized = validateAccountState(state);
     atomicWriteJson(this.accountStatePath(sanitized.accountSpaceId), sanitized);
+  }
+
+  recoveryTargetPath(accountSpaceId?: AccountSpaceId): string {
+    if (accountSpaceId) return this.accountStatePath(accountSpaceId);
+    return existsSync(this.options.paths.manifestFilePath) ? this.options.paths.manifestFilePath : this.options.paths.legacyFilePath;
+  }
+
+  prepareRestoreV1(): void {
+    const { manifestFilePath, legacyFilePath } = this.options.paths;
+    if (!existsSync(legacyFilePath)) throw new Error('No version-1 state is available to restore');
+    if (existsSync(manifestFilePath)) {
+      this.preserveFile(manifestFilePath, 'before-restore-v1');
+      unlinkSync(manifestFilePath);
+    }
+  }
+
+  prepareFreshStart(accountSpaceId?: AccountSpaceId): void {
+    if (accountSpaceId) {
+      const statePath = this.accountStatePath(accountSpaceId);
+      let state: AccountBrowsingStateV2;
+      try { state = validateAccountState(JSON.parse(readFileSync(statePath, 'utf8')) as AccountBrowsingStateV2); }
+      catch { throw new Error('Cannot determine the corrupt Account Space owner; preserve it and use browser-state recovery'); }
+      if (existsSync(statePath)) this.preserveFile(statePath, 'before-fresh-start');
+      this.options.accountStore.replaceCorrupt({
+        id: accountSpaceId,
+        workspaceId: state.workspaceId,
+        label: `${WORKSPACES.find((workspace) => workspace.id === state.workspaceId)?.name ?? 'Account'} recovered`,
+        color: workspaceColor(state.workspaceId),
+        order: 0,
+      });
+      this.saveAccountState(createDefaultAccountState(state.workspaceId, accountSpaceId));
+      return;
+    }
+    for (const path of [this.options.paths.manifestFilePath, this.options.paths.legacyFilePath, this.options.paths.migrationJournalPath]) {
+      if (!existsSync(path)) continue;
+      this.preserveFile(path, 'before-fresh-start');
+      unlinkSync(path);
+    }
   }
 
   private createFresh(): AccountSpaceStateInitialization {

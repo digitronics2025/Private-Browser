@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AccountStore, type SafeStorageAdapter } from '../electron/account-store';
 import { ExternalBrowserLauncher } from '../electron/external-browser';
 import { GoogleConfigurationStore } from '../electron/google-config';
-import { GoogleOAuthManager, type GoogleOAuthClient } from '../electron/google-oauth';
+import { fetchValidatedGoogleAvatar, GoogleOAuthManager, type GoogleOAuthClient } from '../electron/google-oauth';
 import { GOOGLE_SCOPE_BY_MODULE, scopesForModules } from '../electron/google-scopes';
 import { createPkceMaterial, OAuthLoopbackReceiver } from '../electron/oauth-loopback';
 import type { AccountSpaceId } from '../electron/types';
@@ -196,5 +196,18 @@ describe('secure Google desktop OAuth', () => {
     expect(GOOGLE_SCOPE_BY_MODULE['drive-read']).toEqual(['https://www.googleapis.com/auth/drive.readonly']);
     expect(GOOGLE_SCOPE_BY_MODULE['calendar-write']).toEqual(['https://www.googleapis.com/auth/calendar.events.owned']);
     expect(GOOGLE_SCOPE_BY_MODULE['encrypted-backup']).toEqual(['https://www.googleapis.com/auth/drive.appdata']);
+  });
+
+  it('accepts only bounded image bytes from Google-hosted avatar URLs', async () => {
+    const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    const request = vi.fn(async () => new Response(png, { status: 200, headers: { 'Content-Type': 'text/html' } }));
+    await expect(fetchValidatedGoogleAvatar('https://lh3.googleusercontent.com/a/photo', request as typeof fetch)).resolves.toEqual({
+      mimeType: 'image/png',
+      bytesBase64: Buffer.from(png).toString('base64'),
+    });
+    expect(request).toHaveBeenCalledWith(expect.objectContaining({ hostname: 'lh3.googleusercontent.com' }), expect.objectContaining({ redirect: 'error' }));
+    await expect(fetchValidatedGoogleAvatar('https://attacker.example/avatar.png', request as typeof fetch)).resolves.toBeUndefined();
+    await expect(fetchValidatedGoogleAvatar('https://fakegoogleusercontent.com/avatar.png', request as typeof fetch)).resolves.toBeUndefined();
+    await expect(fetchValidatedGoogleAvatar('https://lh3.googleusercontent.com/a/not-image', async () => new Response('not an image') as never)).resolves.toBeUndefined();
   });
 });

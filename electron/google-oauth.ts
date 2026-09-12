@@ -8,7 +8,7 @@ import type {
   GoogleModule,
   GoogleOperationResult,
 } from './types.js';
-import { AccountStore, type GoogleIdentityRecord } from './account-store.js';
+import { AccountStore, type GoogleIdentityRecord, type StoredAvatar } from './account-store.js';
 import { ExternalBrowserLauncher } from './external-browser.js';
 import { GoogleConfigurationStore } from './google-config.js';
 import { hasAllScopes, scopesForModules } from './google-scopes.js';
@@ -37,6 +37,7 @@ export type OAuthLoopbackFactory = () => OAuthLoopbackReceiver;
 
 const GOOGLE_ISSUERS = new Set(['accounts.google.com', 'https://accounts.google.com']);
 const TOKEN_TIMEOUT_MS = 10_000;
+const MAX_AVATAR_BYTES = 512 * 1024;
 type GoogleErrorCode = NonNullable<GoogleOperationResult['error']>['code'];
 
 export class GoogleOAuthManager {
@@ -102,6 +103,7 @@ export class GoogleOAuthManager {
         email: payload.email!,
         displayName: payload.name,
         emailVerified: true,
+        avatar: await fetchValidatedGoogleAvatar(payload.picture, this.request),
       };
       const saved = this.accounts.saveGoogleGrant(accountSpaceId, identity, refreshToken, selectedModules, grantedScopes, allAccountIds);
       if (tokens.access_token) {
@@ -170,6 +172,52 @@ export class GoogleOAuthManager {
     const disconnected = this.accounts.disconnectGoogle(accountSpaceId);
     return { ok: true, data: this.accounts.toSummary(disconnected) };
   }
+}
+
+export async function fetchValidatedGoogleAvatar(
+  pictureUrl: string | undefined,
+  request: typeof fetch = fetch,
+): Promise<StoredAvatar | undefined> {
+  if (!pictureUrl) return undefined;
+  let url: URL;
+  try { url = new URL(pictureUrl); } catch { return undefined; }
+  if (url.protocol !== 'https:' || !(url.hostname === 'googleusercontent.com' || url.hostname.endsWith('.googleusercontent.com'))) return undefined;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TOKEN_TIMEOUT_MS);
+  try {
+    const response = await request(url, { method: 'GET', redirect: 'error', signal: controller.signal });
+    if (!response.ok || !response.body) return undefined;
+    const declaredLength = Number(response.headers.get('content-length') ?? '0');
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_AVATAR_BYTES) return undefined;
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    const reader = response.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      byteLength += value.byteLength;
+      if (byteLength > MAX_AVATAR_BYTES) {
+        await reader.cancel();
+        return undefined;
+      }
+      chunks.push(value);
+    }
+    const bytes = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+    const mimeType = detectAvatarMimeType(bytes);
+    if (!mimeType) return undefined;
+    return { mimeType, bytesBase64: bytes.toString('base64') };
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function detectAvatarMimeType(bytes: Buffer): StoredAvatar['mimeType'] | undefined {
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return undefined;
 }
 
 export function validateVerifiedPayload(payload: VerifiedPayload | undefined, clientId: string, nonce: string, now: Date): VerifiedPayload {

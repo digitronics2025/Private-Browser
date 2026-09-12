@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -127,5 +127,39 @@ describe('v1 to Account Spaces v2 migration', () => {
     }
     const digitronics = initial.accounts.find((account) => account.workspaceId === 'digitronics')!;
     expect(created.options.accountStore.load(digitronics.id).status).toBe('ok');
+  });
+
+  it('preserves unreadable v2 bytes before restoring the original v1 state', () => {
+    const created = fixture();
+    expect(new AccountSpaceStateStore(created.options).initialize().status).toBe('ready');
+    const unreadable = Buffer.from('{"version":99,"doNotLose":"original-v2-bytes"}');
+    writeFileSync(created.options.paths.manifestFilePath, unreadable);
+    const store = new AccountSpaceStateStore(created.options);
+    expect(store.initialize()).toMatchObject({ status: 'recovery' });
+    store.prepareRestoreV1();
+    expect(existsSync(created.options.paths.manifestFilePath)).toBe(false);
+    const preserved = readdirSync(created.root).find((name) => name.includes('browser-state-v2.json.before-restore-v1'));
+    expect(preserved).toBeDefined();
+    expect(readFileSync(join(created.root, preserved!))).toEqual(unreadable);
+    expect(store.initialize().status).toBe('ready');
+    expect(readFileSync(created.options.paths.legacyFilePath)).toEqual(created.original);
+  });
+
+  it('replaces only a corrupt account after explicitly selected fresh recovery', () => {
+    const created = fixture();
+    const first = new AccountSpaceStateStore(created.options).initialize();
+    expect(first.status).toBe('ready');
+    if (first.status !== 'ready') return;
+    const personal = first.accounts.find((account) => account.workspaceId === 'personal')!;
+    const digitronics = first.accounts.find((account) => account.workspaceId === 'digitronics')!;
+    const corruptPath = join(created.root, 'accounts', `${personal.id}.account.enc`);
+    writeFileSync(corruptPath, 'broken');
+    const store = new AccountSpaceStateStore(created.options);
+    expect(store.initialize()).toMatchObject({ status: 'ready', accountRecoveries: [expect.objectContaining({ accountSpaceId: personal.id })] });
+    store.prepareFreshStart(personal.id);
+    const recovered = store.initialize();
+    expect(recovered).toMatchObject({ status: 'ready', accountRecoveries: [] });
+    expect(created.options.accountStore.require(personal.id)).toMatchObject({ workspaceId: 'personal', locked: false, kind: 'local' });
+    expect(created.options.accountStore.require(digitronics.id)).toEqual(first.accounts.find((account) => account.id === digitronics.id));
   });
 });

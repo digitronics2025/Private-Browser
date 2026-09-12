@@ -219,6 +219,9 @@ function recordToSummary(record: AccountSpaceRecord): AccountSpaceSummary {
     websiteStatus: record.websiteStatus,
     enabledModules: [...record.enabledModules],
     grantedScopes: [...record.grantedScopes],
+    backupEnabled: record.backup.enabled,
+    backupIncludesOpenTabs: record.backup.includeOpenTabs,
+    backupIncludesHistory: record.backup.includeHistory,
   };
 }
 
@@ -273,6 +276,9 @@ function recoveryRuntimeState(recovery: StateRecoveryStatus): RuntimeBrowserStat
     websiteStatus: 'unknown' as const,
     enabledModules: [],
     grantedScopes: [],
+    backupEnabled: false,
+    backupIncludesOpenTabs: false,
+    backupIncludesHistory: false,
   }));
   const tabs = accountSpaces.map((account) => ({
     id: randomUUID(),

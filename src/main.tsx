@@ -2,6 +2,9 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import './styles.css';
+import { installPreviewApi } from './preview-api';
+
+installPreviewApi();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
