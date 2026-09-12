@@ -15,8 +15,8 @@ This log tracks the approved secure multi-Google-account Account Spaces implemen
 [DONE] System 2 — Account Space domain and encrypted persistence — 2026-09-12
 
 [START] System 3 — Runtime session isolation and lifecycle — 2026-09-12
-[STEP] 3.1 — Integrate v2 state and per-account partitions into BrowserController — in progress
-[STEP] 3.2 — Add lifecycle, lock, clear and removal guarantees — pending
+[STEP] 3.1 — Integrate v2 state and per-account partitions into BrowserController — done
+[STEP] 3.2 — Add lifecycle, lock, clear and removal guarantees — in progress
 [PENDING] System 4 — Exact-origin permissions
 [PENDING] System 5 — Secure Google OAuth
 [PENDING] System 6 — Google service modules and backup

@@ -178,6 +178,7 @@ export interface BrowserStateManifestV2 {
 export interface BrowserTab {
   id: string;
   workspaceId: WorkspaceId;
+  accountSpaceId: AccountSpaceId;
   title: string;
   url: string;
   favicon?: string;
@@ -195,6 +196,7 @@ export interface Bookmark {
   title: string;
   url: string;
   workspaceId: WorkspaceId;
+  accountSpaceId: AccountSpaceId;
   createdAt: string;
 }
 
@@ -203,11 +205,13 @@ export interface HistoryEntry {
   title: string;
   url: string;
   workspaceId: WorkspaceId;
+  accountSpaceId: AccountSpaceId;
   visitedAt: string;
 }
 
 export interface DownloadEntry {
   id: string;
+  accountSpaceId: AccountSpaceId;
   filename: string;
   receivedBytes: number;
   totalBytes: number;
@@ -224,6 +228,8 @@ export interface PrivacyEvent {
   kind: 'local-read' | 'cloud-approved' | 'blocked' | 'vault';
   title: string;
   detail: string;
+  accountSpaceId?: AccountSpaceId;
+  service?: 'browser' | 'gmail' | 'drive' | 'calendar' | 'contacts' | 'ai' | 'vault';
 }
 
 export interface BrowserSnapshot {
@@ -237,9 +243,9 @@ export interface BrowserSnapshot {
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
   /** Present after Account Spaces initialization; contains renderer-safe data only. */
-  activeAccountSpaceId?: AccountSpaceId;
-  accountSpaces?: AccountSpaceSummary[];
-  accountHealth?: AccountSpaceHealth[];
+  activeAccountSpaceId: AccountSpaceId;
+  accountSpaces: AccountSpaceSummary[];
+  accountHealth: AccountSpaceHealth[];
   recovery?: StateRecoveryStatus;
   pendingPermission?: PermissionPrompt;
 }
@@ -249,10 +255,25 @@ export interface PersistedState {
   activeWorkspaceId: WorkspaceId;
   tabs: Array<Pick<BrowserTab, 'id' | 'workspaceId' | 'title' | 'url' | 'isHome'>>;
   activeTabByWorkspace: Partial<Record<WorkspaceId, string>>;
-  bookmarks: Bookmark[];
-  history: HistoryEntry[];
+  bookmarks: Array<Omit<Bookmark, 'accountSpaceId'>>;
+  history: Array<Omit<HistoryEntry, 'accountSpaceId'>>;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
+}
+
+export interface RuntimeBrowserStateV2 {
+  version: 2;
+  activeWorkspaceId: WorkspaceId;
+  activeAccountSpaceByWorkspace: Partial<Record<WorkspaceId, AccountSpaceId>>;
+  tabs: AccountSpaceBrowserTab[];
+  activeTabByAccountSpace: Record<string, string>;
+  bookmarks: AccountSpaceBookmark[];
+  history: AccountSpaceHistoryEntry[];
+  privacyLog: PrivacyEvent[];
+  trackerBlocking: boolean;
+  accountSpaces: AccountSpaceSummary[];
+  accountHealth: AccountSpaceHealth[];
+  recovery?: StateRecoveryStatus;
 }
 
 export interface AiPagePreview {

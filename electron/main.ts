@@ -7,6 +7,7 @@ import {
   clipboard,
   ipcMain,
   Menu,
+  safeStorage,
   session,
   shell,
   WebContentsView,
@@ -17,8 +18,12 @@ import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTa
 import { ClipboardGuard } from './clipboard-guard.js';
 import { verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { AiProviderStore } from './ai-provider.js';
-import { StateStore, WORKSPACES } from './state-store.js';
+import { WORKSPACES } from './state-store.js';
+import { AccountStore } from './account-store.js';
+import { AccountSpaceStateStore } from './account-space-state.js';
+import { RuntimeStateStore } from './runtime-state-store.js';
 import type {
+  AccountSpaceId,
   AiApproval,
   AiPagePreview,
   AiProviderInput,
@@ -28,8 +33,8 @@ import type {
   DeveloperNetworkIssue,
   DevToolsMode,
   DownloadEntry,
-  PersistedState,
   PrivacyEvent,
+  RuntimeBrowserStateV2,
   VaultItemInput,
   UpdateServiceInput,
   WorkspaceId,
@@ -103,14 +108,14 @@ class BrowserController {
   private window!: BrowserWindow;
 
   constructor(
-    private readonly store: StateStore,
+    private readonly store: RuntimeStateStore,
     private readonly vault: VaultStore,
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
   ) {
-    for (const tab of this.store.get().tabs) {
-      this.runtimeTabs.set(tab.id, this.newRuntimeTab());
-    }
+    const state = this.store.get();
+    const active = this.activeTab(state);
+    this.runtimeTabs.set(active.id, this.newRuntimeTab());
   }
 
   async createWindow(): Promise<void> {
@@ -181,6 +186,10 @@ class BrowserController {
       downloads: [...this.downloads.values()],
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
+      activeAccountSpaceId: this.activeAccountSpaceId(persisted),
+      accountSpaces: persisted.accountSpaces,
+      accountHealth: persisted.accountHealth,
+      recovery: persisted.recovery,
     };
   }
 
@@ -237,15 +246,32 @@ class BrowserController {
     this.broadcast();
   }
 
-  async newTab(workspaceId?: WorkspaceId, url = 'private://home'): Promise<void> {
+  async newTab(workspaceId?: WorkspaceId, url = 'private://home', accountSpaceId?: AccountSpaceId): Promise<void> {
     const state = this.store.get();
     const targetWorkspace = WORKSPACES.some((item) => item.id === workspaceId) ? workspaceId! : state.activeWorkspaceId;
+    const targetAccount = accountSpaceId ?? state.activeAccountSpaceByWorkspace[targetWorkspace];
+    if (!targetAccount || !state.accountSpaces.some((account) => account.id === targetAccount && account.workspaceId === targetWorkspace)) {
+      throw new Error('Account Space does not belong to the selected workspace');
+    }
     const id = randomUUID();
     this.hideAllViews();
     this.store.update((next) => {
       next.activeWorkspaceId = targetWorkspace;
-      next.tabs.push({ id, workspaceId: targetWorkspace, title: 'New tab', url: 'private://home', isHome: true });
-      next.activeTabByWorkspace[targetWorkspace] = id;
+      next.activeAccountSpaceByWorkspace[targetWorkspace] = targetAccount;
+      next.tabs.push({
+        id,
+        accountSpaceId: targetAccount,
+        workspaceId: targetWorkspace,
+        title: 'New tab',
+        url: 'private://home',
+        isHome: true,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        developerToolsAllowed: false,
+        developerToolsOpen: false,
+      });
+      next.activeTabByAccountSpace[targetAccount] = id;
     });
     this.runtimeTabs.set(id, this.newRuntimeTab());
     this.broadcast();
@@ -256,11 +282,11 @@ class BrowserController {
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
-    const workspaceTabs = state.tabs.filter((candidate) => candidate.workspaceId === tab.workspaceId);
-    const closedIndex = workspaceTabs.findIndex((candidate) => candidate.id === tabId);
-    const siblings = workspaceTabs.filter((candidate) => candidate.id !== tab.id);
+    const accountTabs = state.tabs.filter((candidate) => candidate.accountSpaceId === tab.accountSpaceId);
+    const closedIndex = accountTabs.findIndex((candidate) => candidate.id === tabId);
+    const siblings = accountTabs.filter((candidate) => candidate.id !== tab.id);
     const nextId = siblings[Math.min(closedIndex, siblings.length - 1)]?.id;
-    const wasActive = state.activeTabByWorkspace[tab.workspaceId] === tabId;
+    const wasActive = state.activeTabByAccountSpace[tab.accountSpaceId] === tabId;
     const runtime = this.runtimeTabs.get(tabId);
     if (runtime?.view) {
       this.window.contentView.removeChildView(runtime.view);
@@ -269,9 +295,9 @@ class BrowserController {
     this.runtimeTabs.delete(tabId);
     this.store.update((next) => {
       next.tabs = next.tabs.filter((candidate) => candidate.id !== tabId);
-      if (wasActive && nextId) next.activeTabByWorkspace[tab.workspaceId] = nextId;
+      if (wasActive && nextId) next.activeTabByAccountSpace[tab.accountSpaceId] = nextId;
     });
-    if (!nextId) await this.newTab(tab.workspaceId);
+    if (!nextId) await this.newTab(tab.workspaceId, 'private://home', tab.accountSpaceId);
     else if (wasActive) await this.activateTab(nextId);
     else this.broadcast();
   }
@@ -283,7 +309,8 @@ class BrowserController {
     this.hideAllViews();
     this.store.update((next) => {
       next.activeWorkspaceId = tab.workspaceId;
-      next.activeTabByWorkspace[tab.workspaceId] = tab.id;
+      next.activeAccountSpaceByWorkspace[tab.workspaceId] = tab.accountSpaceId;
+      next.activeTabByAccountSpace[tab.accountSpaceId] = tab.id;
     });
     await this.showActiveTab();
   }
@@ -292,6 +319,22 @@ class BrowserController {
     if (!WORKSPACES.some((item) => item.id === workspaceId)) return;
     this.hideAllViews();
     this.store.update((state) => { state.activeWorkspaceId = workspaceId; });
+    await this.showActiveTab();
+  }
+
+  async switchAccountSpace(accountSpaceId: AccountSpaceId): Promise<void> {
+    const state = this.store.get();
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!account || account.workspaceId !== state.activeWorkspaceId) {
+      throw new Error('Account Space does not belong to the active workspace');
+    }
+    if (account.locked || state.recovery?.accountSpaceId === accountSpaceId) {
+      throw new Error('Account Space is locked or unavailable');
+    }
+    this.hideAllViews();
+    this.store.update((next) => {
+      next.activeAccountSpaceByWorkspace[next.activeWorkspaceId] = accountSpaceId;
+    });
     await this.showActiveTab();
   }
 
@@ -318,9 +361,9 @@ class BrowserController {
     const tab = this.activeTab(state);
     if (tab.isHome) return;
     this.store.update((next) => {
-      const existing = next.bookmarks.findIndex((item) => item.url === tab.url && item.workspaceId === tab.workspaceId);
+      const existing = next.bookmarks.findIndex((item) => item.url === tab.url && item.accountSpaceId === tab.accountSpaceId);
       if (existing >= 0) next.bookmarks.splice(existing, 1);
-      else next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, createdAt: new Date().toISOString() });
+      else next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, createdAt: new Date().toISOString() });
     });
     this.broadcast();
   }
@@ -328,7 +371,7 @@ class BrowserController {
   async openBookmark(id: string): Promise<void> {
     const bookmark = this.store.get().bookmarks.find((item) => item.id === id);
     if (!bookmark) return;
-    await this.newTab(bookmark.workspaceId, bookmark.url);
+    await this.newTab(bookmark.workspaceId, bookmark.url, bookmark.accountSpaceId);
   }
 
   toggleTrackerBlocking(): void {
@@ -621,9 +664,19 @@ class BrowserController {
     }
   }
 
-  private activeTab(state: PersistedState) {
-    const id = state.activeTabByWorkspace[state.activeWorkspaceId];
-    return state.tabs.find((tab) => tab.id === id) ?? state.tabs.find((tab) => tab.workspaceId === state.activeWorkspaceId) ?? state.tabs[0];
+  private activeAccountSpaceId(state: RuntimeBrowserStateV2): AccountSpaceId {
+    const id = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+    if (!id) throw new Error('The active workspace has no Account Space');
+    return id;
+  }
+
+  private activeTab(state: RuntimeBrowserStateV2) {
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    const id = state.activeTabByAccountSpace[accountSpaceId];
+    const tab = state.tabs.find((candidate) => candidate.id === id && candidate.accountSpaceId === accountSpaceId)
+      ?? state.tabs.find((candidate) => candidate.accountSpaceId === accountSpaceId);
+    if (!tab) throw new Error('The active Account Space has no tab');
+    return tab;
   }
 
   private newRuntimeTab(): RuntimeTab {
@@ -687,12 +740,16 @@ class BrowserController {
   }
 
   private ensureView(tabId: string): WebContentsView {
-    const runtime = this.runtimeTabs.get(tabId)!;
+    let runtime = this.runtimeTabs.get(tabId);
+    if (!runtime) {
+      runtime = this.newRuntimeTab();
+      this.runtimeTabs.set(tabId, runtime);
+    }
     if (runtime.view) return runtime.view;
     const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId)!;
-    const partition = `persist:private-browser-${tab.workspaceId}`;
+    const partition = this.store.partitionFor(tab.accountSpaceId);
     const ses = session.fromPartition(partition);
-    this.configureSession(ses, partition, tab.workspaceId);
+    this.configureSession(ses, partition, tab.workspaceId, tab.accountSpaceId);
     const view = new WebContentsView({
       webPreferences: {
         session: ses,
@@ -709,7 +766,7 @@ class BrowserController {
       if (tab.workspaceId === 'banking') {
         this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
       } else if (isAllowedRemoteUrl(url)) {
-        void this.newTab(tab.workspaceId, stripTrackingParameters(url));
+        void this.newTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
       }
       return { action: 'deny' };
     });
@@ -768,7 +825,7 @@ class BrowserController {
     return view;
   }
 
-  private configureSession(ses: Session, partition: string, workspaceId: WorkspaceId): void {
+  private configureSession(ses: Session, partition: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): void {
     if (this.configuredSessions.has(partition)) return;
     this.configuredSessions.add(partition);
     ses.setUserAgent(ses.getUserAgent().replace(/\sElectron\/\S+/g, '').replace(/\sPrivate Browser\/\S+/g, ''));
@@ -806,6 +863,7 @@ class BrowserController {
       const id = randomUUID();
       const entry: DownloadEntry = {
         id,
+        accountSpaceId,
         filename: item.getFilename(),
         receivedBytes: 0,
         totalBytes: item.getTotalBytes(),
@@ -887,7 +945,10 @@ class BrowserController {
       this.updateRuntime(tabId, { favicon: undefined });
       return;
     }
-    const cached = this.faviconCache.get(url);
+    const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    const cacheKey = `${tab.accountSpaceId}:${url}`;
+    const cached = this.faviconCache.get(cacheKey);
     if (cached) {
       this.updateRuntime(tabId, { favicon: cached });
       return;
@@ -903,7 +964,7 @@ class BrowserController {
       if (!bytes.byteLength || bytes.byteLength > MAX_FAVICON_BYTES) return;
       const dataUrl = `data:${type};base64,${bytes.toString('base64')}`;
       if (this.faviconCache.size >= 200) this.faviconCache.delete(this.faviconCache.keys().next().value!);
-      this.faviconCache.set(url, dataUrl);
+      this.faviconCache.set(cacheKey, dataUrl);
       this.updateRuntime(tabId, { favicon: dataUrl });
     } catch {
       // A site without a reachable icon is ordinary, not an error worth showing.
@@ -931,8 +992,8 @@ class BrowserController {
       tab.url = sanitizedUrl;
       tab.isHome = false;
       if (addHistory && tab.workspaceId !== 'banking') {
-        state.history.unshift({ id: randomUUID(), title: tab.title, url: sanitizedUrl, workspaceId: tab.workspaceId, visitedAt: new Date().toISOString() });
-        state.history = state.history.slice(0, 500);
+        state.history.unshift({ id: randomUUID(), title: tab.title, url: sanitizedUrl, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, visitedAt: new Date().toISOString() });
+        state.history = state.history.slice(0, 2500);
       }
     });
     this.updateRuntime(tabId, {});
@@ -940,7 +1001,8 @@ class BrowserController {
 
   private addPrivacyEvent(kind: PrivacyEvent['kind'], title: string, detail: string): void {
     this.store.update((state) => {
-      state.privacyLog.unshift({ id: randomUUID(), at: new Date().toISOString(), kind, title, detail });
+      const accountSpaceId = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+      state.privacyLog.unshift({ id: randomUUID(), at: new Date().toISOString(), kind, title, detail, accountSpaceId, service: kind === 'vault' ? 'vault' : 'browser' });
       state.privacyLog = state.privacyLog.slice(0, 100);
     });
     this.broadcast();
@@ -1029,10 +1091,21 @@ function handle(channel: string, callback: (event: IpcMainInvokeEvent, ...args: 
 }
 
 if (hasSingleInstanceLock) void app.whenReady().then(async () => {
-  const store = new StateStore(join(app.getPath('userData'), 'browser-state.json'));
-  const vault = new VaultStore(join(app.getPath('userData'), 'vault.enc'));
-  const aiProvider = new AiProviderStore(join(app.getPath('userData'), 'ai-provider.enc'));
-  const updates = new UpdateServiceStore(join(app.getPath('userData'), 'update-service.enc'));
+  const userDataPath = app.getPath('userData');
+  const accountStore = new AccountStore(join(userDataPath, 'account-spaces'), safeStorage);
+  const persistedState = new AccountSpaceStateStore({
+    paths: {
+      legacyFilePath: join(userDataPath, 'browser-state.json'),
+      manifestFilePath: join(userDataPath, 'browser-state-v2.json'),
+      accountStateDirectory: join(userDataPath, 'account-browsing'),
+      migrationJournalPath: join(userDataPath, 'browser-state-v2.migration.json'),
+    },
+    accountStore,
+  });
+  const store = new RuntimeStateStore(persistedState, accountStore, persistedState.initialize());
+  const vault = new VaultStore(join(userDataPath, 'vault.enc'));
+  const aiProvider = new AiProviderStore(join(userDataPath, 'ai-provider.enc'));
+  const updates = new UpdateServiceStore(join(userDataPath, 'update-service.enc'));
   const updateBootstrapPath = join(process.resourcesPath, 'private-browser-update.json');
   try {
     const updateBootstrap = readUpdateBootstrap(updateBootstrapPath);
@@ -1055,10 +1128,11 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:forward', () => controller!.goForward());
   handle('browser:reload', () => controller!.reload());
   handle('browser:stop', () => controller!.stop());
-  handle('browser:new-tab', (_event, workspaceId?: WorkspaceId, url?: string) => controller!.newTab(workspaceId, url));
+  handle('browser:new-tab', (_event, workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId) => controller!.newTab(workspaceId, url, accountSpaceId));
   handle('browser:close-tab', (_event, id: string) => controller!.closeTab(id));
   handle('browser:activate-tab', (_event, id: string) => controller!.activateTab(id));
   handle('browser:switch-workspace', (_event, id: WorkspaceId) => controller!.switchWorkspace(id));
+  handle('browser:switch-account-space', (_event, id: AccountSpaceId) => controller!.switchAccountSpace(id));
   handle('browser:set-layout', (_event, layout: Layout) => controller!.setLayout(layout));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));

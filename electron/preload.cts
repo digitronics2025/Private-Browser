@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
+import type { AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BrowserSnapshot, DeveloperDiagnosticReport, DevToolsMode, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 
 const api = {
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
@@ -8,10 +8,11 @@ const api = {
   forward: (): Promise<void> => ipcRenderer.invoke('browser:forward'),
   reload: (): Promise<void> => ipcRenderer.invoke('browser:reload'),
   stop: (): Promise<void> => ipcRenderer.invoke('browser:stop'),
-  newTab: (workspaceId?: WorkspaceId, url?: string): Promise<void> => ipcRenderer.invoke('browser:new-tab', workspaceId, url),
+  newTab: (workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:new-tab', workspaceId, url, accountSpaceId),
   closeTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:close-tab', tabId),
   activateTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:activate-tab', tabId),
   switchWorkspace: (workspaceId: WorkspaceId): Promise<void> => ipcRenderer.invoke('browser:switch-workspace', workspaceId),
+  switchAccountSpace: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:switch-account-space', accountSpaceId),
   setLayout: (layout: { top: number; left: number; right: number; bottom: number }): Promise<void> => ipcRenderer.invoke('browser:set-layout', layout),
   toggleBookmark: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark'),
   openBookmark: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-bookmark', id),
