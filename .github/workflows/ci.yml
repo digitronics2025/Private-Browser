@@ -82,8 +82,18 @@ jobs:
           $profile = Join-Path $env:RUNNER_TEMP 'private-browser-vscode-profile'
           $extensions = Join-Path $env:RUNNER_TEMP 'private-browser-vscode-extensions'
           $vsix = Get-ChildItem release\private-browser-bridge-*.vsix | Select-Object -First 1
-          code --install-extension $vsix.FullName --force --user-data-dir $profile --extensions-dir $extensions
-          $installed = code --list-extensions --user-data-dir $profile --extensions-dir $extensions
+          $candidates = @(
+            (Join-Path $env:ProgramFiles 'Microsoft VS Code\bin\code.cmd'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd')
+          )
+          $code = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $code) {
+            choco install vscode --no-progress -y
+            $code = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          }
+          if (-not $code) { throw 'VS Code CLI is unavailable after installation' }
+          & $code --install-extension $vsix.FullName --force --user-data-dir $profile --extensions-dir $extensions
+          $installed = & $code --list-extensions --user-data-dir $profile --extensions-dir $extensions
           if ($installed -notcontains 'digitronics.private-browser-bridge') { throw 'Private Browser Bridge VSIX smoke install failed' }
       - name: Generate release metadata
         shell: pwsh
