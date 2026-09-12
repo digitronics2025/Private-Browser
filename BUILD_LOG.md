@@ -75,3 +75,21 @@
 - Security review: 0 critical, 0 high, 0 medium, and 0 low findings remain after fixes
 - Packaging: NSIS installer launch smoke and isolated VSIX installation passed
 - External limitation: the installer is not Authenticode-signed because no Windows signing certificate is configured
+
+[STEP] 5.5 — MyVault `1.1.0-rc.1` released first; remote device tables, legacy-compatible authorization, extension artifacts, and `/healthz` commit `f197444` verified — done
+[STEP] 5.6 — Private Browser PR #16 rebased over all landed work and merged as `e306e59`; exact-head CodeQL, full checks, Electron security E2E, installer, and VSIX gates passed — done
+[STEP] 5.7 — D1 migrations confirmed current; download Worker directly deployed and live health/authorization behavior verified — done
+[STEP] 5.8 — Private Browser `0.5.0` build 50 published to R2/D1 and authenticated full/range/resume checks passed — done
+[STEP] 5.9 — Exact CI installer hash, R2 object hash, CycloneDX SBOM, and clean per-user installed-app launch verified — done
+[DONE] Phase 5 — Whole-repository verification and coordinated release — 2026-09-12
+
+[FINAL AUDIT] Coordinated production release passed — 2026-09-12
+- MyVault: `1.1.0-rc.1`, live commit `f197444`, Worker version `117f0067-7703-440a-a4ad-857fe361179f`, remote device/enrollment tables present, CI `34691743203` green
+- Private Browser: `0.5.0`, release commit `e306e59`, active Worker version `f77e0b0f-0877-4ed0-96f7-487be2ad2ee1`, CI `34693877661` green
+- Tests: 168 unit/integration checks plus four Playwright journeys passed on the release revision; MyVault's 521-test gate and browser/sync/passkey-cloud suites passed
+- Artifact: `Private-Browser-0.5.0-Setup.exe`, 115151254 bytes, SHA-256 `3ecac7b2bc6659cdaf05ee3462925bf1d0a2c96cf0f62141d056f33ef0d7da27`; CI and R2 bytes match
+- Installed smoke: clean per-user installation launched successfully and remained running through the observation window
+- Passkeys: provider remains deliberately disabled because packaged first-inline-script interception proof is absent; OS fallback is preserved
+- Browser surface: Integrated Browser/control binding was unavailable; Playwright CLI plus the actual packaged Electron process completed the supported fallback verification
+- Operational claims: no pre-existing claims register/scheduler/alert delivery path exists, so no unread claim register was bootstrapped
+- External action: Authenticode remains `NotSigned` until a Windows code-signing certificate is configured
