@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from '../electron/myvault/fill-capability';
 import { workspaceVaultPolicy } from '../electron/myvault/workspace-policy';
+import { isAutomaticFillPageUrl, selectAutomaticFillEntry } from '../electron/myvault/automatic-fill';
+import type { VaultEntryMetadata } from '../electron/myvault/vault-broker';
 
 const context: FillContext = {
   webContentsId: 4,
@@ -53,21 +55,60 @@ describe('isolated-world fill source', () => {
     expect(source).not.toMatch(/addEventListener\(['"]submit/);
     expect(source).not.toMatch(/querySelectorAll\(['"]input['"]\)/);
   });
+
+  it('keeps automatic fill empty-field-only, rejects new-password forms, and never submits', () => {
+    const source = readFileSync(new URL('../electron/myvault/isolated-fill.ts', import.meta.url), 'utf8');
+    expect(source).toContain("return 'occupied'");
+    expect(source).toContain("return 'new-password-form'");
+    expect(source).toContain('passwordFields.length !== 1');
+    expect(source).not.toMatch(/\.submit\s*\(|requestSubmit/);
+  });
 });
 
 describe('central workspace vault policy', () => {
   it('hard-disables Banking extraction, capture, DevTools, extensions, and password clipboard', () => {
     expect(workspaceVaultPolicy('banking')).toEqual({
-      vaultSurface: true, manualFill: true, saveCapture: false, passwordClipboard: false,
+      vaultSurface: true, manualFill: true, automaticFill: false, saveCapture: false, passwordClipboard: false,
       requireFillConfirmation: true, aiExtraction: false, devTools: false, extensions: false, passkeys: false,
     });
   });
 
   it('isolates all vault operations from Development while preserving DevTools', () => {
-    expect(workspaceVaultPolicy('development')).toMatchObject({ vaultSurface: false, manualFill: false, saveCapture: false, passwordClipboard: false, devTools: true, passkeys: false });
+    expect(workspaceVaultPolicy('development')).toMatchObject({ vaultSurface: false, manualFill: false, automaticFill: false, saveCapture: false, passwordClipboard: false, devTools: true, passkeys: false });
   });
 
   it.each(['digitronics', 'tenten', 'personal'] as const)('allows deliberate fill/save defaults in %s', (workspace) => {
-    expect(workspaceVaultPolicy(workspace)).toMatchObject({ vaultSurface: true, manualFill: true, saveCapture: true, passwordClipboard: true, requireFillConfirmation: false });
+    expect(workspaceVaultPolicy(workspace)).toMatchObject({ vaultSurface: true, manualFill: true, automaticFill: true, saveCapture: true, passwordClipboard: true, requireFillConfirmation: false });
+  });
+});
+
+describe('Chrome-style automatic fill decisions', () => {
+  const entry = (id: string, updatedAt: string, hasPassword = true): VaultEntryMetadata => ({
+    id,
+    title: id,
+    type: 'login',
+    username: `${id}@example.test`,
+    url: 'https://example.test',
+    favorite: false,
+    hasPassword,
+    hasTotp: false,
+    updatedAt,
+  });
+
+  it('allows normal HTTPS login URLs but excludes insecure and account-creation routes', () => {
+    expect(isAutomaticFillPageUrl('https://example.test/login')).toBe(true);
+    expect(isAutomaticFillPageUrl('https://example.test/sign-up?campaign=1')).toBe(false);
+    expect(isAutomaticFillPageUrl('https://example.test/reset-password')).toBe(false);
+    expect(isAutomaticFillPageUrl('http://example.test/login')).toBe(false);
+  });
+
+  it('uses a remembered manual choice, otherwise the newest eligible login', () => {
+    const entries = [
+      entry('older', '2026-01-01T00:00:00.000Z'),
+      entry('newer', '2026-09-12T00:00:00.000Z'),
+      entry('missing-secret', '2026-09-13T00:00:00.000Z', false),
+    ];
+    expect(selectAutomaticFillEntry(entries)?.id).toBe('newer');
+    expect(selectAutomaticFillEntry(entries, 'older')?.id).toBe('older');
   });
 });

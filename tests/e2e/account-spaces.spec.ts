@@ -24,3 +24,12 @@ test('keeps the manager usable at mobile width', async ({ page }) => {
   await expect(dialog.getByRole('button', { name: 'Close Account Space manager' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Operations operations@example.com' })).toBeVisible();
 });
+
+test('shows the Chrome-style autofill state in the vault panel without preview errors', async ({ page }) => {
+  const pageErrors: Error[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Vault', exact: true }).click();
+  await expect(page.getByText('Saved logins autofill matching HTTPS sign-in pages.')).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});

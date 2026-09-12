@@ -5,7 +5,7 @@ sources:
   - src/styles.css
   - src/preview-api.ts
   - index.html
-verified_at: 7063e89
+verified_at: af49b2e8
 ---
 
 # Renderer UI
@@ -109,7 +109,7 @@ All in [App.tsx](../../src/App.tsx).
 | `PanelHeader` | Icon + eyebrow + title, shared by every panel | none |
 | `DeveloperPanel` | Four focused Project, Inspect, Test and AI Fix tabs; persistent bridge/version state; workspace/server controls; native DevTools; isolated checks, reports and exact AI preview | bridge, project, inspection, report, AI-option and loading state |
 | `AssistantPanel` | Provider strip, provider form, local preview card, cloud-permission card, question box, answer | `preview`, `approvalToken`, `loading`, `provider`, `showProviderForm`, `providerForm` (endpoint defaults to `https://openrouter.ai/api/v1`), `question`, `answer`; `summary` is a `useMemo` |
-| `VaultPanel` | Encryption-health banner, corrupt-vault recovery button, add form, credential cards | `items`, `available`, `unavailableReason`, `adding`, `form` |
+| `VaultPanel` | Broker lifecycle/sync banner, automatic-fill status, secure unlock/pair actions, explicit page capture, metadata search, generators and credential cards | `items`, `status`, `query`, `formShape`, `conflictReview`, `legacyAvailable` |
 | `AutomationPanel` | The three hard-coded routines and the approval-boundary note | `running` (id of the routine in flight) |
 | `DownloadsPanel` | Download progress plus checksum and executable-risk warnings | none |
 | `PrivacyPanel` | Three summary tiles and the `state.privacyLog` feed | none |
@@ -131,7 +131,7 @@ load runs each time the user switches to it.
 | --- | --- |
 | `assistant` | `getAiProvider`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi` |
 | `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview and `copyText` |
-| `vault` | `listVault`, `addVaultItem`, `removeVaultItem`, `resetCorruptVault`, `copyPassword`, `copyTotp`, `autofill` |
+| `vault` | `listVault`, secure unlock/pair/lock/sync/conflict intents, `openVaultEditor`, `requestSaveFromPage`, Chrome CSV migration, generators, `copyPassword`, `copyTotp`, `autofill` |
 | `automations` | `newTab(workspaceId, url)` only |
 | `downloads` | `openDownload`, `showDownload` (the list itself comes from `state.downloads`) |
 | `privacy` | none — pure render of `state.trackerBlocking` and `state.privacyLog` |
@@ -197,7 +197,10 @@ sent with the workspace ID so the main process can reject mismatched ownership.
 
 `src/preview-api.ts` exists only under Vite development mode and supplies
 credential-free data for visible review and browser E2E. Production Electron
-always supplies the context-isolated preload bridge.
+always supplies the context-isolated preload bridge. The preview explicitly
+implements `onVaultState`, migration status and form-shape inspection so mounting
+the Vault panel has the same synchronous unsubscribe contract as the preload and
+does not fall through to the proxy's asynchronous no-op.
 
 Three push channels, each set up in its own `useEffect` in `App`. Each preload
 method returns an unsubscribe function, and each effect returns it directly, so
@@ -208,6 +211,7 @@ React tears the listener down on unmount.
 | `onState` | `BrowserSnapshot` | `setState` — the only way browsing state ever changes |
 | `onFocusAddress` | none | focuses and selects the address input (this is how the main process's Ctrl+L reaches the box) |
 | `onUpdateAvailable` | `UpdateCheckResult` | toasts `Private Browser <version> is ready to download` |
+| `onVaultState` | none | reloads broker status and metadata after unlock, lock, sync or mutation |
 
 `onState` is paired with a one-shot `getState()` in the same effect so the first
 paint does not wait for a push. Two further effects are pure renderer bookkeeping:
