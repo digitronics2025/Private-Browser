@@ -32,8 +32,11 @@ This log tracks the approved secure multi-Google-account Account Spaces implemen
 [START] System 6 — Google service modules and backup — 2026-09-12
 [STEP] 6.1 — Add resilient token broker and narrow service clients — done
 [STEP] 6.2 — Add single-use mutation confirmations — done
-[STEP] 6.3 — Add authenticated encrypted Drive app-data backup — in progress
-[PENDING] System 7 — Typed IPC and AI boundaries
+[STEP] 6.3 — Add authenticated encrypted Drive app-data backup — done
+[DONE] System 6 — Google service modules and backup — 2026-09-12
+
+[START] System 7 — Typed IPC and AI boundaries — 2026-09-12
+[STEP] 7.1 — Add schema-validated channel-limited Account Space IPC — in progress
 [PENDING] System 8 — Account switcher and management experience
 [PENDING] System 9 — Electron integration and regression coverage
 [PENDING] System 10 — Documentation, audit, packaging and release

@@ -54,6 +54,7 @@ export interface AccountBackupConfiguration {
   enabled: boolean;
   wrappedRecoveryKey?: string;
   remoteEtag?: string;
+  remoteFileId?: string;
   includeOpenTabs: boolean;
   includeHistory: boolean;
 }
@@ -366,6 +367,7 @@ function validateBackup(value: unknown): AccountBackupConfiguration {
     enabled: input.enabled === true,
     wrappedRecoveryKey: input.wrappedRecoveryKey ? requireShortText(input.wrappedRecoveryKey, 'Wrapped recovery key', 4096) : undefined,
     remoteEtag: input.remoteEtag ? requireShortText(input.remoteEtag, 'Remote ETag', 512) : undefined,
+    remoteFileId: input.remoteFileId ? requireShortText(input.remoteFileId, 'Remote backup file ID', 512) : undefined,
     includeOpenTabs: input.includeOpenTabs === true,
     includeHistory: input.includeHistory === true,
   };
