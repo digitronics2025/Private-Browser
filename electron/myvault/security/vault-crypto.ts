@@ -4,8 +4,8 @@ import type {
   EncryptedField,
   VaultEnvelope,
   VaultPayload,
-} from '../types';
-import { CURRENT_SCHEMA_VERSION } from '../types';
+} from '../types.js';
+import { CURRENT_SCHEMA_VERSION } from '../types.js';
 import { isPasskeyCredential } from './passkeys/types.js';
 
 const encoder = new TextEncoder();
@@ -726,4 +726,3 @@ export async function unlockVaultWithBiometricKey(
     rawDataKey?.fill(0);
   }
 }
-

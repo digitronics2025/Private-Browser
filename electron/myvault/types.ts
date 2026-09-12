@@ -1,4 +1,4 @@
-import type { PasskeyCredential } from './security/passkeys/types';
+import type { PasskeyCredential } from './security/passkeys/types.js';
 
 /**
  * MyVault's visual icon registry is deliberately not part of the portable
