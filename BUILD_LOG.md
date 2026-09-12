@@ -60,6 +60,12 @@ This feature-oriented log tracks the approved secure multi-Google-account Accoun
 [STEP] 10.5 — Push, merge, publish and verify release artifacts — done
 [DONE] System 10 — Upstream compatibility, audit, packaging and release — 2026-09-12
 
+[START] System 11 — Public cloud download page — 2026-09-12
+[STEP] 11.1 — Add public Worker routes and recent stable release query — done
+[STEP] 11.2 — Build responsive signed-installer landing page and developer profile — done
+[STEP] 11.3 — Expand Worker security, history and compatibility coverage — done
+[STEP] 11.4 — Full quality gate passed; production publication and verification — in progress
+
 ## Upstream systems incorporated
 
 The authenticated Private Browser VS Code bridge, private extension, project adapters, isolated Playwright checks, local reports, source handoff, reviewed AI edits, Chrome profile import, bookmark hierarchy, bookmark bar, password CSV migration and MyVault broker landed on `main` while this feature was in flight. They are retained. Chrome bookmark/history import requires an explicit Account Space destination. MyVault remains authoritative, is never copied into Google backup, and its internal passkey provider remains disabled behind the upstream release gate. Development-only and Banking-deny policies remain fail closed.

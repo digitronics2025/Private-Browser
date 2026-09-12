@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3 — 2026-09-12
+
+- Added a public Cloudflare download page with automatic current-version metadata,
+  publication time, five-release history, signed installer delivery, checksum
+  details, responsive design and the developer profile.
+
 ## 0.5.0 — 2026-09-12
 
 - Added local Chrome profile detection, selective bookmark/history import and a

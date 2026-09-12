@@ -2,7 +2,7 @@
 
 import { constantTimeEqual, futureExpiry, isLiveExpiry, signValue, verifySignedValue } from './auth';
 import { APP_ID, compareSemver, normalizeTtl, parseSingleRange, validateReleaseInput, type ReleaseManifest, type ReleaseRecord } from './protocol';
-import { renderDownloadPage } from './page';
+import { DEVELOPER_PROFILE, renderDownloadPage, type DownloadPageModel } from './page';
 
 export interface Env {
   DB: D1Database;
@@ -60,6 +60,13 @@ async function latestRelease(env: Env, channel = 'stable'): Promise<ReleaseRecor
     ORDER BY build_number DESC, published_at DESC LIMIT 1`).bind(APP_ID, channel).first<ReleaseRecord>();
 }
 
+async function releaseHistory(env: Env, activeReleaseId: string, channel = 'stable'): Promise<ReleaseRecord[]> {
+  const result = await env.DB.prepare(`SELECT id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, is_active
+    FROM releases WHERE app_id = ?1 AND channel = ?2 AND id <> ?3
+    ORDER BY published_at DESC, build_number DESC LIMIT 5`).bind(APP_ID, channel, activeReleaseId).all<ReleaseRecord>();
+  return result.results;
+}
+
 async function signedManifest(request: Request, env: Env, release: ReleaseRecord): Promise<ReleaseManifest> {
   const expires = futureExpiry(Date.now() / 1000, normalizeTtl(env.LINK_TTL_SECONDS));
   const origin = new URL(request.url).origin;
@@ -95,17 +102,16 @@ async function handleLatest(request: Request, env: Env): Promise<Response> {
     : json(manifest, 200, { 'cache-control': PRIVATE_CACHE });
 }
 
-async function handleDownloadPage(request: Request, env: Env, url: URL): Promise<Response> {
+async function handlePublicDownloadPage(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
   if (!secretsReady(env)) return notFound();
-  const expires = url.searchParams.get('expires');
-  const signature = url.searchParams.get('signature') ?? '';
-  if (!isLiveExpiry(expires, Date.now() / 1000) || !(await verifySignedValue(env.SIGNING_SECRET, `page\n${expires}`, signature))) return notFound();
   const release = await latestRelease(env);
   if (!release) return notFound();
+  const history = await releaseHistory(env, release.id);
+  const expires = futureExpiry(Date.now() / 1000, normalizeTtl(env.LINK_TTL_SECONDS));
   const downloadSignature = await signValue(env.SIGNING_SECRET, `binary\n${release.id}\n${expires}`);
   const downloadUrl = `/download/latest.exe?expires=${expires}&signature=${downloadSignature}`;
-  return downloadPageResponse(request, release, downloadUrl);
+  return downloadPageResponse(request, createDownloadPageModel(request, release, history, downloadUrl), true);
 }
 
 async function handleStableDownloadPage(request: Request, env: Env, token: string): Promise<Response> {
@@ -113,19 +119,31 @@ async function handleStableDownloadPage(request: Request, env: Env, token: strin
   if (!secretsReady(env) || token.length > 1_000 || !(await constantTimeEqual(token, env.DOWNLOAD_ACCESS_TOKEN))) return notFound();
   const release = await latestRelease(env);
   if (!release) return notFound();
+  const history = await releaseHistory(env, release.id);
   const expires = futureExpiry(Date.now() / 1000, normalizeTtl(env.LINK_TTL_SECONDS));
   const downloadSignature = await signValue(env.SIGNING_SECRET, `binary\n${release.id}\n${expires}`);
   const downloadUrl = `/download/latest.exe?expires=${expires}&signature=${downloadSignature}`;
-  return downloadPageResponse(request, release, downloadUrl);
+  return downloadPageResponse(request, createDownloadPageModel(request, release, history, downloadUrl), false);
 }
 
-function downloadPageResponse(request: Request, release: ReleaseRecord, downloadUrl: string): Response {
-  const html = renderDownloadPage(release, downloadUrl);
+function createDownloadPageModel(request: Request, release: ReleaseRecord, history: ReleaseRecord[], downloadUrl: string): DownloadPageModel {
+  return {
+    release,
+    history,
+    downloadUrl,
+    canonicalUrl: `${new URL(request.url).origin}/`,
+    renderedAt: new Date().toISOString(),
+    developer: DEVELOPER_PROFILE,
+  };
+}
+
+function downloadPageResponse(request: Request, model: DownloadPageModel, isPublic: boolean): Response {
+  const html = renderDownloadPage(model);
   const headers = responseHeaders({
     'content-type': 'text/html; charset=utf-8',
     'cache-control': PRIVATE_CACHE,
-    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-    'x-robots-tag': 'noindex, nofollow, noarchive',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    'x-robots-tag': isPublic ? 'index, follow' : 'noindex, nofollow, noarchive',
   });
   headers.set('content-length', String(new TextEncoder().encode(html).byteLength));
   return new Response(request.method === 'HEAD' ? null : html, { headers });
@@ -239,7 +257,7 @@ export default {
       if (url.pathname === '/health') return request.method === 'GET' || request.method === 'HEAD' ? handleHealth(request, env) : methodNotAllowed('GET, HEAD');
       if (url.pathname === '/api/v1/releases/latest' || url.pathname === '/update.json') return handleLatest(request, env);
       if (url.pathname === '/api/v1/admin/releases') return handlePublish(request, env);
-      if (url.pathname === '/download') return handleDownloadPage(request, env, url);
+      if (url.pathname === '/' || url.pathname === '/download') return handlePublicDownloadPage(request, env);
       if (url.pathname === '/download/latest.exe') return handleBinary(request, env, url);
       const pageToken = stableDownloadToken(url.pathname);
       if (pageToken) return handleStableDownloadPage(request, env, pageToken);

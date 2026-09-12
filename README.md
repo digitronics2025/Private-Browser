@@ -28,7 +28,7 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - Windows default-browser registration and single-instance external-link handling.
 - Safe one-click routines that open common work setups without sending, buying, publishing or deleting anything.
 - An auditable privacy activity log.
-- A Cloudflare-native private release service with D1 metadata, R2 installers, a protected download page and resumable downloads.
+- A Cloudflare-native release service with D1 metadata, private R2 storage, a public download page, signed installer links and resumable downloads.
 - OS-encrypted update-service configuration with startup and daily release checks.
 - A Development-workspace cockpit with native Chromium Elements, Console, Sources, Network, Performance, Application and Recorder tools; F12/Ctrl+Shift+I shortcuts; right-click element inspection; and sanitized AI-ready diagnostic reports.
 - A private VS Code companion with authenticated named-pipe pairing, explicit workspace/command grants, project adapters, isolated Playwright checks, local reports, source handoff, and reviewed AI edits.
@@ -79,7 +79,7 @@ SmartScreen may show an unknown-publisher warning.
 
 ## Cloudflare download service
 
-The `cloudflare/` project contains the Worker, D1 migrations, private R2 release flow, protected download page and automated deployment/publishing workflows. Cloudflare account identifiers and credentials must be configured privately in the repository settings before running **Deploy download service**; they are intentionally not included in source documentation.
+The `cloudflare/` project contains the Worker, D1 migrations, private R2 release flow, public download page and automated deployment/publishing workflows. The public `/` and `/download` routes show the active stable release, its publication time and the five previous stable releases, then mint a short-lived signed installer link. Cloudflare account identifiers and credentials must be configured privately in the repository settings before running **Deploy download service**; they are intentionally not included in source documentation.
 
 Main-branch Windows artifacts can receive a temporary test bootstrap from the PRIVATE_BROWSER_DOWNLOAD_URL repository variable and PRIVATE_BROWSER_DOWNLOAD_TOKEN Actions secret. On first launch the app imports that connection into Electron safeStorage, respects a later Disconnect action, and removes the bootstrap resource when Windows permissions allow. Settings always allows the endpoint and token to be rotated. Treat the bundled client token as distributable test configuration rather than a production-grade secret.
 
