@@ -52,7 +52,11 @@ This log tracks the approved secure multi-Google-account Account Spaces implemen
 [STEP] 9.3 — Preserve Banking and Development workspace policy — done
 [DONE] System 9 — Electron integration and regression coverage — 2026-09-12
 
-[PENDING] System 10 — Documentation, audit, packaging and release
+[START] System 10 — Documentation, audit, packaging and release — 2026-09-12
+[STEP] 10.1 — Merge canonical Account Spaces and boundary documentation — done
+[STEP] 10.2 — Run two security and same-pattern review passes — done
+[STEP] 10.3 — Pass the full repository gate and build a runnable 0.4.0 installer — done
+[STEP] 10.4 — Push, merge, publish and verify release artifacts — in progress
 
 ## External verification boundary
 
