@@ -2,7 +2,7 @@
 system: security-boundary
 sources:
   - electron/security.ts
-verified_at: 7063e89
+verified_at: 1e3a6f0
 ---
 
 # Security Boundary
@@ -56,11 +56,6 @@ context and fail closed on downgrade, certificate, IDN, frame or replay ambiguit
 6. **The SSRF guard checks a URL, so redirects must be refused.** Both callers
    pass `redirect: 'error'`; without it a 302 relocates the request after the
    check has already passed. → **isSafeAiEndpoint**
-7. **The legacy User-Agent must agree with Chromium Client Hints.** Electron and
-   packaged application product tokens are removed together; leaving only one
-   creates an internally inconsistent identity that strict verification pages
-   reject. → **Tracking and runtime policy**
-
 ### Where to look
 
 <!-- routing:start -->
@@ -68,8 +63,7 @@ context and fail closed on downgrade, certificate, IDN, frame or replay ambiguit
 | You are changing… | Section |
 | --- | --- |
 | what the address bar does with typed text | [normalizeNavigationInput](#normalizenavigationinput) |
-| campaign identifiers or address warnings | [Tracking and runtime policy](#tracking-and-runtime-policy) |
-| Electron or packaged application User-Agent tokens | [Tracking and runtime policy](#tracking-and-runtime-policy) |
+| campaign identifiers, address warnings or browser identity tokens | [Tracking and runtime policy](#tracking-and-runtime-policy) |
 | site permission or download risk policy | [Tracking and runtime policy](#tracking-and-runtime-policy) |
 | which schemes may load, or be written to disk | [isAllowedRemoteUrl](#isallowedremoteurl) |
 | a secret pattern, or the redaction count shown to the user | [redactSensitiveText](#redactsensitivetext) |
