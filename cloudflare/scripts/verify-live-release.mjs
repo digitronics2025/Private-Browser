@@ -30,10 +30,22 @@ assert(pageResponse.status === 200, `Signed download page returned ${pageRespons
 const page = await pageResponse.text();
 assert(page.includes(manifest.version) && page.includes(expectedHash), 'Download page metadata is incomplete');
 
+for (const publicPath of ['/', '/download']) {
+  const publicPageResponse = await fetch(`${endpoint}${publicPath}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+  assert(publicPageResponse.status === 200, `Public download page ${publicPath} returned ${publicPageResponse.status}`);
+  assert(publicPageResponse.headers.get('cache-control') === 'no-store', `Public download page ${publicPath} is cacheable`);
+  assert(publicPageResponse.headers.get('x-robots-tag') === 'index, follow', `Public download page ${publicPath} is not indexable`);
+  const publicPage = await publicPageResponse.text();
+  assert(publicPage.includes('Download for Windows'), `Public download page ${publicPath} is missing its primary action`);
+  assert(publicPage.includes(manifest.version) && publicPage.includes(expectedHash), `Public download page ${publicPath} metadata is incomplete`);
+  assert(/href="\/download\/latest\.exe\?expires=\d+&amp;signature=[A-Za-z0-9_-]+"/.test(publicPage), `Public download page ${publicPath} is missing its signed installer link`);
+  assert(!publicPage.includes(accessToken), `Public download page ${publicPath} exposed its access token`);
+}
+
 const stablePageResponse = await fetch(`${endpoint}/download/${encodeURIComponent(accessToken)}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
 assert(stablePageResponse.status === 200, `Stable install page returned ${stablePageResponse.status}`);
 const stablePage = await stablePageResponse.text();
-assert(stablePage.includes('Download and install') && stablePage.includes(expectedHash), 'Stable install page metadata is incomplete');
+assert(stablePage.includes('Download for Windows') && stablePage.includes(expectedHash), 'Stable install page metadata is incomplete');
 assert(!stablePage.includes(accessToken), 'Stable install page exposed its access token');
 await expectStatus(`${endpoint}/download/invalid-private-browser-token-000000`, 404);
 
