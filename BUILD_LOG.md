@@ -8,3 +8,6 @@
 [STEP] 2.1 — Encrypted envelope, OS-protected connection state, and in-memory broker — done
 [STEP] 2.2 — Metadata-only IPC and one-shot secure dialogs — done
 [STEP] 2.3 — Compact/full metadata UI, broker generator, guarded isolated-world fill, and shared lock status — done
+[STEP] 2.4 — Deliberate one-shot page capture and central workspace policies — done
+[DONE] Phase 2 — Trusted broker and secure browser operations — 2026-09-12
+[START] Phase 3 — Synchronization, migration, and imports — 2026-09-12

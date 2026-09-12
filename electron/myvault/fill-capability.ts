@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { WorkspaceId } from '../types.js';
 
-export type VaultOperation = 'fill-login' | 'fill-totp';
+export type VaultOperation = 'fill-login' | 'fill-totp' | 'capture-login';
 
 export interface FillContext {
   webContentsId: number;
