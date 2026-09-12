@@ -3,7 +3,8 @@ system: vault
 sources:
   - electron/vault.ts
   - electron/clipboard-guard.ts
-verified_at: 1e9a38cd
+  - electron/myvault/**
+verified_at: 6cca869
 ---
 
 # Vault
@@ -12,18 +13,19 @@ verified_at: 1e9a38cd
 
 ## Agent Brief
 
-**Scope.** [electron/vault.ts](../../electron/vault.ts) is `VaultStore` — saved
-credentials and authenticator secrets, encrypted at rest with Electron
-`safeStorage` — plus `generateTotp`, a self-contained RFC 6238 implementation.
-The store owns the file, the encryption, the corruption flag, and the rule that
-the renderer never sees a secret.
+**Scope.** The singleton `VaultBroker` owns MyVault crypto, decrypted state,
+metadata, TOTP and mutations. `VaultStore` is now read-only migration input;
+the detailed legacy sections below describe only that source.
 
-**What this doc does NOT cover.** The autofill injection and the clipboard
-auto-clear are implemented in `electron/main.ts`, which
-[browser-shell.md](browser-shell.md) owns for source-glob purposes; their
-behaviour is described in prose under **Autofill and Clipboard** below because it
-is meaningless apart from the vault. The IPC channel shapes belong to
-[ipc-contract.md](ipc-contract.md).
+The exact envelope is atomic; connection/CAS/migration state and device token use
+`safeStorage`. Corrupt/future envelopes are preserved and block writes.
+
+React receives metadata/intents only; secrets stay in the broker or one-shot
+dialogs. Unlocked sync is event-driven; CAS conflicts require a user choice.
+
+**What this doc does NOT cover.** Main-process IPC registration and browser-view
+lifecycle remain in [browser-shell.md](browser-shell.md); the public metadata and
+intent surface belongs to [ipc-contract.md](ipc-contract.md).
 
 **Neighbours.**
 

@@ -20,6 +20,9 @@
 [GATE] Passkey provider remains disabled — missing packaged Electron Playwright proof that CDP installation precedes the first inline script — 2026-09-12
 [DONE] Phase 4 — Gated passkeys (provider deliberately disabled) — 2026-09-12
 [START] Phase 5 — Whole-repository verification and coordinated release — 2026-09-12
+[STEP] 5.1 — Security audit and similar-boundary sweep — done
+[STEP] 5.2 — Full check: 135 desktop tests, 16 Worker tests, builds and dry-run — done
+[STEP] 5.3 — Electron Playwright: metadata-only UI, isolated pairing dialog, disabled dialog DevTools, Development isolation — done
 
 [START] System 1 — Private Browser Bridge protocol and security — 2026-09-12
 [STEP] 1.1 — Define the protocol v1 request, response, event, progress, and chunk envelopes — done

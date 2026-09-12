@@ -14,6 +14,10 @@ test-results/
 playwright-report/
 .wrangler/
 .wrangler-dist/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
 
 # Local environment values
 .env

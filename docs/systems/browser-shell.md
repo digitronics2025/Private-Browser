@@ -3,7 +3,7 @@ system: browser-shell
 sources:
   - electron/main.ts
   - electron/developer-tools.ts
-verified_at: 1e9a38cd
+verified_at: 6cca869
 ---
 
 # Browser Shell
@@ -44,11 +44,13 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
    outgoing page stays painted over the incoming one. → **Tabs and WebContentsView Lifecycle**
 2. **Every state mutation ends in `broadcast()`.** It is the only push path; miss
    it and the UI shows a stale snapshot. → **Key Behaviors and Non-Obvious Patterns**
-3. **Configure a session exactly once per partition.** A second registration
+3. **Vault actions use Electron-derived context, never renderer authority.**
+   Navigation, workspace changes and lock invalidate pending capabilities.
+4. **Configure a session exactly once per partition.** A second registration
    double-counts downloads. → **Per-Workspace Sessions and Permissions**
-4. **Register channels through `handle()`, never `ipcMain.handle` directly.** That
+5. **Register channels through `handle()`, never `ipcMain.handle` directly.** That
    wrapper is where the sender check lives. → **IPC Registration and the Trusted-Sender Check**
-5. **A view may only ever reach http and https.** Three guards enforce it and all
+6. **A view may only ever reach http and https.** Three guards enforce it and all
    three must stay. → **Popups and Navigation Guards**
 
 ### Where to look

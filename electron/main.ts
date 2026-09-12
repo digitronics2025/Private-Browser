@@ -1423,6 +1423,9 @@ app.on('certificate-error', (event, webContents, _url, _error, _certificate, cal
   controller?.markCertificateError(webContents.id);
   callback(false);
 });
+const e2eUserData = process.env.PRIVATE_BROWSER_E2E_USER_DATA;
+if (!app.isPackaged && e2eUserData) app.setPath('userData', e2eUserData);
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!hasSingleInstanceLock) {

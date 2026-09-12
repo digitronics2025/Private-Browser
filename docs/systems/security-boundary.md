@@ -2,7 +2,7 @@
 system: security-boundary
 sources:
   - electron/security.ts
-verified_at: 1e9a38cd
+verified_at: 6cca869
 ---
 
 # Security Boundary
@@ -11,9 +11,8 @@ verified_at: 1e9a38cd
 
 ## Agent Brief
 
-**Scope.** [electron/security.ts](../../electron/security.ts) is a dependency-free
-set of URL, permission and download policy helpers. Every URL crossing from an untrusted source — typed
-text, a popup, the state file on disk, a saved provider config — into a
+**Scope.** [electron/security.ts](../../electron/security.ts) holds pure URL,
+permission and download policy helpers. Every untrusted URL entering a
 navigation, a stored record or an outbound `fetch` passes one of them. They hold
 no state and import nothing, which is why they are cheap to call twice.
 
@@ -22,6 +21,9 @@ session partitions, permission handlers, sandboxing, the IPC surface — is
 [browser-shell.md](browser-shell.md) and [ipc-contract.md](ipc-contract.md).
 [SECURITY.md](../../SECURITY.md) is the trust-boundary narrative: it explains the
 model, this doc explains the code. Do not restate either here.
+
+MyVault capabilities bind Electron-derived tab/navigation/workspace/exact-origin
+context and fail closed on downgrade, certificate, IDN, frame or replay ambiguity.
 
 **Neighbours.**
 

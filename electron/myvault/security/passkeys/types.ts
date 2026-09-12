@@ -54,7 +54,6 @@ export interface PasskeyCredential {
   publicKeySpki: string;
   createdAt: string;
 }
-
 /** Whether a stored record is well-formed enough to sign with. */
 export function isPasskeyCredential(value: unknown): value is PasskeyCredential {
   if (!value || typeof value !== 'object') return false;
@@ -70,4 +69,3 @@ export function isPasskeyCredential(value: unknown): value is PasskeyCredential 
     typeof record.algorithm === 'number'
   );
 }
-
