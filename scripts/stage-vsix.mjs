@@ -6,9 +6,9 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const yauzl = require('yauzl');
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const pkg = require(join(root, 'package.json'));
+const extensionPkg = require(join(root, 'vscode-extension', 'package.json'));
 const source = join(root, 'build', 'private-browser-bridge.vsix');
-const target = join(root, 'release', `private-browser-bridge-${pkg.version}.vsix`);
+const target = join(root, 'release', `private-browser-bridge-${extensionPkg.version}.vsix`);
 
 async function entries(path) {
   return await new Promise((resolve, reject) => {
