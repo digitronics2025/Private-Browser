@@ -40,6 +40,7 @@ const api = {
   acknowledgeVaultRecovery: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:acknowledge-recovery'),
   copyPassword: (id: string): Promise<void> => ipcRenderer.invoke('vault:copy-password', id),
   copyTotp: (id: string): Promise<{ secondsRemaining: number }> => ipcRenderer.invoke('vault:copy-totp', id),
+  copyGeneratedCredential: (kind: 'password' | 'passphrase' | 'pin'): Promise<void> => ipcRenderer.invoke('vault:copy-generated', kind),
   autofill: (id: string): Promise<void> => ipcRenderer.invoke('vault:autofill', id),
   copyText: (value: string): Promise<void> => ipcRenderer.invoke('system:copy', value),
   getDefaultBrowserStatus: (): Promise<boolean> => ipcRenderer.invoke('system:is-default-browser'),
@@ -63,6 +64,11 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, result: UpdateCheckResult) => callback(result);
     ipcRenderer.on('updates:available', listener);
     return () => { ipcRenderer.removeListener('updates:available', listener); };
+  },
+  onVaultState: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('vault:state', listener);
+    return () => { ipcRenderer.removeListener('vault:state', listener); };
   },
 };
 

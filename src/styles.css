@@ -224,6 +224,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .vault-form { display: flex; flex-direction: column; gap: 7px; margin-bottom: 13px; background: #151923; border: 1px solid var(--line); border-radius: 11px; padding: 10px; }
 .vault-form input { width: 100%; border-radius: 7px; border: 1px solid var(--line-bright); background: #0d1016; color: white; padding: 9px 10px; font-size: 9px; outline: 0; }
 .vault-form input:focus { border-color: rgba(106,146,255,.7); }
+.vault-search { display: flex; align-items: center; gap: 7px; margin: 12px 0 8px; padding: 0 9px; height: 34px; border: 1px solid var(--line); border-radius: 8px; background: #0d1016; color: #737e94; }
+.vault-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: white; font: inherit; }
+.vault-full-overlay { position: fixed; inset: 128px 0 0; z-index: 30; display: grid; place-items: center; padding: 32px; background: rgba(5,7,11,.82); backdrop-filter: blur(14px); }
+.vault-full-shell { position: relative; width: min(880px, 100%); max-height: 100%; overflow: auto; padding: 32px; border: 1px solid var(--line-bright); border-radius: 16px; background: #10131a; box-shadow: 0 28px 80px rgba(0,0,0,.5); }
+.vault-full-close { position: absolute; top: 20px; right: 20px; }
+.vault-full-shell .side-panel { max-width: 760px; margin: 0 auto; }
 .credential-list, .automation-list, .download-list, .privacy-events { display: flex; flex-direction: column; gap: 8px; }
 .credential-card, .download-card { padding: 10px; border: 1px solid var(--line); background: #141821; border-radius: 10px; }
 .credential-top { display: flex; gap: 9px; align-items: center; }
