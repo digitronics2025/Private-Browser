@@ -10,7 +10,7 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: eec0d54
+verified_at: 9238b1b
 ---
 
 # Release and Updates
