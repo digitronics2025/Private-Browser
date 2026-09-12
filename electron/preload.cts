@@ -51,7 +51,6 @@ const api = {
   getVaultMigrationStatus: (): Promise<{ legacyAvailable: boolean }> => ipcRenderer.invoke('vault:migration-status'),
   migrateLegacyVault: (): Promise<{ sourceCount: number; importedCount: number; skippedCount: number; validatedCount: number; phase: string }> => ipcRenderer.invoke('vault:migrate-legacy'),
   cleanupLegacyVault: (): Promise<boolean> => ipcRenderer.invoke('vault:cleanup-legacy'),
-  importChromePasswords: (): Promise<{ sourceCount: number; importedCount: number; skippedCount: number; validatedCount: number } | undefined> => ipcRenderer.invoke('vault:import-chrome'),
   openVaultEditor: (origin?: string): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:open-editor', origin),
   inspectVaultFormShape: (): Promise<{ hasUsername: boolean; hasPassword: boolean }> => ipcRenderer.invoke('vault:form-shape'),
   requestSaveFromPage: (): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:save-from-page'),

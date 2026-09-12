@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -61,7 +61,7 @@ import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
 import { IpcGuard } from './ipc-guard.js';
-import { listChromeProfiles, parseChromePasswordCsv, readChromeProfile } from './chrome-importer.js';
+import { listChromeProfiles, readChromeProfile } from './chrome-importer.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
 
 interface RuntimeTab {
@@ -410,25 +410,6 @@ class BrowserController {
     this.addPrivacyEvent('local-read', 'Chrome data imported', `${data.result.imported.bookmarks} bookmarks and ${data.result.imported.history} history entries imported locally`);
     this.broadcast();
     return data.result;
-  }
-
-  async importChromePasswords(): Promise<ChromeImportResult> {
-    const selection = await dialog.showOpenDialog(this.window, {
-      title: 'Choose a Chrome password export',
-      filters: [{ name: 'CSV files', extensions: ['csv'] }],
-      properties: ['openFile'],
-    });
-    if (selection.canceled || !selection.filePaths[0]) throw new Error('Password import cancelled');
-    const filePath = selection.filePaths[0];
-    if (statSync(filePath).size > 20 * 1024 * 1024) throw new Error('Password CSV is unusually large');
-    const parsed = parseChromePasswordCsv(readFileSync(filePath, 'utf8'));
-    const added = this.vault.addMany(parsed.items);
-    this.addPrivacyEvent('vault', 'Chrome passwords imported', `${added.imported} credentials encrypted in the local vault`);
-    return {
-      imported: { bookmarks: 0, history: 0, passwords: added.imported },
-      skipped: { bookmarks: 0, history: 0, passwords: parsed.skipped + added.skipped },
-      warnings: ['Delete the unencrypted Chrome CSV file after checking the import.'],
-    };
   }
 
   toggleTrackerBlocking(): void {
@@ -816,13 +797,17 @@ class BrowserController {
     return this.migration.cleanupLegacyAfterConfirmation(Boolean(confirmation?.confirmed));
   }
 
-  async importChromePasswords() {
+  async importChromePasswords(): Promise<ChromeImportResult> {
     this.assertVaultSurface();
     const selected = await dialog.showOpenDialog(this.window, { title: 'Import Chrome passwords into MyVault', properties: ['openFile'], filters: [{ name: 'Chrome password CSV', extensions: ['csv'] }] });
-    if (selected.canceled || !selected.filePaths[0]) return undefined;
+    if (selected.canceled || !selected.filePaths[0]) throw new Error('Password import cancelled');
     const report = await this.migration.importChromeCsv(selected.filePaths[0]);
     this.addPrivacyEvent('vault', 'Chrome passwords imported into MyVault', `${report.validatedCount} rows processed; the source CSV was retained`);
-    return report;
+    return {
+      imported: { bookmarks: 0, history: 0, passwords: report.importedCount },
+      skipped: { bookmarks: 0, history: 0, passwords: report.skippedCount },
+      warnings: ['The plaintext Chrome CSV was retained. Delete it explicitly after verifying MyVault.'],
+    };
   }
 
   async openVaultEditor(origin?: string) {
@@ -1541,7 +1526,6 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:migration-status', () => controller!.migrationStatus());
   handle('vault:migrate-legacy', () => controller!.migrateLegacyVault());
   handle('vault:cleanup-legacy', () => controller!.cleanupLegacyVault());
-  handle('vault:import-chrome', () => controller!.importChromePasswords());
   handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
   handle('vault:form-shape', () => controller!.inspectVaultFormShape());
   handle('vault:save-from-page', () => controller!.requestSaveFromPage());
