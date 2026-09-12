@@ -19,7 +19,7 @@ sources:
   - electron/ipc-contracts.ts
   - electron/oauth-loopback.ts
   - electron/runtime-state-store.ts
-verified_at: 78f08e4
+verified_at: 7063e89
 ---
 
 # Google Account Spaces
