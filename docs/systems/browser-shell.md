@@ -8,7 +8,7 @@ verified_at: 3f68afed
 
 # Browser Shell
 
-> Last verified: 2026-09-10
+> Last verified: 2026-09-12
 
 ## Agent Brief
 
@@ -177,7 +177,9 @@ check `navigationHistory.canGoBack()` / `canGoForward()` first.
 ## Layout Maths
 
 The main process holds one `Layout` for all tabs, defaulting to
-`{ top: 104, left: 78, right: 356, bottom: 0 }`.
+`{ top: 128, left: 0, right: 366, bottom: 0 }`. This matches the renderer and
+CSS: there is no permanent left rail, and the right panel reserves 366 px while
+open.
 
 `setLayout` clamps before storing: `top` becomes `Math.max(80, Math.round(top))`,
 the other three become `Math.max(0, Math.round(n))`.
@@ -500,13 +502,10 @@ explicit `updates:check` surfaces one.
 
 ## Gotchas
 
-- **Three sets of layout numbers, in two files.** App.tsx sends
-  `{ top: 128, left: 74, right: sidebarOpen ? 366 : 0, bottom: 0 }`; the main
-  process defaults to `{ top: 104, left: 78, right: 356, bottom: 0 }`; `setLayout`
-  then clamps `top` to at least 80. The main-process defaults are only ever visible
-  in the gap between `createWindow()` and the renderer's first `setLayout` effect,
-  and the clamp is invisible because 128 already clears it. Change one number and
-  the others are silently wrong — nothing compares them.
+- **Three copies of the layout geometry must remain aligned.** App.tsx sends
+  `{ top: 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 }`; the main
+  process defaults to the open-panel form, and styles.css uses the same offsets.
+  The renderer test guards these values; update all copies together.
 - **The shortcuts are implemented twice.** `handleShortcut` here fires when focus is
   in a page; the `window` keydown listener in App.tsx fires when focus is in the
   chrome. Ctrl+L/T/W/R and DevTools exist in both, Alt+Left/Right only here, and App.tsx

@@ -99,7 +99,7 @@ class BrowserController {
   private readonly clipboardGuard = new ClipboardGuard(clipboard);
   private readonly faviconCache = new Map<string, string>();
   private expectedInstaller?: ExpectedInstaller;
-  private layout: Layout = { top: 104, left: 78, right: 356, bottom: 0 };
+  private layout: Layout = { top: 128, left: 0, right: 366, bottom: 0 };
   private window!: BrowserWindow;
 
   constructor(

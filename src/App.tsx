@@ -159,7 +159,7 @@ export default function App() {
   }, [activeTab?.id, activeTab?.url, activeTab?.isHome]);
 
   useEffect(() => {
-    void window.privateBrowser.setLayout({ top: 128, left: 74, right: sidebarOpen ? 366 : 0, bottom: 0 });
+    void window.privateBrowser.setLayout({ top: 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
   }, [sidebarOpen]);
 
   useEffect(() => {
@@ -256,21 +256,22 @@ export default function App() {
         <button className="icon-button" title="Settings" onClick={() => { setSidebarMode('settings'); setSidebarOpen(true); }}><MoreHorizontal size={18} /></button>
       </nav>
 
-      <WorkspaceRail state={state} onSwitch={(id) => void act(() => window.privateBrowser.switchWorkspace(id))} />
-
       {activeTab.isHome && <Dashboard state={state} open={(url) => void act(() => window.privateBrowser.navigate(url))} openBookmark={(id) => void act(() => window.privateBrowser.openBookmark(id))} />}
 
       {sidebarOpen && (
         <aside className="sidebar">
           <SidebarNav mode={sidebarMode} setMode={setSidebarMode} counts={{ downloads: state.downloads.filter((item) => item.state === 'progressing').length }} />
-          <div className="sidebar-content">
-            {sidebarMode === 'assistant' && <AssistantPanel onToast={showToast} />}
-            {sidebarMode === 'developer' && <DeveloperPanel activeTab={activeTab} onToast={showToast} />}
-            {sidebarMode === 'vault' && <VaultPanel onToast={showToast} />}
-            {sidebarMode === 'automations' && <AutomationPanel onToast={showToast} />}
-            {sidebarMode === 'downloads' && <DownloadsPanel state={state} onToast={showToast} />}
-            {sidebarMode === 'privacy' && <PrivacyPanel state={state} />}
-            {sidebarMode === 'settings' && <SettingsPanel onToast={showToast} />}
+          <div className="sidebar-main">
+            <WorkspaceSwitcher state={state} onSwitch={(id) => void act(() => window.privateBrowser.switchWorkspace(id))} />
+            <div className="sidebar-content">
+              {sidebarMode === 'assistant' && <AssistantPanel onToast={showToast} />}
+              {sidebarMode === 'developer' && <DeveloperPanel activeTab={activeTab} onToast={showToast} />}
+              {sidebarMode === 'vault' && <VaultPanel onToast={showToast} />}
+              {sidebarMode === 'automations' && <AutomationPanel onToast={showToast} />}
+              {sidebarMode === 'downloads' && <DownloadsPanel state={state} onToast={showToast} />}
+              {sidebarMode === 'privacy' && <PrivacyPanel state={state} />}
+              {sidebarMode === 'settings' && <SettingsPanel onToast={showToast} />}
+            </div>
           </div>
         </aside>
       )}
@@ -280,19 +281,20 @@ export default function App() {
   );
 }
 
-function WorkspaceRail({ state, onSwitch }: { state: BrowserSnapshot; onSwitch: (id: WorkspaceId) => void }) {
+function WorkspaceSwitcher({ state, onSwitch }: { state: BrowserSnapshot; onSwitch: (id: WorkspaceId) => void }) {
+  const activeWorkspace = state.workspaces.find((workspace) => workspace.id === state.activeWorkspaceId)!;
   return (
-    <aside className="workspace-rail">
-      <div className="rail-label">Spaces</div>
-      {state.workspaces.map((workspace) => (
-        <button key={workspace.id} title={workspace.name} className={`workspace-button ${state.activeWorkspaceId === workspace.id ? 'active' : ''}`} onClick={() => onSwitch(workspace.id)} style={{ '--workspace-color': workspace.color } as React.CSSProperties}>
-          {workspace.protected ? <LockKeyhole size={17} /> : workspace.icon}
-          <span className="workspace-tooltip">{workspace.name}</span>
-        </button>
-      ))}
-      <div className="rail-spacer" />
-      <button className="workspace-button profile"><UserRound size={18} /></button>
-    </aside>
+    <section className="workspace-switcher" aria-label="Spaces">
+      <div className="workspace-switcher-heading"><span>Spaces</span><strong>{activeWorkspace.name}</strong></div>
+      <div className="workspace-switcher-items">
+        {state.workspaces.map((workspace) => (
+          <button key={workspace.id} title={workspace.name} aria-label={`Switch to ${workspace.name}`} aria-pressed={state.activeWorkspaceId === workspace.id} className={`workspace-button ${state.activeWorkspaceId === workspace.id ? 'active' : ''}`} onClick={() => onSwitch(workspace.id)} style={{ '--workspace-color': workspace.color } as React.CSSProperties}>
+            {workspace.protected ? <LockKeyhole size={17} /> : workspace.icon}
+          </button>
+        ))}
+        <button className="workspace-button profile" title="Personal profile" aria-label="Open personal workspace" onClick={() => onSwitch('personal')}><UserRound size={18} /></button>
+      </div>
+    </section>
   );
 }
 

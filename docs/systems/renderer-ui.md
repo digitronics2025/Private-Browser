@@ -9,12 +9,12 @@ verified_at: 3f68afed
 
 # Renderer UI
 
-> Last verified: 2026-09-10
+> Last verified: 2026-09-12
 
 ## Agent Brief
 
 **Scope.** The entire chrome of Private Browser — title bar, tab strip, toolbar,
-workspace rail, home dashboard and the seven-mode right sidebar — lives in one
+home dashboard, workspace switcher and the seven-mode right sidebar — lives in one
 732-line file, [App.tsx](../../src/App.tsx), styled by one 307-line stylesheet.
 The renderer owns no browsing state: it renders a `BrowserSnapshot` pushed from
 the main process and calls back over `window.privateBrowser`.
@@ -93,8 +93,8 @@ All in [App.tsx](../../src/App.tsx).
 
 | Component | Renders | Key state |
 | --- | --- | --- |
-| `App` (default) | Title bar, tab strip, toolbar, rail, dashboard, sidebar, toast | `state` (snapshot or `null`), `address`, `sidebarOpen` (default `true`), `sidebarMode` (default `assistant`), `toast`, `addressRef` |
-| `WorkspaceRail` | One button per `state.workspaces`; lock icon when `workspace.protected`, else `workspace.icon`; sets `--workspace-color` per button | none |
+| `App` (default) | Title bar, tab strip, toolbar, dashboard, sidebar, toast | `state` (snapshot or `null`), `address`, `sidebarOpen` (default `true`), `sidebarMode` (default `assistant`), `toast`, `addressRef` |
+| `WorkspaceSwitcher` | Horizontal row at the top of the right panel; one button per `state.workspaces`, plus the personal shortcut; lock icon when protected; sets `--workspace-color` per button | none |
 | `Dashboard` | The home screen — welcome block, quick-link grid, 5 most recent history rows, 5 bookmarks, all filtered to the active workspace | none (derives from props) |
 | `SidebarNav` | The seven mode buttons; red badge showing the count of downloads in `progressing` state | none |
 | `PanelHeader` | Icon + eyebrow + title, shared by every panel | none |
@@ -222,7 +222,7 @@ that rectangle to the active `WebContentsView`.
 
 ```
 useEffect(() => {
-  void window.privateBrowser.setLayout({ top: 128, left: 74, right: sidebarOpen ? 366 : 0, bottom: 0 });
+  void window.privateBrowser.setLayout({ top: 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
 }, [sidebarOpen]);
 ```
 
@@ -231,7 +231,7 @@ Where those numbers come from in [styles.css](../../src/styles.css):
 | Inset | Value | Source |
 | --- | --- | --- |
 | `top` | 128 | `.titlebar` 39px + `.tabbar` 37px + `.toolbar` 52px |
-| `left` | 74 | `.workspace-rail` width |
+| `left` | 0 | the removed left rail no longer reserves webpage space |
 | `right` | 366 when open, 0 when closed | `.sidebar` width |
 | `bottom` | 0 | no status bar |
 
@@ -271,11 +271,11 @@ preprocessor, no CSS modules. What a future editor needs:
   `--green`, `--danger`. Dark-only; there is no light theme and no
   `prefers-color-scheme` block.
 - **Two runtime-injected custom properties**, set from React as inline styles:
-  `--workspace-color` on each rail button and `--accent` on `.dashboard`, both
+  `--workspace-color` on each workspace switcher button and `--accent` on `.dashboard`, both
   taken from `workspace.color` and both consumed through `color-mix(in srgb, …)`.
 - **The layout system is fixed positioning, not flow.** `html, body, #root` are
   100% tall with `overflow: hidden`, and `.titlebar`, `.tabbar`, `.toolbar`,
-  `.workspace-rail`, `.dashboard` and `.sidebar` are each `position: fixed` with
+  `.dashboard` and `.sidebar` are each `position: fixed` with
   hard-coded pixel offsets. These numbers are the same ones sent over
   `setLayout` — see **The Layout Handshake**.
 - **Load-bearing oddities.** `.titlebar` carries `-webkit-app-region: drag` and
@@ -310,13 +310,9 @@ preprocessor, no CSS modules. What a future editor needs:
   tab and Ctrl+R on `!isHome` where the main copy does not. Both copies ignore
   auto-repeat; the main copy also accepts only `keyDown`. Adding a shortcut in
   one place gives you a shortcut that works only half the time.
-- **The layout numbers in `App.tsx` and `main.ts` disagree.** The renderer sends
-  `{ top: 128, left: 74, right: 366|0 }`; the `Layout` field in `main.ts` is
-  initialised to `{ top: 104, left: 78, right: 356, bottom: 0 }`. The main
-  process's numbers govern from window creation until the renderer's first
-  `setLayout` lands, so a mis-sized web view can appear briefly at startup, and
-  anyone reading `main.ts` alone will believe the wrong geometry. styles.css is a
-  third copy of the same measurements.
+- **The layout numbers exist in three places.** The renderer call, main-process
+  default and fixed CSS offsets all use top `128`, left `0` and right `366` while
+  the sidebar is open. Keep them synchronized when changing chrome geometry.
 - **`PrivacyPanel` hard-codes `5` isolated spaces** instead of reading
   `state.workspaces.length`. Adding a workspace silently leaves it wrong.
 - **`SettingsPanel` falls back to a hard-coded version string** for the about

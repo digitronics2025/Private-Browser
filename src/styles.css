@@ -31,7 +31,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .privacy-status { margin-left: auto; display: flex; gap: 7px; align-items: center; color: #7f899d; font-size: 10px; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px var(--green); }
 
-.tabbar { position: fixed; z-index: 20; top: 39px; left: 0; right: 0; height: 37px; background: #0d1016; border-bottom: 1px solid var(--line); padding: 4px 380px 0 76px; }
+.tabbar { position: fixed; z-index: 20; top: 39px; left: 0; right: 0; height: 37px; background: #0d1016; border-bottom: 1px solid var(--line); padding: 4px 380px 0 10px; }
 .tab-list { height: 33px; display: flex; align-items: stretch; gap: 3px; overflow: hidden; }
 .browser-tab { border: 0; cursor: default; width: 218px; min-width: 110px; max-width: 235px; background: transparent; border-radius: 8px 8px 0 0; color: #9099aa; display: flex; align-items: center; gap: 8px; padding: 0 9px; font-size: 11px; }
 .browser-tab:hover { background: rgba(255,255,255,.04); }
@@ -42,7 +42,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .tab-close { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 5px; opacity: .55; }
 .tab-close:hover { background: rgba(255,255,255,.09); opacity: 1; }
 
-.toolbar { position: fixed; z-index: 20; top: 76px; left: 0; right: 0; height: 52px; display: flex; align-items: center; gap: 4px; background: var(--surface-2); border-bottom: 1px solid var(--line); padding: 0 9px 0 82px; }
+.toolbar { position: fixed; z-index: 20; top: 76px; left: 0; right: 0; height: 52px; display: flex; align-items: center; gap: 4px; background: var(--surface-2); border-bottom: 1px solid var(--line); padding: 0 9px; }
 .icon-button { border: 0; background: transparent; border-radius: 8px; width: 34px; height: 34px; flex: 0 0 34px; display: grid; place-items: center; color: #a0a9ba; cursor: pointer; }
 .icon-button:hover:not(:disabled) { background: rgba(255,255,255,.055); color: white; }
 .icon-button:disabled { opacity: .24; cursor: default; }
@@ -59,17 +59,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .address-domain { color: #697488; font-size: 10px; padding-right: 11px; white-space: nowrap; }
 .avatar { border: 1px solid rgba(106,146,255,.38); background: linear-gradient(145deg,#304b92,#26366f); border-radius: 50%; width: 29px; height: 29px; color: #dce5ff; font-size: 9px; font-weight: 800; cursor: pointer; }
 
-.workspace-rail { position: fixed; z-index: 21; top: 39px; bottom: 0; left: 0; width: 74px; background: #0e1117; border-right: 1px solid var(--line); display: flex; align-items: center; flex-direction: column; padding: 94px 10px 12px; gap: 10px; }
-.rail-label { text-transform: uppercase; font-size: 8px; font-weight: 800; letter-spacing: .12em; color: #505a6c; margin-bottom: 3px; }
 .workspace-button { --workspace-color: #6a92ff; width: 38px; height: 38px; border-radius: 11px; border: 1px solid rgba(255,255,255,.08); background: #171b24; color: #929bad; display: grid; place-items: center; font-size: 11px; font-weight: 800; cursor: pointer; position: relative; transition: .16s ease; }
 .workspace-button:hover { color: white; border-color: rgba(255,255,255,.15); transform: translateY(-1px); }
 .workspace-button.active { color: white; background: color-mix(in srgb, var(--workspace-color) 24%, #171b24); border-color: color-mix(in srgb, var(--workspace-color) 55%, transparent); box-shadow: inset 3px 0 0 var(--workspace-color), 0 5px 18px rgba(0,0,0,.18); }
-.workspace-tooltip { pointer-events: none; opacity: 0; position: absolute; left: 48px; top: 8px; white-space: nowrap; border: 1px solid var(--line-bright); background: #202532; padding: 5px 8px; border-radius: 6px; color: white; font-size: 10px; transition: opacity .15s; box-shadow: 0 5px 20px rgba(0,0,0,.35); }
-.workspace-button:hover .workspace-tooltip { opacity: 1; }
-.rail-spacer { flex: 1; }
 .workspace-button.profile { border-radius: 50%; }
 
-.dashboard { position: fixed; top: 128px; bottom: 0; left: 74px; right: 366px; overflow: auto; background: radial-gradient(circle at 25% -20%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 39%), #0b0d12; }
+.dashboard { position: fixed; top: 128px; bottom: 0; left: 0; right: 366px; overflow: auto; background: radial-gradient(circle at 25% -20%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 39%), #0b0d12; }
 .app-shell:not(:has(.sidebar)) .dashboard { right: 0; }
 .dashboard-inner { max-width: 1010px; margin: 0 auto; padding: 51px 45px 60px; }
 .welcome { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
@@ -112,6 +107,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid rgba(106, 146, 25
 .sidebar-nav button.active { color: #92adff; background: var(--blue-soft); }
 .sidebar-nav button span { font-size: 7px; font-weight: 700; }
 .sidebar-nav button b { position: absolute; top: 3px; right: 4px; background: var(--danger); color: white; border-radius: 7px; min-width: 13px; height: 13px; display: grid; place-items: center; font-size: 7px; }
+.sidebar-main { min-width: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.workspace-switcher { flex: 0 0 auto; padding: 10px 12px 11px; border-bottom: 1px solid var(--line); background: #0e1117; }
+.workspace-switcher-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; text-transform: uppercase; letter-spacing: .1em; font-size: 7px; color: #596377; }
+.workspace-switcher-heading strong { color: #8f9aaf; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-switcher-items { display: flex; align-items: center; gap: 5px; margin-top: 8px; }
 .sidebar-content { flex: 1; overflow: hidden; }
 .side-panel { width: 100%; height: 100%; overflow-y: auto; padding: 17px 15px 30px; }
 .panel-header { display: flex; align-items: center; gap: 10px; margin-bottom: 17px; }
