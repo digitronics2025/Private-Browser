@@ -33,7 +33,8 @@ assert(page.includes(manifest.version) && page.includes(expectedHash), 'Download
 for (const publicPath of ['/', '/download']) {
   const publicPageResponse = await fetch(`${endpoint}${publicPath}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
   assert(publicPageResponse.status === 200, `Public download page ${publicPath} returned ${publicPageResponse.status}`);
-  assert(publicPageResponse.headers.get('cache-control') === 'no-store', `Public download page ${publicPath} is cacheable`);
+  const cacheDirectives = (publicPageResponse.headers.get('cache-control') ?? '').split(',').map((value) => value.trim().toLowerCase());
+  assert(cacheDirectives.includes('no-store'), `Public download page ${publicPath} is cacheable`);
   assert(publicPageResponse.headers.get('x-robots-tag') === 'index, follow', `Public download page ${publicPath} is not indexable`);
   const publicPage = await publicPageResponse.text();
   assert(publicPage.includes('Download for Windows'), `Public download page ${publicPath} is missing its primary action`);
