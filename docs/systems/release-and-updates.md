@@ -10,7 +10,7 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: dbe0133
+verified_at: b79490f
 ---
 
 # Release and Updates
@@ -427,7 +427,7 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 | --- | --- | --- |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
 | `windows-installer` | windows, 25 min, needs `verify` | Runs the Electron MyVault boundary and Windows named-pipe journeys, selects the stable version on `main`, writes the bundled update bootstrap, runs `npm run dist`, writes checksum, version and CycloneDX SBOM artifacts, smoke-installs the VSIX in an isolated profile, and uploads both private artifacts for 30 days |
-| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Restores the artifact's recorded version, skips documentation-only pushes, otherwise uploads the exe to R2, registers metadata in D1, then re-downloads it through the live authenticated route to prove the whole path works ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)) |
+| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Publishes non-doc-only builds to R2 and D1, then verifies authenticated metadata, signed downloads, checksums, ranges and public pages whose cache-directive list contains `no-store` ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)) |
 
 ### codeql.yml
 
