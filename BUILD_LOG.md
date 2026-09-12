@@ -5,6 +5,9 @@
 [STEP] 1.2 — Pin MyVault envelope contract and known-answer vectors — done
 [DONE] Phase 1.1 — MyVault compatibility contract — 2026-09-12
 
+[START] Phase 2 — Trusted broker and secure operations — 2026-09-12
+[STEP] 2.1 — Encrypted envelope, OS-protected connection state, and in-memory broker — done
+
 [START] System 1 — Private Browser Bridge protocol and security — 2026-09-12
 [STEP] 1.1 — Define the protocol v1 request, response, event, progress, and chunk envelopes — done
 [STEP] 1.2 — Implement Ed25519 identities, X25519/HKDF session derivation, AES-256-GCM framing, replay protection, expiry, and rekeying — done
