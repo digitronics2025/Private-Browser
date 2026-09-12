@@ -42,11 +42,23 @@ const api = {
   askAi: (token: string, question: string): Promise<string> => ipcRenderer.invoke('ai:ask', token, question),
   revokeAiContext: (): Promise<void> => ipcRenderer.invoke('ai:revoke'),
   listVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:list'),
-  addVaultItem: (input: VaultItemInput): Promise<VaultItemMeta> => ipcRenderer.invoke('vault:add', input),
-  removeVaultItem: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:remove', id),
-  resetCorruptVault: (): Promise<boolean> => ipcRenderer.invoke('vault:reset-corrupt'),
+  requestVaultUnlock: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-unlock'),
+  requestVaultPairing: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-pairing'),
+  lockVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:lock'),
+  syncVaultNow: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:sync'),
+  getVaultConflictReview: (): Promise<{ local: VaultItemMeta[]; cloud: VaultItemMeta[] }> => ipcRenderer.invoke('vault:conflict-review'),
+  resolveVaultConflict: (choice: 'cloud' | 'local'): Promise<VaultStatus> => ipcRenderer.invoke('vault:resolve-conflict', choice),
+  getVaultMigrationStatus: (): Promise<{ legacyAvailable: boolean }> => ipcRenderer.invoke('vault:migration-status'),
+  migrateLegacyVault: (): Promise<{ sourceCount: number; importedCount: number; skippedCount: number; validatedCount: number; phase: string }> => ipcRenderer.invoke('vault:migrate-legacy'),
+  cleanupLegacyVault: (): Promise<boolean> => ipcRenderer.invoke('vault:cleanup-legacy'),
+  openVaultEditor: (origin?: string): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:open-editor', origin),
+  inspectVaultFormShape: (): Promise<{ hasUsername: boolean; hasPassword: boolean }> => ipcRenderer.invoke('vault:form-shape'),
+  requestSaveFromPage: (): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:save-from-page'),
+  requestVaultDelete: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:request-delete', id),
+  acknowledgeVaultRecovery: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:acknowledge-recovery'),
   copyPassword: (id: string): Promise<void> => ipcRenderer.invoke('vault:copy-password', id),
   copyTotp: (id: string): Promise<{ secondsRemaining: number }> => ipcRenderer.invoke('vault:copy-totp', id),
+  copyGeneratedCredential: (kind: 'password' | 'passphrase' | 'pin'): Promise<void> => ipcRenderer.invoke('vault:copy-generated', kind),
   autofill: (id: string): Promise<void> => ipcRenderer.invoke('vault:autofill', id),
   copyText: (value: string): Promise<void> => ipcRenderer.invoke('system:copy', value),
   getDefaultBrowserStatus: (): Promise<boolean> => ipcRenderer.invoke('system:is-default-browser'),
@@ -71,8 +83,15 @@ const api = {
     ipcRenderer.on('updates:available', listener);
     return () => { ipcRenderer.removeListener('updates:available', listener); };
   },
+  onVaultState: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('vault:state', listener);
+    return () => { ipcRenderer.removeListener('vault:state', listener); };
+  },
 };
 
 contextBridge.exposeInMainWorld('privateBrowser', api);
+
+window.addEventListener('online', () => { void ipcRenderer.invoke('vault:reconnect').catch(() => undefined); });
 
 export type PrivateBrowserApi = typeof api;

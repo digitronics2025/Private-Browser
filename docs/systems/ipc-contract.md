@@ -4,7 +4,7 @@ sources:
   - electron/preload.cts
   - electron/types.ts
   - electron/ipc-guard.ts
-verified_at: 1e9a38cd
+verified_at: fd870404
 ---
 
 # IPC Contract
@@ -13,9 +13,9 @@ verified_at: 1e9a38cd
 
 ## Agent Brief
 
-**Scope.** The whole surface between the Electron main process and the React
-renderer: 44 `invoke` channels in six namespaces, three main-to-renderer event
-subscriptions, and every shared payload type. Defined in
+**Scope.** The whole surface between the Electron main process and React,
+including Chrome import, metadata-only `vault:*` intents, `vault:state`, other
+subscriptions and every shared payload type. Defined in
 [preload.cts](../../electron/preload.cts) and
 [types.ts](../../electron/types.ts).
 
@@ -44,6 +44,9 @@ trusted-sender check, the browser methods) and in [vault.md](vault.md),
    **The Bridge**
 4. **The three `on*` methods return an unsubscribe function.** Dropping it leaks a
    listener on every re-render. → **Main to Renderer Events**
+5. **The normal preload never accepts or returns vault secrets.** Unlock,
+   pairing, edit and confirmation values travel through a separate one-shot
+   preload whose nonce, sender, kind, size and lifetime are checked in main.
 
 ### Where to look
 

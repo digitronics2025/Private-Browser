@@ -4,7 +4,7 @@ sources:
   - src/App.tsx
   - src/styles.css
   - index.html
-verified_at: 1e9a38cd
+verified_at: fd870404
 ---
 
 # Renderer UI
@@ -24,6 +24,13 @@ the main process and calls back over `window.privateBrowser`.
 and session lifecycle, and everything behind an IPC channel. Web content is
 *never* inside this React tree — it is a sibling view the main process positions.
 → [browser-shell.md](browser-shell.md), [ipc-contract.md](ipc-contract.md).
+
+The toolbar MyVault button opens a compact metadata panel; a modal full view
+uses the same projections. React can search metadata and request unlock, pair,
+sync, fill, copy, generate, save, edit, delete, migrate and conflict resolution,
+but never receives a master password, device token, data key or entry secret.
+Development hides the surface completely; Banking renders only centrally
+permitted actions.
 
 **Neighbours.**
 
