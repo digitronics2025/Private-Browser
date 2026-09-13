@@ -165,4 +165,15 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 [START] System 15 — Cloudflare Turnstile identity correction — 2026-09-13
 [STEP] 15.1 — Reproduce the dashboard verification failure and compare legacy User-Agent with Client Hints — done
 [STEP] 15.2 — Restore Electron's stable default embedded-browser identity and add a real Turnstile test-key regression — done
-[STEP] 15.3 — Pass the repository gate, package, publish and verify the corrected release — in progress
+[STEP] 15.3 — Pass the repository gate, package, publish and verify the corrected release — done
+[DONE] System 15 — Cloudflare Turnstile identity correction — 2026-09-13
+
+[FINAL AUDIT] Cloudflare Turnstile identity correction passed — 2026-09-13
+- Root cause: the 0.5.7 workaround presented the legacy User-Agent as Google Chrome while Client Hints still identified Chromium. Cloudflare's embedded-browser guidance requires the stable default identity and warns that modified browser characteristics can fail Challenges.
+- Commit `af2314bfefd6ef459d0032a4c0b1ee843ef69c73` is on `main`. The canonical local gate passed 218 desktop tests, 7 protocol tests, 6 extension tests, 24 Worker tests, 10 browser flows and 5 real Electron tests; the dependency audit found zero vulnerabilities.
+- The real Electron suite now proves that network, session and renderer User-Agent values stay identical and completes Cloudflare's official always-pass Turnstile test-key flow inside an isolated Account Space.
+- Direct Wrangler publication activated Worker version `2e80a34e-ff3b-4d9c-ad89-69c813f6bd56`, tagged `git-af2314b`; no D1 migrations were pending. Live `/health` returned 200 with `database: ok` and `releaseReady: true`.
+- GitHub run `34752714983` passed Linux verification, Windows Electron/package verification, VSIX smoke installation, R2 upload, D1 registration and authenticated end-to-end download verification. CodeQL run `34752714924` passed on the exact commit.
+- D1/R2 and the public manifest expose Private Browser `0.5.10` build 93 for the exact fix commit: `Private-Browser-0.5.10-Setup.exe`, 115,640,382 bytes, SHA-256 `62f2546439be19bd644931c26a0fdce39ccac97eaf10663e4f2c2c0679e844da`.
+- A separate public signed-route stream matched the active D1 size and SHA-256 exactly. Automated live-page checks passed at 1440px and 375px with version 0.5.10, build 93, the published checksum and zero console errors; the same production URL was opened visibly in VS Code Integrated Browser.
+- Cloudflare intentionally does not support automated browsers for solving production challenges. The production login CAPTCHA itself was not bypassed; the official test-key flow plus the corrected unmodified identity are the automated evidence, and the updated normal desktop build is the human-use verification surface.
