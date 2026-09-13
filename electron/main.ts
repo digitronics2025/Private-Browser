@@ -19,7 +19,7 @@ import {
   type IpcMainInvokeEvent,
   type Session,
 } from 'electron';
-import { browserCompatibleUserAgent, downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, normalizeNavigationInput, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from './security.js';
+import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, normalizeNavigationInput, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from './security.js';
 import { ClipboardGuard } from './clipboard-guard.js';
 import { verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { AiProviderStore } from './ai-provider.js';
@@ -1821,7 +1821,6 @@ class BrowserController {
   private configureSession(ses: Session, partition: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): void {
     if (this.configuredSessions.has(partition)) return;
     this.configuredSessions.add(partition);
-    ses.setUserAgent(browserCompatibleUserAgent(ses.getUserAgent(), [app.getName(), 'Private Browser']));
     const protectedWorkspace = WORKSPACES.find((workspace) => workspace.id === workspaceId)!.protected;
     ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
       if (protectedWorkspace || !details.isMainFrame) {

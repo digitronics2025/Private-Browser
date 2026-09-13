@@ -161,3 +161,8 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 - GitHub runs `34750537980` (deploy), `34750538005` (CodeQL) and `34750538015` (verify/package/publish) passed on the exact commit. The authenticated publication verifier completed full, range, checksum and public-page checks.
 - D1/R2 and the public manifest expose Private Browser `0.5.9` build 91 for `eb63d5876802894cd6334869e0aed0c954f9506c`: `Private-Browser-0.5.9-Setup.exe`, 115,640,767 bytes, SHA-256 `c91878008b6f27da04367c94c6e24b13a41fa9be7ca96992ffd90e3cc55dc755`.
 - Live `/health` returned 200 with `status: ok`, `database: ok` and `releaseReady: true`; `/favicon.ico` returned 200 as `image/svg+xml` with one-day public caching. Fresh automated desktop and 375px browser sessions showed version 0.5.9 with zero console errors.
+
+[START] System 15 — Cloudflare Turnstile identity correction — 2026-09-13
+[STEP] 15.1 — Reproduce the dashboard verification failure and compare legacy User-Agent with Client Hints — done
+[STEP] 15.2 — Restore Electron's stable default embedded-browser identity and add a real Turnstile test-key regression — done
+[STEP] 15.3 — Pass the repository gate, package, publish and verify the corrected release — in progress

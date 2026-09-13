@@ -8,7 +8,7 @@ verified_at: 0f2626a1
 
 # Browser Shell
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-13
 
 ## Agent Brief
 
@@ -372,12 +372,11 @@ workspace reuses the same `Session` object, and without it `onBeforeRequest` and
 
 What it configures, once per partition:
 
-- **User agent** — `browserCompatibleUserAgent` removes both Electron's product
-  token and every space/hyphen/underscore spelling of the packaged application
-  token. The legacy header therefore stays aligned with Chromium's User-Agent
-  Client Hints; strict browser-integrity checks do not see the packaged
-  `private-work-browser/<version>` token that the former literal-only cleanup
-  missed.
+- **User agent** — no override. Remote views retain Electron's stable default
+  identity for the lifetime of the partition. Cloudflare's embedded-browser
+  guidance requires a consistent default User-Agent and stable browser
+  characteristics; presenting the legacy header as Google Chrome while Client
+  Hints exposed Chromium caused its verification flow to reject the page.
 - **Permissions** — both handlers allow only top-frame `fullscreen` and
   `clipboard-sanitized-write` from HTTPS or localhost. Banking denies everything.
   Camera, microphone, geolocation, notifications and the rest are denied without

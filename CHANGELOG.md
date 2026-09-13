@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.10 — 2026-09-13
+
+- Fixed Cloudflare login verification by preserving Electron's stable default
+  embedded-browser identity instead of advertising Google Chrome in the legacy
+  User-Agent while Client Hints identified Chromium.
+- Added a real Electron regression that completes Cloudflare's official
+  Turnstile test-key flow inside an isolated Account Space.
+
 ## 0.5.9 — 2026-09-13
 
 - Added an explicit, security-header-protected favicon route for the public

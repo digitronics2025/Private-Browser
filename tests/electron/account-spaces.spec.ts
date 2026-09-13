@@ -15,6 +15,14 @@ test.beforeEach(async () => {
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
+    if (request.url === '/turnstile') {
+      response.setHeader('Content-Type', 'text/html');
+      response.end(`<!doctype html>
+        <title>Turnstile fixture</title>
+        <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+        <div class="cf-turnstile" data-sitekey="1x00000000000000000000AA"></div>`);
+      return;
+    }
     if (request.url === '/sw.js') {
       response.setHeader('Content-Type', 'text/javascript');
       response.end("self.addEventListener('fetch', () => undefined);");
@@ -39,7 +47,7 @@ test.afterEach(async () => {
   rmSync(userDataPath, { recursive: true, force: true });
 });
 
-test('keeps the packaged User-Agent aligned with Chromium client hints', async () => {
+test('keeps the default embedded-browser identity stable across the session', async () => {
   const page = await application!.firstWindow();
   const state = await page.evaluate(() => window.privateBrowser.getState());
   await page.evaluate(
@@ -51,18 +59,36 @@ test('keeps the packaged User-Agent aligned with Chromium client hints', async (
   );
   await expect.poll(() => documentHeaders?.['user-agent']).toContain('Chrome/');
   const headerUserAgent = documentHeaders?.['user-agent'] ?? '';
-  expect(headerUserAgent).not.toMatch(/Electron|private[-_ ]work[-_ ]browser/i);
 
   const rendererIdentity = await application!.evaluate(async ({ webContents }, target) => {
     const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL().startsWith(target));
     if (!contents) throw new Error('Browser page view was not created');
-    return contents.executeJavaScript(`({
+    const identity = await contents.executeJavaScript(`({
       userAgent: navigator.userAgent,
       brands: navigator.userAgentData?.brands ?? []
     })`);
+    return { ...identity, sessionUserAgent: contents.session.getUserAgent() };
   }, origin);
   expect(rendererIdentity.userAgent).toBe(headerUserAgent);
+  expect(rendererIdentity.sessionUserAgent).toBe(headerUserAgent);
+  expect(headerUserAgent).toContain('Electron/');
+  expect(headerUserAgent).not.toContain('HeadlessChrome/');
   expect(rendererIdentity.brands).toEqual(expect.arrayContaining([expect.objectContaining({ brand: 'Chromium' })]));
+});
+
+test('completes the official Turnstile test-key flow in a remote page view', async () => {
+  const page = await application!.firstWindow();
+  const state = await page.evaluate(() => window.privateBrowser.getState());
+  await page.evaluate(
+    ({ accountSpaceId, target }) => window.privateBrowser.openInAccountSpace(accountSpaceId, target),
+    { accountSpaceId: state.activeAccountSpaceId, target: `${origin}/turnstile` },
+  );
+
+  await expect.poll(() => application!.evaluate(async ({ webContents }, target) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === target);
+    if (!contents) return 0;
+    return contents.executeJavaScript(`document.querySelector('[name="cf-turnstile-response"]')?.value.length ?? 0`);
+  }, `${origin}/turnstile`), { timeout: 30_000 }).toBeGreaterThan(0);
 });
 
 test('creates unique persistent partitions and isolates cookies, storage, cache and workers', async () => {
