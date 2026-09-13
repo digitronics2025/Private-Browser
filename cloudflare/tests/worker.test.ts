@@ -208,6 +208,7 @@ describe('download Worker', () => {
       expect(html).toContain('<title>Download Private Browser for Windows</title>');
       expect(html).toContain('<meta name="robots" content="index,follow">');
       expect(html).toContain('<link rel="canonical" href="https://downloads.example.com/">');
+      expect(html).toContain('<link rel="icon" href="/favicon.ico" type="image/svg+xml">');
       expect(html).toContain('Dr. Badawi Abdalsalam');
       expect(html).toContain('Software Architect · Casablanca, Morocco');
       expect(html).toContain('https://dr-badawi-abdalsalam.com/');
@@ -231,6 +232,24 @@ describe('download Worker', () => {
     expect(head.status).toBe(200);
     expect(Number(head.headers.get('content-length'))).toBeGreaterThan(1_000);
     expect(await head.text()).toBe('');
+  });
+
+  it('serves an explicit favicon without touching release storage', async () => {
+    const response = await request('/favicon.ico');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/svg+xml; charset=utf-8');
+    expect(response.headers.get('cache-control')).toBe('public, max-age=86400');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(await response.text()).toContain('<svg');
+
+    const head = await request('/favicon.ico', { method: 'HEAD' });
+    expect(head.status).toBe(200);
+    expect(Number(head.headers.get('content-length'))).toBeGreaterThan(100);
+    expect(await head.text()).toBe('');
+
+    const rejected = await request('/favicon.ico', { method: 'POST' });
+    expect(rejected.status).toBe(405);
+    expect(rejected.headers.get('allow')).toBe('GET, HEAD');
   });
 
   it('shows only the five most recently published prior stable releases', async () => {

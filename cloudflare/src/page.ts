@@ -46,6 +46,7 @@ export function renderDownloadPage(model: DownloadPageModel): string {
   <meta property="og:type" content="website">
   <meta property="og:url" content="${escapeHtml(model.canonicalUrl)}">
   <link rel="canonical" href="${escapeHtml(model.canonicalUrl)}">
+  <link rel="icon" href="/favicon.ico" type="image/svg+xml">
   <title>Download Private Browser for Windows</title>
   <style>
     :root {

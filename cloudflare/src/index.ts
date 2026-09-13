@@ -15,6 +15,7 @@ export interface Env {
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8' };
 const PRIVATE_CACHE = 'private, no-store, max-age=0';
+const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#5b5ce2"/><rect x="21" y="21" width="22" height="22" rx="5" fill="none" stroke="white" stroke-width="6" transform="rotate(45 32 32)"/></svg>`;
 
 function responseHeaders(extra: HeadersInit = {}): Headers {
   const headers = new Headers(extra);
@@ -35,6 +36,16 @@ function notFound(): Response {
 
 function methodNotAllowed(allow: string): Response {
   return json({ error: 'method_not_allowed' }, 405, { allow, 'cache-control': PRIVATE_CACHE });
+}
+
+function handleFavicon(request: Request): Response {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
+  const headers = responseHeaders({
+    'content-type': 'image/svg+xml; charset=utf-8',
+    'cache-control': 'public, max-age=86400',
+  });
+  headers.set('content-length', String(new TextEncoder().encode(FAVICON_SVG).byteLength));
+  return new Response(request.method === 'HEAD' ? null : FAVICON_SVG, { headers });
 }
 
 function bearer(request: Request): string {
@@ -266,6 +277,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     try {
+      if (url.pathname === '/favicon.ico') return handleFavicon(request);
       if (url.pathname === '/health') return request.method === 'GET' || request.method === 'HEAD' ? handleHealth(request, env) : methodNotAllowed('GET, HEAD');
       if (url.pathname === '/api/v1/releases/public/latest') return handlePublicLatest(request, env);
       if (url.pathname === '/api/v1/releases/latest' || url.pathname === '/update.json') return handleLatest(request, env);

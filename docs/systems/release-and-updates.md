@@ -10,12 +10,12 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: 0f2626a1
+verified_at: c5d1e2a9
 ---
 
 # Release and Updates
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-13
 
 ## Agent Brief
 
@@ -117,6 +117,7 @@ message and returns 500 `internal_error`.
 | Route | Methods | Auth | Behaviour |
 | --- | --- | --- | --- |
 | `/health` | GET, HEAD | none | 503 `{status:'degraded'}` if `secretsReady` is false or the D1 query throws. Otherwise 200 `{status:'ok', service, database:'ok', releaseReady}`, where `releaseReady` is whether the newest active release's R2 object exists. `cache-control: no-store`. |
+| `/favicon.ico` | GET, HEAD | none | Cacheable SVG application icon used by the public download page; unsupported methods return 405. |
 | `/` | GET, HEAD | none | `handlePublicDownloadPage`. Renders the canonical public page, current release, five previous stable releases and a freshly signed installer URL. |
 | `/api/v1/releases/public/latest` | GET, HEAD | none | `handlePublicLatest`. Returns the active stable signed manifest for installed-app version checks. Requires deployment secrets, returns 404 when no release exists, and never returns a client or administrator credential. |
 | `/api/v1/releases/latest` | GET, HEAD | client bearer | `handleLatest`. 404 on bad token or no release. Returns the signed manifest; HEAD returns the headers with no body. |
