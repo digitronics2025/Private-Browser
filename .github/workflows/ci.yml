@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -37,7 +37,7 @@ jobs:
     # No job-level secrets: `npm ci` must not run with credentials in its
     # environment, or any dependency's install script can read them.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -140,7 +140,7 @@ jobs:
     # Secrets are attached per step below, never to the job, so `npm ci` runs
     # without them in scope.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # Needed to diff this push against its predecessor below.
           fetch-depth: 0
