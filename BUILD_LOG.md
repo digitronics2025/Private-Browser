@@ -146,3 +146,18 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 - An independent public signed-route proof returned HEAD 200 and range 206, resumed from one MiB to the exact byte count, and recomputed the same SHA-256. The current-user installer exited 0, Windows reports product version `0.5.8.0`, and the launched installed app remained responsive.
 - The in-app state matrix is verified: installed `0.5.7` versus live `0.5.8` shows **Update available**; installed `0.5.8` versus live `0.5.8` shows **Private Browser is up to date**. The page also passed loading, failure/retry, developer-link and 375px CTA checks.
 - Downstream claim due 2026-09-13: the active D1 tuple `(0.5.8, 89, 0f2626a, 115640788, a820b01…)` must equal the public feed and signed R2 bytes, and the desktop comparison must continue resolving older/current versions correctly.
+
+[START] System 14 — Main production consolidation — 2026-09-13
+[STEP] 14.1 — Reconcile local branches with `origin/main` and exclude the superseded duplicate cache-verifier branch — done
+[STEP] 14.2 — Run the canonical gate and dependency audit against exact `main` — done
+[STEP] 14.3 — Deploy exact `main`, diagnose the live favicon 404, and add regression coverage — done
+[STEP] 14.4 — Push, directly deploy, publish the Windows installer, and verify Worker, D1, R2 and browser state — done
+[DONE] System 14 — Main production consolidation — 2026-09-13
+
+[FINAL AUDIT] Main production consolidation passed — 2026-09-13
+- Commit `eb63d5876802894cd6334869e0aed0c954f9506c` is on `main`; the only local-only branch contains an older equivalent of the already-merged composite `no-store` verifier and stale documentation metadata, so it was deliberately not merged over the newer implementation.
+- The canonical local gate passed 220 desktop tests, 7 protocol tests, 6 extension tests, 24 Worker tests, 10 browser flows and 4 real Electron tests. Typechecks, secret and documentation guards, VSIX validation, production builds and the Wrangler dry-run passed; `npm audit` found zero vulnerabilities.
+- Direct Wrangler release applied no pending D1 migrations and activated Worker version `3cc3d01c-1065-4e66-a959-0ab02f188d64`, tagged `git-eb63d58`; rollback point before the final tagged deployment was `ca955ffd-3fc5-4695-a0ff-cb8609007868`.
+- GitHub runs `34750537980` (deploy), `34750538005` (CodeQL) and `34750538015` (verify/package/publish) passed on the exact commit. The authenticated publication verifier completed full, range, checksum and public-page checks.
+- D1/R2 and the public manifest expose Private Browser `0.5.9` build 91 for `eb63d5876802894cd6334869e0aed0c954f9506c`: `Private-Browser-0.5.9-Setup.exe`, 115,640,767 bytes, SHA-256 `c91878008b6f27da04367c94c6e24b13a41fa9be7ca96992ffd90e3cc55dc755`.
+- Live `/health` returned 200 with `status: ok`, `database: ok` and `releaseReady: true`; `/favicon.ico` returned 200 as `image/svg+xml` with one-day public caching. Fresh automated desktop and 375px browser sessions showed version 0.5.9 with zero console errors.

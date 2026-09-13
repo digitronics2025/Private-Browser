@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.9 — 2026-09-13
+
+- Added an explicit, security-header-protected favicon route for the public
+  download page so production browsers no longer log a missing-resource error.
+
 ## 0.5.8 — 2026-09-12
 
 - Added a dedicated in-app Updates page that automatically compares the installed
