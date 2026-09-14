@@ -154,10 +154,20 @@ test('side panel opens from the toolbar, switches tools, resizes and keeps its c
 
   const handle = panel.getByRole('separator', { name: 'Resize side panel' });
   const grip = (await handle.boundingBox())!;
-  await page.mouse.move(grip.x + grip.width / 2, grip.y + 200);
+  const pointer = { x: Math.round(grip.x + grip.width / 2), y: Math.round(grip.y + 200) };
+  // Diagnose rather than guess if this ever fails: which element is under the pointer?
+  const underPointer = await page.evaluate(({ x, y }) => {
+    const element = document.elementFromPoint(x, y);
+    return element ? `${element.tagName.toLowerCase()}.${String(element.className)}` : 'nothing';
+  }, pointer);
+  expect(underPointer, `element under the resize grip at ${pointer.x},${pointer.y}`).toContain('side-panel-resize');
+  await page.mouse.move(pointer.x, pointer.y);
   await page.mouse.down();
-  await page.mouse.move(grip.x - 80, grip.y + 200, { steps: 6 });
+  await expect(panel, 'pressing the grip starts a resize').toHaveClass(/resizing/);
+  await page.mouse.move(pointer.x - 40, pointer.y, { steps: 10 });
+  await page.mouse.move(pointer.x - 84, pointer.y, { steps: 10 });
   await page.mouse.up();
+  await expect(panel).not.toHaveClass(/resizing/);
   await expect.poll(async () => Math.round((await panel.boundingBox())!.width)).toBe(484);
   await handle.focus();
   await page.keyboard.press('End');

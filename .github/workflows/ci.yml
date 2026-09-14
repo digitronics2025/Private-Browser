@@ -29,6 +29,18 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npx playwright install --with-deps chromium
       - run: npm run check
+      # Browser test failures on the runner are not always reproducible locally;
+      # keep the screenshots and traces (preview mock data only) to diagnose them.
+      - name: Keep browser test evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-evidence
+          path: |
+            test-results/
+            blob-report/
+          retention-days: 7
+          if-no-files-found: ignore
 
   windows-installer:
     needs: verify
