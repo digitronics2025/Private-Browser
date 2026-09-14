@@ -116,7 +116,8 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+/* clip, not hidden: a hidden box can still be scrolled by focus or scrollIntoView, sliding the whole frame sideways. */
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: clip; }
 body { background: var(--window); color: var(--text); font-size: var(--fs-md); line-height: 1.4; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: default; }
@@ -282,7 +283,8 @@ kbd { font: inherit; }
 .bookmark-item.dragging { z-index: 3; transition: none; background: var(--surface-3); box-shadow: var(--shadow-md); }
 .bookmark-overflow { padding: 0 6px; }
 .bookmark-other { margin-left: 4px; border-left: 1px solid var(--border); border-radius: 0 var(--radius-pill) var(--radius-pill) 0; padding-left: 10px; }
-.bookmark-measure { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; display: flex; gap: 2px; white-space: nowrap; }
+/* Zero-width and clipped so the full-length measuring row never widens the page; items keep their natural width (flex: 0 0 auto). */
+.bookmark-measure { position: absolute; left: 0; top: 0; width: 0; overflow: hidden; visibility: hidden; pointer-events: none; display: flex; gap: 2px; white-space: nowrap; }
 .bookmark-bar-hint { display: flex; align-items: center; gap: 2px; padding-left: 8px; color: var(--text-muted); font-size: var(--fs-sm); white-space: nowrap; }
 .hint-dismiss { width: 22px; height: 22px; display: grid; place-items: center; margin-left: 6px; padding: 0; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-subtle); }
 .hint-dismiss:hover { background: var(--hover); }

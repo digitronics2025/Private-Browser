@@ -10,12 +10,12 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: eb63d587
+verified_at: a014e2c7
 ---
 
 # Release and Updates
 
-> Last verified: 2026-09-13
+> Last verified: 2026-09-14
 
 ## Agent Brief
 
@@ -412,6 +412,11 @@ F-11). `publish-cloudflare-release` overrides the workflow concurrency with its
 own group and `cancel-in-progress: false`: the ref-level group could otherwise
 kill it between the R2 upload and the D1 registration and strand a ~114 MB object
 nothing references (F-21).
+
+**A failed `verify` keeps its browser test evidence.** The `playwright-evidence`
+artifact (`test-results/` and `blob-report/`, 7 days) is uploaded only on failure.
+It holds screenshots and traces of the preview mock and throwaway Electron
+profiles, never real browsing data.
 
 **A documentation-only push publishes nothing.** The publish job checks out at
 `fetch-depth: 0`, diffs against `github.event.before` (falling back to `HEAD~1`

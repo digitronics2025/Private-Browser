@@ -151,6 +151,11 @@ test('side panel opens from the toolbar, switches tools, resizes and keeps its c
   await panel.getByRole('tab', { name: 'Privacy' }).click();
   await expect(panel.getByRole('heading', { name: 'Privacy log' })).toBeVisible();
   await expect.poll(async () => Math.round((await panel.boundingBox())!.width)).toBe(400);
+  // Regression: the bookmark measuring row once overflowed the page, so a click could scroll the frame sideways.
+  expect(await page.evaluate(() => ({
+    rootScrollLeft: document.getElementById('root')!.scrollLeft,
+    shellOverflow: document.querySelector('.app-shell')!.scrollWidth - window.innerWidth,
+  }))).toEqual({ rootScrollLeft: 0, shellOverflow: 0 });
 
   const handle = panel.getByRole('separator', { name: 'Resize side panel' });
   const grip = (await handle.boundingBox())!;

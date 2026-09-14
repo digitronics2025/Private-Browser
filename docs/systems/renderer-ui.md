@@ -3,7 +3,7 @@ system: renderer-ui
 sources:
   - src/**
   - index.html
-verified_at: 08cf6e94
+verified_at: a014e2c7
 ---
 
 # Renderer UI
@@ -187,8 +187,15 @@ overlay (the page view would otherwise swallow the pointer), update a live width
 that only moves CSS, and commit once on release — so the IPC rate limit is never
 hit. The drag is tracked with window-level `pointermove`/`pointerup` listeners
 (pointer capture is requested but not relied on), so losing capture cannot end
-the drag early. A capture-only version failed on the GitHub Linux runner with the
-width unchanged, although it never failed locally or in a 2-CPU Linux container. Arrow keys resize by 24 px, Home/End jump to max/min.
+the drag early. Arrow keys resize by 24 px, Home/End jump to max/min.
+
+**The frame must never scroll sideways.** `html, body, #root` use `overflow: clip`,
+not `hidden`: a hidden box is still scrollable by focus or `scrollIntoView`. The
+bookmarks bar's `.bookmark-measure` row (every bookmark, used to compute overflow)
+is zero-width and clipped. Before both, that row made `#root` about 2,200 px wide,
+a click scrolled the frame ~800 px left, and the side panel grip ended up
+off-screen (seen only on the GitHub Linux runner's fonts). `chrome-shell.spec.ts`
+asserts `#root` scrollLeft 0 and no `.app-shell` overflow.
 
 ## New Tab Page
 
