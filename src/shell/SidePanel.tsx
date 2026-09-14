@@ -1,4 +1,4 @@
-import { useContext, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Code2, Download, KeyRound, ShieldCheck, Sparkles, X, Zap } from 'lucide-react';
 import type { SidePanelTool } from '../../electron/types';
 import { clampSidePanelWidth, SIDE_PANEL } from '../../electron/chrome-layout';
@@ -29,29 +29,48 @@ export function SidePanel({ tool, width, activeDownloads, onSelectTool, onClose,
   const [resizing, setResizing] = useState(false);
   const liveWidth = useRef(width);
 
+  const callbacks = useRef({ onLiveWidth, onCommitWidth });
+  callbacks.current = { onLiveWidth, onCommitWidth };
+  const detach = useRef<(() => void) | null>(null);
+  useEffect(() => () => detach.current?.(), []);
+
   const beginResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || release.current) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    // Track the drag on the window rather than relying on pointer capture alone:
+    // capture can be lost while the page freezes underneath, and a lost capture
+    // must not silently turn the drag into a no-op.
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* window listeners still track the drag */ }
     // The page view would swallow the pointer as soon as it crosses into it, so
     // freeze the page for the length of the drag.
     release.current = overlay.acquire();
     start.current = { x: event.clientX, width };
     liveWidth.current = width;
     setResizing(true);
-  };
-  const resize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!release.current) return;
-    liveWidth.current = clampSidePanelWidth(start.current.width + (start.current.x - event.clientX), window.innerWidth);
-    onLiveWidth(liveWidth.current);
-  };
-  const endResize = () => {
-    if (!release.current) return;
-    onCommitWidth(liveWidth.current);
-    onLiveWidth(null);
-    release.current();
-    release.current = null;
-    setResizing(false);
+    const pointerId = event.pointerId;
+    const move = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      liveWidth.current = clampSidePanelWidth(start.current.width + (start.current.x - moveEvent.clientX), window.innerWidth);
+      callbacks.current.onLiveWidth(liveWidth.current);
+    };
+    const end = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId !== pointerId) return;
+      detach.current?.();
+      callbacks.current.onCommitWidth(liveWidth.current);
+      callbacks.current.onLiveWidth(null);
+      release.current?.();
+      release.current = null;
+      setResizing(false);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    detach.current = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      detach.current = null;
+    };
   };
   const onSeparatorKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const delta = event.key === 'ArrowLeft' ? 24 : event.key === 'ArrowRight' ? -24 : 0;
@@ -85,10 +104,6 @@ export function SidePanel({ tool, width, activeDownloads, onSelectTool, onClose,
         aria-valuenow={width}
         tabIndex={0}
         onPointerDown={beginResize}
-        onPointerMove={resize}
-        onPointerUp={endResize}
-        onPointerCancel={endResize}
-        onLostPointerCapture={endResize}
         onKeyDown={onSeparatorKey}
       />
       <header className="side-panel-header">

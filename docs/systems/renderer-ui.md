@@ -185,7 +185,10 @@ Privacy — and a close button; Bookmarks, History and Settings open from menus 
 shortcuts. The left-edge separator resizes 320–520 px: pointer drags acquire the
 overlay (the page view would otherwise swallow the pointer), update a live width
 that only moves CSS, and commit once on release — so the IPC rate limit is never
-hit. Arrow keys resize by 24 px, Home/End jump to max/min.
+hit. The drag is tracked with window-level `pointermove`/`pointerup` listeners
+(pointer capture is requested but not relied on), so losing capture cannot end
+the drag early. A capture-only version failed on the GitHub Linux runner with the
+width unchanged, although it never failed locally or in a 2-CPU Linux container. Arrow keys resize by 24 px, Home/End jump to max/min.
 
 ## New Tab Page
 
