@@ -5,7 +5,7 @@ sources:
   - electron/account-space-state.ts
   - electron/runtime-state-store.ts
   - electron/ui-preferences.ts
-verified_at: 7063e89
+verified_at: 08cf6e94
 ---
 
 # Workspaces and Persisted State

@@ -3,7 +3,7 @@ system: renderer-ui
 sources:
   - src/**
   - index.html
-verified_at: 0f2626a1
+verified_at: 08cf6e94
 ---
 
 # Renderer UI

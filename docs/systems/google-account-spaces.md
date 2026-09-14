@@ -19,12 +19,12 @@ sources:
   - electron/ipc-contracts.ts
   - electron/oauth-loopback.ts
   - electron/runtime-state-store.ts
-verified_at: 7063e89
+verified_at: 08cf6e94
 ---
 
 # Google Account Spaces
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-14
 
 ## Agent Brief
 
@@ -62,9 +62,12 @@ key, refresh token or Google subject to the renderer.
 ## Persistence and migration
 
 The plaintext `browser-state-v2.json` manifest contains only active workspace,
-opaque Account Space references, active account references, tracker preference
-and the privacy log. Each account has a separate plaintext browsing file for
-tabs, bookmarks and history. Encrypted `<uuid>.account.enc` records hold label,
+opaque Account Space references, active account references, tracker preference,
+interface preferences (`ui`: theme, bookmarks-bar mode, side panel and New Tab
+background) and the privacy log. Each account has a separate plaintext browsing
+file for tabs, bookmarks, history and, once customised, up to 12 HTTP(S) New Tab
+shortcuts. Deleting an Account Space removes its shortcuts with its other state.
+Details: [workspaces-and-state.md](workspaces-and-state.md). Encrypted `<uuid>.account.enc` records hold label,
 colour, workspace ownership, partition key, Google identity, refresh token,
 grants, modules, permissions and backup settings.
 
@@ -173,11 +176,15 @@ overwrite. A bad authentication tag or missing recovery key stops restore.
 
 ## UI and tests
 
-The top-right switcher exposes only accounts in the active workspace and supports
-keyboard cycling. The manager provides local/Google add, rename, recolour,
-reorder, module reconnect, service launch, lock, clear, disconnect and delete.
-The address chip and tab accent show the active account. The native page view is
-hidden below account, permission and recovery overlays; focus returns on close.
+The toolbar profile avatar (Account Space colour ring, warning badge only when
+action is required) opens a menu listing workspaces and only the accounts in the
+active workspace, with keyboard cycling. The manager provides local/Google add,
+rename, recolour, reorder, module reconnect, service launch, lock, clear,
+disconnect and delete. Tab, tab-move, mute and bookmark-editing IPC act only on
+the active Account Space; `ipc-contracts.ts` validates their shapes. The native
+page view is hidden below menus, account, permission and recovery overlays (a
+still image of the page is shown instead, never for Banking or protected pages);
+focus returns on close.
 
 `npm run dev:preview` installs a credential-free renderer mock. Browser E2E checks
 desktop/mobile switching and management. Playwright Electron creates a fresh app

@@ -6,7 +6,7 @@ sources:
   - electron/chrome-layout.ts
   - electron/shortcuts.ts
   - electron/bookmark-tree.ts
-verified_at: af2314bf
+verified_at: 08cf6e94
 ---
 
 # Browser Shell
