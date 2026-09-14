@@ -9,7 +9,7 @@ verified_at: 0f2626a1
 
 # IPC Contract
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-14
 
 ## Agent Brief
 
@@ -43,7 +43,7 @@ trusted-sender check, the browser methods) and in [vault.md](vault.md),
 3. **Only these keys reach the renderer.** `contextBridge` exposes exactly the
    `api` object; nothing else is reachable from page or chrome JavaScript. →
    **The Bridge**
-4. **The three `on*` methods return an unsubscribe function.** Dropping it leaks a
+4. **Every `on*` method returns an unsubscribe function.** Dropping it leaks a
    listener on every re-render. → **Main to Renderer Events**
 5. **The normal preload never accepts or returns vault secrets.** Unlock,
    pairing, edit and confirmation values travel through a separate one-shot
@@ -89,8 +89,8 @@ contextBridge.exposeInMainWorld('privateBrowser', api);
 export type PrivateBrowserApi = typeof api;
 ```
 
-- The exposed object is the literal `api` const: 40 `invoke` wrappers and three
-  `on*` subscription helpers. Nothing else crosses.
+- The exposed object is the literal `api` const: `invoke` wrappers plus the `on*`
+  subscription helpers listed below. Nothing else crosses.
 - `PrivateBrowserApi` is derived with `typeof`, so the renderer's type follows the
   implementation automatically. This is the one place in the contract that cannot
   drift.
@@ -118,7 +118,17 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:close-tab` | `closeTab(tabId)` | `tabId: string` | `void` |
 | `browser:activate-tab` | `activateTab(tabId)` | `tabId: string` | `void` |
 | `browser:switch-workspace` | `switchWorkspace(workspaceId)` | `workspaceId: WorkspaceId` | `void` |
-| `browser:set-layout` | `setLayout(layout)` | `{ top: number; left: number; right: number; bottom: number }` | `void` |
+| `browser:set-layout` | `setLayout(layout)` | `{ top; left; right; bottom }` (`ContentInsets`) — finite 0–4000 | `void` |
+| `browser:freeze-content` | `freezeContent()` | — | JPEG `data:` URL, or `null` for home/protected pages |
+| `browser:move-tab` | `moveTab(tabId, toIndex)` | tab id, integer 0–25000 | `void` |
+| `browser:reopen-closed-tab` | `reopenClosedTab()` | — | `void` |
+| `browser:zoom` | `zoom(direction)` | `'in' \| 'out' \| 'reset'` | `void` |
+| `browser:print` | `print()` | — | `void` |
+| `browser:find` | `findInPage(text, forward, newSession)` | text ≤ 1000, two booleans | `void` |
+| `browser:stop-find` | `stopFindInPage()` | — | `void` |
+| `browser:set-tab-muted` | `setTabMuted(tabId, muted)` | tab id, boolean | `void` |
+| `browser:hard-reload` | `hardReload()` | — | `void` |
+| `browser:toggle-fullscreen` | `toggleFullscreen()` | — | `void` |
 | `browser:toggle-bookmark` | `toggleBookmark()` | — | `void` |
 | `browser:open-bookmark` | `openBookmark(id)` | `id: string` | `void` |
 | `browser:toggle-bookmark-bar` | `toggleBookmarkBar()` | — | `void` |
@@ -129,9 +139,22 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
 
-`setLayout` is the only argument shape written as an inline object literal rather
-than a named type. `main.ts` has its own unexported `Layout` interface with the
-same four fields, and neither file imports the other.
+### ui:, bookmarks:, shortcuts:, app:
+
+| Channel | Preload method | Arguments | Resolves with |
+| --- | --- | --- | --- |
+| `ui:set-preferences` | `setUiPreferences(patch)` | non-empty `UiPreferencesPatch`, validated by `requireUiPreferencesPatch` | `void` |
+| `bookmarks:move` | `moveBookmark(level, key, toIndex)` | `BookmarkLevelInput`, `BookmarkEntryKeyInput`, integer | `void` |
+| `bookmarks:rename` | `renameBookmark(id, title)` | id, non-blank title ≤ 500 | `void` |
+| `bookmarks:remove` | `removeBookmark(id)` | id | `void` |
+| `bookmarks:rename-folder` | `renameBookmarkFolder(level, name, nextName)` | level, two non-blank names ≤ 200 | `void` |
+| `bookmarks:remove-folder` | `removeBookmarkFolder(level, name)` | level, name | `void` |
+| `bookmarks:export` | `exportBookmarks()` | — | `boolean` (false when the save dialog was cancelled) |
+| `shortcuts:set` | `setShortcutTiles(accountSpaceId, tiles)` | Account Space id, ≤ 12 `ShortcutTile` with HTTP(S) URLs, or `null` | `void` |
+| `app:quit` | `quit()` | — | `void` |
+
+`browser:open-bookmark` now validates its id as bounded text. Bookmark and tab
+mutations are additionally scoped to the active Account Space in the controller.
 
 ### developer: — 12 channels
 
@@ -214,13 +237,14 @@ in the controller — `back()` calls `browser:back` which runs `goBack()`.
 
 ## Main to Renderer Events
 
-Three channels flow the other way, via `webContents.send` in `main.ts` and
+These channels flow the other way, via `webContents.send` in `main.ts` and
 `ipcRenderer.on` in the preload.
 
 | Channel | Preload method | Payload | Sent when |
 | --- | --- | --- | --- |
 | `browser:state` | `onState(cb)` | `BrowserSnapshot` | every `broadcast()` in the controller |
-| `browser:focus-address` | `onFocusAddress(cb)` | none | Ctrl/Cmd+L pressed inside a page view |
+| `browser:command` | `onCommand(cb)` | `Shortcut` (`{ command, index? }`) | a shortcut resolved while a page view had focus |
+| `browser:find-result` | `onFindResult(cb)` | `FindResult` | Chromium reported find-in-page matches for the active tab |
 | `updates:available` | `onUpdateAvailable(cb)` | `UpdateCheckResult` | a background check found a newer version |
 
 Each helper wraps the caller's callback in a listener that strips the
@@ -229,8 +253,11 @@ Each helper wraps the caller's callback in a listener that strips the
 out of a `useEffect`.
 
 `browser:state` is a full snapshot every time — there are no deltas, and there is
-no acknowledgement. `browser:focus-address` carries no payload; the renderer
-decides what focusing means.
+no acknowledgement. The snapshot now also carries `ui` (`UiPreferences`),
+`windowState` (`maximized`, `fullscreen`, `darkMode`), `shortcutsByAccountSpace`
+(customised New Tab tiles; a missing key means defaults), `canReopenClosedTab`,
+and per-tab `audible`, `muted` and `zoomPercent`. `bookmarkBarVisible` remains as
+a derived compatibility field.
 
 ## Shared Payload Types
 
@@ -428,10 +455,9 @@ response field by field before it is cast — see
 - **`browser:state` has no sequence number.** A renderer that starts an action and
   then receives a snapshot cannot tell whether the snapshot reflects its action or
   predates it.
-- **The three `on*` helpers must be unsubscribed.** They register a new listener
-  every call. App.tsx returns each one's result from a `useEffect`; a caller that
-  ignores the return leaks a listener per render.
-- **`setLayout` has no named type.** Its shape is duplicated between an inline
-  literal in the preload and the `Layout` interface in `main.ts`, and the main
-  process clamps the values it receives — see
-  [browser-shell.md](browser-shell.md).
+- **The `on*` helpers must be unsubscribed.** They register a new listener
+  every call. The renderer returns each one's result from a `useEffect` through
+  `disposer()`, which also tolerates test doubles that omit a channel.
+- **`setLayout` is clamped twice.** `ipc-contracts.ts` rejects malformed numbers;
+  the controller then applies `sanitizeContentInsets` — see
+  [browser-shell.md](browser-shell.md#layout-maths).

@@ -3,12 +3,15 @@ system: browser-shell
 sources:
   - electron/main.ts
   - electron/developer-tools.ts
+  - electron/chrome-layout.ts
+  - electron/shortcuts.ts
+  - electron/bookmark-tree.ts
 verified_at: af2314bf
 ---
 
 # Browser Shell
 
-> Last verified: 2026-09-13
+> Last verified: 2026-09-14
 
 ## Agent Brief
 
@@ -35,8 +38,9 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
   the 40 channels this file registers and their payload types.
 - **What survives a restart** → [workspaces-and-state.md](workspaces-and-state.md).
   Owns `WORKSPACES`, `PersistedState`, `sanitizeState`, the atomic save.
-- **The React chrome** → [renderer-ui.md](renderer-ui.md). Owns App.tsx, its own
-  second copy of the keyboard shortcuts, and the layout numbers it sends here.
+- **The React chrome** → [renderer-ui.md](renderer-ui.md). Owns `src/`. It imports
+  the geometry (`chrome-layout.ts`) and the shortcut table (`shortcuts.ts`)
+  documented here, so both processes share one copy of each.
 
 ### Invariants
 
@@ -62,8 +66,8 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
 | the window size, title bar, preload path or dev/prod load | [Window and Chrome Renderer](#window-and-chrome-renderer) |
 | opening, closing, activating or switching tabs | [Tabs and WebContentsView Lifecycle](#tabs-and-webcontentsview-lifecycle) |
 | the address bar, a committed URL or a history row | [Navigation and History](#navigation-and-history) |
-| where the page sits under the chrome | [Layout Maths](#layout-maths) |
-| a shortcut that fires while focus is inside a page | [Keyboard Shortcuts](#keyboard-shortcuts) |
+| where the page sits under the chrome, full screen, or a menu over the page | [Layout Maths](#layout-maths) |
+| any keyboard shortcut | [Keyboard Shortcuts](#keyboard-shortcuts) |
 | the download list or opening a downloaded file | [Downloads](#downloads) |
 | the tracker denylist or the shield toggle | [Tracker Blocking](#tracker-blocking) |
 | an entry in the privacy timeline | [Privacy Log](#privacy-log) |
@@ -83,7 +87,8 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
 - Mutate state only through `this.store.update(...)`; `get()` hands back a clone.
 - End any mutating method with `broadcast()`.
 - Adding a channel means three edits in three files — see [ipc-contract.md](ipc-contract.md).
-- Changing a layout number means changing it in App.tsx too; nothing checks.
+- Layout numbers live only in `chrome-layout.ts`; the renderer and this process
+  both import it, and `tests/chrome-layout.test.ts` pins the arithmetic.
 - Do not add AI, vault or update logic here. Put it in its own module and leave a
   one-line facade.
 
@@ -98,11 +103,29 @@ and no dependency injection beyond the stores passed into the constructor.
 ## Window and Chrome Renderer
 
 `createWindow()` builds the one and only `BrowserWindow`: 1500x940, minimum
-1050x680, background `#0b0d12`, `titleBarStyle: 'hidden'` with a `titleBarOverlay`
-39 px tall. The OS draws the window controls on top of the React chrome, which is
-why the chrome reserves that strip itself.
+900x600, `titleBarStyle: 'hidden'` with a `titleBarOverlay` exactly
+`CHROME.tabStrip` (40 px) tall. Windows draws its native minimise, maximise and
+close buttons into the right end of the tab strip — which keeps Snap Layouts,
+double-click-to-maximise on the drag region and correct high-DPI hit testing —
+and the tab strip leaves that space free via CSS `env(titlebar-area-*)`.
 
-- `show: false` plus a `ready-to-show` handler — no white flash on launch.
+- **Theme.** `nativeTheme.themeSource` is set from the saved `ui.theme` before the
+  window is created, so `backgroundColor` and the overlay colours come from
+  `FRAME_COLORS` for the effective theme with no flash. `nativeTheme` `updated`
+  calls `applyFrameColors()` (overlay, background, broadcast). The renderer reads
+  `windowState.darkMode` from the snapshot rather than guessing.
+- **Window state.** `maximize`, `unmaximize`, `enter-full-screen` and
+  `leave-full-screen` re-apply the layout and broadcast `windowState`;
+  `screen` `display-metrics-changed` (moving between monitors or changing
+  scaling) re-applies the layout. Both listeners are removed on `closed`.
+- **Chrome zoom is pinned to 1** (`setZoomFactor(1)` after load, visual zoom
+  limits 1–1): the geometry is in DIPs and a zoomed chrome would drift from the
+  page view.
+
+- `show: false` plus a `ready-to-show` handler — no white flash on launch. The
+  handler is attached **before** `loadURL`, and the window is shown after the load
+  resolves if it is still hidden: `ready-to-show` can fire before `loadURL`
+  resolves, and a late listener left the window invisible on some launches.
 - `webPreferences`: preload resolved as `join(import.meta.dirname, 'preload.cjs')`,
   so it loads `dist-electron/preload.cjs`, next to the compiled `main.js`.
   `contextIsolation`, `sandbox` and `webSecurity` on, `nodeIntegration` off.
@@ -185,53 +208,100 @@ check `navigationHistory.canGoBack()` / `canGoForward()` first.
 
 ## Layout Maths
 
-The main process holds one `Layout` for all tabs, defaulting to
-`{ top: 158, left: 0, right: 366, bottom: 0 }`, matching the initially visible
-bookmarks bar and the absence of a permanent left rail. The renderer then sends
-the persisted 158 px or 128 px top inset, and reserves 366 px on the right while
-the panel is open.
+All geometry lives in [chrome-layout.ts](../../electron/chrome-layout.ts), a pure
+module imported by this process and by the renderer:
 
-`setLayout` clamps before storing: `top` becomes `Math.max(80, Math.round(top))`,
-the other three become `Math.max(0, Math.round(n))`.
+| Token | Value |
+| --- | --- |
+| `CHROME.tabStrip` | 40 (also the title-bar overlay height) |
+| `CHROME.toolbar` | 48 |
+| `CHROME.bookmarkBar` | 34 |
+| `CHROME.findBar` | 44 |
+| `SIDE_PANEL` | min 320, default 400, max 520 |
 
-`applyLayout()` positions only the **active** tab's view:
+`computeChromeLayout({ bookmarkBarMode, isHome, findBarOpen, sidePanelOpen,
+sidePanelWidth, fullscreen, windowWidth })` returns each bar's height and the page
+insets: `top = tabStrip + toolbar + bookmarkBar? + findBar?`, `right = side panel
+width` (clamped so at least `MIN_CONTENT_WIDTH` 200 px of page remains), `left =
+bottom = 0`. The bookmarks bar counts for `always`, or for `new-tab` only on the
+New Tab page; the find bar never counts on the New Tab page; full screen returns
+zero for everything. The renderer sizes its bars from the same result and sends
+`insets` over `browser:set-layout`.
 
-```
-x      = left
-y      = top
-width  = max(100, contentWidth  - left - right)
-height = max(100, contentHeight - top  - bottom)
-```
+The controller starts at `DEFAULT_CONTENT_INSETS` (the same calculation for the
+default preferences). `setLayout` runs `sanitizeContentInsets`: every side
+rounded and bounded to 0–4000, `top` never below `MIN_CHROME_TOP` (tab strip +
+toolbar, 88), so a renderer bug cannot slide a page over the address bar and its
+security chip. `ipc-contracts.ts` also rejects non-finite numbers.
 
-It reads `window.getContentSize()`, so the numbers are content-area DIPs, not
-screen pixels. It returns early when the active tab is home, has no view, or the
-window is destroyed — the bounds are then applied by the next navigate or show.
-Background views keep whatever bounds they last had; `showActiveTab` re-applies
-before revealing one.
+`applyLayout()` positions only the **active** tab's view with
+`contentBounds(insets, contentWidth, contentHeight)`; while the window is full
+screen it uses `ZERO_INSETS`. It reads `window.getContentSize()`, so the numbers
+are content-area DIPs. It returns early when the active tab is home, has no view,
+or the window is destroyed. Window `resize`, `resized`, `restore`, maximise,
+full-screen and `display-metrics-changed` go through `scheduleLayout()`, which
+applies immediately and again 80 ms later: Windows raises those events while the
+frame is still settling, and at 150 % scaling a maximised window otherwise kept a
+page one DIP short of the bottom edge. `navigate`, `showActiveTab` and
+`setLayout` call `applyLayout()` directly.
 
-Callers: window `resize`, `navigate`, `showActiveTab`, `setLayout`.
+**Full screen.** `toggleFullscreen()` (F11, the menu) toggles window full screen.
+A page's own request (`enter-html-full-screen`) makes the window full screen and
+records the owning tab in `htmlFullscreenOwner`; `leave-html-full-screen` from
+that tab restores it. Esc inside a page leaves window full screen only when no
+page owns it. The renderer hides all chrome while `windowState.fullscreen`.
+
+**Menus over the page.** A `WebContentsView` always paints above the React tree,
+so any menu, dialog or resize drag that overlaps the page first calls
+`freezeContent()`: `capturePage()` on the active visible view, returned as a JPEG
+`data:` URL that the renderer paints in the page rectangle, followed by
+`setOverlayOpen(true)`, which hides every view with `setVisible(false)` but —
+unlike `hideAllViews` for tab switches — leaves docked DevTools attached. Home tabs, hidden
+views, protected workspaces (Banking) and `isProtectedPage` URLs return `null`
+and get a plain backdrop instead — protected pixels never enter the chrome
+renderer. Nothing is written to disk and the image is dropped when the overlay
+closes.
 
 ## Keyboard Shortcuts
 
-Registered per view via `before-input-event`, so these fire only when focus is
-inside a page.
+There is one table: `resolveShortcut(input)` in
+[shortcuts.ts](../../electron/shortcuts.ts). `handleShortcut` (every view's
+`before-input-event`, i.e. page focus) resolves the key, calls
+`preventDefault`, focuses the chrome webContents first when
+`needsChromeFocus(command)` (address bar, find, menus, panels), and sends the
+result on `browser:command`. The renderer's `keydown` listener (chrome focus)
+resolves the same table and both paths run one dispatcher in App.tsx.
 
-| Keys | Effect |
+| Keys | Command |
 | --- | --- |
-| Ctrl/Cmd+L | sends `browser:focus-address` to the chrome renderer |
-| Ctrl/Cmd+T | `newTab()` in the current workspace |
-| Ctrl/Cmd+W | `closeTab()` on the active tab |
-| Ctrl/Cmd+R | `reload()` |
-| Ctrl/Cmd+Shift+B | toggles and persists the bookmarks bar |
-| F12 or Ctrl/Cmd+Shift+I | toggles Chromium DevTools for an allowed Development-workspace page |
-| Alt+Left | `goBack()` |
-| Alt+Right | `goForward()` |
+| Ctrl+L, Alt+D, F6 | focus the address bar |
+| Ctrl+T / Ctrl+W (Ctrl+F4) / Ctrl+Shift+T | new tab / close tab / reopen closed tab |
+| Ctrl+Tab, Ctrl+PgDn / Ctrl+Shift+Tab, Ctrl+PgUp | next / previous tab |
+| Ctrl+1–8 / Ctrl+9 | tab by position / last tab |
+| Ctrl+R, F5 / Ctrl+Shift+R, Ctrl+F5, Shift+F5 | reload / reload ignoring cache |
+| Alt+Left / Alt+Right / Alt+Home | back / forward / New Tab page |
+| Ctrl+D / Ctrl+Shift+B / Ctrl+Shift+O | bookmark page / toggle bookmarks bar / bookmark manager |
+| Ctrl+H / Ctrl+J | history / downloads panels |
+| Ctrl+F / Ctrl+P | find in page / print |
+| Ctrl+= (+) / Ctrl+- / Ctrl+0 | zoom in / out / reset |
+| F11 | full screen |
+| Alt+F, Alt+E / Ctrl+Shift+A | browser menu / tab search |
+| Ctrl+Shift+Delete | delete browsing data (confirmed) |
+| F12, Ctrl+Shift+I | DevTools for an allowed Development page |
+| Ctrl+Shift+Left/Right | previous/next Account Space (ignored while typing) |
 
-The chrome window has its own separate copy of Ctrl+L/T/W/R and the DevTools shortcut in App.tsx — see
-[renderer-ui.md](renderer-ui.md) and the Gotchas below.
+Ordinary editing keys (Ctrl+C/V/A/Z, bare letters, Esc) never resolve, so pages
+and text fields keep them. `handleShortcut` accepts only `keyDown` and ignores
+auto-repeat.
 
-`handleShortcut` accepts only `keyDown` and ignores auto-repeat, so one physical
-shortcut produces one action.
+**Per-tab controls behind those commands.** `reopenClosedTab` pops a
+memory-only stack (25 per Account Space, never Banking, cleared when the Account
+Space's views close); `zoom` steps through Chrome's zoom levels with
+`setZoomFactor` (Chromium applies zoom per origin within a session);
+`findInPage`/`stopFindInPage` forward to Chromium and push `browser:find-result`
+only for the active tab; `setTabMuted` and the snapshot's `audible`/`muted`/
+`zoomPercent` read the live webContents; `moveTab` reorders only within the
+active Account Space (`moveTabWithinAccountSpace`).
 
 ## Developer Cockpit
 
@@ -270,9 +340,19 @@ facades over [chrome-import.md](chrome-import.md). `importChrome` merges records
 without duplicating the same bookmark path/title/URL or history URL/timestamp,
 refuses Banking as a target, persists the result and records a local-read event.
 The password path uses the native file chooser and calls `VaultStore.addMany`;
-CSV contents and filesystem paths never enter the renderer. `toggleBookmarkBar`
-persists visibility and broadcasts so React can update both the bar and the view
-inset.
+CSV contents and filesystem paths never enter the renderer.
+
+`toggleBookmarkBar` flips `ui.bookmarkBarMode` between `hidden` and `always`;
+`setUiPreferences` sets any mode. Bookmark editing goes through the pure helpers
+in [bookmark-tree.ts](../../electron/bookmark-tree.ts) and always scopes to the
+**active** Account Space: `moveBookmark` (reorders one bookmark or a whole folder
+among its siblings by rewriting `orderPath[depth]`), `renameBookmark`,
+`removeBookmark`, `renameBookmarkFolder` (refuses a name that already exists at
+that level) and `removeBookmarkFolder`. `exportBookmarks` writes an HTML-escaped
+Netscape bookmark file of the active Account Space through the native save
+dialog and records a privacy event; nothing is written without the dialog.
+`setShortcutTiles` stores up to 12 HTTP(S) New Tab shortcuts for an Account Space
+in the active workspace, or `null` to return to the defaults.
 
 ## Downloads
 
@@ -551,15 +631,14 @@ only if the application window has already been destroyed.
 
 ## Gotchas
 
-- **Three copies of the layout geometry must remain aligned.** App.tsx sends
-  `{ top: 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 }`; the main
-  process defaults to the open-panel form, and styles.css uses the same offsets.
-  The renderer test guards these values; update all copies together.
-- **The shortcuts are implemented twice.** `handleShortcut` here fires when focus is
-  in a page; the `window` keydown listener in App.tsx fires when focus is in the
-  chrome. Ctrl+L/T/W/R and DevTools exist in both, Alt+Left/Right only here, and App.tsx
-  additionally guards Ctrl+R on the tab not being home. Add a shortcut in one place
-  and it works only when focus happens to be there.
+- **A menu over the page needs the freeze-frame.** Anything the chrome draws
+  below the toolbar is invisible while the native view is showing. Use
+  `MenuSurface` or `useOverlayLayer` in the renderer; do not hand-roll a popup.
+- **Snap Layouts depend on the native caption buttons.** Replacing
+  `titleBarOverlay` with HTML buttons would lose them; keep the overlay height
+  equal to `CHROME.tabStrip`.
+- **Zoom is per origin, not per tab.** Two tabs on the same site in the same
+  Account Space share a zoom level, as in Chromium.
 - **History rows carry the previous page's title.** `commitNavigation` runs on
   `did-navigate` and copies `tab.title`, which `page-title-updated` has not
   refreshed yet.

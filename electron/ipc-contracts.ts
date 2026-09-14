@@ -10,6 +10,7 @@ import {
 } from './account-space-validation.js';
 import type { ExternalBrowserId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
+import { requireUiPreferencesPatch } from './ui-preferences.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
@@ -87,6 +88,46 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); requireUuid(args[0], 'operation'); return;
     case 'browser:set-overlay-open':
       exact(args, 1); requireBoolean(args[0]); return;
+    case 'browser:set-layout': {
+      exact(args, 1);
+      const layout = requireObject(args[0]);
+      for (const side of ['top', 'left', 'right', 'bottom'] as const) requireBoundedNumber(layout[side], 'layout inset', 0, 4000);
+      return;
+    }
+    case 'ui:set-preferences':
+      exact(args, 1); requireUiPreferencesPatch(args[0]); return;
+    case 'browser:move-tab':
+      exact(args, 2); requireBoundedText(args[0], 'tab identifier', 200); requireIndex(args[1]); return;
+    case 'browser:zoom':
+      exact(args, 1); if (!['in', 'out', 'reset'].includes(String(args[0]))) throw new Error('Invalid zoom direction'); return;
+    case 'browser:find':
+      exact(args, 3); requireBoundedText(args[0], 'find text', 1000); requireBoolean(args[1]); requireBoolean(args[2]); return;
+    case 'browser:set-tab-muted':
+      exact(args, 2); requireBoundedText(args[0], 'tab identifier', 200); requireBoolean(args[1]); return;
+    case 'bookmarks:move':
+      exact(args, 3); requireBookmarkLevel(args[0]); requireBookmarkKey(args[1]); requireIndex(args[2]); return;
+    case 'bookmarks:rename':
+      exact(args, 2); requireBoundedText(args[0], 'bookmark identifier', 200); requireNonEmptyText(args[1], 'bookmark name', 500); return;
+    case 'bookmarks:remove':
+    case 'browser:open-bookmark':
+      exact(args, 1); requireBoundedText(args[0], 'bookmark identifier', 200); return;
+    case 'bookmarks:rename-folder':
+      exact(args, 3); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200); requireNonEmptyText(args[2], 'folder name', 200); return;
+    case 'bookmarks:remove-folder':
+      exact(args, 2); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200); return;
+    case 'shortcuts:set': {
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (args[1] === null) return;
+      if (!Array.isArray(args[1]) || args[1].length > 12) throw new Error('Invalid shortcut list');
+      for (const tile of args[1]) {
+        const input = requireObject(tile);
+        requireNonEmptyText(input.id, 'shortcut identifier', 64);
+        requireBoundedText(input.title, 'shortcut name', 100);
+        const url = requireBoundedText(input.url, 'shortcut URL', 4096);
+        if (!isAllowedRemoteUrl(url)) throw new Error('Shortcuts must be HTTP or HTTPS pages');
+      }
+      return;
+    }
     case 'browser:import-chrome': {
       exact(args, 1);
       const input = requireObject(args[0]);
@@ -107,6 +148,21 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
   }
 }
 
+function requireBoundedNumber(value: unknown, field: string, minimum: number, maximum: number): number { if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) throw new Error(`Invalid ${field}`); return value; }
+function requireIndex(value: unknown): void { if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 25_000) throw new Error('Invalid position'); }
+function requireNonEmptyText(value: unknown, field: string, maximum: number): string { const text = requireBoundedText(value, field, maximum); if (!text.trim()) throw new Error(`A ${field} is required`); return text; }
+function requireBookmarkLevel(value: unknown): void {
+  const input = requireObject(value);
+  if (input.location !== 'bar' && input.location !== 'other') throw new Error('Invalid bookmark location');
+  if (!Array.isArray(input.path) || input.path.length > 20) throw new Error('Invalid bookmark folder path');
+  input.path.forEach((part) => requireBoundedText(part, 'folder name', 200));
+}
+function requireBookmarkKey(value: unknown): void {
+  const input = requireObject(value);
+  if (input.kind === 'bookmark') requireBoundedText(input.id, 'bookmark identifier', 200);
+  else if (input.kind === 'folder') requireNonEmptyText(input.name, 'folder name', 200);
+  else throw new Error('Invalid bookmark entry');
+}
 function exact(args: unknown[], count: number): void { if (args.length !== count) throw new Error('Invalid browser command arguments'); }
 function between(args: unknown[], minimum: number, maximum: number): void { if (args.length < minimum || args.length > maximum) throw new Error('Invalid browser command arguments'); }
 function requireBoolean(value: unknown): asserts value is boolean { if (typeof value !== 'boolean') throw new Error('Expected a boolean'); }

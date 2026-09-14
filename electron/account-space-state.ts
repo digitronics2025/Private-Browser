@@ -17,12 +17,14 @@ import type {
   BrowserStateManifestV2,
   PersistedState,
   PrivacyEvent,
+  ShortcutTile,
   StateRecoveryStatus,
   WorkspaceId,
 } from './types.js';
 import { AccountStore, type AccountSpaceRecord } from './account-store.js';
 import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation.js';
 import { isAllowedRemoteUrl } from './security.js';
+import { sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
 
 interface MigrationJournal {
@@ -336,6 +338,7 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
     return id;
   });
   if (new Set(accountSpaceIds).size !== accountSpaceIds.length) throw new Error('Duplicate Account Space identifier');
+  const ui = sanitizeUiPreferences(input.ui, input.bookmarkBarVisible !== false);
   const activeAccountSpaceByWorkspace: Partial<Record<WorkspaceId, AccountSpaceId>> = {};
   for (const workspace of WORKSPACES) {
     const id = input.activeAccountSpaceByWorkspace?.[workspace.id];
@@ -348,8 +351,9 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
     accountSpaceIds,
     activeAccountSpaceByWorkspace,
     trackerBlocking: input.trackerBlocking !== false,
-    bookmarkBarVisible: input.bookmarkBarVisible !== false,
+    bookmarkBarVisible: ui.bookmarkBarMode !== 'hidden',
     privacyLog: sanitizePrivacyLog(input.privacyLog),
+    ui,
   };
 }
 
@@ -382,7 +386,27 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
     orderPath: Array.isArray(item.orderPath) ? item.orderPath.slice(0, 20).filter((part) => Number.isSafeInteger(part) && part >= 0) : [index],
   }));
   const history = sanitizeAccountItems<AccountSpaceHistoryEntry>(input.history, input.accountSpaceId, workspaceId, 10_000);
-  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs, activeTabId, bookmarks, history };
+  const shortcuts = sanitizeShortcutTiles(input.shortcuts);
+  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs, activeTabId, bookmarks, history, ...(shortcuts ? { shortcuts } : {}) };
+}
+
+export const MAX_SHORTCUT_TILES = 12;
+
+/** New Tab shortcuts are user-chosen links, so they get the same URL policy as a bookmark. */
+export function sanitizeShortcutTiles(value: unknown): ShortcutTile[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  return value.slice(0, MAX_SHORTCUT_TILES)
+    .filter((item): item is ShortcutTile => Boolean(item) && typeof item === 'object'
+      && typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 64
+      && typeof item.title === 'string'
+      && typeof item.url === 'string' && item.url.length <= 4096 && isAllowedRemoteUrl(item.url))
+    .filter((item) => {
+      if (seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    })
+    .map((item) => ({ id: item.id, title: item.title.trim().slice(0, 100) || item.url, url: item.url }));
 }
 
 function sanitizeAccountItems<T extends AccountSpaceBookmark | AccountSpaceHistoryEntry>(
@@ -417,6 +441,7 @@ function createManifest(
     trackerBlocking,
     bookmarkBarVisible,
     privacyLog: sanitizePrivacyLog(privacyLog),
+    ui: sanitizeUiPreferences(undefined, bookmarkBarVisible),
   };
 }
 

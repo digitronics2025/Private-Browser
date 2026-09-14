@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { BookmarkEntryKeyInput, BookmarkLevelInput, FindResult, Shortcut, ShortcutTile, UiPreferencesPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { BackupWriteResult } from './account-backup.js';
@@ -52,6 +53,25 @@ const api = {
   toggleBookmark: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark'),
   openBookmark: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-bookmark', id),
   toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
+  setUiPreferences: (patch: UiPreferencesPatch): Promise<void> => ipcRenderer.invoke('ui:set-preferences', patch),
+  freezeContent: (): Promise<string | null> => ipcRenderer.invoke('browser:freeze-content'),
+  moveTab: (tabId: string, toIndex: number): Promise<void> => ipcRenderer.invoke('browser:move-tab', tabId, toIndex),
+  reopenClosedTab: (): Promise<void> => ipcRenderer.invoke('browser:reopen-closed-tab'),
+  zoom: (direction: 'in' | 'out' | 'reset'): Promise<void> => ipcRenderer.invoke('browser:zoom', direction),
+  print: (): Promise<void> => ipcRenderer.invoke('browser:print'),
+  findInPage: (text: string, forward: boolean, findNext: boolean): Promise<void> => ipcRenderer.invoke('browser:find', text, forward, findNext),
+  stopFindInPage: (): Promise<void> => ipcRenderer.invoke('browser:stop-find'),
+  setTabMuted: (tabId: string, muted: boolean): Promise<void> => ipcRenderer.invoke('browser:set-tab-muted', tabId, muted),
+  hardReload: (): Promise<void> => ipcRenderer.invoke('browser:hard-reload'),
+  toggleFullscreen: (): Promise<void> => ipcRenderer.invoke('browser:toggle-fullscreen'),
+  moveBookmark: (level: BookmarkLevelInput, key: BookmarkEntryKeyInput, toIndex: number): Promise<void> => ipcRenderer.invoke('bookmarks:move', level, key, toIndex),
+  renameBookmark: (id: string, title: string): Promise<void> => ipcRenderer.invoke('bookmarks:rename', id, title),
+  removeBookmark: (id: string): Promise<void> => ipcRenderer.invoke('bookmarks:remove', id),
+  renameBookmarkFolder: (level: BookmarkLevelInput, name: string, nextName: string): Promise<void> => ipcRenderer.invoke('bookmarks:rename-folder', level, name, nextName),
+  removeBookmarkFolder: (level: BookmarkLevelInput, name: string): Promise<void> => ipcRenderer.invoke('bookmarks:remove-folder', level, name),
+  exportBookmarks: (): Promise<boolean> => ipcRenderer.invoke('bookmarks:export'),
+  setShortcutTiles: (accountSpaceId: AccountSpaceId, tiles: ShortcutTile[] | null): Promise<void> => ipcRenderer.invoke('shortcuts:set', accountSpaceId, tiles),
+  quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
   listChromeProfiles: (): Promise<ChromeProfileSource[]> => ipcRenderer.invoke('browser:list-chrome-profiles'),
   importChrome: (options: ChromeImportOptions): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome', options),
   importChromePasswords: (): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome-passwords'),
@@ -109,10 +129,15 @@ const api = {
     ipcRenderer.on('browser:state', listener);
     return () => { ipcRenderer.removeListener('browser:state', listener); };
   },
-  onFocusAddress: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on('browser:focus-address', listener);
-    return () => { ipcRenderer.removeListener('browser:focus-address', listener); };
+  onCommand: (callback: (shortcut: Shortcut) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, shortcut: Shortcut) => callback(shortcut);
+    ipcRenderer.on('browser:command', listener);
+    return () => { ipcRenderer.removeListener('browser:command', listener); };
+  },
+  onFindResult: (callback: (result: FindResult) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, result: FindResult) => callback(result);
+    ipcRenderer.on('browser:find-result', listener);
+    return () => { ipcRenderer.removeListener('browser:find-result', listener); };
   },
   onUpdateAvailable: (callback: (result: UpdateCheckResult) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, result: UpdateCheckResult) => callback(result);

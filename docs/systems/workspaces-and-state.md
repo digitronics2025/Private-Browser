@@ -4,12 +4,13 @@ sources:
   - electron/state-store.ts
   - electron/account-space-state.ts
   - electron/runtime-state-store.ts
+  - electron/ui-preferences.ts
 verified_at: 7063e89
 ---
 
 # Workspaces and Persisted State
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-14
 
 ## Agent Brief
 
@@ -56,9 +57,21 @@ recovery and preserves evidence before any confirmed restore or fresh start.
 
 ## Version-2 plaintext boundary
 
-The manifest contains opaque UUID references, active selection, tracker and
-bookmark-bar preferences, and the privacy log. Per-account browsing files contain
-URLs, titles, bookmark hierarchy, and history plus workspace/account IDs. They do
+The manifest contains opaque UUID references, active selection, tracker
+preference, the privacy log and `ui` interface preferences: `theme`
+(`system`/`dark`/`light`), `bookmarkBarMode` (`always`/`new-tab`/`hidden`),
+`sidePanelOpen` (default `false`), `sidePanelWidth` (320–520, default 400),
+`sidePanelTool` and `newTabBackground`. `sanitizeUiPreferences` falls back to
+defaults for any unknown value rather than opening recovery, and migrates a
+manifest without `ui` from the legacy `bookmarkBarVisible` flag, which is still
+written (`bookmarkBarMode !== 'hidden'`) so an older build reads the same bar
+state. IPC patches use the stricter `requireUiPreferencesPatch`.
+
+Per-account browsing files contain URLs, titles, bookmark hierarchy, and history
+plus workspace/account IDs, and an optional `shortcuts` list (≤ 12 HTTP(S)
+New Tab tiles, sanitised by `sanitizeShortcutTiles`) that is present only once the
+user customises them. Deleting an Account Space drops its shortcuts; clearing its
+browsing data keeps them, like bookmarks. They do
 not contain email, display name, Google subject, partition key, OAuth data,
 permission grants, or descriptive account metadata. Those fields live in
 independent `safeStorage`-encrypted account records.

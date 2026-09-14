@@ -153,6 +153,29 @@ node scripts/docs-find.mjs --history "<term from the entry>"
   `system:copy` channel writes up to 100,000 characters straight to the clipboard
   with no clear at all. Nothing stops a renderer panel from using the generic
   channel for something sensitive. Symbol: `copySensitiveValue`. *(2026-09-10)*
+## Browser chrome (Chrome Precision redesign)
+
+- **No second window, private window, extensions, tab groups or pinned tabs.** The
+  controller owns exactly one `BrowserWindow` and has no extension runtime, group
+  model or pin state, so the browser menu deliberately omits those entries rather
+  than showing actions that do nothing. Each is a main-process feature, not a
+  styling task. Symbol: `BrowserController.createWindow`. *(2026-09-14)*
+- **The address bar has no suggestion dropdown.** History and bookmark
+  suggestions would need a ranked local index and a popup that uses the
+  freeze-frame on every keystroke. Symbol: `NavigationToolbar`. *(2026-09-14)*
+- **Bookmarks reorder only among siblings.** Drag-and-drop works on the top level
+  of the bookmarks bar and `bookmarks:move` supports any single level, but moving a
+  bookmark into or out of a folder, creating folders, and dragging inside folder
+  menus are not built. Symbol: `reorderBookmarkEntry`. *(2026-09-14)*
+- **History panel shows the snapshot's 100 most recent entries.** Full history
+  search needs a paged query channel instead of the broadcast snapshot. Symbol:
+  `HistoryPanel`. *(2026-09-14)*
+- **Menus over a live page show a still image.** While a menu or dialog is open
+  the page is frozen (and blank for protected pages); video and animations pause
+  visually until it closes. A transparent overlay view would avoid that but widens
+  the trusted-sender check to a second webContents. Symbol: `freezeContent`.
+  *(2026-09-14)*
+
 ---
 
 ## Owner decisions — not engineering debt

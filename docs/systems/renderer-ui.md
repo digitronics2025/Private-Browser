@@ -1,62 +1,61 @@
 ---
 system: renderer-ui
 sources:
-  - src/App.tsx
-  - src/styles.css
-  - src/preview-api.ts
+  - src/**
   - index.html
 verified_at: 0f2626a1
 ---
 
 # Renderer UI
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-14
 
 ## Agent Brief
 
-**Scope.** The entire chrome of Private Browser — title bar, tab strip, toolbar,
-Chrome-style bookmarks bar, home dashboard, workspace switcher and the seven-mode
-right sidebar — lives in one
-732-line file, [App.tsx](../../src/App.tsx), styled by one 307-line stylesheet.
-The renderer owns no browsing state: it renders a `BrowserSnapshot` pushed from
-the main process and calls back over `window.privateBrowser`.
+**Scope.** The whole trusted browser chrome — tab strip, toolbar and address bar,
+bookmarks bar, find bar, side panel, New Tab page, menus, dialogs and every panel
+— as a React tree under [src/](../../src/). The renderer owns no browsing state:
+it renders a `BrowserSnapshot` pushed from the main process and calls back over
+`window.privateBrowser`.
 
 **Not covered here:** the `WebContentsView` that actually renders web pages, tab
 and session lifecycle, and everything behind an IPC channel. Web content is
-*never* inside this React tree — it is a sibling view the main process positions.
-→ [browser-shell.md](browser-shell.md), [ipc-contract.md](ipc-contract.md).
+*never* inside this React tree — it is a sibling native view the main process
+positions. The geometry and shortcut tables are shared modules documented in
+[browser-shell.md](browser-shell.md#layout-maths).
 
-The toolbar MyVault button opens a compact metadata panel; a modal full view
-uses the same projections. React can search metadata and request unlock, pair,
-sync, fill, copy, generate, save, edit, delete, migrate and conflict resolution,
-but never receives a master password, device token, data key or entry secret.
-Development hides the surface completely; Banking renders only centrally
-permitted actions.
+The MyVault panel shows metadata only: React requests vault actions but never
+receives a master password, device token, data key or entry secret. Development
+hides the vault entry points; Banking renders only centrally permitted actions.
 
 **Neighbours.**
 
-- **browser-shell.md** — owns `electron/main.ts`: window, views, layout
-  application, and a second copy of the keyboard shortcuts.
+- **browser-shell.md** — owns `electron/main.ts`, `chrome-layout.ts`,
+  `shortcuts.ts` and `bookmark-tree.ts`: window, views, layout application,
+  freeze-frame, shortcut resolution.
 - **ipc-contract.md** — owns `electron/preload.cts`: every method named below.
-- **workspaces-and-state.md** — owns the snapshot this file renders.
+- **workspaces-and-state.md** — owns the snapshot fields and `ui` preferences.
 - **vault.md** / **ai-consent.md** / **release-and-updates.md** — own the
   behaviour behind the Vault, Assistant and Settings panels.
 
 ### Invariants
 
-1. **Three copies of the chrome geometry must agree.** `setLayout` in App.tsx,
-   the fixed offsets in styles.css, and the `Layout` default in `main.ts` all
-   describe the same rectangle. Change one, change all three. → **The Layout
-   Handshake**
-2. **Every `on*` subscription must return its unsubscribe function from the
-   effect.** The preload bridge returns a disposer; dropping it leaks an
-   `ipcRenderer` listener on every remount. → **Main-Process Subscriptions**
-3. **A shortcut added here must be added in `main.ts` too, or it dies whenever a
-   web page has focus.** → **Gotchas**
-4. **Automations only open tabs.** No panel may add a routine that sends, buys,
-   publishes or deletes. → **Static Data Tables**
-5. **The renderer never receives a secret back.** Panels submit tokens, keys and
-   passwords and read only status objects. → **Sidebar Modes and Their IPC**
+1. **Geometry comes only from `computeChromeLayout`.** Bars size from its result,
+   CSS reads `--chrome-top`/`--side-panel-w`/`--*-h` set on `.app-shell`, and the
+   same result is sent over `setLayout`. Never hard-code a chrome offset. →
+   **The Layout Handshake**
+2. **Anything drawn over the page area must acquire the overlay.** Use
+   `MenuSurface` (menus/popovers) or `useOverlayLayer` (dialogs, drags); the page
+   view paints above React otherwise. → **Menus, Overlays and the Freeze-Frame**
+3. **Every `on*` subscription is returned from its effect through `disposer()`.**
+   → **Main-Process Subscriptions**
+4. **Shortcuts are resolved by `resolveShortcut` and run by one dispatcher**
+   (`runCommand` in App.tsx) — never add a second `keydown` table. → **Keyboard**
+5. **Security warnings stay visible.** The "Not secure"/"Check domain" chip in the
+   address bar is never hidden for density; narrow layouts hide optional buttons
+   instead. → **Toolbar and Address Bar**
+6. **Automations only open tabs; the renderer never receives a secret back.** →
+   **Panels and Their IPC**
 
 ### Where to look
 
@@ -64,307 +63,245 @@ permitted actions.
 
 | You are changing… | Section |
 | --- | --- |
-| a panel's markup, props or local state | [Frontend Components](#frontend-components) |
-| adding, moving or removing a call to the main process | [Sidebar Modes and Their IPC](#sidebar-modes-and-their-ipc) |
-| a quick-link tile or a one-click routine | [Static Data Tables](#static-data-tables) |
+| which file renders what | [Component Map](#component-map) |
+| tabs, drag reordering, tab search, the shield | [Tab Strip](#tab-strip) |
+| toolbar buttons, the address bar, site information | [Toolbar and Address Bar](#toolbar-and-address-bar) |
+| profile menu, browser menu, any popup | [Menus, Overlays and the Freeze-Frame](#menus-overlays-and-the-freeze-frame) |
+| the bookmarks bar, folders, overflow, context menus | [Bookmarks Bar](#bookmarks-bar) |
+| the side panel, its tools, resizing | [Side Panel](#side-panel) |
+| the New Tab page or shortcut tiles | [New Tab Page](#new-tab-page) |
+| a panel's markup or IPC calls | [Panels and Their IPC](#panels-and-their-ipc) |
+| a keyboard shortcut | [Keyboard](#keyboard) |
 | reacting to something the main process pushes | [Main-Process Subscriptions](#main-process-subscriptions) |
-| the size of the chrome, or where the web view sits | [The Layout Handshake](#the-layout-handshake) |
-| the CSP, the page title or the module entry point | [index.html](#indexhtml) |
-| colours, spacing, or the fixed-position shell | [Styling](#styling) |
-| a keyboard shortcut, or a number that lives in three files | [Gotchas](#gotchas) |
+| where the page sits, bar heights | [The Layout Handshake](#the-layout-handshake) |
+| colours, themes, type scale, motion | [Styling](#styling) |
+| the CSP or the browser preview mock | [index.html and Preview Mode](#indexhtml-and-preview-mode) |
 
 <!-- routing:end -->
 
 ### Before you write
 
 - Read the `BrowserSnapshot` shape in [types.ts](../../electron/types.ts) before
-  adding a field to a panel — the renderer cannot invent state.
-- Any new call must exist on the preload bridge first; `window.privateBrowser`
-  is the only channel.
-- New inline `style` attributes are fine (`style-src 'unsafe-inline'` is set),
-  but a new remote asset host needs a CSP change in `index.html`.
-- Panels are plain functions in the same file. Keep them there unless the file
-  outgrows a single read; a split costs every reader an extra hop.
-- Errors surface as toasts, never as thrown exceptions — wrap IPC in `act()` or
-  a local try/catch, as every existing panel does.
+  adding a field to a component — the renderer cannot invent state.
+- Any new call must exist on the preload bridge first, and in
+  [preview-api.ts](../../src/preview-api.ts) if the browser tests need it.
+- Errors surface as toasts: wrap IPC in `act()` (App) or a local try/catch.
+- Only show a menu action that works. Unsupported browser features are listed in
+  [../follow-ups.md](../follow-ups.md), not rendered as disabled decoration.
 
-## Overview
+## Component Map
 
-`index.html` boots a Vite/React module at `/src/main.tsx`, which mounts `App`
-into `#root` under `StrictMode`. `App` fetches one snapshot with `getState()`,
-subscribes to pushes, and renders a boot placeholder until the snapshot, an
-active tab and an active workspace all exist. Everything else in the file is a
-child function component in the same module.
-
-## Frontend Components
-
-All in [App.tsx](../../src/App.tsx).
-
-| Component | Renders | Key state |
+| Path | Renders | Notes |
 | --- | --- | --- |
-| `App` (default) | Title bar, tab strip, toolbar, dashboard, sidebar, toast | `state` (snapshot or `null`), `address`, `sidebarOpen` (default `true`), `sidebarMode` (default `assistant`), `toast`, `addressRef` |
-| `WorkspaceSwitcher` | Horizontal row at the top of the right panel; one button per `state.workspaces`, plus the personal shortcut; lock icon when protected; sets `--workspace-color` per button | none |
-| `Dashboard` | The home screen — welcome block, quick-link grid, 5 most recent history rows, 5 bookmarks, all filtered to the active workspace | none (derives from props) |
-| `SidebarNav` | The seven mode buttons; red badge showing the count of downloads in `progressing` state | none |
-| `PanelHeader` | Icon + eyebrow + title, shared by every panel | none |
-| `DeveloperPanel` | Four focused Project, Inspect, Test and AI Fix tabs; persistent bridge/version state; workspace/server controls; native DevTools; isolated checks, reports and exact AI preview | bridge, project, inspection, report, AI-option and loading state |
-| `AssistantPanel` | Provider strip, provider form, local preview card, cloud-permission card, question box, answer | `preview`, `approvalToken`, `loading`, `provider`, `showProviderForm`, `providerForm` (endpoint defaults to `https://openrouter.ai/api/v1`), `question`, `answer`; `summary` is a `useMemo` |
-| `VaultPanel` | Broker lifecycle/sync banner, automatic-fill status, secure unlock/pair actions, explicit page capture, metadata search, generators and credential cards | `items`, `status`, `query`, `formShape`, `conflictReview`, `legacyAvailable` |
-| `AutomationPanel` | The three hard-coded routines and the approval-boundary note | `running` (id of the routine in flight) |
-| `DownloadsPanel` | Download progress plus checksum and executable-risk warnings | none |
-| `PrivacyPanel` | Three summary tiles and the `state.privacyLog` feed | none |
-| `SettingsPanel` | Default browser, Chrome import wizard, bookmark-bar toggle, app-update entry, security and about | update state plus Chrome profiles, options and result |
-| `UpdatesPage` | Dedicated installed-versus-latest comparison, release provenance, checksum, developer profile and optional private-service controls | update status, result, error, form and callbacks |
-| `EmptyState` | Icon + one line, used at five call sites across four panels | none |
+| [App.tsx](../../src/App.tsx) | the shell: subscriptions, layout effect, overlay coordination, command dispatcher, which menu/dialog is open | holds `pendingUi` optimistic preferences until the snapshot confirms them |
+| `shell/TabStrip.tsx` | `WindowTabStrip`: shield button, `role=tablist` tabs, new tab, drag area, tab search, caption space | pointer drag reorder, middle-click close, roving focus |
+| `shell/NavigationToolbar.tsx` | back, forward, reload/stop, home, address bar, side panel, AI, profile avatar, ⋮ | Home and AI carry `optional` (hidden below 560 px) |
+| `shell/StatusMenus.tsx` | `ShieldStatusMenu`, `SiteInfoMenu`, `TabSearchMenu` | protection status lives here, not in permanent chrome |
+| `shell/ProfileMenu.tsx` | current Account Space card, workspace switcher, Account Space list, manage/add/lock | `role=menu` named "Account Spaces" |
+| `shell/BrowserMenu.tsx` | Chrome-style ⋮ menu with submenus and the zoom row | |
+| `shell/BookmarkBar.tsx` | bookmarks bar, folder/overflow/"Other bookmarks" menus, context menus | measures entries to compute overflow |
+| `shell/FindBar.tsx` | find-in-page row | only on real pages |
+| `shell/SidePanel.tsx` | panel frame: resize separator, tool tabs, close | tools listed in `SIDE_PANEL_TABS` |
+| `shell/NewTabPage.tsx` | brand, search, shortcut tiles, recent/bookmark cards, Customize | |
+| `shell/Menu.tsx` | `MenuSurface`, `MenuItem`, `SubmenuItem`, `MenuSeparator`, `MenuHeading` | portal, positioning, keyboard, focus restore |
+| `shell/overlay.tsx` | `OverlayContext`, `useOverlayLayer` | |
+| `shell/PromptDialog.tsx` | text-input dialog (rename, shortcuts) | Electron has no `window.prompt` |
+| `shell/BrandMark.tsx` | the original teal shield | no third-party marks |
+| `panels/*.tsx` | Assistant, Developer, Vault, Automation, Downloads, Privacy, Settings (+ Updates page), AccountManager, Permission/Recovery overlays, Bookmarks, History | existing panels were moved verbatim; Settings gained Appearance and bookmarks-bar mode |
+| `lib/` | `format.ts` (domain, bytes, timeAgo, cached favicons by host), `accounts.tsx` (avatar, action-required rule), `quick-links.ts` (default New Tab tiles), `subscribe.ts` | |
 
-Module-level helpers: `domainFromUrl` (hostname minus `www.`, falls back to the
-raw string), `humanBytes` (B/KB/MB/GB), `timeAgo` (`just now` / `Nm` / `Nh` /
-`Nd`). `App` also defines `act(action, success?)`, which awaits an IPC call and
-turns either the success string or the thrown error message into a toast.
+## Tab Strip
 
-## Sidebar Modes and Their IPC
+Only tabs of the active Account Space render (`tab.accountSpaceId ===
+state.activeAccountSpaceId`). A tab is a `role=tab` div (so its close and mute
+buttons are real buttons, not nested inside one) activated on pointer-down.
+Dragging past 5 px moves the tab with the pointer while siblings shift by its
+width; release calls `moveTab(id, index)`. Middle-click closes, Delete closes the
+focused tab, arrows move focus and activate. Tabs flex between 76 and 236 px (an explicit
+`width` makes the strip size from 236 px rather than from content). Container
+queries on each tab's content box drop the audio toggle below 96 px, the inactive
+close button below 72 px and the title only below 44 px, so many tabs keep
+truncated titles as in Chrome; past the minimum the strip scrolls (wheel scrolls horizontally). Loading shows
+a spinner; `audible`/`muted` show a mute toggle.
 
-`SidebarMode = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' |
-'privacy' | 'settings'`. Exactly one panel is mounted at a time, so a panel's `useEffect`
-load runs each time the user switches to it.
+The empty strip and the space right of the tabs are `-webkit-app-region: drag`;
+every button and tab is `no-drag`. `.caption-buttons-space` reserves the width
+Windows reports through `env(titlebar-area-*)` (fallback 138 px).
 
-| Mode | `window.privateBrowser` methods called |
+## Toolbar and Address Bar
+
+The address bar (`role=search`) shows a site-information button on the left —
+search icon on the New Tab page, warning triangle for `securityWarning`, site
+controls otherwise — then the always-visible security chip, the input, a zoom
+chip when not 100 %, the MyVault key (not in Development) and the bookmark star.
+`SiteInfoMenu` explains the connection state, Account Space and tracker
+blocking. The profile avatar has an Account Space colour ring and a "!" badge only
+for `reconnect-required`, `partial-scopes` or `account-corrupt`
+(`accountNeedsAction`).
+
+## Menus, Overlays and the Freeze-Frame
+
+`MenuSurface` portals to `<body>`, positions below/beside its anchor or at a
+point, clamps to the viewport (scrolling when taller), focuses the first item,
+supports Arrow/Home/End, Esc, ArrowLeft to leave a submenu, Tab to close, closes
+on outside pointer-down and window blur, and restores focus to the anchor.
+`SubmenuItem` opens on hover (140 ms), click, ArrowRight or Enter.
+
+Root surfaces acquire the overlay. App counts acquisitions and also treats the
+Account Space manager, full vault view, permission prompt and recovery prompt as
+overlays. When the count becomes non-zero App calls `freezeContent()`, paints the
+returned image (or nothing for protected pages) in `.page-surface`, waits two
+frames, then calls `setOverlayOpen(overlayOpen)` to hide the live view; menus fade
+in once `ready`. Closing reverses the order and drops the image. Changing tab
+clears the image.
+
+The browser menu lists only working actions: new tab, reopen closed tab, Account
+Spaces, Passwords and MyVault, History, Downloads, Bookmarks (bookmark tab,
+bar mode, manager, import, export), Delete browsing data (confirmed; removes
+website data and history of the active Account Space only), zoom and full
+screen, Print, Find, Copy link, More tools (DevTools, Developer Bridge,
+Automations, Privacy log, Block trackers), Privacy and AI, Appearance, Settings,
+About, Exit.
+
+## Bookmarks Bar
+
+Shown per `computeChromeLayout` (`always`, or `new-tab` on the New Tab page).
+Entries come from `bookmarkEntries` (imported Chrome order and folders). A hidden
+measuring row gives each entry's width; a `ResizeObserver` decides how many fit
+and the rest go to the » overflow menu. Folders open nested `SubmenuItem` menus.
+Top-level entries drag-reorder (`moveBookmark`). Right-click offers Open in new
+tab, Copy link, Edit name, Delete; folders offer Open all (confirm above 8), Rename
+and Delete; the empty bar offers the visibility modes, the manager, import and
+export. Icons reuse favicons the main process already fetched for open tabs —
+the bar never fetches an icon. The import hint appears only while the bar is empty
+and until dismissed (per-viewer `localStorage` flag).
+
+## Side Panel
+
+Closed by default; `ui.sidePanelOpen`, `sidePanelWidth` and `sidePanelTool` are
+persisted through `setUiPreferences`. The header holds compact tool tabs — AI,
+DevTools (title "Developer cockpit"), Vault, Flows, Files (active download badge),
+Privacy — and a close button; Bookmarks, History and Settings open from menus and
+shortcuts. The left-edge separator resizes 320–520 px: pointer drags acquire the
+overlay (the page view would otherwise swallow the pointer), update a live width
+that only moves CSS, and commit once on release — so the IPC rate limit is never
+hit. Arrow keys resize by 24 px, Home/End jump to max/min.
+
+## New Tab Page
+
+Brand mark and "Private Browser" heading, a search field that calls `navigate`,
+the workspace and Account Space, up to 12 shortcut tiles, recently visited and
+bookmark cards, and a Customize popover (theme, five local gradient backgrounds,
+restore default shortcuts). Tiles default to `defaultShortcutTiles(workspace)`;
+the first edit saves an explicit list with fresh ids through `setShortcutTiles`.
+Protection detail is in the shield menu, not on the page.
+
+## Panels and Their IPC
+
+| Tool | `window.privateBrowser` methods |
 | --- | --- |
-| `assistant` | `getAiProvider`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi` |
-| `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview and `copyText` |
-| `vault` | `listVault`, secure unlock/pair/lock/sync/conflict intents, `openVaultEditor`, `requestSaveFromPage`, Chrome CSV migration, generators, `copyPassword`, `copyTotp`, `autofill` |
+| `assistant` | `getAiProvider`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi`, `revokeAiContext` |
+| `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview, `copyText` |
+| `vault` | `listVault`, unlock/pair/lock/sync/conflict intents, `openVaultEditor`, `requestSaveFromPage`, migration, generators, `copyPassword`, `copyTotp`, `autofill` |
 | `automations` | `newTab(workspaceId, url)` only |
-| `downloads` | `openDownload`, `showDownload` (the list itself comes from `state.downloads`) |
-| `privacy` | none — pure render of `state.trackerBlocking` and `state.privacyLog` |
-| `settings` | `getDefaultBrowserStatus`, `setDefaultBrowser`, `getUpdateService`, `configureUpdateService`, `clearUpdateService`, `checkForUpdates`, `openUpdatePage`, and `newTab` for the developer website |
+| `downloads` | `openDownload`, `showDownload` |
+| `privacy` | none |
+| `settings` | default browser, update service, Chrome import, `setUiPreferences` (theme, bar mode) |
+| `bookmarks` | `openBookmark`, `renameBookmark`, `removeBookmark`, `exportBookmarks` |
+| `history` | `navigate`, `clearAccountSpaceData` (confirmed) |
 
-The always-mounted chrome (not a sidebar mode) calls `getState`, `setLayout`,
-`navigate`, `back`, `forward`, `reload`, `stop`, `newTab`, `closeTab`,
-`activateTab`, `switchWorkspace`, `toggleBookmark`, `openBookmark`,
-`toggleBookmarkBar` and `toggleTrackerBlocking`. Settings additionally calls the
-three Chrome import methods.
+The two-step AI flow is unchanged: preview locally, approve for a single-use
+token, ask once, then the token is cleared; leaving the panel revokes the
+context. Secret form fields are cleared in `finally`. Toasts carry `ok`/`error`
+so a refusal never looks like success. Automations open tabs and stop — they
+never send, buy, publish or delete.
 
-`copyText` is used only to copy the main-process-formatted developer report; it
-does not receive raw page content or browser secrets.
+## Keyboard
 
-Nothing sensitive comes back: `configureAiProvider` and `configureUpdateService`
-return status objects (`configured`, `source`, `endpoint`, `model`, `error`), never the key
-or token that was submitted. The AI flow is two steps by design — `prepareAiPreview`
-reads the page locally, `approveAiPreview` returns a single-use token that `askAi`
-consumes, and the panel clears `approvalToken` immediately after asking.
-
-## Static Data Tables
-
-Both are hard-coded consts at the top of App.tsx. Neither is persisted, editable
-in the UI, or synced.
-
-**`QUICK_LINKS`** — `Record<WorkspaceId, Array<{label, url, tone}>>`, rendered by
-`Dashboard` as the shortcut grid; `tone` is a hex colour used for the tile. Being
-a `Record` over `WorkspaceId`, TypeScript forces a new workspace to bring its own
-entry. Current sets: digitronics (4), tenten (4), development (4), personal (4),
-banking (1 — a private search engine only).
-
-**`AUTOMATIONS`** — three entries (`morning`, `development`, `marketplaces`),
-each `{ id, name, description, icon, workspaceId, urls }`. `AutomationPanel.run`
-awaits `newTab(workspaceId, url)` once per URL, in order, then toasts.
-
-That is the whole feature. A routine **opens tabs in a workspace and stops**. It
-does not log in, fill anything, click anything, read the pages back, verify they
-loaded, or record that it ran. Per [README.md](../../README.md), these routines
-deliberately never send, buy, publish or delete — the panel says so on screen
-("Messages, purchases, ads, deletion and account changes always require you"),
-and that boundary is the point of the feature, not a limitation to fix.
+App's `keydown` listener resolves the event with `resolveShortcut` and runs
+`runCommand`; `onCommand` delivers commands resolved while a page had focus.
+Ctrl+Shift+Left/Right are ignored inside text fields (word selection). Esc leaves
+window full screen. Menus stop propagation of the keys they handle.
 
 ## Main-Process Subscriptions
 
-### Account switcher and manager
-
-The former `DR` shortcut is an accessible Account Space switcher. It shows the
-current avatar/label/email and independent website/API state, lists only accounts
-in the active workspace, and supports `Ctrl+Shift+Left/Right` cycling. The active
-account also appears in the address chip and tab accent; the visible tab strip,
-bookmarks and history are filtered by the active account.
-
-The modal manager supports local/Google add, rename, recolour, reorder, module
-re-consent, service launch, operational lock/reopen, data clear, API disconnect
-and destructive deletion confirmation. Backup upload is unavailable until the
-one-time recovery code has been verified. Recovery and exact-origin permission
-dialogs are trusted renderer overlays; the main process hides native page views
-while they are open and focus is restored on close.
-
-The Chrome import wizard lists Account Spaces only from the active workspace and
-disables bookmark/history import entirely in Banking. The selected opaque ID is
-sent with the workspace ID so the main process can reject mismatched ownership.
-
-`src/preview-api.ts` exists only under Vite development mode and supplies
-credential-free data for visible review and browser E2E. Production Electron
-always supplies the context-isolated preload bridge. The preview explicitly
-implements `onVaultState`, migration status and form-shape inspection so mounting
-the Vault panel has the same synchronous unsubscribe contract as the preload and
-does not fall through to the proxy's asynchronous no-op.
-
-Three push channels, each set up in its own `useEffect` in `App`. Each preload
-method returns an unsubscribe function, and each effect returns it directly, so
-React tears the listener down on unmount.
-
 | Subscription | Payload | What the renderer does |
 | --- | --- | --- |
-| `onState` | `BrowserSnapshot` | `setState` — the only way browsing state ever changes |
-| `onFocusAddress` | none | focuses and selects the address input (this is how the main process's Ctrl+L reaches the box) |
-| `onUpdateAvailable` | `UpdateCheckResult` | toasts `Private Browser <version> is ready to download` |
-| `onVaultState` | none | reloads broker status and metadata after unlock, lock, sync or mutation |
+| `onState` | `BrowserSnapshot` | `setState` — the only way browsing state changes |
+| `onCommand` | `Shortcut` | `runCommand` |
+| `onFindResult` | `FindResult` | match counter in `FindBar` |
+| `onUpdateAvailable` | `UpdateCheckResult` | toast |
+| `onVaultState` | none | vault panel reloads status and metadata |
 
-`onState` is paired with a one-shot `getState()` in the same effect so the first
-paint does not wait for a push. Two further effects are pure renderer bookkeeping:
-`address` is re-synced whenever the active tab's id, url or `isHome` changes (home
-tabs show an empty box), and a toast clears itself after 3200 ms.
-
-**Toasts carry a kind.** State is `{ text, kind: 'ok' | 'error' }`, set through
-`showToast(text, kind = 'ok')`; every `catch` passes `'error'`. A failure renders
-an `X` in `--danger` with a tinted border, a success a green `Check`. Before this
-there was one toast style and every security refusal — "AI access is disabled for
-protected and banking pages", "This credential belongs to another website" —
-appeared with the same green tick as a success (audit finding F-16). Both the
-icon and the border change, not only the colour.
-
-**Secret fields are cleared in `finally`, not on success.** The provider API key,
-the vault password and authenticator seed, and the download access token are all
-dropped whether or not the submit was accepted; a rejected submit used to leave
-them in renderer state and in the input's DOM value (F-25). The vault form keeps
-label, address and username on failure so a rejected entry need not be retyped
-whole.
-
-**The AI approval card shows the payload, not a taste of it.** It renders
-`preview.text` verbatim in a scrollable box with its character count, plus
-`preview.title` (the *redacted* title) and `preview.url` (the bare origin). It
-previously showed at most three sentences longer than 35 characters — nothing at
-all on a page of short lines — above the claim that only "the preview shown
-above" would be sent, while up to 12,000 characters went to the provider (F-06).
-It also showed the live tab title, which a page can rewrite at any moment, rather
-than the redacted one actually sent.
-
-**Clearing the panel revokes for real.** "Clear page context" and unmounting the
-panel both call `revokeAiContext()`, so the captured text and the live capability
-are dropped in the main process instead of merely being forgotten here (F-24).
-
-**The security badge is derived, not asserted.** Settings shows "Checking…" until
-the first status arrives, then "Active" or "Encryption unavailable" based on
-`updateStatus.error`. It used to be a hardcoded green "Active" that contradicted
-the Vault panel whenever encryption was unavailable (F-18).
+`onState` is paired with a one-shot `getState()`. The address box re-syncs when
+the active tab's id, url or `isHome` changes. `data-theme` and `--frame`/`--window`
+follow `windowState.darkMode` using `FRAME_COLORS`, the same values the native
+title-bar overlay uses.
 
 ## The Layout Handshake
 
-Web pages are not in this React tree. The renderer measures its own chrome and
-tells the main process which rectangle is left over, and the main process gives
-that rectangle to the active `WebContentsView`.
-
-```
-useEffect(() => {
-  void window.privateBrowser.setLayout({ top: bookmarkBarVisible ? 158 : 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 });
-}, [sidebarOpen, bookmarkBarVisible]);
-```
-
-Where those numbers come from in [styles.css](../../src/styles.css):
-
-| Inset | Value | Source |
-| --- | --- | --- |
-| `top` | 128 or 158 | title, tabs and toolbar, plus the optional 30px bookmarks bar |
-| `left` | 0 | the removed left rail no longer reserves webpage space |
-| `right` | 366 when open, 0 when closed | `.sidebar` width |
-| `bottom` | 0 | no status bar |
-
-The effect depends on `sidebarOpen` and bookmark-bar visibility, so it fires at
-mount and whenever either inset changes. Window resizes are handled in the main process, which
-re-applies the last received insets on `resize`.
-
-The main process clamps what it receives (`top` at minimum 80, the rest at
-minimum 0, all rounded) and computes the view bounds as
-`width - left - right` by `height - top - bottom`, each floored at 100px. See
-[browser-shell.md](browser-shell.md).
-
-## index.html
-
-- **CSP meta tag** — `default-src 'self'`; `script-src 'self'`; `style-src 'self'
-  'unsafe-inline'` (required: the app sets inline `style` attributes for workspace
-  colour, quick-link tone and download progress); `img-src 'self' data:`
-  (tab favicons arrive as `data:` URLs built by the main process, see
-  [browser-shell.md](browser-shell.md#favicons)); `connect-src 'self'`
-  — **no localhost exceptions ship**. The Vite dev server and its HMR socket
-  need `ws://127.0.0.1:* http://127.0.0.1:*`, injected by a `transformIndexHtml`
-  plugin in [vite.config.ts](../../vite.config.ts) with `apply: 'serve'`, so they
-  exist in dev only. They used to be written into this file and therefore shipped
-  inside the installer (audit finding F-17); `object-src 'none'`;
-  `form-action 'none'`.
-- **Root element** — `<div id="root">`, the only body content.
-- **Module entry** — `<script type="module" src="/src/main.tsx">`.
-- Also sets `<title>Private Browser</title>` and `theme-color` `#0b0d12`.
+App computes `committedLayout = computeChromeLayout({ bookmarkBarMode, isHome,
+findBarOpen, sidePanelOpen, sidePanelWidth, fullscreen, windowWidth })` and sends
+`committedLayout.insets` whenever a side changes. A second `liveLayout` uses the
+in-progress drag width for CSS only. `.app-shell` receives `--tab-strip-h`,
+`--toolbar-h`, `--bookmark-bar-h`, `--find-bar-h`, `--chrome-top` and
+`--side-panel-w`; the toolbar, bookmarks bar, find bar, `.page-surface`,
+`.new-tab-page` and `.side-panel-shell` position from those. In full screen all
+chrome unmounts and the variables are zero. `tests/renderer-layout.test.ts` pins
+this wiring, `chrome-shell.spec.ts` compares reported insets with the DOM, and
+`tests/electron/chrome-layout.spec.ts` compares the real view bounds.
 
 ## Styling
 
-[styles.css](../../src/styles.css) is a single flat stylesheet — no framework, no
-preprocessor, no CSS modules. What a future editor needs:
+[styles.css](../../src/styles.css) is one flat stylesheet on tokens: type scale
+(`--fs-xs` 11 px … `--fs-xxl` 30 px; nothing smaller than 11 px), radii, motion
+(120/160/200 ms with one easing), sizes (`--button` 34, `--omnibox` 36), and
+colour roles (`--frame`, `--toolbar`, `--surface*`, `--field*`, `--text*`,
+`--border*`, `--hover`, `--accent*`, `--ok`/`--warn`/`--danger` with soft
+variants, shadows, `--scrim`). `:root` is the light theme; `:root[data-theme=dark]`
+is charcoal with a teal accent. Windows 11-style menus use `--radius-lg` and
+`--shadow-menu`. System fonts only ("Segoe UI Variable", Segoe UI, system-ui); no
+remote assets. Media queries: 1100 px (tab width), 850 px (Account Space manager),
+560 px (optional toolbar buttons), `prefers-reduced-motion`, `forced-colors`.
+Existing panel class names were kept and restyled on the tokens.
 
-- **Tokens** on `:root`: `--bg`, `--surface`, `--surface-2`, `--surface-3`,
-  `--line`, `--line-bright`, `--text`, `--muted`, `--blue`, `--blue-soft`,
-  `--green`, `--danger`. Dark-only; there is no light theme and no
-  `prefers-color-scheme` block.
-- **Two runtime-injected custom properties**, set from React as inline styles:
-  `--workspace-color` on each workspace switcher button and `--accent` on `.dashboard`, both
-  taken from `workspace.color` and both consumed through `color-mix(in srgb, …)`.
-- **The layout system is fixed positioning, not flow.** `html, body, #root` are
-  100% tall with `overflow: hidden`, and `.titlebar`, `.tabbar`, `.toolbar`,
-  `.dashboard` and `.sidebar` are each `position: fixed` with
-  hard-coded pixel offsets. These numbers are the same ones sent over
-  `setLayout` — see **The Layout Handshake**.
-- **Load-bearing oddities.** `.titlebar` carries `-webkit-app-region: drag` and
-  150px of right padding to clear the Windows caption buttons. `.tabbar` reserves
-  380px of right padding so tabs never slide under the sidebar. `.app-shell:not(:has(.sidebar))
-  .dashboard { right: 0 }` widens the home screen when the sidebar is closed —
-  a `:has()` selector, so it depends on the sidebar being conditionally rendered
-  rather than hidden.
-- One breakpoint (`max-width: 1220px`) collapses the quick-link grid to two
-  columns and the dashboard to one. Two keyframes: `spin`, `toast-in`.
+## index.html and Preview Mode
+
+- **CSP** — `default-src 'self'`; `script-src 'self'`; `style-src 'self'
+  'unsafe-inline'` (inline custom properties); `img-src 'self' data:` (favicons and
+  the freeze-frame arrive as `data:` URLs); `connect-src 'self'`; `object-src
+  'none'`; `form-action 'none'`. Dev-only localhost sources are injected by the
+  Vite plugin with `apply: 'serve'`.
+- [preview-api.ts](../../src/preview-api.ts) exists only under Vite dev and
+  supplies credential-free data for review and browser E2E: six Account Spaces,
+  page tabs with a long title, an audible tab and an insecure `http:` tab, nested
+  bookmark folders with enough entries to overflow, and in-memory implementations
+  of the new tab, bookmark, preference and shortcut methods. `?theme=` and
+  `?panel=open` seed preferences; `setLayout` records the insets on
+  `<html data-preview-layout>` for tests. Production always uses the preload.
 
 ## Related Systems
 
-- [browser-shell.md](browser-shell.md) — the other half of the layout handshake
-  and the other copy of the keyboard shortcuts.
-- [ipc-contract.md](ipc-contract.md) — the preload bridge every call above uses.
-- [workspaces-and-state.md](workspaces-and-state.md) — what is in a snapshot.
+- [browser-shell.md](browser-shell.md) — geometry, shortcuts, freeze-frame and the
+  main-process half of every handler.
+- [ipc-contract.md](ipc-contract.md) — the preload bridge.
+- [workspaces-and-state.md](workspaces-and-state.md) — the snapshot and `ui`.
 - [vault.md](vault.md), [ai-consent.md](ai-consent.md),
-  [release-and-updates.md](release-and-updates.md) — the three panels with real
-  machinery behind them.
+  [release-and-updates.md](release-and-updates.md) — panels with real machinery.
 - [security-boundary.md](security-boundary.md) — why the CSP and the
   never-return-a-secret rule are shaped the way they are.
 
 ## Gotchas
 
-- **Keyboard shortcuts are implemented twice.** `App.tsx` attaches a `window`
-  `keydown` listener; `main.ts` attaches `before-input-event` to every tab's
-  `webContents`. Ctrl/Cmd + **L, T, W, R** and F12/Ctrl+Shift+I exist in both, because the renderer
-  listener is deaf while a web page has focus and the main-process listener is
-  deaf while the React chrome has focus. They are not identical: `main.ts` also
-  handles Alt+Left / Alt+Right, and the renderer copy guards Ctrl+W on an active
-  tab and Ctrl+R on `!isHome` where the main copy does not. Both copies ignore
-  auto-repeat; the main copy also accepts only `keyDown`. Adding a shortcut in
-  one place gives you a shortcut that works only half the time.
-- **The layout numbers exist in three places.** The renderer call, main-process
-  default and fixed CSS offsets all use top `128`, left `0` and right `366` while
-  the sidebar is open. Keep them synchronized when changing chrome geometry.
-- **`PrivacyPanel` hard-codes `5` isolated spaces** instead of reading
-  `state.workspaces.length`. Adding a workspace silently leaves it wrong.
-- **The Updates page checks on every mount.** Switching away from Settings
-  unmounts it, so returning issues another public or configured-private manifest
-  request. This is deliberate because signed links expire after 15 minutes.
-- **The release page stays available when the app is current.** The up-to-date
-  state uses `Check again` as its primary action and keeps `Release page` as a
-  secondary action. Both available and current flows call `openUpdatePage`, which
-  performs a fresh manifest check and opens the page in a Development tab.
-- **The "LOCAL SUMMARY" text is not AI output.** It is the `summary` `useMemo`:
-  collapse whitespace, split on sentence endings, keep sentences longer than 35
-  characters, join the first three. Nothing has left the machine at that point.
-- **Panels re-fetch on every mode switch.** `VaultPanel`, `AssistantPanel` and
-  `SettingsPanel` load in a mount effect, and switching modes unmounts them, so
-  toggling the sidebar tabs repeatedly re-issues those IPC calls.
-- **`act()` is only used by the chrome.** Each panel repeats its own
-  try/catch/toast instead, so error handling is duplicated eleven times over.
+- **Menus look frozen over pages.** That is the freeze-frame, not a hang; protected
+  pages show a plain backdrop instead of an image.
+- **Accessible names depend on block layout.** Menu labels stack `strong`/`small`
+  in a flex column so Chromium inserts a space between them ("Personal Local
+  browsing only"); keep that when restyling.
+- **`PrivacyPanel` still hard-codes `5` isolated spaces** instead of counting
+  Account Spaces.
+- **Panels re-fetch on every tool switch** because only one panel is mounted.
+- **The Updates page checks on every mount.** Deliberate: signed links expire after
+  15 minutes.
+- **Preview mode is not Electron.** There is no page view, so the freeze-frame and
+  real bounds are only exercised by `tests/electron/`.

@@ -39,7 +39,8 @@ test('MyVault renderer stays metadata-only and secrets use an isolated window', 
     await secureWindow.getByRole('button', { name: 'Cancel' }).click();
     await secureClosePromise;
 
-    await page.getByRole('button', { name: 'Development' }).click();
+    await page.getByRole('button', { name: /Account Space:/ }).click();
+    await page.getByLabel('Switch to Development').click();
     await expect(page.getByRole('button', { name: 'Open MyVault' })).toHaveCount(0);
   } finally {
     await electronApp.close();

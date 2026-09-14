@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,7 +12,9 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   safeStorage,
+  screen,
   session,
   shell,
   WebContentsView,
@@ -27,6 +30,11 @@ import { WORKSPACES } from './state-store.js';
 import { AccountStore } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
 import { RuntimeStateStore } from './runtime-state-store.js';
+import { CHROME, contentBounds, DEFAULT_CONTENT_INSETS, FRAME_COLORS, sanitizeContentInsets, ZERO_INSETS, type ContentInsets } from './chrome-layout.js';
+import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
+import { exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
+import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
+import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
   AccountSpaceColor,
   AccountSpaceId,
@@ -35,6 +43,8 @@ import type {
   AiApproval,
   AiPagePreview,
   AiProviderInput,
+  BookmarkEntryKeyInput,
+  BookmarkLevelInput,
   BrowserSnapshot,
   BrowserTab,
   ChromeImportOptions,
@@ -52,6 +62,7 @@ import type {
   PermissionCapability,
   PermissionDecision,
   PermissionPrompt,
+  ShortcutTile,
   UpdateServiceInput,
   WorkspaceId,
   StateRecoveryAction,
@@ -105,12 +116,10 @@ interface RuntimeTab {
   automaticFillPending: boolean;
 }
 
-interface Layout {
-  top: number;
-  left: number;
-  right: number;
-  bottom: number;
-}
+type Layout = ContentInsets;
+
+const ZOOM_PERCENTS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
+const MAX_CLOSED_TABS = 25;
 
 const FAVICON_TYPES = new Set(['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_FAVICON_BYTES = 32 * 1024;
@@ -189,7 +198,12 @@ class BrowserController {
   private readonly faviconCache = new Map<string, string>();
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private expectedInstaller?: ExpectedInstaller;
-  private layout: Layout = { top: 158, left: 0, right: 366, bottom: 0 };
+  private layout: Layout = { ...DEFAULT_CONTENT_INSETS };
+  private readonly closedTabs = new Map<AccountSpaceId, Array<{ title: string; url: string }>>();
+  private htmlFullscreenOwner?: string;
+  private settleLayoutTimer?: NodeJS.Timeout;
+  private settleBroadcast = false;
+  private appliedFrame?: (typeof FRAME_COLORS)[keyof typeof FRAME_COLORS];
   private window!: BrowserWindow;
   private readonly secureDialogs = new SecureVaultDialogs(() => this.window);
   private readonly fillCapabilities = new FillCapabilityStore();
@@ -236,14 +250,17 @@ class BrowserController {
   }
 
   async createWindow(): Promise<void> {
+    nativeTheme.themeSource = this.store.get().ui.theme;
+    const frame = this.frameColors();
+    this.appliedFrame = frame;
     this.window = new BrowserWindow({
       width: 1500,
       height: 940,
-      minWidth: 1050,
-      minHeight: 680,
-      backgroundColor: '#0b0d12',
+      minWidth: 900,
+      minHeight: 600,
+      backgroundColor: frame.window,
       titleBarStyle: 'hidden',
-      titleBarOverlay: { color: '#10131a', symbolColor: '#aeb6c8', height: 39 },
+      titleBarOverlay: { color: frame.frame, symbolColor: frame.symbol, height: CHROME.tabStrip },
       show: false,
       webPreferences: {
         preload: join(import.meta.dirname, 'preload.cjs'),
@@ -254,8 +271,26 @@ class BrowserController {
       },
     });
     Menu.setApplicationMenu(null);
-    this.window.on('resize', () => this.applyLayout());
+    this.window.on('resize', () => this.scheduleLayout());
+    // Maximise, restore and full screen report their events while Windows is still
+    // settling the frame, so the content size read then can be one DIP short.
+    // `scheduleLayout` applies now and again once the size has settled.
+    for (const event of ['resized', 'restore', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen'] as const) {
+      this.window.on(event as 'maximize', () => {
+        this.scheduleLayout(true);
+        this.broadcast();
+      });
+    }
+    const onDisplayChange = () => { if (!this.window.isDestroyed()) this.scheduleLayout(); };
+    screen.on('display-metrics-changed', onDisplayChange);
+    const onThemeChange = () => this.applyFrameColors();
+    nativeTheme.on('updated', onThemeChange);
+    // The chrome's geometry is expressed in DIPs; a zoomed chrome would drift from the page view.
+    this.window.webContents.on('did-finish-load', () => this.window.webContents.setZoomFactor(1));
+    this.window.webContents.setVisualZoomLevelLimits(1, 1).catch(() => undefined);
     this.window.on('closed', () => {
+      screen.removeListener('display-metrics-changed', onDisplayChange);
+      nativeTheme.removeListener('updated', onThemeChange);
       for (const runtime of this.runtimeTabs.values()) {
         runtime.view?.webContents.close();
         runtime.view = undefined;
@@ -272,9 +307,11 @@ class BrowserController {
       try { allowed ||= Boolean(trustedDevelopmentOrigin && new URL(url).origin === trustedDevelopmentOrigin); } catch { allowed = false; }
       if (!allowed) event.preventDefault();
     });
+    // Listen before loading: `ready-to-show` can fire before `loadURL` resolves,
+    // and a listener attached afterwards would leave the window hidden for good.
+    this.window.once('ready-to-show', () => { if (!this.window.isDestroyed()) this.window.show(); });
     await this.window.loadURL(devUrl ?? productionUrl);
-
-    this.window.once('ready-to-show', () => this.window.show());
+    if (!this.window.isDestroyed() && !this.window.isVisible()) this.window.show();
     await this.showActiveTab();
   }
 
@@ -291,8 +328,11 @@ class BrowserController {
         developerToolsAllowed: canUseDeveloperTools(tab.workspaceId, tab.isHome, tab.url),
         developerToolsOpen: runtime?.developerToolsOpen ?? false,
         securityWarning: tab.isHome ? undefined : navigationWarning(tab.url),
+        ...this.runtimeMedia(runtime),
       };
     });
+    const activeAccountSpaceId = this.activeAccountSpaceId(persisted);
+    const windowReady = Boolean(this.window && !this.window.isDestroyed());
     return {
       workspaces: WORKSPACES,
       activeWorkspaceId: persisted.activeWorkspaceId,
@@ -303,7 +343,7 @@ class BrowserController {
       downloads: [...this.downloads.values()],
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
-      activeAccountSpaceId: this.activeAccountSpaceId(persisted),
+      activeAccountSpaceId,
       accountSpaces: persisted.accountSpaces,
       accountHealth: persisted.accountHealth,
       recovery: persisted.recovery,
@@ -311,7 +351,43 @@ class BrowserController {
       googleConfiguration: this.googleConfiguration.status(),
       externalBrowsers: this.externalBrowsers.discover().map(({ id, name }) => ({ id, name })),
       bookmarkBarVisible: persisted.bookmarkBarVisible,
+      ui: persisted.ui,
+      windowState: {
+        maximized: windowReady && this.window.isMaximized(),
+        fullscreen: windowReady && this.window.isFullScreen(),
+        darkMode: nativeTheme.shouldUseDarkColors,
+      },
+      shortcutsByAccountSpace: persisted.shortcutsByAccountSpace,
+      canReopenClosedTab: (this.closedTabs.get(activeAccountSpaceId)?.length ?? 0) > 0,
     };
+  }
+
+  private runtimeMedia(runtime?: RuntimeTab): Pick<BrowserTab, 'audible' | 'muted' | 'zoomPercent'> {
+    const contents = runtime?.view?.webContents;
+    if (!contents || contents.isDestroyed()) return {};
+    return {
+      audible: contents.isCurrentlyAudible(),
+      muted: contents.isAudioMuted(),
+      zoomPercent: Math.round(contents.getZoomFactor() * 100),
+    };
+  }
+
+  private frameColors() {
+    return nativeTheme.shouldUseDarkColors ? FRAME_COLORS.dark : FRAME_COLORS.light;
+  }
+
+  private applyFrameColors(): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    const frame = this.frameColors();
+    // `nativeTheme` emits `updated` for unrelated system changes and during
+    // startup; reconfiguring the native overlay for no colour change is wasted
+    // compositor work, so only touch the window when the colours really differ.
+    if (this.appliedFrame !== frame) {
+      this.appliedFrame = frame;
+      this.window.setBackgroundColor(frame.window);
+      try { this.window.setTitleBarOverlay({ color: frame.frame, symbolColor: frame.symbol, height: CHROME.tabStrip }); } catch { /* not supported on this platform */ }
+    }
+    this.broadcast();
   }
 
   broadcast(): void {
@@ -331,12 +407,7 @@ class BrowserController {
   }
 
   setLayout(layout: Layout): void {
-    this.layout = {
-      top: Math.max(80, Math.round(layout.top)),
-      left: Math.max(0, Math.round(layout.left)),
-      right: Math.max(0, Math.round(layout.right)),
-      bottom: Math.max(0, Math.round(layout.bottom)),
-    };
+    this.layout = sanitizeContentInsets(layout);
     this.applyLayout();
   }
 
@@ -409,6 +480,11 @@ class BrowserController {
     const siblings = accountTabs.filter((candidate) => candidate.id !== tab.id);
     const nextId = siblings[Math.min(closedIndex, siblings.length - 1)]?.id;
     const wasActive = state.activeTabByAccountSpace[tab.accountSpaceId] === tabId;
+    if (!tab.isHome && tab.workspaceId !== 'banking' && isAllowedRemoteUrl(tab.url)) {
+      const closed = this.closedTabs.get(tab.accountSpaceId) ?? [];
+      closed.push({ title: tab.title, url: tab.url });
+      this.closedTabs.set(tab.accountSpaceId, closed.slice(-MAX_CLOSED_TABS));
+    }
     const runtime = this.runtimeTabs.get(tabId);
     if (runtime?.view) {
       this.window.contentView.removeChildView(runtime.view);
@@ -447,7 +523,9 @@ class BrowserController {
   }
 
   async setOverlayOpen(open: boolean): Promise<void> {
-    if (open) this.hideAllViews();
+    // Menus and dialogs only cover the page: hide the views but keep docked
+    // DevTools attached, unlike a tab or workspace switch.
+    if (open) for (const runtime of this.runtimeTabs.values()) runtime.view?.setVisible(false);
     else await this.showActiveTab();
   }
 
@@ -805,6 +883,7 @@ class BrowserController {
       this.runtimeTabs.delete(id);
     }
     for (const key of [...this.faviconCache.keys()]) if (key.startsWith(`${accountSpaceId}:`)) this.faviconCache.delete(key);
+    this.closedTabs.delete(accountSpaceId);
   }
 
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
@@ -883,7 +962,168 @@ class BrowserController {
   }
 
   toggleBookmarkBar(): void {
-    this.store.update((state) => { state.bookmarkBarVisible = !state.bookmarkBarVisible; });
+    this.store.update((state) => { state.ui = mergeUiPreferences(state.ui, { bookmarkBarMode: state.ui.bookmarkBarMode === 'hidden' ? 'always' : 'hidden' }); });
+    this.broadcast();
+  }
+
+  setUiPreferences(patch: UiPreferencesPatch): void {
+    const before = this.store.get().ui;
+    const next = this.store.update((state) => { state.ui = mergeUiPreferences(state.ui, patch); });
+    if (next.ui.theme !== before.theme) {
+      nativeTheme.themeSource = next.ui.theme;
+      this.applyFrameColors();
+    }
+    this.broadcast();
+  }
+
+  /**
+   * A still image of the active page, so trusted menus can draw over the
+   * content area while the live view is hidden. Protected workspaces and
+   * protected pages (banking, payment, identity) never leave pixels in the
+   * chrome renderer: they fail closed to a neutral backdrop.
+   */
+  async freezeContent(): Promise<string | null> {
+    const tab = this.activeTab(this.store.get());
+    const view = this.runtimeTabs.get(tab.id)?.view;
+    const workspace = WORKSPACES.find((item) => item.id === tab.workspaceId);
+    if (tab.isHome || !view || !view.getVisible() || workspace?.protected || isProtectedPage(tab.url)) return null;
+    try {
+      const image = await view.webContents.capturePage();
+      if (image.isEmpty()) return null;
+      return `data:image/jpeg;base64,${image.toJPEG(82).toString('base64')}`;
+    } catch {
+      return null;
+    }
+  }
+
+  moveTab(tabId: string, toIndex: number): void {
+    const state = this.store.get();
+    const tab = state.tabs.find((candidate) => candidate.id === tabId);
+    if (!tab || tab.accountSpaceId !== this.activeAccountSpaceId(state)) throw new Error('Only tabs in the active Account Space can be moved');
+    this.store.update((next) => { next.tabs = moveTabWithinAccountSpace(next.tabs, tabId, toIndex); });
+    this.broadcast();
+  }
+
+  async reopenClosedTab(): Promise<void> {
+    const state = this.store.get();
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    const closed = this.closedTabs.get(accountSpaceId);
+    const entry = closed?.pop();
+    if (!entry) return;
+    await this.newTab(state.activeWorkspaceId, entry.url, accountSpaceId);
+  }
+
+  zoom(direction: 'in' | 'out' | 'reset'): void {
+    const contents = this.activeContents();
+    // A New Tab page keeps the previous page's view hidden underneath; never zoom that.
+    if (!contents || this.activeTab(this.store.get()).isHome) return;
+    const current = Math.round(contents.getZoomFactor() * 100);
+    let next = 100;
+    if (direction === 'in') next = ZOOM_PERCENTS.find((value) => value > current) ?? ZOOM_PERCENTS.at(-1)!;
+    if (direction === 'out') next = [...ZOOM_PERCENTS].reverse().find((value) => value < current) ?? ZOOM_PERCENTS[0];
+    contents.setZoomFactor(next / 100);
+    this.broadcast();
+  }
+
+  print(): void {
+    const contents = this.activeContents();
+    if (contents && !this.activeTab(this.store.get()).isHome) contents.print({}, () => undefined);
+  }
+
+  findInPage(text: string, forward: boolean, findNext: boolean): void {
+    const contents = this.activeContents();
+    if (!contents || !text) return;
+    contents.findInPage(text, { forward, findNext });
+  }
+
+  stopFindInPage(): void {
+    this.activeContents()?.stopFindInPage('clearSelection');
+  }
+
+  setTabMuted(tabId: string, muted: boolean): void {
+    const state = this.store.get();
+    const tab = state.tabs.find((candidate) => candidate.id === tabId);
+    if (!tab || tab.accountSpaceId !== this.activeAccountSpaceId(state)) throw new Error('Tab is not in the active Account Space');
+    this.runtimeTabs.get(tabId)?.view?.webContents.setAudioMuted(muted);
+    this.broadcast();
+  }
+
+  hardReload(): void {
+    this.activeContents()?.reloadIgnoringCache();
+  }
+
+  toggleFullscreen(): void {
+    if (this.window.isDestroyed()) return;
+    this.window.setFullScreen(!this.window.isFullScreen());
+  }
+
+  private activeBookmarkScope() {
+    const state = this.store.get();
+    return { state, accountSpaceId: this.activeAccountSpaceId(state) };
+  }
+
+  private requireActiveBookmark(id: string) {
+    const { state, accountSpaceId } = this.activeBookmarkScope();
+    const bookmark = state.bookmarks.find((item) => item.id === id);
+    if (!bookmark || bookmark.accountSpaceId !== accountSpaceId) throw new Error('Bookmark belongs to another Account Space');
+    return bookmark;
+  }
+
+  moveBookmark(level: BookmarkLevelInput, key: BookmarkEntryKeyInput, toIndex: number): void {
+    const { accountSpaceId } = this.activeBookmarkScope();
+    if (key.kind === 'bookmark') this.requireActiveBookmark(key.id);
+    this.store.update((state) => { state.bookmarks = reorderBookmarkEntry(state.bookmarks, accountSpaceId, level, key, toIndex); });
+    this.broadcast();
+  }
+
+  renameBookmark(id: string, title: string): void {
+    this.requireActiveBookmark(id);
+    this.store.update((state) => { state.bookmarks = renameBookmark(state.bookmarks, id, title); });
+    this.broadcast();
+  }
+
+  removeBookmark(id: string): void {
+    this.requireActiveBookmark(id);
+    this.store.update((state) => { state.bookmarks = removeBookmark(state.bookmarks, id); });
+    this.broadcast();
+  }
+
+  renameBookmarkFolder(level: BookmarkLevelInput, name: string, nextName: string): void {
+    const { accountSpaceId } = this.activeBookmarkScope();
+    this.store.update((state) => { state.bookmarks = renameBookmarkFolder(state.bookmarks, accountSpaceId, level, name, nextName); });
+    this.broadcast();
+  }
+
+  removeBookmarkFolder(level: BookmarkLevelInput, name: string): void {
+    const { accountSpaceId } = this.activeBookmarkScope();
+    this.store.update((state) => { state.bookmarks = removeBookmarkFolder(state.bookmarks, accountSpaceId, level, name); });
+    this.broadcast();
+  }
+
+  async exportBookmarks(): Promise<boolean> {
+    const { state, accountSpaceId } = this.activeBookmarkScope();
+    const account = state.accountSpaces.find((item) => item.id === accountSpaceId);
+    const bookmarks = state.bookmarks.filter((item) => item.accountSpaceId === accountSpaceId);
+    const safeLabel = (account?.label ?? 'bookmarks').replace(/[^\w .-]+/g, '').trim().slice(0, 60) || 'bookmarks';
+    const result = await dialog.showSaveDialog(this.window, {
+      title: 'Export bookmarks',
+      defaultPath: `Private Browser bookmarks - ${safeLabel}.html`,
+      filters: [{ name: 'Bookmark file', extensions: ['html'] }],
+    });
+    if (result.canceled || !result.filePath) return false;
+    await writeFile(result.filePath, exportBookmarksHtml(bookmarks), { encoding: 'utf8' });
+    this.addPrivacyEvent('local-read', 'Bookmarks exported', `${bookmarks.length} bookmarks from ${account?.label ?? 'this Account Space'} saved to a local file`);
+    return true;
+  }
+
+  setShortcutTiles(accountSpaceId: AccountSpaceId, tiles: ShortcutTile[] | null): void {
+    this.requireAccountMembership(accountSpaceId);
+    const sanitized = tiles === null ? undefined : sanitizeShortcutTiles(tiles);
+    if (tiles !== null && sanitized?.length !== tiles.length) throw new Error('Shortcuts must be HTTP or HTTPS pages');
+    this.store.update((state) => {
+      if (sanitized) state.shortcutsByAccountSpace[accountSpaceId] = sanitized;
+      else delete state.shortcutsByAccountSpace[accountSpaceId];
+    });
     this.broadcast();
   }
 
@@ -1795,6 +2035,22 @@ class BrowserController {
       ]).popup({ window: this.window });
     });
     view.webContents.on('before-input-event', (event, input) => this.handleShortcut(event, input));
+    view.webContents.on('audio-state-changed', () => this.broadcast());
+    view.webContents.on('zoom-changed', () => this.broadcast());
+    view.webContents.on('found-in-page', (_event, result) => {
+      if (this.activeTab(this.store.get()).id !== tabId || this.window.isDestroyed()) return;
+      this.window.webContents.send('browser:find-result', { tabId, matches: result.matches, activeMatchOrdinal: result.activeMatchOrdinal, finalUpdate: result.finalUpdate });
+    });
+    view.webContents.on('enter-html-full-screen', () => {
+      if (this.window.isDestroyed() || this.window.isFullScreen()) return;
+      this.htmlFullscreenOwner = tabId;
+      this.window.setFullScreen(true);
+    });
+    view.webContents.on('leave-html-full-screen', () => {
+      if (this.window.isDestroyed() || this.htmlFullscreenOwner !== tabId) return;
+      this.htmlFullscreenOwner = undefined;
+      this.window.setFullScreen(false);
+    });
     view.webContents.on('render-process-gone', () => this.updateRuntime(tabId, { loading: false }));
     return view;
   }
@@ -1987,18 +2243,35 @@ class BrowserController {
     }
   }
 
+  /**
+   * Apply now and again once the frame has settled. Window-state events also
+   * re-broadcast then, because `isFullScreen()`/`isMaximized()` can still report
+   * the previous state while the event is being delivered.
+   */
+  private scheduleLayout(windowStateChanged = false): void {
+    this.applyLayout();
+    this.settleBroadcast ||= windowStateChanged;
+    if (this.settleLayoutTimer) clearTimeout(this.settleLayoutTimer);
+    this.settleLayoutTimer = setTimeout(() => {
+      this.settleLayoutTimer = undefined;
+      if (this.window.isDestroyed()) return;
+      this.applyLayout();
+      if (this.settleBroadcast) {
+        this.settleBroadcast = false;
+        this.broadcast();
+      }
+    }, 80);
+  }
+
   private applyLayout(): void {
     const state = this.store.get();
     const active = this.activeTab(state);
     const runtime = this.runtimeTabs.get(active.id);
     if (!runtime?.view || active.isHome || this.window.isDestroyed()) return;
     const [width, height] = this.window.getContentSize();
-    runtime.view.setBounds({
-      x: this.layout.left,
-      y: this.layout.top,
-      width: Math.max(100, width - this.layout.left - this.layout.right),
-      height: Math.max(100, height - this.layout.top - this.layout.bottom),
-    });
+    // Full screen hides every piece of chrome, so the page owns the whole window.
+    const insets = this.window.isFullScreen() ? ZERO_INSETS : this.layout;
+    runtime.view.setBounds(contentBounds(insets, width, height));
   }
 
   /**
@@ -2095,33 +2368,16 @@ class BrowserController {
 
   private handleShortcut(event: Electron.Event, input: Electron.Input): void {
     if (input.type !== 'keyDown' || input.isAutoRepeat) return;
-    const command = input.control || input.meta;
-    const key = input.key.toLowerCase();
-    if (input.key === 'F12' || (command && input.shift && key === 'i')) {
-      event.preventDefault();
-      void Promise.resolve().then(() => this.toggleDeveloperTools('right')).catch(() => undefined);
-    } else if (command && key === 'l') {
-      event.preventDefault();
-      this.window.webContents.send('browser:focus-address');
-    } else if (command && key === 't') {
-      event.preventDefault();
-      void this.newTab();
-    } else if (command && key === 'w') {
-      event.preventDefault();
-      void this.closeTab(this.activeTab(this.store.get()).id);
-    } else if (command && key === 'r') {
-      event.preventDefault();
-      this.reload();
-    } else if (command && input.shift && key === 'b') {
-      event.preventDefault();
-      this.toggleBookmarkBar();
-    } else if (input.alt && input.key === 'Left') {
-      event.preventDefault();
-      this.goBack();
-    } else if (input.alt && input.key === 'Right') {
-      event.preventDefault();
-      this.goForward();
+    // Esc leaves window full screen (F11) the way it leaves page full screen.
+    if (input.key === 'Escape' && !this.window.isDestroyed() && this.window.isFullScreen() && !this.htmlFullscreenOwner && !input.control && !input.alt && !input.shift && !input.meta) {
+      this.window.setFullScreen(false);
+      return;
     }
+    const shortcut = resolveShortcut({ key: input.key, control: input.control, meta: input.meta, shift: input.shift, alt: input.alt });
+    if (!shortcut || this.window.isDestroyed()) return;
+    event.preventDefault();
+    if (needsChromeFocus(shortcut.command)) this.window.webContents.focus();
+    this.window.webContents.send('browser:command', shortcut);
   }
 }
 
@@ -2269,6 +2525,25 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
+  handle('ui:set-preferences', (_event, patch: UiPreferencesPatch) => controller!.setUiPreferences(patch));
+  handle('browser:freeze-content', () => controller!.freezeContent());
+  handle('browser:move-tab', (_event, tabId: string, toIndex: number) => controller!.moveTab(tabId, toIndex));
+  handle('browser:reopen-closed-tab', () => controller!.reopenClosedTab());
+  handle('browser:zoom', (_event, direction: 'in' | 'out' | 'reset') => controller!.zoom(direction));
+  handle('browser:print', () => controller!.print());
+  handle('browser:find', (_event, text: string, forward: boolean, findNext: boolean) => controller!.findInPage(text, forward, findNext));
+  handle('browser:stop-find', () => controller!.stopFindInPage());
+  handle('browser:set-tab-muted', (_event, tabId: string, muted: boolean) => controller!.setTabMuted(tabId, muted));
+  handle('browser:hard-reload', () => controller!.hardReload());
+  handle('browser:toggle-fullscreen', () => controller!.toggleFullscreen());
+  handle('bookmarks:move', (_event, level: BookmarkLevelInput, key: BookmarkEntryKeyInput, toIndex: number) => controller!.moveBookmark(level, key, toIndex));
+  handle('bookmarks:rename', (_event, id: string, title: string) => controller!.renameBookmark(id, title));
+  handle('bookmarks:remove', (_event, id: string) => controller!.removeBookmark(id));
+  handle('bookmarks:rename-folder', (_event, level: BookmarkLevelInput, name: string, nextName: string) => controller!.renameBookmarkFolder(level, name, nextName));
+  handle('bookmarks:remove-folder', (_event, level: BookmarkLevelInput, name: string) => controller!.removeBookmarkFolder(level, name));
+  handle('bookmarks:export', () => controller!.exportBookmarks());
+  handle('shortcuts:set', (_event, accountSpaceId: AccountSpaceId, tiles: ShortcutTile[] | null) => controller!.setShortcutTiles(accountSpaceId, tiles));
+  handle('app:quit', () => { app.quit(); });
   handle('browser:list-chrome-profiles', () => controller!.listChromeProfiles());
   handle('browser:import-chrome', (_event, options: ChromeImportOptions) => controller!.importChrome(options));
   handle('browser:import-chrome-passwords', () => controller!.importChromePasswords());

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0 — 2026-09-14
+
+- Redesigned the browser frame in a Chrome-familiar "Chrome Precision" style with
+  the original Private Browser shield and teal palette, in light and dark themes.
+- Merged the title row into one tab strip with the native Windows caption buttons,
+  drag-to-reorder tabs, middle-click close, mute, tab search and a protection
+  status popup.
+- Added a real keyboard-accessible browser menu, a compact profile menu with
+  workspace and Account Space switching, find in page, zoom, print, reopen closed
+  tab and full screen, plus standard Chrome shortcuts that now work identically
+  from the page and from the browser controls.
+- Rebuilt the bookmarks bar with favicons, nested folder menus, overflow,
+  reordering, rename/delete, export and Always/New Tab/Hidden modes, and added
+  Bookmarks and History panels.
+- Replaced the permanent sidebar with a closed-by-default, resizable side panel
+  that remembers its width and tool, and a New Tab page with customisable
+  shortcuts and backgrounds.
+- Fixed a startup race that could leave the browser window hidden when the page
+  became ready before loading finished.
+- Computed the page position from one shared layout module in both processes, so
+  web content always starts directly below the visible chrome and ends at the side
+  panel, across resizing, maximising, display scaling and full screen.
+
 ## 0.5.10 — 2026-09-13
 
 - Fixed Cloudflare login verification by preserving Electron's stable default

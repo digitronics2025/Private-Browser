@@ -12,6 +12,7 @@ import type {
 import { AccountStore, type AccountSpaceRecord } from './account-store.js';
 import { AccountSpaceStateStore, type AccountSpaceStateInitialization } from './account-space-state.js';
 import { WORKSPACES } from './state-store.js';
+import { DEFAULT_UI_PREFERENCES, sanitizeUiPreferences } from './ui-preferences.js';
 
 export class RuntimeStateStore {
   private state: RuntimeBrowserStateV2;
@@ -112,6 +113,7 @@ export class RuntimeStateStore {
       state.bookmarks = state.bookmarks.filter((bookmark) => bookmark.accountSpaceId !== id);
       state.history = state.history.filter((entry) => entry.accountSpaceId !== id);
       delete state.activeTabByAccountSpace[id];
+      delete state.shortcutsByAccountSpace[id];
       if (state.activeAccountSpaceByWorkspace[account.workspaceId] === id) state.activeAccountSpaceByWorkspace[account.workspaceId] = replacement.id;
     });
     this.records.delete(id);
@@ -140,7 +142,8 @@ export class RuntimeStateStore {
       activeAccountSpaceByWorkspace: next.activeAccountSpaceByWorkspace,
       privacyLog: next.privacyLog,
       trackerBlocking: next.trackerBlocking,
-      bookmarkBarVisible: next.bookmarkBarVisible,
+      bookmarkBarVisible: next.ui.bookmarkBarMode !== 'hidden',
+      ui: next.ui,
     };
     for (const account of next.accountSpaces) {
       const tabs = next.tabs.filter((tab) => tab.accountSpaceId === account.id);
@@ -148,10 +151,11 @@ export class RuntimeStateStore {
         version: 2,
         accountSpaceId: account.id,
         workspaceId: account.workspaceId,
-        tabs: tabs.map(({ loading: _loading, canGoBack: _back, canGoForward: _forward, favicon: _favicon, developerToolsAllowed: _tools, developerToolsOpen: _toolsOpen, securityWarning: _warning, ...tab }) => tab),
+        tabs: tabs.map(({ loading: _loading, canGoBack: _back, canGoForward: _forward, favicon: _favicon, developerToolsAllowed: _tools, developerToolsOpen: _toolsOpen, securityWarning: _warning, audible: _audible, muted: _muted, zoomPercent: _zoom, ...tab }) => tab),
         activeTabId: next.activeTabByAccountSpace[account.id],
         bookmarks: next.bookmarks.filter((item) => item.accountSpaceId === account.id),
         history: next.history.filter((item) => item.accountSpaceId === account.id),
+        ...(next.shortcutsByAccountSpace[account.id] ? { shortcuts: next.shortcutsByAccountSpace[account.id] } : {}),
       };
       this.persistedStore.saveAccountState(state);
     }
@@ -196,6 +200,8 @@ function combine(
     privacyLog: [...manifest.privacyLog],
     trackerBlocking: manifest.trackerBlocking,
     bookmarkBarVisible: manifest.bookmarkBarVisible,
+    ui: sanitizeUiPreferences(manifest.ui, manifest.bookmarkBarVisible),
+    shortcutsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.shortcuts).map((state) => [state.accountSpaceId, state.shortcuts!])),
     accountSpaces,
     accountHealth,
     recovery: firstRecovery,
@@ -228,6 +234,8 @@ function recordToSummary(record: AccountSpaceRecord): AccountSpaceSummary {
 }
 
 function normalizeRuntimeState(state: RuntimeBrowserStateV2): void {
+  state.ui = sanitizeUiPreferences(state.ui);
+  state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
   const accountsById = new Map(state.accountSpaces.map((account) => [account.id, account]));
   for (const workspace of WORKSPACES) {
     const members = state.accountSpaces.filter((account) => account.workspaceId === workspace.id);
@@ -311,6 +319,8 @@ function recoveryRuntimeState(recovery: StateRecoveryStatus): RuntimeBrowserStat
     privacyLog: [],
     trackerBlocking: true,
     bookmarkBarVisible: true,
+    ui: { ...DEFAULT_UI_PREFERENCES },
+    shortcutsByAccountSpace: {},
     accountSpaces,
     accountHealth: accountSpaces.map((account) => ({ accountSpaceId: account.id, status: 'locked', checkedAt: now })),
     recovery,

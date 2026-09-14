@@ -14,8 +14,14 @@ function monitorBrowser(page: import('@playwright/test').Page) {
   };
 }
 
+async function openSettings(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menu', { name: 'Browser menu' }).getByRole('menuitem', { name: 'Settings', exact: true }).click();
+  await expect(page.locator('.update-settings')).toBeVisible();
+}
+
 async function openUpdatesPage(page: import('@playwright/test').Page, action: 'Open' | 'Update' | 'Review') {
-  await page.locator('.sidebar-nav button[title="Settings"]').click();
+  await openSettings(page);
   await page.locator('.update-settings').getByRole('button', { name: action, exact: true }).click();
   await expect(page.getByTestId('updates-page')).toBeVisible();
 }
@@ -52,7 +58,7 @@ test('shows a focused full-width download action when a newer release exists', a
 test('keeps loading and failure states explicit and retryable', async ({ page }) => {
   const expectNoBrowserIssues = monitorBrowser(page);
   await page.goto('/?update=loading');
-  await page.locator('.sidebar-nav button[title="Settings"]').click();
+  await openSettings(page);
   await expect(page.getByText('Checking the latest stable release…')).toBeVisible();
   await page.waitForTimeout(1_050);
   await openUpdatesPage(page, 'Open');

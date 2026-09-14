@@ -19,6 +19,16 @@ workspaces remain policy boundaries: Banking denies privileged behavior before
 any Account Space grant is consulted, while Development retains controlled
 DevTools. New partition names and Google subjects never cross the preload bridge.
 
+The browser chrome draws menus and dialogs over the page area by briefly hiding
+the native page view. So that the page does not disappear behind an open menu,
+the main process may hand the trusted chrome renderer a still JPEG of the active
+page (`browser:freeze-content`). The image is held in renderer memory only while
+the menu is open and never written to disk or sent anywhere. It is never produced
+for Banking or other protected workspaces, for `isProtectedPage` URLs, or for a
+hidden view; those show a neutral backdrop instead. Page layout insets sent by the
+renderer are clamped so the address bar and its security warning can never be
+covered by page content.
+
 ## Vault
 
 Credentials and TOTP secrets are encrypted using Electron `safeStorage` before being written to disk. The vault file and browser-state file are created with owner-only permissions where the operating system supports them. Vault metadata exposed to the UI never contains passwords or TOTP secrets. Passwords and TOTP values are copied directly by the main process and cleared from the clipboard after 30 seconds if unchanged.

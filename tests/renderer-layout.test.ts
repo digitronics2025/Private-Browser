@@ -4,19 +4,48 @@ import { describe, expect, it } from 'vitest';
 const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+const profileMenu = readFileSync(new URL('../src/shell/ProfileMenu.tsx', import.meta.url), 'utf8');
 
-describe('browser chrome layout', () => {
-  it('uses the full left edge and keeps the renderer and main-process layout in sync', () => {
-    expect(app).toContain('setLayout({ top: state.bookmarkBarVisible ? 158 : 128, left: 0, right: sidebarOpen ? 366 : 0, bottom: 0 })');
-    expect(main).toContain('layout: Layout = { top: 158, left: 0, right: 366, bottom: 0 }');
-    expect(styles).toMatch(/\.dashboard \{[^}]*left: 0;[^}]*right: 366px;/);
-    expect(styles).toMatch(/\.bookmark-bar \{[^}]*left: 0;[^}]*right: 366px;/);
+describe('browser chrome geometry', () => {
+  it('derives the page rectangle from one shared calculation in both processes', () => {
+    expect(app).toContain("from '../electron/chrome-layout'");
+    expect(app).toContain('computeChromeLayout(');
+    expect(app).toContain('setLayout(committedLayout.insets)');
+    expect(main).toContain("from './chrome-layout.js'");
+    expect(main).toContain('private layout: Layout = { ...DEFAULT_CONTENT_INSETS }');
+    expect(main).toContain('contentBounds(insets, width, height)');
   });
 
-  it('moves the workspace switcher into the right sidebar', () => {
+  it('no longer duplicates the old fixed offsets anywhere', () => {
+    for (const source of [app, main, styles]) {
+      expect(source).not.toMatch(/\b(158|128|366)px\b/);
+      expect(source).not.toMatch(/top:\s*(158|128)\b/);
+    }
+  });
+
+  it('positions every page-adjacent surface from the shared custom properties', () => {
+    expect(styles).toMatch(/\.page-surface, \.new-tab-page \{[^}]*top: var\(--chrome-top\);[^}]*right: var\(--side-panel-w\);/);
+    expect(styles).toMatch(/\.side-panel-shell \{[^}]*top: var\(--chrome-top\);[^}]*width: var\(--side-panel-w\);/);
+    expect(styles).toContain('--chrome-top');
+  });
+
+  it('keeps the draggable tab strip free of interactive drag regions', () => {
+    expect(styles).toMatch(/\.tab-strip \{[^}]*-webkit-app-region: drag;/);
+    expect(styles).toMatch(/\.tab-strip button, \.tab-strip \.browser-tab \{ -webkit-app-region: no-drag; \}/);
+    expect(main).toContain('height: CHROME.tabStrip');
+  });
+
+  it('shows the window even when ready-to-show fires before the chrome finishes loading', () => {
+    const listen = main.indexOf("this.window.once('ready-to-show'");
+    const load = main.indexOf('await this.window.loadURL(devUrl ?? productionUrl)');
+    expect(listen).toBeGreaterThan(-1);
+    expect(listen).toBeLessThan(load);
+    expect(main).toContain('if (!this.window.isDestroyed() && !this.window.isVisible()) this.window.show();');
+  });
+
+  it('moves workspace switching into the profile menu', () => {
     expect(app).not.toContain('<WorkspaceRail');
     expect(styles).not.toContain('.workspace-rail');
-    expect(app).toContain('<WorkspaceSwitcher state={state}');
-    expect(app).toMatch(/<aside className="sidebar">[\s\S]*<WorkspaceSwitcher state=\{state\}/);
+    expect(profileMenu).toContain('aria-label={`Switch to ${item.name}`}');
   });
 });

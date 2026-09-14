@@ -20,7 +20,7 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
     const api = new Proxy({
       getState: async () => state,
       onState: () => () => undefined,
-      onFocusAddress: () => () => undefined,
+      onCommand: () => () => undefined,
       onUpdateAvailable: () => () => undefined,
       getBridgeStatus: async () => bridge,
       getAiProvider: async () => ({ configured: false }),
@@ -36,6 +36,7 @@ test('shows focused pairing and all four bridge tabs in Development', async ({ p
   const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
   await installMock(page, 'development'); await page.goto('/', { waitUntil: 'networkidle' }); await page.waitForTimeout(200);
   expect(errors).toEqual([]); await expect(page.locator('.app-shell')).toBeVisible();
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   await page.getByTitle('Developer cockpit').evaluate((element: HTMLButtonElement) => element.click());
   await expect(page.getByRole('heading', { name: 'Developer Bridge' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Project' })).toBeVisible();
@@ -50,6 +51,7 @@ test('keeps bridge actions hidden in Banking', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
   await installMock(page, 'banking'); await page.goto('/', { waitUntil: 'networkidle' }); await page.waitForTimeout(200);
   expect(errors).toEqual([]); await expect(page.locator('.app-shell')).toBeVisible();
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   await page.getByTitle('Developer cockpit').evaluate((element: HTMLButtonElement) => element.click());
   await expect(page.getByText('Protected by workspace policy')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Pair', exact: true })).toHaveCount(0);

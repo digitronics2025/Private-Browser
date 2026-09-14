@@ -1,3 +1,9 @@
+import type { UiPreferences } from './ui-preferences.js';
+
+export type { UiPreferences, UiPreferencesPatch, ThemePreference, SidePanelTool, NewTabBackground } from './ui-preferences.js';
+export type { BookmarkBarMode } from './chrome-layout.js';
+export type { Shortcut, ShortcutCommand } from './shortcuts.js';
+
 export type WorkspaceId = 'digitronics' | 'tenten' | 'development' | 'personal' | 'banking';
 
 export interface Workspace {
@@ -268,7 +274,35 @@ export interface AccountBrowsingStateV2 {
   activeTabId: string;
   bookmarks: AccountSpaceBookmark[];
   history: AccountSpaceHistoryEntry[];
+  /** Absent until the user customises the New Tab shortcuts for this Account Space. */
+  shortcuts?: ShortcutTile[];
 }
+
+export interface ShortcutTile {
+  id: string;
+  title: string;
+  url: string;
+}
+
+export interface WindowState {
+  maximized: boolean;
+  fullscreen: boolean;
+  darkMode: boolean;
+}
+
+export interface FindResult {
+  tabId: string;
+  matches: number;
+  activeMatchOrdinal: number;
+  finalUpdate: boolean;
+}
+
+export interface BookmarkLevelInput {
+  location: 'bar' | 'other';
+  path: string[];
+}
+
+export type BookmarkEntryKeyInput = { kind: 'bookmark'; id: string } | { kind: 'folder'; name: string };
 
 export interface BrowserStateManifestV2 {
   version: 2;
@@ -278,6 +312,7 @@ export interface BrowserStateManifestV2 {
   trackerBlocking: boolean;
   bookmarkBarVisible: boolean;
   privacyLog: PrivacyEvent[];
+  ui?: UiPreferences;
 }
 
 export interface BrowserTab {
@@ -294,6 +329,9 @@ export interface BrowserTab {
   developerToolsAllowed: boolean;
   developerToolsOpen: boolean;
   securityWarning?: 'insecure' | 'idn';
+  audible?: boolean;
+  muted?: boolean;
+  zoomPercent?: number;
 }
 
 export interface Bookmark {
@@ -360,6 +398,11 @@ export interface BrowserSnapshot {
   recovery?: StateRecoveryStatus;
   pendingPermission?: PermissionPrompt;
   bookmarkBarVisible: boolean;
+  ui: UiPreferences;
+  windowState: WindowState;
+  /** Customised New Tab shortcuts keyed by Account Space; a missing key means the defaults. */
+  shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
+  canReopenClosedTab: boolean;
 }
 
 export interface PersistedState {
@@ -407,6 +450,8 @@ export interface RuntimeBrowserStateV2 {
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
   bookmarkBarVisible: boolean;
+  ui: UiPreferences;
+  shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
   accountSpaces: AccountSpaceSummary[];
   accountHealth: AccountSpaceHealth[];
   recovery?: StateRecoveryStatus;
