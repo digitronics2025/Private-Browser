@@ -158,8 +158,18 @@ node scripts/docs-find.mjs --history "<term from the entry>"
   iframe (some banks and SSO widgets) gets no list, because the focus probe runs
   in the main frame, and fill already refuses cross-origin frames. It also fills
   the first visible username and password fields, as the side panel's Fill does,
-  not necessarily the exact field clicked. It offers no "suggest a strong
-  password" row and no passkey rows. Symbol: `probeFocusedLoginField`.
+  not necessarily the exact field clicked. Opened on the email field, the list
+  may cover the password field below it, as Chrome's does; it never covers the
+  field it belongs to. It offers no "suggest a strong password" row and no
+  passkey rows. Symbol: `probeFocusedLoginField`.
+  *(2026-09-24)*
+
+- **Remembered login picks outlive a vault disconnect or reset.**
+  `myvault/fill-preferences.enc` maps each site where a login was picked to an
+  entry id. It is `safeStorage` ciphertext and holds no secret, but it still
+  names those sites after the vault they belonged to is gone; a new vault's ids
+  never match, so it only costs privacy, not correctness. Clearing it belongs
+  with the vault's disconnect/reset flow. Symbol: `FillPreferenceStore`.
   *(2026-09-24)*
 ## Browser chrome (Chrome Precision redesign)
 

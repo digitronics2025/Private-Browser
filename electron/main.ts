@@ -80,6 +80,8 @@ import type { ConfirmDeleteDialogValue, EditLoginDialogValue, UnlockDialogValue 
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
 import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape, probeFocusedLoginField } from './myvault/isolated-fill.js';
 import { FillPicker } from './myvault/fill-picker.js';
+import { FillPreferenceStore } from './myvault/fill-preferences.js';
+import { isSameSiteFillCandidate } from './myvault/site-match.js';
 import { fillPickerBounds, type FillPickerChoice } from './myvault/fill-picker-model.js';
 import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
 import { FILL_PICKER_MAX_ROWS, isAutomaticFillPageUrl, orderFillCandidates, selectAutomaticFillEntry } from './myvault/automatic-fill.js';
@@ -215,7 +217,6 @@ class BrowserController {
   private window!: BrowserWindow;
   private readonly secureDialogs = new SecureVaultDialogs(() => this.window);
   private readonly fillCapabilities = new FillCapabilityStore();
-  private readonly preferredFillEntryByOrigin = new Map<string, string>();
   private readonly fillPicker: FillPicker = new FillPicker(() => this.window, { choose: (choice) => void this.handleFillPickerChoice(choice) });
   private readonly vaultSync: VaultSyncController;
   private dirtySyncTimer?: NodeJS.Timeout;
@@ -237,6 +238,7 @@ class BrowserController {
     private readonly updates: UpdateServiceStore,
     private readonly vscodeBridge: VscodeBridgeServer,
     private readonly controlCenter: ControlCenterLink,
+    private readonly fillPreferences: FillPreferenceStore,
   ) {
     this.permissions = new AccountPermissionManager(accounts);
     const state = this.store.get();
@@ -1797,12 +1799,16 @@ class BrowserController {
    * Deliberate fill shared by the side panel's Fill and the login picker.
    * `initial` is the context the user saw when choosing; if the page has moved
    * on since, the capability redemption throws and nothing is filled.
+   * `scope` is 'same-site' only for a login the user picked from the picker,
+   * which may list other addresses of the page's site; everything else is exact.
    */
-  private async fillEntryInto(initial: FillContext, id: string): Promise<void> {
+  private async fillEntryInto(initial: FillContext, id: string, scope: 'exact' | 'same-site' = 'exact'): Promise<void> {
     const capability = this.fillCapabilities.issue(initial, id, 'fill-login');
     this.fillCapabilities.redeem(capability, this.currentFillContext(), id, 'fill-login');
-    const match = this.vault.searchMetadata('', initial.origin).find((entry) => entry.id === id);
-    if (!match?.url || !isAutofillTarget(match.url, initial.origin)) throw new Error('This credential belongs to another website, or this page is not secure');
+    const match = scope === 'same-site'
+      ? this.vault.searchMetadata('').find((entry) => entry.id === id && Boolean(entry.url) && isSameSiteFillCandidate(entry.url!, initial.origin))
+      : this.vault.searchMetadata('', initial.origin).find((entry) => entry.id === id && Boolean(entry.url) && isAutofillTarget(entry.url!, initial.origin));
+    if (!match) throw new Error('This credential belongs to another website, or this page is not secure');
     const username = this.vault.resolveSecretForTrustedOperation(id, 'username');
     const password = this.vault.resolveSecretForTrustedOperation(id, 'password');
     const beforeInjection = this.currentFillContext();
@@ -1810,7 +1816,7 @@ class BrowserController {
     const contents = this.activeContents();
     if (!contents || contents.id !== initial.webContentsId) throw new Error('Vault fill expired because the page context changed');
     await fillLoginInIsolatedWorld(contents, username, password);
-    this.preferredFillEntryByOrigin.set(initial.origin, id);
+    this.fillPreferences.remember(initial.origin, id);
     const runtime = this.runtimeTabs.get(initial.tabId);
     if (runtime) runtime.automaticFillGeneration = initial.navigationGeneration;
   }
@@ -1873,16 +1879,24 @@ class BrowserController {
     try {
       const context = this.currentFillContext();
       if (context.tabId !== tabId || context.navigationGeneration !== generation || !context.origin.startsWith('https://')) return;
+      // Chrome's rule: this exact origin first, then other addresses of the same site.
       const candidates = orderFillCandidates(
-        this.vault.searchMetadata('', context.origin).filter((entry) => Boolean(entry.url) && isAutofillTarget(entry.url!, context.origin)),
-        this.preferredFillEntryByOrigin.get(context.origin),
+        this.vault.searchMetadata('').filter((entry) => Boolean(entry.url) && isSameSiteFillCandidate(entry.url!, context.origin)),
+        this.fillPreferences.get(context.origin),
+        context.origin,
       ).slice(0, FILL_PICKER_MAX_ROWS);
       if (!candidates.length) return;
       const field = await probeFocusedLoginField(contents);
       if (!field || JSON.stringify(this.currentFillContext()) !== JSON.stringify(context)) return;
       const bounds = fillPickerBounds(field.rect, contents.getZoomFactor(), view.getBounds(), candidates.length);
       if (!bounds) return;
-      picker.show(context, candidates.map((entry) => ({ entryId: entry.id, username: entry.username, title: entry.title })), bounds, contents);
+      const rows = candidates.map((entry) => ({
+        entryId: entry.id,
+        username: entry.username,
+        title: entry.title,
+        savedFor: isAutofillTarget(entry.url!, context.origin) ? undefined : new URL(entry.url!).host,
+      }));
+      picker.show(context, rows, bounds, contents);
     } catch {
       // A locked vault, a navigation or a vanished field just means no list.
     }
@@ -1900,7 +1914,7 @@ class BrowserController {
     if (contents && contents.id === choice.context.webContentsId) contents.focus();
     try {
       if (!workspaceVaultPolicy(choice.context.workspaceId).fillPicker) return;
-      await this.fillEntryInto(choice.context, choice.entryId);
+      await this.fillEntryInto(choice.context, choice.entryId, 'same-site');
       this.addPrivacyEvent('vault', 'Credential filled from picker', new URL(choice.context.origin).hostname);
     } catch {
       // The page moved on after the list opened: fail closed and fill nothing.
@@ -1937,7 +1951,7 @@ class BrowserController {
       if (initial.tabId !== tabId || initial.navigationGeneration !== generation || !initial.origin.startsWith('https://')) return;
       const match = selectAutomaticFillEntry(
         this.vault.searchMetadata('', initial.origin),
-        this.preferredFillEntryByOrigin.get(initial.origin),
+        this.fillPreferences.get(initial.origin),
       );
       if (!match?.url || !isAutofillTarget(match.url, initial.origin)) return;
       const capability = this.fillCapabilities.issue(initial, match.id, 'fill-login');
@@ -2734,6 +2748,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   });
   const store = new RuntimeStateStore(persistedState, accountStore, persistedState.initialize());
   const vault = new VaultBroker(new MyVaultDiskStore(userDataPath, safeStorage));
+  const fillPreferences = new FillPreferenceStore(join(userDataPath, 'myvault', 'fill-preferences.enc'), safeStorage);
   vault.initialize();
   const aiProvider = new AiProviderStore(join(userDataPath, 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(userDataPath, 'update-service.enc'));
@@ -2762,7 +2777,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     removeUpdateBootstrap(updateBootstrapPath);
   }
   const migration = new VaultMigrationService(join(userDataPath, 'vault.enc'), join(userDataPath, 'myvault', 'migration-journal.enc'), safeStorage, vault);
-  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge, controlCenter);
+  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge, controlCenter, fillPreferences);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));

@@ -30,7 +30,7 @@ function timestampForPath(now: Date): string {
   return now.toISOString().replace(/[:.]/g, '-');
 }
 
-function atomicWrite(filePath: string, value: string): void {
+export function atomicWrite(filePath: string, value: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${process.pid}.tmp`;
   writeFileSync(temporaryPath, value, { encoding: 'utf8', mode: 0o600 });

@@ -60,8 +60,11 @@ export class FillPicker {
     view.setBackgroundColor('#00000000');
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     view.webContents.on('will-navigate', (event) => event.preventDefault());
-    view.webContents.on('render-process-gone', () => this.close());
-    const returnFocus = () => { if (!page.isDestroyed()) page.focus(); };
+    // A discarded list's late events (its renderer going away, its load being cut
+    // short) must never close the list that replaced it.
+    const closeIfCurrent = () => { if (this.view === view) this.close(); };
+    view.webContents.on('render-process-gone', closeIfCurrent);
+    const returnFocus = () => { if (this.view === view && !page.isDestroyed()) page.focus(); };
     view.webContents.on('focus', returnFocus);
     view.webContents.once('did-finish-load', returnFocus);
     this.sessions.open(context, rows.map((row) => row.entryId), view.webContents.id, ipcNonce);
@@ -71,7 +74,7 @@ export class FillPicker {
     window.contentView.addChildView(view);
     this.owner = window;
     if (!page.isDestroyed()) page.focus();
-    void view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(fillPickerHtml(rows, cspNonce))}`).catch(() => this.close());
+    void view.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(fillPickerHtml(rows, cspNonce))}`).catch(closeIfCurrent);
     this.armIdleTimer();
   }
 

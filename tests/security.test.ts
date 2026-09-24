@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
+import { isSameSiteFillCandidate, registrableSite } from '../electron/myvault/site-match';
 import { createDefaultState, sanitizeState } from '../electron/state-store';
 import { generateTotp } from '../electron/vault';
 
@@ -174,6 +175,42 @@ describe('local data', () => {
 
   it('generates RFC 6238-compatible TOTP values', () => {
     expect(generateTotp('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 59)).toBe('287082');
+  });
+});
+
+describe('same-site login picker candidates', () => {
+  it('groups addresses of one site by registrable domain, as Chrome does', () => {
+    expect(registrableSite('admin.digitronics.ma')).toBe('digitronics.ma');
+    expect(isSameSiteFillCandidate('https://digitronics.ma/', 'https://admin.digitronics.ma/en/sign-in')).toBe(true);
+    expect(isSameSiteFillCandidate('https://www.digitronics.ma/', 'https://digitronics.ma/')).toBe(true);
+    expect(isSameSiteFillCandidate('https://digitronics.ma/', 'https://digitronics.ma:443/')).toBe(true);
+  });
+
+  it('keeps sites under a shared public suffix apart', () => {
+    expect(isSameSiteFillCandidate('https://shop.co.ma/', 'https://evil.co.ma/')).toBe(false);
+    expect(isSameSiteFillCandidate('https://a.co.uk/', 'https://b.co.uk/')).toBe(false);
+    expect(isSameSiteFillCandidate('https://alice.github.io/', 'https://mallory.github.io/')).toBe(false);
+    expect(isSameSiteFillCandidate('https://digitronics.ma/', 'https://digitronics.ma.evil.example/')).toBe(false);
+  });
+
+  it('requires the same effective port and never downgrades https to http', () => {
+    expect(isSameSiteFillCandidate('https://digitronics.ma/', 'https://admin.digitronics.ma:8443/')).toBe(false);
+    expect(isSameSiteFillCandidate('https://digitronics.ma/', 'http://admin.digitronics.ma/')).toBe(false);
+    expect(isSameSiteFillCandidate('http://digitronics.ma/', 'https://admin.digitronics.ma/')).toBe(false);
+  });
+
+  it('matches IP addresses, localhost and punycode only exactly', () => {
+    expect(registrableSite('127.0.0.1')).toBeUndefined();
+    expect(registrableSite('localhost')).toBeUndefined();
+    expect(registrableSite('xn--digitrnics-p7a.ma')).toBeUndefined();
+    expect(isSameSiteFillCandidate('https://127.0.0.1/', 'https://127.0.0.1/')).toBe(true);
+    expect(isSameSiteFillCandidate('https://a.localhost/', 'https://b.localhost/')).toBe(false);
+    expect(isSameSiteFillCandidate('https://xn--digitrnics-p7a.ma/', 'https://www.xn--digitrnics-p7a.ma/')).toBe(false);
+  });
+
+  it('refuses non-web and credential-bearing addresses', () => {
+    expect(isSameSiteFillCandidate('file:///C:/x', 'https://digitronics.ma/')).toBe(false);
+    expect(isSameSiteFillCandidate('https://digitronics.ma/', 'https://user:pass@admin.digitronics.ma/')).toBe(false); // secret-guard:allow — inert URL, asserts refusal
   });
 });
 

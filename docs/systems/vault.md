@@ -51,9 +51,18 @@ memory wiping.
    a manual Fill established a preferred login for that origin during the session.
    The same three workspaces (policy flag `fillPicker`) show a Chrome-style login
    list under a focused sign-in field. It opens only on genuine input (a left
-   click, Tab, or ArrowDown in the page), never on page script. It lists up to
-   eight matching logins in the same order automatic fill uses, and fills through
-   the same capability path as the side panel's Fill. The list is a separate sandboxed
+   click, Tab, or ArrowDown in the page), never on page script. It lists (up to
+   50, scrolling) the logins for this exact origin, then those saved for other
+   addresses of the same site (`isSameSiteFillCandidate`: same registrable domain
+   per the Public Suffix List, same port, no https-to-http), each labelled with
+   its saved host. Only a pick from the list may fill a same-site login
+   (`fillEntryInto(..., 'same-site')`); automatic fill and the side panel's Fill
+   stay exact-origin. The list opens below the field, or above it when there is
+   more room there, shrinks to the space on that side, and never covers the
+   field. The last login picked on a site (manual Fill or picker) is remembered
+   per registrable domain in `myvault/fill-preferences.enc` (`safeStorage` only;
+   memory-only when OS encryption is unavailable; 500 sites). It leads the list
+   and is preferred by automatic fill when it is an exact match. The list is a separate sandboxed
    `WebContentsView` with its own two-channel preload. The page never sees the
    usernames, and the overlay never sees an entry id: it returns a row index that
    main maps back, once, only from that view and with its nonce. The page keeps
@@ -85,7 +94,11 @@ memory wiping.
   `probeFocusedLoginField` reports which sign-in field has focus and where.
 - `fill-picker.ts` / `fill-picker-model.ts` / `fill-picker-preload.cts` — the
   login picker overlay: view lifecycle, single-use sessions, placement under or
-  above the field, and escaped static markup.
+  above the field, and escaped static markup. A discarded overlay's late events
+  close only that overlay, never its replacement.
+- `fill-preferences.ts` — `FillPreferenceStore`, the per-site remembered pick.
+- `site-match.ts` — `registrableSite` and `isSameSiteFillCandidate` (main-process
+  only; `tldts` must not reach the renderer bundle).
 - `vault-migration.ts` — verified backup, protected journal, stable duplicates,
   direct Chrome CSV import and explicit cleanup.
 - `passkey-controller.ts` / `security/passkeys/*` — disabled gated provider core.

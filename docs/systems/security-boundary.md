@@ -250,6 +250,18 @@ the same name on a hostile network — audit finding F-05. Refusing the upgrade
 case instead would break anyone who saved a bare hostname, which normalises to
 `https` only for public-looking names.
 
+**`isSameSiteFillCandidate(credentialUrl, pageUrl)`**, in
+[site-match.ts](../../electron/myvault/site-match.ts) and not here because
+`tldts` carries the whole suffix list and this file is also bundled into the
+renderer's preview API, is the wider rule, used
+only by the login picker to decide what it may *offer*. It holds for exact
+matches, and otherwise needs the same effective port, the same scheme direction
+as the table above, and the same non-empty `registrableSite` (`tldts.getDomain`
+with private suffixes, so `alice.github.io` and `mallory.github.io` stay
+apart). `registrableSite` returns nothing for IP addresses, `localhost` and
+punycode, which therefore only ever match exactly. Automatic fill and the side
+panel never use it.
+
 ## urlOriginForSharing
 
 `urlOriginForSharing(value: string): string` — `new URL(value).origin`, or `''`

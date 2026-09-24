@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FILL_PICKER_MAX_ROWS, orderFillCandidates, selectAutomaticFillEntry } from '../electron/myvault/automatic-fill';
 import { workspaceVaultPolicy } from '../electron/myvault/workspace-policy';
@@ -6,6 +8,7 @@ import type { VaultEntryMetadata } from '../electron/myvault/vault-broker';
 import type { FillContext } from '../electron/myvault/fill-capability';
 import { FILL_PICKER_MANAGE_INDEX, FillPickerSessions, fillPickerBounds, fillPickerHeight, fillPickerHtml } from '../electron/myvault/fill-picker-model';
 import { parseFocusedLoginField } from '../electron/myvault/isolated-fill';
+import { FILL_PREFERENCE_MAX_SITES, FillPreferenceStore } from '../electron/myvault/fill-preferences';
 
 function entry(id: string, updatedAt: string, hasPassword = true, url: string | null = 'https://example.test'): VaultEntryMetadata {
   return { id, title: id, type: 'login', username: `${id}@example.test`, url: url ?? undefined, favorite: false, hasPassword, hasTotp: false, updatedAt };
@@ -40,8 +43,18 @@ describe('login picker candidate order', () => {
     expect(orderFillCandidates(ties).map((item) => item.id)).toEqual(['b', 'a', 'c']);
   });
 
-  it('caps the visible list at a small number of rows', () => {
-    expect(FILL_PICKER_MAX_ROWS).toBe(8);
+  it('bounds the list only as a sanity limit, since it scrolls', () => {
+    expect(FILL_PICKER_MAX_ROWS).toBe(50);
+  });
+
+  it('lists this exact address first, then other addresses of the same site', () => {
+    const site = [
+      entry('sibling-new', '2026-09-20T00:00:00.000Z', true, 'https://www.example.test'),
+      entry('exact-old', '2026-09-01T00:00:00.000Z', true, 'https://example.test'),
+      entry('exact-new', '2026-09-10T00:00:00.000Z', true, 'https://example.test'),
+    ];
+    expect(orderFillCandidates(site, undefined, 'https://example.test').map((item) => item.id)).toEqual(['exact-new', 'exact-old', 'sibling-new']);
+    expect(orderFillCandidates(site, 'sibling-new', 'https://example.test').map((item) => item.id)).toEqual(['sibling-new', 'exact-new', 'exact-old']);
   });
 });
 
@@ -184,5 +197,122 @@ describe('login picker preload', () => {
     expect(channels.sort()).toEqual(['fill-picker:choose', 'fill-picker:highlight']);
     const code = preload.replace(/\/\/.*$/gm, '');
     expect(code).not.toMatch(/vault:|resolveSecret|password/i);
+  });
+});
+
+describe('login picker never covers the field', () => {
+  const page = { x: 0, y: 190, width: 1375, height: 860 };
+  const overlaps = (a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+  it('keeps clear of the field wherever it is and however many logins there are', () => {
+    for (let fieldY = -20; fieldY < page.height; fieldY += 17) {
+      for (const rows of [1, 2, 8, 12, 50]) {
+        const field = { x: 338, y: fieldY, width: 700, height: 62 };
+        const bounds = fillPickerBounds(field, 1, page, rows);
+        if (!bounds) continue;
+        const fieldInWindow = { x: page.x + field.x, y: page.y + field.y, width: field.width, height: field.height };
+        expect(overlaps(bounds, fieldInWindow), `field y ${fieldY}, ${rows} rows`).toBe(false);
+        expect(bounds.y).toBeGreaterThanOrEqual(page.y);
+        expect(bounds.y + bounds.height).toBeLessThanOrEqual(page.y + page.height);
+        expect(bounds.height).toBeGreaterThanOrEqual(fillPickerHeight(1));
+      }
+    }
+  });
+
+  it('shrinks to the larger side and scrolls when the full list fits nowhere', () => {
+    // Eight logins, more room below than above, but not enough for all of them.
+    const bounds = fillPickerBounds({ x: 338, y: 200, width: 700, height: 62 }, 1, { ...page, height: 700 }, 8)!;
+    expect(bounds.height).toBeLessThan(fillPickerHeight(8));
+    expect(bounds.y).toBe(190 + 200 + 62 + 4);
+    expect(bounds.y + bounds.height).toBe(190 + 700);
+  });
+
+  it('goes above when there is more room there', () => {
+    const bounds = fillPickerBounds({ x: 10, y: 600, width: 300, height: 40 }, 1, { ...page, height: 700 }, 20)!;
+    expect(bounds.y + bounds.height).toBe(190 + 600 - 4);
+    expect(bounds.y).toBe(190);
+  });
+
+  it('is not shown when neither side holds a row and the footer', () => {
+    expect(fillPickerBounds({ x: 10, y: 60, width: 300, height: 40 }, 1, { ...page, height: 160 }, 3)).toBeUndefined();
+  });
+});
+
+describe('login picker markup for a long list', () => {
+  it('is sized so a list that fits shows no scrollbar', () => {
+    // rows + footer + padding + the 1px frame, top and bottom
+    expect(fillPickerHeight(2)).toBe(2 * 52 + 44 + 2 * 6 + 2);
+  });
+
+  it('scrolls the rows and keeps "Manage logins" pinned', () => {
+    const html = fillPickerHtml([{ entryId: 'e', username: 'a@example.test', title: 't' }], 'n');
+    expect(html).toContain('overflow-y:auto');
+    expect(html).toContain("scrollIntoView({block:'nearest'})");
+    expect(html).toContain('.manage{flex:none');
+  });
+
+  it('shows, escaped, the address a same-site login was saved for', () => {
+    const html = fillPickerHtml([{ entryId: 'e', username: 'a@example.test', title: 't', savedFor: '<b>www.example.test</b>' }], 'n');
+    expect(html).toContain('&lt;b&gt;www.example.test&lt;/b&gt;');
+    expect(html).not.toContain('<b>www.example.test');
+    expect(html).not.toContain('saved password');
+  });
+});
+
+describe('remembered login per site', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'fill-preferences-'));
+  const storage = {
+    isEncryptionAvailable: () => true,
+    encryptString: (value: string) => Buffer.from(`enc:${value}`, 'utf8'),
+    decryptString: (value: Buffer) => {
+      const text = value.toString('utf8');
+      if (!text.startsWith('enc:')) throw new Error('bad');
+      return text.slice(4);
+    },
+  };
+  let counter = 0;
+  const file = () => join(directory, `prefs-${counter += 1}.enc`);
+
+  it('is shared by every address of a site and survives a restart', () => {
+    const path = file();
+    new FillPreferenceStore(path, storage).remember('https://admin.digitronics.ma', 'entry-b');
+    const reloaded = new FillPreferenceStore(path, storage);
+    expect(reloaded.get('https://digitronics.ma')).toBe('entry-b');
+    expect(reloaded.get('https://www.digitronics.ma')).toBe('entry-b');
+    expect(reloaded.get('https://evil.co.ma')).toBeUndefined();
+  });
+
+  it('keeps IP addresses to their exact origin', () => {
+    const store = new FillPreferenceStore(file(), storage);
+    store.remember('https://127.0.0.1:8443', 'entry-ip');
+    expect(store.get('https://127.0.0.1:8443')).toBe('entry-ip');
+    expect(store.get('https://127.0.0.1:9443')).toBeUndefined();
+  });
+
+  it('writes only ciphertext, and nothing at all without OS encryption', () => {
+    const path = file();
+    new FillPreferenceStore(path, storage).remember('https://digitronics.ma', 'entry-a');
+    expect(Buffer.from(readFileSync(path, 'utf8'), 'base64').toString('utf8').startsWith('enc:')).toBe(true);
+    const plainPath = file();
+    const memoryOnly = new FillPreferenceStore(plainPath, { ...storage, isEncryptionAvailable: () => false });
+    memoryOnly.remember('https://digitronics.ma', 'entry-a');
+    expect(memoryOnly.get('https://digitronics.ma')).toBe('entry-a');
+    expect(existsSync(plainPath)).toBe(false);
+  });
+
+  it('starts empty from an unreadable file', () => {
+    const path = file();
+    writeFileSync(path, 'not ciphertext', 'utf8');
+    expect(new FillPreferenceStore(path, storage).get('https://digitronics.ma')).toBeUndefined();
+  });
+
+  it('forgets the oldest site beyond the cap', () => {
+    let now = 0;
+    const store = new FillPreferenceStore(file(), { ...storage, isEncryptionAvailable: () => false }, () => (now += 1));
+    for (let index = 0; index <= FILL_PREFERENCE_MAX_SITES; index += 1) store.remember(`https://site${index}.com`, `entry-${index}`);
+    expect(store.get('https://site0.com')).toBeUndefined();
+    expect(store.get('https://site1.com')).toBe('entry-1');
+    expect(store.get(`https://site${FILL_PREFERENCE_MAX_SITES}.com`)).toBe(`entry-${FILL_PREFERENCE_MAX_SITES}`);
   });
 });
