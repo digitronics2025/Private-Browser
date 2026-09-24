@@ -8,6 +8,7 @@ import {
   decodeRecoveryCode,
   decryptBackupEnvelope,
   encryptBackupPayload,
+  restorableItems,
   type AccountBackupPayload,
   type EncryptedBackupTransport,
   type RemoteEncryptedBackup,
@@ -122,5 +123,39 @@ describe('encrypted Account Space backup', () => {
   it('disables restore when local recovery material is missing', async () => {
     const { manager } = fixture();
     await expect(manager.restore(ID)).rejects.toThrow(/recovery material is unavailable/);
+  });
+});
+
+describe('restoring a backup into an Account Space', () => {
+  const OTHER = '9c1c1c1c-1111-4222-8333-444444444444' as AccountSpaceId;
+  const payload: AccountBackupPayload = {
+    version: 1,
+    createdAt: '2026-09-12T10:00:00.000Z',
+    bookmarks: [{ id: 'b1', title: 'Mail', url: 'https://mail.example/', workspaceId: 'personal', accountSpaceId: OTHER, createdAt: '2026-09-12T10:00:00.000Z', location: 'bar', folderPath: [], order: 0, orderPath: [0] }],
+    bookmarkFolders: [],
+    settings: { trackerBlocking: false },
+    history: [
+      { id: 'h1', title: 'Docs', url: 'https://docs.example/', workspaceId: 'personal', accountSpaceId: OTHER, visitedAt: '2026-09-12T10:00:00.000Z' },
+      { id: 'h2', title: 'Script', url: 'javascript:alert(1)', workspaceId: 'personal', accountSpaceId: OTHER, visitedAt: '2026-09-12T10:00:00.000Z' },
+    ],
+    openTabs: [{ id: 't1', title: 'Mail', url: 'https://mail.example/', workspaceId: 'personal', accountSpaceId: OTHER, isHome: false }],
+  };
+
+  // F-45: a new device or reinstall has new local ids; the backup must still restore.
+  it('re-stamps items written under another local id into the target space', () => {
+    const restored = restorableItems(payload, { accountSpaceId: ID, workspaceId: 'personal' });
+    expect(restored.bookmarks.map((item) => [item.id, item.accountSpaceId])).toEqual([['b1', ID]]);
+    expect(restored.openTabs?.map((item) => item.accountSpaceId)).toEqual([ID]);
+  });
+
+  // F-63: items pass the on-disk validator; a hostile entry is dropped, not merged.
+  it('drops entries the state validator refuses', () => {
+    const restored = restorableItems(payload, { accountSpaceId: ID, workspaceId: 'personal' });
+    expect(restored.history?.map((item) => item.id)).toEqual(['h1']);
+  });
+
+  it('refuses a backup from another workspace, and carries no browser-wide settings', () => {
+    expect(() => restorableItems(payload, { accountSpaceId: ID, workspaceId: 'banking' })).toThrow('another workspace');
+    expect(restorableItems(payload, { accountSpaceId: ID, workspaceId: 'personal' })).not.toHaveProperty('settings');
   });
 });

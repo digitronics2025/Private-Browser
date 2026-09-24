@@ -110,8 +110,10 @@ input. Banking does not write ordinary browsing history.
 - A manifest is written last during migration and atomically replaced on updates.
 - Migration IDs are stable for a source fingerprint, so a retry cannot create a
   second set of legacy partitions.
-- Only opaque IDs cross the plaintext manifest/renderer boundary; partition names
-  resolve exclusively in the main process.
+- The plaintext manifest holds only opaque IDs (the privacy log names no account
+  label). The renderer receives account summaries — label, email, display name,
+  avatar — but never partition names, Google subjects or tokens, which resolve
+  exclusively in the main process.
 - The bookmark bar filters by both workspace and active Account Space.
 - Do not remove `state-store.ts`: it remains the v1 parser and workspace source of
   truth until the supported migration window is intentionally retired.

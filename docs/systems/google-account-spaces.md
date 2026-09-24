@@ -84,8 +84,12 @@ Version-1 migration is transaction-like:
 
 Unknown or malformed v2 state opens read-only recovery. The original and a
 timestamped backup remain untouched. Available actions are retry, open backup
-location, restore v1 and explicitly confirmed fresh start. An individual corrupt
-account receives the same treatment without disabling other accounts.
+location, restore v1 and explicitly confirmed fresh start. Restore v1 first
+preserves every per-account file, because re-migration reuses the same ids. An
+individual corrupt account receives the same treatment without disabling other
+accounts: it stays in the manifest and its files are never written until the
+recovery is resolved, and a fresh start takes its workspace from whichever of
+its record or browsing file is still readable.
 
 ## Session and lifecycle behavior
 
@@ -96,12 +100,18 @@ account is restored eagerly at startup.
 
 Lock is an operational privacy control, not another Windows authentication
 boundary: it closes views and Google connections, clears memory-only tokens and
-sensitive caches, cancels operations, and blocks use until reopened.
+sensitive caches, cancels operations, and blocks use until reopened. Locking
+the active account first switches the workspace to an unlocked sibling (the
+lock is refused if none exists), and no page view is ever built for a locked
+account. A token refresh in flight when the account is locked or disconnected
+is discarded.
 
-Deletion closes every view, cancels work, attempts Google revocation when a
-grant exists, removes all session storage with Electron, verifies cookies and
-cache are gone, then removes account browsing state, permissions and encrypted
-metadata. It never enumerates or clears another partition. Disconnecting Google
+Deletion closes every view, cancels work, revokes the Google grant when one
+exists (and refuses to delete if revocation fails), removes all session storage
+with Electron, verifies cookies and cache are gone, then removes the plaintext
+browsing file, permissions and encrypted metadata. At startup, a legacy
+per-workspace partition that no account owns any more is cleared, unless any
+account is in recovery. It never enumerates or clears another partition. Disconnecting Google
 API access does not clear website cookies; clearing website data does not revoke
 Google API access.
 
@@ -120,7 +130,10 @@ single-use, supports cancellation and expires after five minutes. Token calls
 time out after ten seconds. `google-auth-library` verifies the ID-token signature;
 the app additionally requires the Google issuer, exact audience, future expiry,
 nonce, verified email and non-empty stable `sub`. A `sub` may be connected only
-once application-wide.
+once application-wide, checked against the spaces that exist when the grant is
+saved. A reconnect must return the same `sub` the space already holds; a
+different Google account is refused (`GOOGLE_POLICY_DENIED`). A failed or
+cancelled reconnect leaves an existing grant's status as it was.
 
 Avatar URLs must be HTTPS on `googleusercontent.com` or a subdomain. Downloads
 reject redirects, stop at 512 KiB, and accept only PNG, JPEG or WebP magic bytes.
@@ -175,6 +188,9 @@ open tabs are optional and history is separately opt-in. Cookies, tokens, codes,
 passwords, passkeys/TOTP, downloads, mail bodies, attachments, AI privacy logs
 and My Vault are excluded. ETags detect conflicts and require explicit merge or
 overwrite. A bad authentication tag or missing recovery key stops restore.
+Restore (`restorableItems`) re-stamps items with the target space's id — a new
+device has new local ids — requires the same workspace, passes everything through
+the on-disk state validator, and never applies the browser-wide tracker setting.
 
 ## UI and tests
 

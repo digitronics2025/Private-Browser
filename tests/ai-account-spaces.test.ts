@@ -26,6 +26,9 @@ describe('AI Account Space capabilities', () => {
 
   it('classifies Google services and refuses mailbox model input', () => {
     expect(classifyAiSource('https://mail.google.com/mail/u/0/')).toBe('gmail');
+    // F-60: the fully-qualified spelling is the same mailbox.
+    expect(classifyAiSource('https://MAIL.google.com./mail/u/0/')).toBe('gmail');
+    expect(classifyAiSource('https://mail.google.com.evil.example/')).toBe('browser');
     expect(classifyAiSource('https://docs.google.com/document/d/1')).toBe('drive');
     expect(maySendAiPreviewToCloud({ ...preview(), service: 'gmail' })).toBe(false);
     expect(maySendAiPreviewToCloud(preview())).toBe(true);

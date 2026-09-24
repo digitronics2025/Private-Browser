@@ -81,3 +81,26 @@ test('a hidden tab cannot take the foreground or open unlimited tabs', async () 
   expect(state.activeWorkspaceId).toBe('banking');
   expect(state.privacyLog.some((event) => event.title === 'Popups blocked')).toBe(true);
 });
+
+// F-30: locking the account in use used to leave the workspace pointing at it,
+// so the next menu close rebuilt its page in the locked partition.
+test('locking the active Account Space closes its page and it stays closed', async () => {
+  const page = await application!.firstWindow();
+  const origin = `http://127.0.0.1:${port}`;
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  const locked = (await page.evaluate(() => window.privateBrowser.getState())).activeAccountSpaceId;
+  await page.evaluate((target) => window.privateBrowser.navigate(target), `${origin}/locked-account`);
+  const hasView = () => application!.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((contents) => !contents.isDestroyed() && contents.getURL() === url), `${origin}/locked-account`);
+  await expect.poll(hasView).toBe(true);
+  await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Second', 'emerald'));
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), locked);
+
+  await page.evaluate((id) => window.privateBrowser.setAccountSpaceLocked(id, true), locked);
+  await page.evaluate(() => window.privateBrowser.setOverlayOpen(true));
+  await page.evaluate(() => window.privateBrowser.setOverlayOpen(false));
+
+  const state = await page.evaluate(() => window.privateBrowser.getState());
+  expect(state.activeWorkspaceId).toBe('personal');
+  expect(state.activeAccountSpaceId).not.toBe(locked);
+  await expect.poll(hasView).toBe(false);
+});

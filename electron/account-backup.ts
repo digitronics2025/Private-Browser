@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto';
-import type { AccountSpaceBookmark, AccountSpaceId, BrowserTab, HistoryEntry } from './types.js';
+import type { AccountBrowsingStateV2, AccountSpaceBookmark, AccountSpaceHistoryEntry, AccountSpaceId, BrowserTab, HistoryEntry, WorkspaceId } from './types.js';
+import { validateAccountState } from './account-space-state.js';
 import { AccountStore, type SafeStorageAdapter } from './account-store.js';
 
 const BACKUP_AAD = Buffer.from('private-browser-account-space-backup:v1', 'utf8');
@@ -179,6 +180,39 @@ export class AccountBackupManager {
       throw new Error('Backup restore is disabled because recovery material is unavailable');
     }
   }
+}
+
+/**
+ * What a decrypted backup may put into one Account Space.
+ *
+ * Items are re-stamped with the target's id: a backup lives in the Google
+ * account's own Drive app-data, and restoring it on a new device or after a
+ * reinstall — its whole purpose — meets a freshly generated local id (F-45).
+ * The workspace must still match, and everything passes the same validator as
+ * the on-disk state, so a malformed item is dropped rather than merged (F-63).
+ * Browser-wide settings are deliberately not restored (F-59).
+ */
+export function restorableItems(
+  payload: AccountBackupPayload,
+  target: { accountSpaceId: AccountSpaceId; workspaceId: WorkspaceId },
+): { bookmarks: AccountSpaceBookmark[]; history?: AccountSpaceHistoryEntry[]; openTabs?: AccountBrowsingStateV2['tabs'] } {
+  const items: Array<{ workspaceId?: unknown }> = [...payload.bookmarks, ...(payload.history ?? []), ...(payload.openTabs ?? [])];
+  if (items.some((item) => !item || item.workspaceId !== target.workspaceId)) throw new Error('This backup was made in another workspace');
+  const restamp = <T extends object>(list: T[] | undefined): T[] => (list ?? []).map((item) => ({ ...item, accountSpaceId: target.accountSpaceId }));
+  const clean = validateAccountState({
+    version: 2,
+    accountSpaceId: target.accountSpaceId,
+    workspaceId: target.workspaceId,
+    tabs: restamp(payload.openTabs),
+    activeTabId: payload.openTabs?.[0]?.id ?? '',
+    bookmarks: restamp(payload.bookmarks),
+    history: restamp(payload.history),
+  });
+  return {
+    bookmarks: clean.bookmarks,
+    ...(payload.history ? { history: clean.history } : {}),
+    ...(payload.openTabs?.length ? { openTabs: clean.tabs } : {}),
+  };
 }
 
 export function encryptBackupPayload(payload: AccountBackupPayload, key: Uint8Array): EncryptedBackupEnvelope {

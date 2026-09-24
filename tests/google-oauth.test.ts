@@ -122,7 +122,7 @@ describe('secure Google desktop OAuth', () => {
 
   it('requests the complete selected scope set and persists only a verified encrypted grant', async () => {
     const fixture = oauthFixture();
-    const result = await fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', [ACCOUNT_ID]);
+    const result = await fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', () => [ACCOUNT_ID]);
     expect(result.ok).toBe(true);
     expect(fixture.launcher.launched).toMatch(/^https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth/);
     expect(fixture.getAuthorizationOptions()).toMatchObject({
@@ -151,14 +151,41 @@ describe('secure Google desktop OAuth', () => {
       { email_verified: false },
     ]) {
       const fixture = oauthFixture(patch);
-      const result = await fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', [ACCOUNT_ID]);
+      const result = await fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', () => [ACCOUNT_ID]);
       expect(result).toMatchObject({ ok: false, error: { code: 'GOOGLE_INVALID_RESPONSE' } });
     }
     const fixture = oauthFixture();
     const client = fixture.client.getToken as ReturnType<typeof vi.fn>;
     client.mockResolvedValueOnce({ tokens: { refresh_token: 'refresh-token', id_token: 'id-token', scope: 'openid email profile' } });
-    const result = await fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', [ACCOUNT_ID]);
+    const result = await fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', () => [ACCOUNT_ID]);
     expect(result).toMatchObject({ ok: false, error: { code: 'GOOGLE_SCOPE_MISSING' } });
+  });
+
+  // F-40: a reconnect that picks another Google account must not re-bind the space.
+  it('refuses a reconnect that returns a different Google identity and keeps the original grant', async () => {
+    const fixture = oauthFixture();
+    expect((await fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', () => [ACCOUNT_ID])).ok).toBe(true);
+    const verify = fixture.client.verifyIdToken as ReturnType<typeof vi.fn>;
+    const original = await (verify.mock.results[0]!.value as Promise<{ getPayload: () => Record<string, unknown> }>);
+    verify.mockImplementationOnce(async () => ({ getPayload: () => ({ ...original.getPayload(), nonce: String(fixture.getAuthorizationOptions().nonce), sub: 'another-google-subject', email: 'other@example.test' }) }));
+    const result = await fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', () => [ACCOUNT_ID]);
+    expect(result).toMatchObject({ ok: false, error: { code: 'GOOGLE_POLICY_DENIED' } });
+    expect(fixture.accounts.require(ACCOUNT_ID).googleIdentity).toMatchObject({ sub: 'stable-google-subject', email: 'person@example.test' });
+  });
+
+  it('checks one-subject-per-app against the spaces that exist when the grant is saved', async () => {
+    const fixture = oauthFixture();
+    const other = fixture.accounts.createLocal({ workspaceId: 'personal', label: 'Other', color: 'sky', order: 1 });
+    let known = [ACCOUNT_ID];
+    const connecting = fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', () => known);
+    // While the consent page is open, the same Google account is bound to a new space.
+    fixture.accounts.saveGoogleGrant(other.id, { sub: 'stable-google-subject', email: 'person@example.test', emailVerified: true }, 'refresh-other', ['identity'], ['openid'], [other.id]);
+    known = [ACCOUNT_ID, other.id];
+    expect(await connecting).toMatchObject({ ok: false });
+    expect(fixture.accounts.require(ACCOUNT_ID).googleIdentity).toBeUndefined();
+    // Control: the refusal comes from the late list, not from anything else in the flow.
+    known = [ACCOUNT_ID];
+    expect((await fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', () => known)).ok).toBe(true);
   });
 
   it('never uses the OS default-handler route and launches only a discovered executable with shell false', () => {

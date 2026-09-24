@@ -56,6 +56,26 @@ describe('narrow resilient Google services', () => {
     expect(readFileSync(join(root, 'accounts', `${ID}.account.enc`), 'utf8')).not.toContain('fresh-access');
   });
 
+  // F-58: a refresh in flight when the user disconnects or locks must not
+  // re-cache a token or report "connected" afterwards.
+  it('drops a refresh that completes after the account was cleared', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const request = vi.fn<typeof fetch>(async () => {
+      await gate;
+      return json({ access_token: 'late-access', expires_in: 3600 });
+    });
+    const { accounts, broker } = fixture(request, false);
+    const refreshing = broker.getAccessToken(ID, 'gmail-metadata');
+    broker.clear(ID);
+    accounts.update(ID, (record) => { record.googleConnection = 'disconnected'; });
+    release();
+    await expect(refreshing).rejects.toThrow(/disconnected while refreshing/);
+    expect(accounts.require(ID).googleConnection).toBe('disconnected');
+    request.mockImplementation(async () => json({ access_token: 'next-access', expires_in: 3600 }));
+    await expect(broker.getAccessToken(ID, 'gmail-metadata')).resolves.toBe('next-access');
+  });
+
   it('returns Gmail unread count and only recent metadata headers', async () => {
     const request = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

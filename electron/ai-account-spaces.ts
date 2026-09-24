@@ -5,7 +5,8 @@ export type AiSourceService = 'browser' | 'gmail' | 'drive' | 'calendar' | 'cont
 
 export function classifyAiSource(urlValue: string): AiSourceService {
   let hostname = '';
-  try { hostname = new URL(urlValue).hostname.toLowerCase(); } catch { return 'browser'; }
+  // A trailing dot is the fully-qualified spelling of the same host.
+  try { hostname = new URL(urlValue).hostname.toLowerCase().replace(/\.$/, ''); } catch { return 'browser'; }
   if (hostname === 'mail.google.com') return 'gmail';
   if (hostname === 'drive.google.com' || hostname === 'docs.google.com') return 'drive';
   if (hostname === 'calendar.google.com') return 'calendar';

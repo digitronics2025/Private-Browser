@@ -102,7 +102,7 @@ import { ExternalBrowserLauncher } from './external-browser.js';
 import { GoogleOAuthManager } from './google-oauth.js';
 import { GoogleTokenBroker } from './google-token-broker.js';
 import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailSendInput } from './google-services.js';
-import { AccountBackupManager, type BackupWriteResult } from './account-backup.js';
+import { AccountBackupManager, restorableItems, type BackupWriteResult } from './account-backup.js';
 import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
 import { ControlCenterLink, developerEvidence } from './control-center-link.js';
@@ -678,8 +678,18 @@ class BrowserController {
   }
 
   async setAccountSpaceLocked(accountSpaceId: AccountSpaceId, locked: boolean): Promise<void> {
-    this.requireAccountMembership(accountSpaceId);
+    const account = this.requireAccountMembership(accountSpaceId);
     if (locked) {
+      // Move off the account first: the workspace would otherwise still point at
+      // it and the next showActiveTab would rebuild its page (F-30).
+      const state = this.store.get();
+      if (state.activeAccountSpaceByWorkspace[account.workspaceId] === accountSpaceId) {
+        const sibling = state.accountSpaces.find((candidate) => candidate.workspaceId === account.workspaceId
+          && candidate.id !== accountSpaceId && !candidate.locked && state.recovery?.accountSpaceId !== candidate.id);
+        if (!sibling) throw new Error('Unlock or add another Account Space in this workspace before locking this one');
+        this.hideAllViews();
+        this.store.update((next) => { next.activeAccountSpaceByWorkspace[account.workspaceId] = sibling.id; });
+      }
       this.closeAccountViews(accountSpaceId);
       this.cancelAccountOperations(accountSpaceId);
       await session.fromPartition(this.store.partitionFor(accountSpaceId)).closeAllConnections();
@@ -690,7 +700,7 @@ class BrowserController {
     });
     this.store.refreshAccount(record);
     this.broadcast();
-    if (!locked) await this.showActiveTab();
+    await this.showActiveTab();
   }
 
   configureGoogle(clientId: string) {
@@ -707,18 +717,20 @@ class BrowserController {
 
   async connectGoogleAccount(accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) {
     this.requireAccountMembership(accountSpaceId);
+    const previous = this.accounts.require(accountSpaceId).googleConnection;
     const connecting = this.accounts.update(accountSpaceId, (account) => { account.googleConnection = 'connecting'; });
     this.store.refreshAccount(connecting);
     this.broadcast();
-    const allAccountIds = this.store.get().accountSpaces.map((account) => account.id);
-    const result = await this.googleOAuth.connect(accountSpaceId, modules, browserId, allAccountIds);
+    const result = await this.googleOAuth.connect(accountSpaceId, modules, browserId, () => this.store.get().accountSpaces.map((account) => account.id));
     if (!result.ok) {
       const status = result.error?.code === 'GOOGLE_CONFIGURATION_REQUIRED' ? 'not-configured'
         : result.error?.code === 'GOOGLE_SCOPE_MISSING' ? 'partial-scopes'
           : result.error?.code === 'GOOGLE_RECONNECT_REQUIRED' ? 'reconnect-required'
             : result.error?.code === 'GOOGLE_OFFLINE' ? 'offline'
               : 'disconnected';
-      this.accounts.update(accountSpaceId, (account) => { account.googleConnection = status; });
+      // A failed or cancelled reconnect leaves an existing grant as it was: the
+      // stored token still works, so "disconnected" would be untrue (F-58).
+      this.accounts.update(accountSpaceId, (account) => { account.googleConnection = status === 'disconnected' && account.refreshToken ? previous : status; });
     }
     this.store.refreshAccount(this.accounts.require(accountSpaceId));
     this.broadcast();
@@ -760,7 +772,7 @@ class BrowserController {
         tab.isHome = true;
       }
     });
-    this.addPrivacyEvent('vault', 'Account Space data cleared', `${account.label} website data and history were removed`);
+    this.addPrivacyEvent('vault', 'Account Space data cleared', `${WORKSPACES.find((item) => item.id === account.workspaceId)?.name ?? 'An'} Account Space: website data and history were removed`);
     await this.showActiveTab();
   }
 
@@ -887,20 +899,15 @@ class BrowserController {
   restoreBackup(accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<void> {
     const account = this.requireAccountMembership(accountSpaceId);
     return this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
-      const restored = await this.backups.restore(accountSpaceId, recoveryCode, signal);
-      const validBookmark = (item: { accountSpaceId: AccountSpaceId; workspaceId: WorkspaceId }) => item.accountSpaceId === accountSpaceId && item.workspaceId === account.workspaceId;
-      if (!restored.bookmarks.every(validBookmark) || restored.history?.some((item) => !validBookmark(item)) || restored.openTabs?.some((item) => !validBookmark(item))) {
-        throw new Error('Backup belongs to another Account Space');
-      }
+      const restored = restorableItems(await this.backups.restore(accountSpaceId, recoveryCode, signal), { accountSpaceId, workspaceId: account.workspaceId });
       this.closeAccountViews(accountSpaceId);
       this.store.update((state) => {
         state.bookmarks = [...state.bookmarks.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.bookmarks];
         if (restored.history) state.history = [...state.history.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.history];
         if (restored.openTabs?.length) {
           state.tabs = [...state.tabs.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.openTabs.map((tab) => ({ ...tab, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false }))];
-          state.activeTabByAccountSpace[accountSpaceId] = restored.openTabs[0].id;
+          state.activeTabByAccountSpace[accountSpaceId] = restored.openTabs[0]!.id;
         }
-        state.trackerBlocking = restored.settings.trackerBlocking;
       });
       this.broadcast();
     });
@@ -1232,7 +1239,7 @@ class BrowserController {
     });
     if (result.canceled || !result.filePath) return false;
     await writeFile(result.filePath, exportBookmarksHtml(bookmarks), { encoding: 'utf8' });
-    this.addPrivacyEvent('local-read', 'Bookmarks exported', `${bookmarks.length} bookmarks from ${account?.label ?? 'this Account Space'} saved to a local file`);
+    this.addPrivacyEvent('local-read', 'Bookmarks exported', `${bookmarks.length} bookmarks from the active Account Space saved to a local file`);
     return true;
   }
 
@@ -2308,6 +2315,11 @@ class BrowserController {
     }
     if (runtime.view) return runtime.view;
     const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId)!;
+    // A locked Account Space gets no page view at all: its cookies stay unused
+    // until the user unlocks it.
+    if (this.store.get().accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked) {
+      throw new Error('This Account Space is locked');
+    }
     const partition = this.store.partitionFor(tab.accountSpaceId);
     const ses = session.fromPartition(partition);
     this.configureSession(ses, partition, tab.workspaceId, tab.accountSpaceId);
@@ -2629,8 +2641,10 @@ class BrowserController {
   }
 
   private async showActiveTab(): Promise<void> {
-    const tab = this.activeTab(this.store.get());
-    if (!tab.isHome && isAllowedRemoteUrl(tab.url)) {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const locked = state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked;
+    if (!locked && !tab.isHome && isAllowedRemoteUrl(tab.url)) {
       const view = this.ensureView(tab.id);
       view.setVisible(true);
       this.applyLayout();
@@ -2876,6 +2890,14 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     accountStore,
   });
   const store = new RuntimeStateStore(persistedState, accountStore, persistedState.initialize());
+  // Cookies left in a legacy partition no Account Space owns any more (after a
+  // confirmed fresh start) are cleared rather than kept with no way to reach them.
+  for (const key of store.orphanedLegacyPartitions()) {
+    if (!existsSync(join(userDataPath, 'Partitions', key.slice('persist:'.length)))) continue;
+    const orphan = session.fromPartition(key);
+    await orphan.clearStorageData().catch(() => undefined);
+    await orphan.clearCache().catch(() => undefined);
+  }
   const vault = new VaultBroker(new MyVaultDiskStore(userDataPath, safeStorage));
   const fillPreferences = new FillPreferenceStore(join(userDataPath, 'myvault', 'fill-preferences.enc'), safeStorage);
   vault.initialize();

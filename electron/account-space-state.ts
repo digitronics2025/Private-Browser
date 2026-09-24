@@ -3,8 +3,10 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -92,27 +94,51 @@ export class AccountSpaceStateStore {
   prepareRestoreV1(): void {
     const { manifestFilePath, legacyFilePath } = this.options.paths;
     if (!existsSync(legacyFilePath)) throw new Error('No version-1 state is available to restore');
+    // Re-migrating reuses the same stable account ids and publishes over their
+    // per-account files, so every one of them is preserved first (F-38).
+    const { accountStateDirectory } = this.options.paths;
+    if (existsSync(accountStateDirectory)) {
+      for (const name of readdirSync(accountStateDirectory)) {
+        if (name.endsWith('.json')) this.preserveFile(join(accountStateDirectory, name), 'before-restore-v1');
+      }
+    }
     if (existsSync(manifestFilePath)) {
       this.preserveFile(manifestFilePath, 'before-restore-v1');
       unlinkSync(manifestFilePath);
     }
   }
 
+  /** Deletes an Account Space's plaintext browsing file once it is no longer in the manifest. */
+  removeAccountState(accountSpaceId: AccountSpaceId): void {
+    const statePath = this.accountStatePath(accountSpaceId);
+    rmSync(statePath, { force: true });
+    rmSync(`${statePath}.staged`, { force: true });
+  }
+
   prepareFreshStart(accountSpaceId?: AccountSpaceId): void {
     if (accountSpaceId) {
       const statePath = this.accountStatePath(accountSpaceId);
-      let state: AccountBrowsingStateV2;
-      try { state = validateAccountState(JSON.parse(readFileSync(statePath, 'utf8')) as AccountBrowsingStateV2); }
-      catch { throw new Error('Cannot determine the corrupt Account Space owner; preserve it and use browser-state recovery'); }
+      // The owner workspace comes from whichever half is still readable: the
+      // browsing file when the encrypted record is damaged, the record when the
+      // browsing file is (F-37).
+      let workspaceId: WorkspaceId | undefined;
+      try { workspaceId = validateAccountState(JSON.parse(readFileSync(statePath, 'utf8')) as AccountBrowsingStateV2).workspaceId; }
+      catch { /* try the record */ }
+      const loaded = this.options.accountStore.load(accountSpaceId);
+      const recordIntact = loaded.status === 'ok';
+      if (!workspaceId && loaded.status === 'ok') workspaceId = loaded.record.workspaceId;
+      if (!workspaceId) throw new Error('Cannot determine the corrupt Account Space owner; preserve it and use browser-state recovery');
       if (existsSync(statePath)) this.preserveFile(statePath, 'before-fresh-start');
-      this.options.accountStore.replaceCorrupt({
-        id: accountSpaceId,
-        workspaceId: state.workspaceId,
-        label: `${WORKSPACES.find((workspace) => workspace.id === state.workspaceId)?.name ?? 'Account'} recovered`,
-        color: workspaceColor(state.workspaceId),
-        order: 0,
-      });
-      this.saveAccountState(createDefaultAccountState(state.workspaceId, accountSpaceId));
+      if (!recordIntact) {
+        this.options.accountStore.replaceCorrupt({
+          id: accountSpaceId,
+          workspaceId,
+          label: `${WORKSPACES.find((workspace) => workspace.id === workspaceId)?.name ?? 'Account'} recovered`,
+          color: workspaceColor(workspaceId),
+          order: 0,
+        });
+      }
+      this.saveAccountState(createDefaultAccountState(workspaceId, accountSpaceId));
       return;
     }
     for (const path of [this.options.paths.manifestFilePath, this.options.paths.legacyFilePath, this.options.paths.migrationJournalPath]) {

@@ -58,7 +58,8 @@ export class GoogleOAuthManager {
     accountSpaceId: AccountSpaceId,
     modules: GoogleModule[],
     browserId: ExternalBrowserId,
-    allAccountIds: AccountSpaceId[],
+    /** Read when the grant is saved, not before the consent wait: spaces may be added meanwhile. */
+    allAccountIds: () => AccountSpaceId[],
   ): Promise<GoogleOperationResult<AccountSpaceSummary>> {
     const requestId = randomUUID();
     if (this.operations.has(accountSpaceId)) return failure('GOOGLE_INTERNAL', 'A Google connection is already in progress for this account', requestId);
@@ -96,7 +97,14 @@ export class GoogleOAuthManager {
       if (!hasAllScopes(grantedScopes, requiredScopes)) {
         throw new OAuthFailure('GOOGLE_SCOPE_MISSING', 'Google did not grant every selected module scope');
       }
-      const refreshToken = tokens.refresh_token ?? account.refreshToken;
+      // Reconnecting keeps the same Google identity. Switching an Account Space to
+      // another person silently would leave the old person's cookies in its
+      // partition, and could pair their old refresh token with the new identity.
+      const current = this.accounts.require(accountSpaceId);
+      if (current.googleIdentity && current.googleIdentity.sub !== payload.sub) {
+        throw new OAuthFailure('GOOGLE_POLICY_DENIED', 'This Account Space is connected to a different Google account. Disconnect it first, or use another Account Space.');
+      }
+      const refreshToken = tokens.refresh_token ?? current.refreshToken;
       if (!refreshToken) throw new OAuthFailure('GOOGLE_RECONNECT_REQUIRED', 'Google did not return a refresh token; reconnect and approve access');
       const identity: GoogleIdentityRecord = {
         sub: payload.sub!,
@@ -105,7 +113,7 @@ export class GoogleOAuthManager {
         emailVerified: true,
         avatar: await fetchValidatedGoogleAvatar(payload.picture, this.request),
       };
-      const saved = this.accounts.saveGoogleGrant(accountSpaceId, identity, refreshToken, selectedModules, grantedScopes, allAccountIds);
+      const saved = this.accounts.saveGoogleGrant(accountSpaceId, identity, refreshToken, selectedModules, grantedScopes, allAccountIds());
       if (tokens.access_token) {
         this.accessTokens.set(accountSpaceId, { value: tokens.access_token, expiresAt: tokens.expiry_date ?? this.now().getTime() + 55 * 60_000 });
       }

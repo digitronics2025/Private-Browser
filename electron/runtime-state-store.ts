@@ -20,6 +20,12 @@ export class RuntimeStateStore {
   private state: RuntimeBrowserStateV2;
   private readonly records = new Map<AccountSpaceId, AccountSpaceRecord>();
   private readonly readOnly: boolean;
+  /**
+   * Accounts waiting in per-account recovery. They stay in the manifest and
+   * their files are never written until the user resolves them, so a save
+   * elsewhere can neither drop them nor overwrite what recovery must preserve.
+   */
+  private readonly recovering = new Set<AccountSpaceId>();
 
   constructor(
     private readonly persistedStore: AccountSpaceStateStore,
@@ -33,6 +39,7 @@ export class RuntimeStateStore {
     }
     this.readOnly = false;
     for (const record of initialization.accounts) this.records.set(record.id, record);
+    for (const recovery of initialization.accountRecoveries) if (recovery.accountSpaceId) this.recovering.add(recovery.accountSpaceId);
     this.state = combine(initialization.manifest, initialization.accounts, initialization.accountStates, initialization.accountRecoveries);
   }
 
@@ -42,6 +49,18 @@ export class RuntimeStateStore {
 
   isReadOnly(): boolean {
     return this.readOnly;
+  }
+
+  /**
+   * Legacy per-workspace partitions that no Account Space uses any more — left
+   * behind when a migrated default account is fresh-started with a new record
+   * (F-62). Nothing is reported while any account is in recovery: an unreadable
+   * record might still own one of them.
+   */
+  orphanedLegacyPartitions(): string[] {
+    if (this.readOnly || this.recovering.size) return [];
+    const used = new Set([...this.records.values()].map((record) => record.partitionKey));
+    return WORKSPACES.map((workspace) => `persist:private-browser-${workspace.id}`).filter((key) => !used.has(key));
   }
 
   partitionFor(id: AccountSpaceId): string {
@@ -60,7 +79,7 @@ export class RuntimeStateStore {
     if (this.readOnly) throw new Error('Browser state is in read-only recovery mode');
     const next = structuredClone(this.state);
     mutator(next);
-    normalizeRuntimeState(next);
+    normalizeRuntimeState(next, this.recovering);
     this.persist(next);
     this.state = next;
     return this.get();
@@ -121,6 +140,10 @@ export class RuntimeStateStore {
     });
     this.records.delete(id);
     this.accountStore.remove(id);
+    // The manifest no longer lists it, so its plaintext history, tabs and
+    // bookmarks file is deleted too (F-39).
+    this.persistedStore.removeAccountState(id);
+    this.recovering.delete(id);
     return result;
   }
 
@@ -141,7 +164,7 @@ export class RuntimeStateStore {
     const manifest: BrowserStateManifestV2 = {
       version: 2,
       activeWorkspaceId: next.activeWorkspaceId,
-      accountSpaceIds: next.accountSpaces.map((account) => account.id),
+      accountSpaceIds: [...new Set([...next.accountSpaces.map((account) => account.id), ...this.recovering])],
       activeAccountSpaceByWorkspace: next.activeAccountSpaceByWorkspace,
       privacyLog: next.privacyLog,
       trackerBlocking: next.trackerBlocking,
@@ -150,6 +173,7 @@ export class RuntimeStateStore {
       settings: next.settings,
     };
     for (const account of next.accountSpaces) {
+      if (this.recovering.has(account.id)) continue;
       const tabs = next.tabs.filter((tab) => tab.accountSpaceId === account.id);
       const state: AccountBrowsingStateV2 = {
         version: 2,
@@ -240,13 +264,17 @@ function recordToSummary(record: AccountSpaceRecord): AccountSpaceSummary {
   };
 }
 
-function normalizeRuntimeState(state: RuntimeBrowserStateV2): void {
+function normalizeRuntimeState(state: RuntimeBrowserStateV2, recovering: ReadonlySet<AccountSpaceId> = new Set()): void {
   state.ui = sanitizeUiPreferences(state.ui);
   state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
   const accountsById = new Map(state.accountSpaces.map((account) => [account.id, account]));
   for (const workspace of WORKSPACES) {
     const members = state.accountSpaces.filter((account) => account.workspaceId === workspace.id);
-    if (members.length === 0) throw new Error('Every workspace requires at least one Account Space');
+    if (members.length === 0) {
+      // A workspace whose only account is in recovery keeps pointing at it.
+      if (recovering.has(state.activeAccountSpaceByWorkspace[workspace.id]!)) continue;
+      throw new Error('Every workspace requires at least one Account Space');
+    }
     const active = state.activeAccountSpaceByWorkspace[workspace.id];
     if (!active || !members.some((account) => account.id === active)) state.activeAccountSpaceByWorkspace[workspace.id] = members[0].id;
   }

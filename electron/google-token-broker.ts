@@ -1,5 +1,5 @@
 import type { AccountSpaceId, GoogleModule } from './types.js';
-import { AccountStore } from './account-store.js';
+import { AccountStore, type AccountSpaceRecord } from './account-store.js';
 import { GoogleConfigurationStore } from './google-config.js';
 import { hasAllScopes, scopesForModules } from './google-scopes.js';
 
@@ -18,6 +18,8 @@ export class GoogleTokenError extends Error {
 export class GoogleTokenBroker {
   private readonly accessTokens = new Map<AccountSpaceId, { value: string; expiresAt: number }>();
   private readonly refreshes = new Map<AccountSpaceId, Promise<string>>();
+  /** Bumped by clear(): a refresh that started before a disconnect or lock must not land after it. */
+  private readonly generations = new Map<AccountSpaceId, number>();
 
   constructor(
     private readonly configuration: GoogleConfigurationStore,
@@ -54,11 +56,18 @@ export class GoogleTokenBroker {
 
   clear(accountSpaceId: AccountSpaceId): void {
     this.invalidate(accountSpaceId);
+    this.refreshes.delete(accountSpaceId);
+    this.generations.set(accountSpaceId, (this.generations.get(accountSpaceId) ?? 0) + 1);
   }
 
   private async refresh(accountSpaceId: AccountSpaceId): Promise<string> {
     const account = this.accounts.require(accountSpaceId);
     if (!account.refreshToken) throw new GoogleTokenError('revoked', 'Google access must be reconnected');
+    const generation = this.generations.get(accountSpaceId) ?? 0;
+    const current = () => (this.generations.get(accountSpaceId) ?? 0) === generation;
+    const setStatus = (status: AccountSpaceRecord['googleConnection']) => {
+      if (current()) this.accounts.update(accountSpaceId, (record) => { record.googleConnection = status; });
+    };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), TOKEN_TIMEOUT_MS);
     try {
@@ -75,12 +84,12 @@ export class GoogleTokenBroker {
         redirect: 'error',
       });
       if (response.status === 400 || response.status === 401) {
-        this.accounts.update(accountSpaceId, (record) => { record.googleConnection = 'reconnect-required'; });
+        setStatus('reconnect-required');
         throw new GoogleTokenError('revoked', 'Google access was revoked or expired');
       }
       if (response.status === 429) {
         const retryAfter = parseRetryAfter(response.headers.get('retry-after'), this.now());
-        this.accounts.update(accountSpaceId, (record) => { record.googleConnection = 'quota-limited'; });
+        setStatus('quota-limited');
         throw new GoogleTokenError('quota', 'Google token quota is temporarily limited', retryAfter);
       }
       if (!response.ok) throw new GoogleTokenError('offline', 'Google token service is unavailable');
@@ -91,12 +100,13 @@ export class GoogleTokenBroker {
       if (typeof token !== 'string' || token.length === 0 || token.length > 8192 || typeof expiresIn !== 'number' || expiresIn < 60 || expiresIn > 86_400) {
         throw new GoogleTokenError('invalid-response', 'Google returned an invalid token response');
       }
+      if (!current()) throw new GoogleTokenError('revoked', 'Google access was disconnected while refreshing');
       this.accessTokens.set(accountSpaceId, { value: token, expiresAt: this.now().getTime() + expiresIn * 1000 });
-      this.accounts.update(accountSpaceId, (record) => { record.googleConnection = 'connected'; });
+      setStatus('connected');
       return token;
     } catch (error) {
       if (error instanceof GoogleTokenError) throw error;
-      this.accounts.update(accountSpaceId, (record) => { record.googleConnection = 'offline'; });
+      setStatus('offline');
       throw new GoogleTokenError('offline', 'Google token service is unavailable');
     } finally {
       clearTimeout(timeout);
