@@ -91,6 +91,10 @@ node scripts/docs-guard.mjs ratchet --write # tighten allowances that gained sla
 - [../security/prerelease-audit-2026-09-10.md](../security/prerelease-audit-2026-09-10.md)
   — pre-release audit of `63e5ee8` (v0.3.1): 26 numbered, line-cited findings with
   a must-fix table and an order of work. Read it before the next release.
+- [../security/prerelease-audit-2026-09-24.md](../security/prerelease-audit-2026-09-24.md)
+  — second audit, of `a577936` (0.6.7): F-27…F-85, five must-fixes (vault sync
+  race and lock, IDN tab guards, picker click timing, "signed" claim), the
+  public-distribution decision, and the delta against the first audit.
 
 ## Creating a new doc
 
