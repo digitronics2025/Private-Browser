@@ -88,7 +88,9 @@ memory wiping.
     key deletes the record; a cancel keeps it; an unreadable record is discarded,
     never blocking. Installing a different vault identity drops it. The WinRT
     call runs in a short-lived `powershell.exe` addressed by absolute path, with
-    the challenge on stdin.
+    the challenge on stdin. PowerShell 5.1 cannot pass a native WinRT `IBuffer`
+    back into a WinRT call, so bytes cross as managed buffers (`AsBuffer` in,
+    `ToArray` out).
 11. The internal passkey provider is disabled by default and release-gated.
     Registration appends one immutable encrypted record, authentication does not
     mutate, and every refusal preserves the original OS WebAuthn operation.
