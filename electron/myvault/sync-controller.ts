@@ -21,8 +21,7 @@ export class VaultSyncController {
   }
 
   async chooseCloud(): Promise<void> {
-    const remote = this.broker.pendingConflict();
-    await this.broker.acceptRemote(remote.envelope, remote.version);
+    await this.broker.acceptRemote(this.broker.pendingConflict());
   }
 
   async chooseLocal(): Promise<void> {
@@ -52,7 +51,8 @@ export class VaultSyncController {
         this.broker.markPushSucceeded(envelope, connection.remoteVersion);
         return;
       }
-      await this.broker.acceptRemote(remote.envelope, remote.version);
+      // A local change made while the pull was in flight must not be overwritten.
+      if (await this.broker.acceptRemote(remote, { basis: envelope }) === 'conflict') throw new VaultSyncConflictError(remote);
     } catch (error) {
       if (error instanceof VaultSyncConflictError) this.broker.setConflict(error.remote);
       else this.broker.markSyncError();

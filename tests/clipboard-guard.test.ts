@@ -21,6 +21,15 @@ function fakeClipboard(mode: 'async' | 'sync') {
 }
 
 describe.each(['async', 'sync'] as const)('ClipboardGuard over a %s clipboard', (mode) => {
+  it('holds only a digest of the pending secret, never the secret itself', () => {
+    const { clipboard } = fakeClipboard(mode);
+    const guard = new ClipboardGuard(clipboard);
+    guard.copy('pending-secret-value');
+    const held = Object.values(guard as unknown as Record<string, unknown>).filter((value) => typeof value === 'string');
+    expect(held.length).toBeGreaterThan(0);
+    expect(held.join('')).not.toContain('pending-secret-value');
+  });
+
   it('clears a copied secret that is still on the clipboard', async () => {
     const { clipboard, state } = fakeClipboard(mode);
     const guard = new ClipboardGuard(clipboard);

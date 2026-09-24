@@ -45,9 +45,13 @@ cross the preload bridge.
 - **History:** copies and opens the selected profile's `History` SQLite database
   read-only, selecting up to 10,000 newest visible URLs and converting Chrome's
   1601-based microsecond timestamps to ISO time.
-- **Passwords:** the MyVault import service parses the selected CSV in main,
-  validates origins and bounds, and performs normalized in-memory duplicate
-  comparison. The plaintext source remains until the user deletes it explicitly.
+- **Passwords:** the MyVault import service reads the selected CSV in main (20 MB
+  cap) through `parseChromePasswordCsv`: BOM stripped, fields bounded, 5,000
+  rows, passwords never trimmed. Rows that are not web logins — Chrome's
+  `android://` app entries, `chrome://`, unparsable URLs — are counted as
+  skipped instead of aborting. Duplicates (origin + username) are skipped, and
+  the new logins are written in one encrypted save. The plaintext source remains
+  until the user deletes it explicitly.
 
 Cookies, sessions, payment cards, extensions, account tokens, search engines and
 autofill profiles are not copied. The current product has no compatible storage
@@ -59,8 +63,8 @@ browser's session-isolation boundary.
 - `listChromeProfiles(userDataDirectory?)` returns display-safe profile metadata.
 - `readChromeProfile(...)` validates the profile id and non-Banking Account Space target,
   returning accepted bookmarks/history plus result counters.
-- `parseChromeBookmarks(...)` and `parseChromePasswordCsv(...)` are pure parsers
-  exported for unit tests.
+- `parseChromeBookmarks(...)` and `parseChromePasswordCsv(...)` are pure parsers;
+  the second is the live password-import parser (`vault-migration.ts`).
 
 ## Related Systems
 

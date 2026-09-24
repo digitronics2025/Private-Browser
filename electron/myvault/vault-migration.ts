@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { parseChromePasswordCsv } from '../chrome-importer.js';
 import { VaultBroker } from './vault-broker.js';
 import type { SafeStorageAdapter } from './vault-store.js';
 
@@ -70,28 +71,8 @@ function parseLegacy(value: unknown): LegacyVaultItem[] {
   });
 }
 
-function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let quoted = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (quoted && character === '"' && text[index + 1] === '"') { field += '"'; index += 1; }
-    else if (character === '"') quoted = !quoted;
-    else if (!quoted && character === ',') { row.push(field); field = ''; }
-    else if (!quoted && (character === '\n' || character === '\r')) {
-      if (character === '\r' && text[index + 1] === '\n') index += 1;
-      row.push(field); field = '';
-      if (row.some(Boolean)) rows.push(row);
-      row = [];
-    } else field += character;
-  }
-  row.push(field);
-  if (row.some(Boolean)) rows.push(row);
-  if (quoted) throw new Error('The Chrome CSV has an unterminated quoted field');
-  return rows;
-}
+/** Chrome exports are a few MB even for thousands of logins. */
+const MAX_CHROME_CSV_BYTES = 20 * 1024 * 1024;
 
 export class VaultMigrationService {
   constructor(
@@ -150,25 +131,21 @@ export class VaultMigrationService {
   }
 
   async importChromeCsv(filePath: string): Promise<Omit<MigrationReport, 'backupPath' | 'journalPhase'>> {
-    const text = readFileSync(filePath, 'utf8');
-    const rows = parseCsv(text);
-    const headers = rows.shift()?.map((value) => value.trim().toLocaleLowerCase('en-US')) ?? [];
-    const at = (row: string[], name: string) => row[headers.indexOf(name)] ?? '';
-    const existing = this.broker.searchMetadata();
-    let importedCount = 0;
-    let skippedCount = 0;
-    for (const row of rows) {
-      const url = at(row, 'url');
-      const username = at(row, 'username');
-      const password = at(row, 'password');
-      if (!url || !password) { skippedCount += 1; continue; }
-      const normalizedOrigin = origin(url);
-      if (existing.some((item) => item.url === normalizedOrigin && item.username.normalize('NFKC') === username.normalize('NFKC'))) { skippedCount += 1; continue; }
-      const saved = await this.broker.saveLogin({ title: at(row, 'name') || new URL(normalizedOrigin).hostname, url: normalizedOrigin, username, password, notes: at(row, 'note') || undefined });
-      existing.push(saved);
-      importedCount += 1;
+    if (statSync(filePath).size > MAX_CHROME_CSV_BYTES) throw new Error('This file is too large to be a Chrome password export');
+    const parsed = parseChromePasswordCsv(readFileSync(filePath, 'utf8'));
+    const seen = new Set(this.broker.searchMetadata().map((item) => `${item.url}\n${item.username.normalize('NFKC').trim()}`));
+    const fresh = [];
+    let skippedCount = parsed.skipped;
+    for (const row of parsed.items) {
+      const normalizedOrigin = origin(row.url);
+      const key = `${normalizedOrigin}\n${row.username.normalize('NFKC').trim()}`;
+      if (seen.has(key)) { skippedCount += 1; continue; }
+      seen.add(key);
+      fresh.push({ title: row.label, url: normalizedOrigin, username: row.username, password: row.password, notes: row.note });
     }
-    return { sourceCount: rows.length, importedCount, skippedCount, validatedCount: importedCount + skippedCount, conflicts: [] };
+    const imported = await this.broker.importLogins(fresh);
+    const sourceCount = parsed.items.length + parsed.skipped;
+    return { sourceCount, importedCount: imported.length, skippedCount, validatedCount: imported.length + skippedCount, conflicts: [] };
   }
 
   cleanupLegacyAfterConfirmation(confirmed: boolean): boolean {

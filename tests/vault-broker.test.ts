@@ -63,10 +63,17 @@ describe('VaultBroker', () => {
 
   it('enters explicit conflict state without modifying ciphertext', async () => {
     const { broker, store } = await setup();
+    await broker.unlock(PASSWORD);
     const before = readFileSync(store.envelopePath, 'utf8');
     broker.markConflict();
     expect(broker.status()).toMatchObject({ lifecycle: 'conflict', sync: 'conflict' });
     expect(readFileSync(store.envelopePath, 'utf8')).toBe(before);
+  });
+
+  it('records a conflict found while locked without re-opening the vault', async () => {
+    const { broker } = await setup();
+    broker.markConflict();
+    expect(broker.status()).toMatchObject({ lifecycle: 'locked', sync: 'conflict' });
   });
 
   it('appends each immutable passkey record exactly once', async () => {
@@ -89,6 +96,29 @@ describe('VaultBroker', () => {
   });
 });
 
+describe('VaultBroker recovery', () => {
+  it('refuses every unlock and install while recovery is pending, then keeps the preserved file', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pb-myvault-broker-recovery-'));
+    const store = new MyVaultDiskStore(root, safeStorage());
+    mkdirSync(dirname(store.envelopePath), { recursive: true });
+    writeFileSync(store.envelopePath, '{broken', 'utf8');
+    const broker = new VaultBroker(store);
+    const status = broker.initialize();
+    expect(status).toMatchObject({ lifecycle: 'recovery-required', blockedReason: 'envelope-corrupt' });
+    const hello = { isAvailable: async () => true, enroll: async () => new Uint8Array(256), sign: async () => new Uint8Array(256), remove: async () => undefined };
+    await expect(broker.unlock(PASSWORD)).rejects.toThrow('Recovery acknowledgement');
+    await expect(broker.unlockWithPlatform(hello)).rejects.toThrow('Recovery acknowledgement');
+    const { envelope } = await createVault(PASSWORD, createEmptyVaultPayload(), { memorySizeKiB: 8 * 1024, iterations: 1 });
+    expect(() => broker.installEncryptedVault(envelope, { endpoint: 'https://vault.example.test', deviceToken: DEVICE_TOKEN, remoteVersion: 1, dirty: false })).toThrow('Recovery acknowledgement');
+    broker.acknowledgeRecovery();
+    expect(broker.status().lifecycle).toBe('unconfigured');
+    expect(readFileSync(status.recoveryPath!, 'utf8')).toBe('{broken');
+    broker.installEncryptedVault(envelope, { endpoint: 'https://vault.example.test', deviceToken: DEVICE_TOKEN, remoteVersion: 1, dirty: false });
+    await broker.unlock(PASSWORD);
+    expect(broker.status().lifecycle).toBe('unlocked');
+  });
+});
+
 describe('MyVaultDiskStore recovery', () => {
   it('preserves corrupt ciphertext and blocks writes until acknowledgement', () => {
     const root = mkdtempSync(join(tmpdir(), 'pb-myvault-corrupt-'));
@@ -101,6 +131,8 @@ describe('MyVaultDiskStore recovery', () => {
     expect(readFileSync(snapshot.recoveryPath!, 'utf8')).toBe('{broken');
     expect(() => store.writeConnection({ endpoint: 'https://vault.example.test', deviceToken: DEVICE_TOKEN, remoteVersion: 0, dirty: false })).toThrow('blocked');
     store.acknowledgeRecovery();
+    expect(readFileSync(snapshot.recoveryPath!, 'utf8')).toBe('{broken');
+    expect(() => store.writeConnection({ endpoint: 'https://vault.example.test', deviceToken: DEVICE_TOKEN, remoteVersion: 0, dirty: false })).not.toThrow();
   });
 
   it('refuses credential persistence when OS encryption is unavailable', async () => {

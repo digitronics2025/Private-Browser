@@ -46,7 +46,7 @@ describe('Chrome data importer', () => {
 
   it('parses quoted Chrome password CSV without exposing unsupported rows', () => {
     const result = parseChromePasswordCsv('name,url,username,password,note\n"Shop, Main",https://shop.example/login,user@example.com,"p,a""ss",memo\nBad,chrome://settings,user,secret,\n');
-    expect(result.items).toEqual([{ label: 'Shop, Main', url: 'https://shop.example/login', username: 'user@example.com', password: 'p,a"ss' }]);
+    expect(result.items).toEqual([{ label: 'Shop, Main', url: 'https://shop.example/login', username: 'user@example.com', password: 'p,a"ss', note: 'memo' }]);
     expect(result.skipped).toBe(1);
   });
 });

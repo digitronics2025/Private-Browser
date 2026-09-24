@@ -8,6 +8,12 @@
  * W3C-modelled API in Electron 44. Both are accepted here so the guard does not
  * silently stop clearing the next time that changes.
  */
+import { createHash } from 'node:crypto';
+
+function digest(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('base64');
+}
+
 export interface ClipboardLike {
   writeText(text: string): Promise<void> | void;
   readText(): Promise<string> | string;
@@ -25,7 +31,8 @@ export class ClipboardGuard {
   /** Copy a secret and schedule its removal. A second copy replaces the first. */
   copy(value: string): void {
     void this.clipboard.writeText(value);
-    this.pending = value;
+    // Only a digest is held for the "still unchanged?" comparison, never the secret.
+    this.pending = digest(value);
     this.cancelTimer();
     this.timer = setTimeout(() => void this.flush(), this.holdMs);
     // Never hold the process open for a pending clear; quitting flushes instead.
@@ -48,7 +55,7 @@ export class ClipboardGuard {
     } catch {
       return false;
     }
-    if (current !== value) return false;
+    if (digest(current) !== value) return false;
     this.clipboard.clear();
     return true;
   }

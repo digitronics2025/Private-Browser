@@ -58,7 +58,7 @@ export function atomicWrite(filePath: string, value: string): void {
   renameSync(temporaryPath, filePath);
 }
 
-function isConnectionState(value: unknown): value is BrokerConnectionState {
+export function isConnectionState(value: unknown): value is BrokerConnectionState {
   if (!value || typeof value !== 'object') return false;
   const state = value as Partial<BrokerConnectionState>;
   return typeof state.endpoint === 'string'

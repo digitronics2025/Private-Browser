@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -15,8 +15,9 @@ const DEVICE_TOKEN = `mvd_11111111-1111-4111-8111-111111111111_${'a'.repeat(43)}
 function safeStorage(): SafeStorageAdapter {
   return {
     isEncryptionAvailable: () => true,
-    encryptString: (value) => Buffer.from(value, 'utf8'),
-    decryptString: (value) => value.toString('utf8'),
+    // Not identity: a record written without OS encryption must fail the tests.
+    encryptString: (value) => Buffer.from(Buffer.from(value, 'utf8').map((byte) => byte ^ 0x5a)),
+    decryptString: (value) => Buffer.from(value.map((byte) => byte ^ 0x5a)).toString('utf8'),
   };
 }
 
@@ -63,6 +64,24 @@ describe('Windows Hello unlock', () => {
     await broker.unlockWithPlatform(device.signer);
     expect(broker.status().lifecycle).toBe('unlocked');
     expect(broker.searchMetadata()).toEqual([]);
+  });
+
+  it('stores the Hello wrap only as OS-encrypted ciphertext', async () => {
+    const { store } = await enrolled();
+    const onDisk = readFileSync(store.platformUnlockPath, 'utf8');
+    expect(onDisk).not.toContain('wrappedKey');
+    expect(Buffer.from(onDisk, 'base64').toString('utf8')).not.toContain('wrappedKey');
+  });
+
+  it('a Hello session writes ciphertext the master password still opens', async () => {
+    const { root, broker, device } = await enrolled();
+    await broker.unlockWithPlatform(device.signer);
+    await broker.saveLogin({ title: 'After Hello', username: 'h', password: 'hello-saved', url: 'https://hello.example' });
+    broker.lock();
+    const reopened = new VaultBroker(new MyVaultDiskStore(root, safeStorage()));
+    reopened.initialize();
+    await reopened.unlock(PASSWORD);
+    expect(reopened.searchMetadata().map((item) => item.title)).toEqual(['After Hello']);
   });
 
   it('survives a restart: the record is read back from disk', async () => {

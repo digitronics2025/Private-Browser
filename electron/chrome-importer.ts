@@ -225,7 +225,16 @@ function parseCsvRows(content: string): string[][] {
   return rows;
 }
 
-export function parseChromePasswordCsv(content: string): { items: VaultItemInput[]; skipped: number } {
+export interface ChromePasswordRow extends VaultItemInput { note?: string }
+
+/**
+ * The one parser for Chrome's password export, used by the live MyVault import.
+ * Every field is bounded, a UTF-8 BOM is stripped, and rows that are not web
+ * logins (`android://…` app entries, `chrome://`, unparsable URLs) are counted as
+ * skipped rather than aborting the import. Passwords are never trimmed: that
+ * would change the credential.
+ */
+export function parseChromePasswordCsv(content: string): { items: ChromePasswordRow[]; skipped: number } {
   const rows = parseCsvRows(content.replace(/^\uFEFF/, ''));
   const headers = rows.shift()?.map((value) => value.trim().toLowerCase()) ?? [];
   const indexOf = (names: string[]) => headers.findIndex((header) => names.includes(header));
@@ -233,17 +242,21 @@ export function parseChromePasswordCsv(content: string): { items: VaultItemInput
   const urlIndex = indexOf(['url']);
   const usernameIndex = indexOf(['username']);
   const passwordIndex = indexOf(['password']);
+  const noteIndex = indexOf(['note']);
   if (urlIndex < 0 || usernameIndex < 0 || passwordIndex < 0) throw new Error('This is not a Chrome password CSV export');
   let skipped = 0;
   const items = rows.flatMap((row) => {
+    if (row.every((value) => !value)) return [] as ChromePasswordRow[];
     const url = row[urlIndex]?.trim();
-    const username = row[usernameIndex]?.trim();
+    // A login with no username is legitimate (password-only sites).
+    const username = row[usernameIndex]?.trim() ?? '';
     const password = row[passwordIndex] ?? '';
-    if (!url || !username || !password || !isAllowedRemoteUrl(url) || url.length > 2000 || username.length > 500 || password.length > 5000) {
+    const note = noteIndex >= 0 ? row[noteIndex] ?? '' : '';
+    if (!url || !password || !isAllowedRemoteUrl(url) || url.length > 2000 || username.length > 500 || password.length > 5000 || note.length > 10_000) {
       skipped += 1;
-      return [] as VaultItemInput[];
+      return [] as ChromePasswordRow[];
     }
-    return [{ label: (row[nameIndex]?.trim() || new URL(url).hostname).slice(0, 200), url, username, password }];
+    return [{ label: (row[nameIndex]?.trim() || new URL(url).hostname).slice(0, 200), url, username, password, ...(note ? { note } : {}) }];
   });
   return { items: items.slice(0, 5000), skipped: skipped + Math.max(0, items.length - 5000) };
 }

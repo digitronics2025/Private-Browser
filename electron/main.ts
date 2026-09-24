@@ -1714,6 +1714,9 @@ class BrowserController {
 
   async requestVaultPairing() {
     this.assertVaultSurface();
+    // Pairing installs the cloud envelope over the local one; it is only for a
+    // device that has no vault yet, never a way to discard unsynced changes.
+    if (this.vault.status().lifecycle !== 'unconfigured') throw new Error('MyVault is already connected on this device');
     const value = await this.secureDialogs.open('pair') as PairDialogValue | undefined;
     if (!value) return this.listVault();
     await this.vaultSync.pair(value.endpoint, value.enrollmentCode, value.password);
@@ -1806,6 +1809,7 @@ class BrowserController {
   }
 
   acknowledgeVaultRecovery() {
+    this.assertVaultSurface();
     this.vault.acknowledgeRecovery();
     this.addPrivacyEvent('vault', 'Vault recovery acknowledged', 'The unreadable encrypted file remains preserved');
     return this.listVault();

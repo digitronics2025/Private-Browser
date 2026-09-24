@@ -35,7 +35,10 @@ memory wiping.
    explicit recovery.
 3. Established locked vaults make no network requests. Unlocked sync is triggered
    by explicit action, unlock, reconnect or one 45-second dirty delay. CAS 409
-   enters an explicit conflict and never auto-merges or overwrites.
+   enters an explicit conflict and never auto-merges or overwrites; so does a
+   pull that lands after a local change made while it was in flight. Mutations
+   and accepted pulls run through one broker queue, and a sync that finishes
+   after lock updates sync metadata only — it never re-opens the vault.
 4. Pairing takes a ten-minute single-use enrollment code in secure UI. The
    returned `mvd_...` token never reaches React and is stored only by `safeStorage`.
 5. Fill capabilities are single-use and bind WebContents, tab, navigation
@@ -47,8 +50,8 @@ memory wiping.
    In Digitronics, TenTen and Personal, an unlocked vault automatically fills
    matching normal HTTPS login forms after navigation. It retries briefly for
    client-rendered forms, never overwrites populated fields, refuses signup,
-   reset and new-password forms, and picks the most recently updated login unless
-   a manual Fill established a preferred login for that origin during the session.
+   reset and new-password forms, and picks the remembered login for the site
+   (below) when it is an exact match, otherwise the most recently updated one.
    The same three workspaces (policy flag `fillPicker`) show a Chrome-style login
    list under a focused sign-in field. It opens only on genuine input (a left
    click, Tab, or ArrowDown in the page), never on page script. It lists (up to
