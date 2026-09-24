@@ -50,9 +50,8 @@ hides the vault entry points; Banking renders only centrally permitted actions.
 3. **Every `on*` subscription is returned from its effect through `disposer()`.**
    → **Main-Process Subscriptions**
 4. **Shortcuts are resolved by `resolveShortcut` and run by one dispatcher**
-   (`runCommand` in App.tsx) — never add a second `keydown` table. Main also
-   sends key-less commands on the same channel (`open-vault`, from the login
-   picker's "Manage logins…" row, opens the Vault panel). → **Keyboard**
+   (`runCommand` in App.tsx) — never add a second `keydown` table; key-less
+   `open-vault` (login picker's "Manage logins…") shares it. → **Keyboard**
 5. **Security warnings stay visible.** The "Not secure"/"Check domain" chip in the
    address bar is never hidden for density; narrow layouts hide optional buttons
    instead. → **Toolbar and Address Bar**
