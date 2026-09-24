@@ -13,7 +13,7 @@ import { SidePanel } from './shell/SidePanel';
 import { NewTabPage } from './shell/NewTabPage';
 import { ProfileMenu } from './shell/ProfileMenu';
 import { BrowserMenu } from './shell/BrowserMenu';
-import { ShieldStatusMenu, SiteInfoMenu, TabSearchMenu } from './shell/StatusMenus';
+import { ShieldStatusMenu, SiteInfoMenu, TabSearchMenu, ZoomMenu } from './shell/StatusMenus';
 import { PromptDialog, type PromptRequest } from './shell/PromptDialog';
 import { AccountManager } from './panels/AccountManager';
 import { PermissionOverlay, RecoveryOverlay } from './panels/Overlays';
@@ -31,7 +31,7 @@ import { defaultShortcutTiles } from './lib/quick-links';
 import { faviconsByHost } from './lib/format';
 import { disposer } from './lib/subscribe';
 
-type MenuKind = 'browser' | 'profile' | 'shield' | 'tab-search' | 'site-info';
+type MenuKind = 'browser' | 'profile' | 'shield' | 'tab-search' | 'site-info' | 'zoom';
 
 const DEFAULT_WINDOW_STATE: WindowState = { maximized: false, fullscreen: false, darkMode: true };
 
@@ -71,6 +71,7 @@ export default function App() {
   const shieldButtonRef = useRef<HTMLButtonElement>(null);
   const tabSearchButtonRef = useRef<HTMLButtonElement>(null);
   const siteInfoButtonRef = useRef<HTMLButtonElement>(null);
+  const zoomButtonRef = useRef<HTMLButtonElement>(null);
   const profileButtonRef = useRef<HTMLButtonElement>(null);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -402,6 +403,8 @@ export default function App() {
               profileButtonRef={profileButtonRef}
               menuButtonRef={menuButtonRef}
               siteInfoOpen={menu === 'site-info'}
+              zoomOpen={menu === 'zoom'}
+              zoomButtonRef={zoomButtonRef}
               profileOpen={menu === 'profile'}
               menuOpen={menu === 'browser'}
               onAddressChange={setAddress}
@@ -413,7 +416,7 @@ export default function App() {
               onSiteInfo={() => setMenu((current) => (current === 'site-info' ? null : 'site-info'))}
               onToggleBookmark={() => void act(() => window.privateBrowser.toggleBookmark())}
               onOpenVault={() => toggleTool('vault')}
-              onResetZoom={() => void act(() => window.privateBrowser.zoom('reset'))}
+              onZoomMenu={() => setMenu((current) => (current === 'zoom' ? null : 'zoom'))}
               onToggleSidePanel={() => setUi({ sidePanelOpen: !ui.sidePanelOpen })}
               onAssistant={() => toggleTool('assistant')}
               onProfile={() => setMenu((current) => (current === 'profile' ? null : 'profile'))}
@@ -467,6 +470,7 @@ export default function App() {
         {menu === 'shield' && <ShieldStatusMenu anchor={shieldButtonRef.current} state={state} workspace={workspace} onClose={closeMenu} onToggleTrackers={() => void act(() => window.privateBrowser.toggleTrackerBlocking(), state.trackerBlocking ? 'Tracker blocking paused' : 'Tracker blocking enabled')} onOpenPrivacy={() => openTool('privacy')} onOpenSettings={() => openTool('settings')} />}
         {menu === 'tab-search' && <TabSearchMenu anchor={tabSearchButtonRef.current} tabs={workspaceTabs} activeTabId={activeTab.id} onActivate={(id) => void act(() => window.privateBrowser.activateTab(id))} onClose={closeMenu} />}
         {menu === 'site-info' && <SiteInfoMenu anchor={siteInfoButtonRef.current} tab={activeTab} account={activeAccount} trackerBlocking={state.trackerBlocking} onClose={closeMenu} onOpenPrivacy={() => openTool('privacy')} onResetZoom={() => void act(() => window.privateBrowser.zoom('reset'))} onToggleDeveloperTools={() => void act(() => window.privateBrowser.toggleDeveloperTools('right'))} />}
+        {menu === 'zoom' && !activeTab.isHome && <ZoomMenu anchor={zoomButtonRef.current} zoom={activeTab.zoomPercent ?? 100} onZoom={(direction) => void act(() => window.privateBrowser.zoom(direction))} onClose={closeMenu} />}
         {menu === 'profile' && (
           <ProfileMenu
             anchor={profileButtonRef.current}

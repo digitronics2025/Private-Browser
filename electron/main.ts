@@ -122,6 +122,7 @@ interface RuntimeTab {
 
 type Layout = ContentInsets;
 
+const WHEEL_ZOOM_INTERVAL_MS = 100;
 const ZOOM_PERCENTS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
 const MAX_CLOSED_TABS = 25;
 
@@ -1025,6 +1026,10 @@ class BrowserController {
     const contents = this.activeContents();
     // A New Tab page keeps the previous page's view hidden underneath; never zoom that.
     if (!contents || this.activeTab(this.store.get()).isHome) return;
+    this.stepZoom(contents, direction);
+  }
+
+  private stepZoom(contents: Electron.WebContents, direction: 'in' | 'out' | 'reset'): void {
     const current = Math.round(contents.getZoomFactor() * 100);
     let next = 100;
     if (direction === 'in') next = ZOOM_PERCENTS.find((value) => value > current) ?? ZOOM_PERCENTS.at(-1)!;
@@ -2118,7 +2123,15 @@ class BrowserController {
     });
     view.webContents.on('before-input-event', (event, input) => this.handleShortcut(event, input));
     view.webContents.on('audio-state-changed', () => this.broadcast());
-    view.webContents.on('zoom-changed', () => this.broadcast());
+    // Electron only reports Ctrl+wheel and touchpad pinch; applying the step is the embedder's job.
+    // One wheel notch reports twice and a pinch reports a burst, so take at most one step per window.
+    let lastWheelZoom = 0;
+    view.webContents.on('zoom-changed', (_event, direction) => {
+      const now = Date.now();
+      if (now - lastWheelZoom < WHEEL_ZOOM_INTERVAL_MS) return;
+      lastWheelZoom = now;
+      this.stepZoom(view.webContents, direction);
+    });
     view.webContents.on('found-in-page', (_event, result) => {
       if (this.activeTab(this.store.get()).id !== tabId || this.window.isDestroyed()) return;
       this.window.webContents.send('browser:find-result', { tabId, matches: result.matches, activeMatchOrdinal: result.activeMatchOrdinal, finalUpdate: result.finalUpdate });

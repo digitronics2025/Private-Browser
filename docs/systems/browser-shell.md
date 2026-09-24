@@ -283,7 +283,7 @@ resolves the same table and both paths run one dispatcher in App.tsx.
 | Ctrl+D / Ctrl+Shift+B / Ctrl+Shift+O | bookmark page / toggle bookmarks bar / bookmark manager |
 | Ctrl+H / Ctrl+J | history / downloads panels |
 | Ctrl+F / Ctrl+P | find in page / print |
-| Ctrl+= (+) / Ctrl+- / Ctrl+0 | zoom in / out / reset |
+| Ctrl+= (+) / Ctrl+- / Ctrl+0, Ctrl+wheel | zoom in / out / reset |
 | F11 | full screen |
 | Alt+F, Alt+E / Ctrl+Shift+A | browser menu / tab search |
 | Ctrl+Shift+Delete | delete browsing data (confirmed) |
@@ -297,7 +297,10 @@ auto-repeat.
 **Per-tab controls behind those commands.** `reopenClosedTab` pops a
 memory-only stack (25 per Account Space, never Banking, cleared when the Account
 Space's views close); `zoom` steps through Chrome's zoom levels with
-`setZoomFactor` (Chromium applies zoom per origin within a session);
+`setZoomFactor` (Chromium applies zoom per origin within a session), and a
+page view's `zoom-changed` (Ctrl+wheel, touchpad pinch) takes the same step on
+that view — Electron reports the gesture but never applies it itself, and one
+notch reports twice, so wheel steps are throttled to one per 100 ms per view;
 `findInPage`/`stopFindInPage` forward to Chromium and push `browser:find-result`
 only for the active tab; `setTabMuted` and the snapshot's `audible`/`muted`/
 `zoomPercent` read the live webContents; `moveTab` reorders only within the

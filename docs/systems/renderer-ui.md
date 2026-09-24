@@ -133,7 +133,8 @@ Windows reports through `env(titlebar-area-*)` (fallback 138 px).
 The address bar (`role=search`) shows a site-information button on the left —
 search icon on the New Tab page, warning triangle for `securityWarning`, site
 controls otherwise — then the always-visible security chip, the input, a zoom
-chip when not 100 %, the MyVault key (not in Development) and the bookmark star.
+magnifier when not 100 % (opens `ZoomMenu`: −, +, Reset; it stays while that
+bubble is open so Reset does not pull its anchor away), the MyVault key (not in Development) and the bookmark star.
 `SiteInfoMenu` explains the connection state, Account Space and tracker
 blocking. The profile avatar has an Account Space colour ring and a "!" badge only
 for `reconnect-required`, `partial-scopes` or `account-corrupt`

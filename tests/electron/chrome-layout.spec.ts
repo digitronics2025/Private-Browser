@@ -171,3 +171,35 @@ test('the page view follows the chrome through every layout change', async () =>
     await rm(userData, { recursive: true, force: true }).catch(() => undefined);
   }
 });
+
+test('Ctrl+wheel zooms the page and the magnifier bubble steps and resets it', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'private-browser-zoom-'));
+  const app = await electron.launch({ args: launchArguments(), env: environment(userData) });
+  try {
+    const page = await app.firstWindow();
+    await expect(page.getByRole('heading', { name: 'Private Browser' })).toBeVisible();
+    await page.evaluate((url) => window.privateBrowser.navigate(url), `${origin}/`);
+    await expect(page.getByRole('tab', { name: /Layout fixture/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Zoom: / })).toHaveCount(0);
+
+    // Electron reports Ctrl+wheel as zoom-changed but leaves applying it to the embedder.
+    await app.evaluate(({ BrowserWindow }) => {
+      const view = BrowserWindow.getAllWindows()[0].contentView.children.find((child) => child.getVisible()) as Electron.WebContentsView;
+      view.webContents.sendInputEvent({ type: 'mouseWheel', x: 100, y: 100, deltaX: 0, deltaY: 120, wheelTicksX: 0, wheelTicksY: 1, canScroll: true, modifiers: ['control'] });
+    });
+    const magnifier = page.getByRole('button', { name: 'Zoom: 110%' });
+    await expect(magnifier).toBeVisible();
+
+    await magnifier.click();
+    const bubble = page.getByRole('dialog', { name: 'Page zoom' });
+    await bubble.getByRole('button', { name: 'Zoom in' }).click();
+    await expect(bubble.getByText('Zoom: 125%')).toBeVisible();
+    await bubble.getByRole('button', { name: 'Reset' }).click();
+    await expect(bubble.getByText('Zoom: 100%')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: /^Zoom: / })).toHaveCount(0);
+  } finally {
+    await app.close();
+    await rm(userData, { recursive: true, force: true });
+  }
+});
