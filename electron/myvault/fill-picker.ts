@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { ipcMain, WebContentsView, type BrowserWindow, type WebContents } from 'electron';
 import type { FillContext } from './fill-capability.js';
-import { FillPickerSessions, fillPickerHtml, type FillPickerChoice, type FillPickerRow, type Rect } from './fill-picker-model.js';
+import { FillPickerSessions, fillPickerHtml, isFillPickerChoiceArmed, type FillPickerChoice, type FillPickerRow, type Rect } from './fill-picker-model.js';
 
 const IDLE_TIMEOUT_MS = 10_000;
 
@@ -23,11 +23,15 @@ export class FillPicker {
   private owner?: BrowserWindow;
   private highlighted = -1;
   private idleTimer?: NodeJS.Timeout;
+  /** When the rows were drawn; pointer choices before `FILL_PICKER_ARM_DELAY_MS` after it are ignored. */
+  private visibleSince?: number;
 
   constructor(private readonly parent: () => BrowserWindow | undefined, private readonly handlers: FillPickerHandlers) {
     ipcMain.on('fill-picker:choose', (event, nonce: unknown, index: unknown) => {
       // Anything but the open overlay is ignored outright, so it cannot even close the list.
       if (!this.view || event.sender.id !== this.view.webContents.id) return;
+      // Too early to be a deliberate pick: ignore it and keep the list open (F-34).
+      if (!isFillPickerChoiceArmed(this.visibleSince, Date.now())) return;
       const choice = this.sessions.take(event.sender.id, nonce, index);
       this.close();
       if (choice) this.handlers.choose(choice);
@@ -66,7 +70,10 @@ export class FillPicker {
     view.webContents.on('render-process-gone', closeIfCurrent);
     const returnFocus = () => { if (this.view === view && !page.isDestroyed()) page.focus(); };
     view.webContents.on('focus', returnFocus);
-    view.webContents.once('did-finish-load', returnFocus);
+    view.webContents.once('did-finish-load', () => {
+      if (this.view === view) this.visibleSince = Date.now();
+      returnFocus();
+    });
     this.sessions.open(context, rows.map((row) => row.entryId), view.webContents.id, ipcNonce);
     this.view = view;
     this.highlighted = -1;
@@ -99,6 +106,7 @@ export class FillPicker {
   close(): void {
     this.sessions.clear();
     this.highlighted = -1;
+    this.visibleSince = undefined;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = undefined;
     const view = this.view;

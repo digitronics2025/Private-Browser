@@ -6,7 +6,7 @@ import { FILL_PICKER_MAX_ROWS, orderFillCandidates, selectAutomaticFillEntry } f
 import { workspaceVaultPolicy } from '../electron/myvault/workspace-policy';
 import type { VaultEntryMetadata } from '../electron/myvault/vault-broker';
 import type { FillContext } from '../electron/myvault/fill-capability';
-import { FILL_PICKER_MANAGE_INDEX, FillPickerSessions, fillPickerBounds, fillPickerHeight, fillPickerHtml } from '../electron/myvault/fill-picker-model';
+import { FILL_PICKER_ARM_DELAY_MS, FILL_PICKER_MANAGE_INDEX, FillPickerSessions, fillPickerBounds, fillPickerHeight, fillPickerHtml, isFillPickerChoiceArmed } from '../electron/myvault/fill-picker-model';
 import { parseFocusedLoginField } from '../electron/myvault/isolated-fill';
 import { FILL_PREFERENCE_MAX_SITES, FillPreferenceStore } from '../electron/myvault/fill-preferences';
 
@@ -132,6 +132,24 @@ describe('login picker session', () => {
   });
 });
 
+// F-34: a click already on its way when the list appeared (a double-click a
+// page asked for) must not pick a row.
+describe('login picker click arming', () => {
+  it('ignores pointer choices until the list has been visible long enough to read', () => {
+    expect(isFillPickerChoiceArmed(undefined, 10_000)).toBe(false);
+    expect(isFillPickerChoiceArmed(10_000, 10_000)).toBe(false);
+    expect(isFillPickerChoiceArmed(10_000, 10_000 + FILL_PICKER_ARM_DELAY_MS - 1)).toBe(false);
+    expect(isFillPickerChoiceArmed(10_000, 10_000 + FILL_PICKER_ARM_DELAY_MS)).toBe(true);
+  });
+
+  it('checks arming in main before a choice is taken, not in the overlay page', () => {
+    const source = readFileSync(join(process.cwd(), 'electron/myvault/fill-picker.ts'), 'utf8');
+    const handler = source.slice(source.indexOf("ipcMain.on('fill-picker:choose'"), source.indexOf('get isOpen'));
+    expect(handler.indexOf('isFillPickerChoiceArmed')).toBeGreaterThan(-1);
+    expect(handler.indexOf('isFillPickerChoiceArmed')).toBeLessThan(handler.indexOf('this.sessions.take('));
+  });
+});
+
 describe('login picker placement', () => {
   const page = { x: 0, y: 190, width: 1375, height: 860 };
 
@@ -197,6 +215,13 @@ describe('login picker preload', () => {
     expect(channels.sort()).toEqual(['fill-picker:choose', 'fill-picker:highlight']);
     const code = preload.replace(/\/\/.*$/gm, '');
     expect(code).not.toMatch(/vault:|resolveSecret|password/i);
+  });
+
+  it('arms clicks after the same delay main enforces, without spending the one choice early', () => {
+    const preload = readFileSync(new URL('../electron/myvault/fill-picker-preload.cts', import.meta.url), 'utf8');
+    expect(Number(/ARM_DELAY_MS = (\d+)/.exec(preload)?.[1])).toBe(FILL_PICKER_ARM_DELAY_MS);
+    const choose = preload.slice(preload.indexOf('choose(index'));
+    expect(choose.indexOf('ARM_DELAY_MS')).toBeLessThan(choose.indexOf('used = true'));
   });
 });
 

@@ -77,7 +77,11 @@ async function pickerRows(): Promise<string[] | null> {
   });
 }
 
-async function clickPickerRow(index: number): Promise<void> {
+/** Rows ignore clicks for this long after the list is drawn (F-34); a person reads first. */
+const HUMAN_READ_MS = 700;
+
+async function clickPickerRow(index: number, options: { immediately?: boolean } = {}): Promise<void> {
+  if (!options.immediately) await new Promise((resolve) => setTimeout(resolve, HUMAN_READ_MS));
   await application!.evaluate(({ webContents }, { row, rowHeight, padding }) => {
     const overlay = webContents.getAllWebContents().find((candidate) => !candidate.isDestroyed()
       && candidate.getURL().startsWith('data:text/html') && decodeURIComponent(candidate.getURL()).includes('<title>Saved logins</title>'));
@@ -180,6 +184,12 @@ test('lists every saved login under the field and fills the one chosen, without 
   expect(await pageText(loginUrl)).not.toContain(OTHER_USERNAME);
   // Typing must still land in the field: the overlay never keeps keyboard focus.
   await expect.poll(() => pageHasFocus(loginUrl)).toBe(true);
+
+  // A click that arrives as the list appears (the second half of a double-click
+  // a page asked for) picks nothing and leaves the list open.
+  await clickPickerRow(1, { immediately: true });
+  await expect.poll(pickerRows).toEqual([NEWEST_USERNAME, OTHER_USERNAME]);
+  expect(await readForm(loginUrl)).toMatchObject({ username: NEWEST_USERNAME, password: NEWEST_PASSWORD });
 
   await clickPickerRow(1);
   await expect.poll(() => readForm(loginUrl)).toEqual({ username: OTHER_USERNAME, password: OTHER_PASSWORD, submitted: false });

@@ -81,14 +81,37 @@ export function isAllowedSitePermission(permission: string, requestingUrl: strin
   }
 }
 
+/**
+ * File types the shell opens in a viewer rather than running. The rule is an
+ * allowlist on purpose: Windows keeps adding executable containers (`.msix`,
+ * `.appinstaller`, `.vhdx`, `.url`, `.appref-ms`, `.diagcab`…), and a denylist
+ * is wrong the day a new one ships. Anything not listed is not opened from the
+ * browser unless it is a verified Private Browser release.
+ */
+const INERT_DOWNLOAD_TYPES = new Set([
+  'pdf', 'txt', 'csv', 'tsv', 'json', 'xml', 'md', 'rtf', 'log',
+  'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'heic', 'tif', 'tiff', 'ico',
+  'mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v',
+  'zip', '7z', 'rar', 'tar', 'gz', 'tgz',
+  'epub', 'ics', 'vcf', 'eml',
+]);
+
+/** Extensions an attacker would put before a real one to look like a document. */
+const DISGUISE_TYPES = new Set(['doc', 'docx', 'gif', 'jpeg', 'jpg', 'pdf', 'png', 'ppt', 'pptx', 'txt', 'xls', 'xlsx', 'zip', 'mp4', 'mp3']);
+
+/**
+ * Classify the file that will actually be opened. Pass the saved path's name,
+ * not the name the site suggested — the two can differ.
+ */
 export function downloadRisk(filename: string): 'ordinary' | 'dangerous' | 'deceptive' {
-  const parts = filename.toLowerCase().trim().split('.').filter(Boolean);
-  if (parts.length < 2) return 'ordinary';
-  const dangerous = new Set(['bat', 'chm', 'cmd', 'com', 'cpl', 'exe', 'hta', 'img', 'iso', 'jar', 'js', 'jse', 'lnk', 'msi', 'msp', 'pif', 'ps1', 'reg', 'scr', 'vbs', 'vbe', 'wsf']);
+  // Windows strips trailing dots and spaces, so "setup.exe." is setup.exe.
+  const name = filename.toLowerCase().trim().replace(/[. ]+$/, '');
+  const parts = name.split('.').filter(Boolean);
+  if (parts.length < 2) return 'dangerous';
   const last = parts.at(-1)!;
-  if (!dangerous.has(last)) return 'ordinary';
-  const disguise = new Set(['doc', 'docx', 'gif', 'jpeg', 'jpg', 'pdf', 'png', 'ppt', 'pptx', 'txt', 'xls', 'xlsx', 'zip']);
-  return parts.length >= 3 && disguise.has(parts.at(-2)!) ? 'deceptive' : 'dangerous';
+  if (INERT_DOWNLOAD_TYPES.has(last)) return 'ordinary';
+  return parts.length >= 3 && DISGUISE_TYPES.has(parts.at(-2)!) ? 'deceptive' : 'dangerous';
 }
 
 function isLocalDevelopmentHost(hostname: string): boolean {

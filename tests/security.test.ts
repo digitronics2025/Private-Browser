@@ -67,6 +67,12 @@ describe('navigation security', () => {
     expect(downloadRisk('invoice.pdf.exe')).toBe('deceptive');
     expect(downloadRisk('installer.msi')).toBe('dangerous');
     expect(downloadRisk('report.pdf')).toBe('ordinary');
+    // F-32: types Windows runs or mounts that a denylist missed are never "ordinary".
+    for (const name of ['app.msix', 'update.appinstaller', 'disk.vhdx', 'disk.vhd', 'link.url', 'app.application', 'x.appref-ms', 'x.wsh', 'x.msc', 'x.diagcab', 'x.settingcontent-ms', 'x.library-ms', 'setup.exe.', 'setup.exe ', 'README']) {
+      expect(downloadRisk(name), name).not.toBe('ordinary');
+    }
+    for (const name of ['photo.JPG', 'archive.zip', 'notes.txt', 'sheet.xlsx', 'clip.mp4']) expect(downloadRisk(name), name).toBe('ordinary');
+    expect(downloadRisk('invoice.pdf.msix')).toBe('deceptive');
   });
 
   it('protects banking and payment pages', () => {

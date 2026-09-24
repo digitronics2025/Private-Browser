@@ -18,6 +18,18 @@ const FIELD_GAP = 4;
 /** Row index the overlay sends for "Manage logins…". */
 export const FILL_PICKER_MANAGE_INDEX = -1;
 
+/**
+ * A click that lands this soon after the list is drawn was already on its way
+ * before the user could see the rows — the second press of a double-click a
+ * page asked for. Chrome's autofill popup ignores such clicks for the same reason.
+ */
+export const FILL_PICKER_ARM_DELAY_MS = 500;
+
+/** Whether a pointer choice may be honoured: the list must have been visible long enough to be read. */
+export function isFillPickerChoiceArmed(visibleSince: number | undefined, now: number): boolean {
+  return visibleSince !== undefined && now - visibleSince >= FILL_PICKER_ARM_DELAY_MS;
+}
+
 export interface FillPickerRow {
   entryId: string;
   username: string;

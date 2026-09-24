@@ -100,9 +100,11 @@ identifiers are removed from navigations, DNT and Global Privacy Control headers
 are sent, common tracker hosts are blocked, and cleartext or punycode domains are
 visibly marked in the address bar.
 
-Executable, script and deceptive double-extension downloads are labelled and
-cannot be opened from Private Browser unless they match the checksum of the
-release manifest. This does not replace operating-system malware scanning.
+Private Browser opens only documents, images, media and archives. Every other
+download type — executables, scripts, installers such as `.msix`, disk images,
+shortcuts — and every deceptive double extension is labelled and cannot be
+opened from Private Browser unless it matches the checksum of the release
+manifest. This does not replace operating-system malware scanning.
 
 ## Developer tools
 

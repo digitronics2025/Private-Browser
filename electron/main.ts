@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   app,
@@ -133,6 +133,22 @@ const ZOOM_PERCENTS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200,
 const MAX_CLOSED_TABS = 25;
 
 const AUTOMATIC_FILL_RETRY_DELAYS_MS = [0, 300, 1_000, 2_500] as const;
+/** At most this many popups per page view in any rolling window. */
+const MAX_POPUPS_PER_WINDOW = 5;
+const POPUP_WINDOW_MS = 10_000;
+
+/**
+ * The origin a passkey opt-in is keyed by, or a placeholder that matches no
+ * opt-in. Never throws: `normalizedWebOrigin` refuses punycode hosts, and a
+ * throw during view creation used to leave the view without its guards.
+ */
+function passkeyOriginFor(url: string): string {
+  try {
+    return url === 'private://home' ? 'https://invalid.local' : normalizedWebOrigin(url);
+  } catch {
+    return 'https://invalid.local';
+  }
+}
 
 function safeOrigin(value: string): string {
   try { return new URL(value).origin; } catch { return ''; }
@@ -463,6 +479,33 @@ class BrowserController {
     view.setVisible(true);
     this.applyLayout();
     await view.webContents.loadURL(url);
+    this.broadcast();
+  }
+
+  /**
+   * Adds a tab behind the current one without changing what the user sees: no
+   * workspace, Account Space or tab switch. Its page loads when it is first shown.
+   */
+  private addBackgroundTab(workspaceId: WorkspaceId, url: string, accountSpaceId: AccountSpaceId): void {
+    const state = this.store.get();
+    if (!isAllowedRemoteUrl(url) || !state.accountSpaces.some((account) => account.id === accountSpaceId && account.workspaceId === workspaceId)) return;
+    const id = randomUUID();
+    this.store.update((next) => {
+      next.tabs.push({
+        id,
+        accountSpaceId,
+        workspaceId,
+        title: new URL(url).hostname,
+        url,
+        isHome: false,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        developerToolsAllowed: false,
+        developerToolsOpen: false,
+      });
+    });
+    this.runtimeTabs.set(id, this.newRuntimeTab());
     this.broadcast();
   }
 
@@ -1055,9 +1098,14 @@ class BrowserController {
     const view = this.runtimeTabs.get(tab.id)?.view;
     const workspace = WORKSPACES.find((item) => item.id === tab.workspaceId);
     if (tab.isHome || !view || !view.getVisible() || workspace?.protected || isProtectedPage(tab.url)) return null;
+    // The stored URL changes before a navigation commits, so also judge what the
+    // view is actually painting, and refuse while a main-frame load is in flight.
+    const painted = () => view.webContents.getURL();
+    if (view.webContents.isLoadingMainFrame() || isProtectedPage(painted())) return null;
+    const before = painted();
     try {
       const image = await view.webContents.capturePage();
-      if (image.isEmpty()) return null;
+      if (image.isEmpty() || painted() !== before || isProtectedPage(painted())) return null;
       return `data:image/jpeg;base64,${image.toJPEG(82).toString('base64')}`;
     } catch {
       return null;
@@ -2070,8 +2118,9 @@ class BrowserController {
     // A file whose checksum did not match the manifest is the one case where the
     // app knows something is wrong; opening it anyway would waste the check.
     if (item.checksum === 'mismatch') throw new Error('This download does not match the published checksum and will not be opened. Delete it and download again.');
-    if (item.risk !== 'ordinary' && item.checksum !== 'verified') {
-      throw new Error('Private Browser will not open executable or deceptive downloads unless they match a verified Private Browser release. Review the file in its folder and scan it first.');
+    // Judge the file that will be opened, not the name the site suggested.
+    if (downloadRisk(basename(item.savePath)) !== 'ordinary' && item.checksum !== 'verified') {
+      throw new Error('Private Browser only opens documents, images, media and archives. Other file types can run code: review this one in its folder and scan it first.');
     }
     void shell.openPath(item.savePath);
   }
@@ -2240,8 +2289,14 @@ class BrowserController {
     if (target.runtime.network.length > 100) target.runtime.network.splice(0, target.runtime.network.length - 100);
   }
 
+  /**
+   * The page the user is looking at. A New Tab page keeps the previous page's
+   * view alive but hidden; nothing — navigation, find, extraction, fill — may
+   * act on that hidden page while Home is showing (F-48).
+   */
   private activeContents() {
     const tab = this.activeTab(this.store.get());
+    if (tab.isHome) return undefined;
     return this.runtimeTabs.get(tab.id)?.view?.webContents;
   }
 
@@ -2268,15 +2323,29 @@ class BrowserController {
     });
     runtime.view = view;
     this.window.contentView.addChildView(view);
-    if (canInstallPasskeyProvider(tab.workspaceId, normalizedWebOrigin(tab.url === 'private://home' ? 'https://invalid.local' : tab.url), this.passkeyOptIns, false)) {
-      void this.passkeyController.installAtDocumentStart(view.webContents).catch(() => this.passkeyController.detach(view.webContents));
-    }
+    // Every guard is attached before anything below that could throw: a view
+    // that exists without them would run a hostile page with no popup,
+    // navigation or tab-tracking control for its whole life (F-28).
+    const popupTimes: number[] = [];
     view.webContents.setWindowOpenHandler(({ url }) => {
       if (tab.workspaceId === 'banking') {
         this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
-      } else if (isAllowedRemoteUrl(url)) {
-        void this.newTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
+        return { action: 'deny' };
       }
+      if (!isAllowedRemoteUrl(url)) return { action: 'deny' };
+      const now = Date.now();
+      while (popupTimes.length && now - popupTimes[0]! > POPUP_WINDOW_MS) popupTimes.shift();
+      if (popupTimes.length >= MAX_POPUPS_PER_WINDOW) {
+        this.addPrivacyEvent('blocked', 'Popups blocked', `${urlOriginForSharing(url)} opened too many windows`);
+        return { action: 'deny' };
+      }
+      popupTimes.push(now);
+      // Only the page the user is looking at may take the foreground; a hidden
+      // or background tab's popup is added behind the current one (F-31).
+      const opener = this.activeTab(this.store.get());
+      const inForeground = opener.id === tabId && view.getVisible() && !this.window.isDestroyed() && this.window.isFocused();
+      if (inForeground) void this.newTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
+      else this.addBackgroundTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
       return { action: 'deny' };
     });
     view.webContents.on('will-navigate', (event, url) => {
@@ -2383,6 +2452,9 @@ class BrowserController {
       this.window.setFullScreen(false);
     });
     view.webContents.on('render-process-gone', () => this.updateRuntime(tabId, { loading: false }));
+    if (canInstallPasskeyProvider(tab.workspaceId, passkeyOriginFor(tab.url), this.passkeyOptIns, false)) {
+      void this.passkeyController.installAtDocumentStart(view.webContents).catch(() => this.passkeyController.detach(view.webContents));
+    }
     return view;
   }
 
@@ -2536,6 +2608,7 @@ class BrowserController {
       item.once('done', (_downloadEvent, state) => {
         this.downloadItems.delete(id);
         Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath() });
+        if (entry.savePath) entry.risk = downloadRisk(basename(entry.savePath));
         this.broadcast();
         if (state !== 'completed') return;
         void verifyDownload(entry.savePath ?? '', entry.filename, this.expectedInstaller).then((checksum) => {

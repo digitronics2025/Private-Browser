@@ -57,6 +57,20 @@ test('address bar keeps security warnings visible and Ctrl+L focuses it', async 
   noErrors();
 });
 
+// F-35: a page changing its own URL must not overwrite what the user is typing.
+test('a page URL change does not replace an address the user is typing', async ({ page }) => {
+  const noErrors = watchErrors(page);
+  await page.goto('/');
+  const address = page.getByRole('textbox', { name: 'Address and search bar' });
+  await page.getByRole('tab', { name: /Legacy intranet dashboard/ }).click();
+  await address.click();
+  await address.fill('mybank.example');
+  await page.evaluate(() => window.privateBrowser.navigate('https://page-chosen.example/'));
+  await expect.poll(async () => (await page.evaluate(() => window.privateBrowser.getState())).tabs.some((tab) => tab.url.startsWith('https://page-chosen.example'))).toBe(true);
+  await expect(address).toHaveValue('mybank.example');
+  noErrors();
+});
+
 test('browser menu is keyboard navigable, closes cleanly and lists only working actions', async ({ page }) => {
   const noErrors = watchErrors(page);
   await page.goto('/');

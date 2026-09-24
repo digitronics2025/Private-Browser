@@ -114,9 +114,24 @@ export default function App() {
     });
   }, [state?.ui]);
 
+  // A page can change its own URL at any time (pushState, redirects). While the
+  // user is editing the address, that must not replace what they typed — the
+  // text they are about to navigate to is theirs. Switching tabs always resyncs.
+  const addressEdited = useRef(false);
+  const addressTabId = useRef<string>();
   useEffect(() => {
-    if (activeTab) setAddress(activeTab.isHome ? '' : activeTab.url);
+    if (!activeTab) return;
+    const tabChanged = addressTabId.current !== activeTab.id;
+    addressTabId.current = activeTab.id;
+    if (!tabChanged && addressEdited.current) return;
+    addressEdited.current = false;
+    setAddress(activeTab.isHome ? '' : activeTab.url);
   }, [activeTab?.id, activeTab?.url, activeTab?.isHome]);
+
+  const editAddress = (value: string) => {
+    addressEdited.current = true;
+    setAddress(value);
+  };
 
   useEffect(() => {
     setFindOpen(false);
@@ -307,6 +322,7 @@ export default function App() {
 
   const submitAddress = (event: FormEvent) => {
     event.preventDefault();
+    addressEdited.current = false;
     void act(() => window.privateBrowser.navigate(address));
     addressRef.current?.blur();
   };
@@ -413,7 +429,7 @@ export default function App() {
               zoomButtonRef={zoomButtonRef}
               profileOpen={menu === 'profile'}
               menuOpen={menu === 'browser'}
-              onAddressChange={setAddress}
+              onAddressChange={editAddress}
               onSubmit={submitAddress}
               onBack={() => void act(() => window.privateBrowser.back())}
               onForward={() => void act(() => window.privateBrowser.forward())}

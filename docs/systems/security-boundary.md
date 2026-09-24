@@ -106,8 +106,10 @@ navigations, redirects and stored URLs. `navigationWarning` marks public
 cleartext HTTP and punycode (`xn--`) hosts; localhost and loopback HTTP remain
 usable. `isAllowedSitePermission` permits only top-frame fullscreen and sanitized
 clipboard writes from trustworthy origins, and denies every permission in
-Banking. `downloadRisk` detects executable/script extensions and deceptive names
-such as `invoice.pdf.exe` so the shell can refuse to open them.
+Banking. `downloadRisk` is an allowlist of inert types (documents, images,
+media, archives): anything else is `dangerous`, and a disguise extension such as
+`invoice.pdf.exe` is `deceptive`, so the shell refuses to open them. Trailing
+dots and spaces are stripped first, as Windows does.
 
 ## normalizeNavigationInput
 

@@ -155,8 +155,10 @@ runtime state survives a restart.
 `getSnapshot()` merges the two halves for the wire.
 
 **Views are lazy.** `ensureView(tabId)` builds the `WebContentsView` on first
-navigate or first show. A tab still on `private://home` has no view at all, which
-is why back, forward, reload and stop silently do nothing there.
+navigate or first show. A tab still on `private://home` either has no view or
+keeps its previous page's view hidden; `activeContents()` returns nothing for a
+Home tab, so back, forward, reload, stop, find, AI extraction and fill never act
+on that hidden page.
 
 `ensureView` also wires every per-view listener: the window-open handler, the
 `will-navigate` guard, `did-start-loading` / `did-stop-loading`, `did-navigate`,
@@ -289,7 +291,9 @@ so any menu, dialog or resize drag that overlaps the page first calls
 unlike `hideAllViews` for tab switches — leaves docked DevTools attached. Home tabs, hidden
 views, protected workspaces (Banking) and `isProtectedPage` URLs return `null`
 and get a plain backdrop instead — protected pixels never enter the chrome
-renderer. Nothing is written to disk and the image is dropped when the overlay
+renderer. The check covers both the stored tab URL and the URL the view is
+painting, refuses while a main-frame load is in flight, and discards the capture
+if the painted URL changed during it. Nothing is written to disk and the image is dropped when the overlay
 closes.
 
 ## Keyboard Shortcuts
@@ -405,8 +409,11 @@ becomes a `DownloadEntry` in an in-memory `Map` keyed by a fresh `randomUUID()`:
   progress.
 - Nothing calls `item.setSavePath()`, so Electron's own save behaviour applies.
 - Banking-workspace downloads are cancelled before a file is written.
-- `downloadRisk` marks executable/script extensions and deceptive double
-  extensions. `openDownload(id)` requires state `completed` **and** a `savePath`,
+- `downloadRisk` is an allowlist: only documents, images, media and archives are
+  `ordinary`; every other type (including `.msix`, `.vhdx`, `.url`,
+  extensionless names) is `dangerous`, and a disguise extension before it is
+  `deceptive`. Risk is re-judged from the saved path's name when the download
+  completes. `openDownload(id)` requires state `completed` **and** a `savePath`,
   and refuses a risky file unless it is the checksum-verified app installer;
   `showDownload(id)` only requires a `savePath`.
 - The map is never persisted and never pruned.
@@ -522,11 +529,18 @@ What it configures, once per partition:
 Three guards keep a view on http and https:
 
 1. Per-view `setWindowOpenHandler(({ url }) => ...)` — outside Banking, an
-   allowed URL becomes a sanitized `newTab(tab.workspaceId, url)` and the handler **always** returns
+   allowed URL becomes a sanitized tab and the handler **always** returns
    `{ action: 'deny' }`. `window.open` and `target="_blank"` become tabs in the
-   same workspace, never real windows and never a cross-workspace leak. The
+   same workspace, never real windows and never a cross-workspace leak. Only the
+   visible active tab of a focused window may open a foreground tab
+   (`newTab`); any other opener gets `addBackgroundTab`, which changes no
+   active workspace, Account Space or tab. Each view may open at most 5 popups
+   per 10 s; more are refused with a "Popups blocked" privacy event. The
    workspace id is captured in the closure when the view is built. Banking
-   denies the popup completely.
+   denies the popup completely. Every guard is attached before anything in
+   `ensureView` that could throw; the passkey-provider check runs last and
+   cannot throw (`passkeyOriginFor`), so an `xn--` first address still gets
+   every guard.
 2. Per-view `will-navigate` and `will-redirect` call `event.preventDefault()` on anything that fails
    `isAllowedRemoteUrl`, so a page cannot walk its own view to `file:`, `data:` or
    a custom scheme. They reload URLs after removing tracking parameters.

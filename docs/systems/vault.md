@@ -72,7 +72,9 @@ memory wiping.
    keyboard focus (arrows, Enter and Escape are read in `before-input-event`).
    Navigation, a tab, workspace or layout change, lock, window blur, a click
    elsewhere or 10 s idle all close it, and a choice made after the context moved
-   on fills nothing.
+   on fills nothing. A pointer choice in the first 500 ms after the rows are
+   drawn is ignored, in main and in the overlay (which keeps its one choice), so
+   a page cannot turn a double-click into a pick.
 7. Clipboard writes go broker-to-OS. Only a digest survives for unchanged-value
    clearing; lock and quit flush pending secret content.
 8. Page inspection exposes shape only. Explicit Save/Update reads minimum login
