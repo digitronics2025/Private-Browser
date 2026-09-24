@@ -34,8 +34,10 @@ describe('download verification', () => {
 
   it('rejects a file whose bytes were swapped after publication', async () => {
     const { expected } = installer('c.exe', 'the real installer');
-    const tampered = installer('c.exe', 'a different installer entirely');
+    // Same length, so only the hash comparison can catch it (F-53).
+    const tampered = installer('c.exe', 'the fake installer');
     // Same name and same expected checksum, different content.
+    expect(tampered.expected.sizeBytes).toBe(expected.sizeBytes);
     expect(await verifyDownload(tampered.path, 'c.exe', expected)).toBe('mismatch');
   });
 

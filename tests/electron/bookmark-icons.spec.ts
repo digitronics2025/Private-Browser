@@ -48,11 +48,9 @@ test('a bookmark keeps the icon of a site after its tab closes and across a rest
   let page = await application!.firstWindow();
   const state = await page.evaluate(() => window.privateBrowser.getState());
   await page.evaluate(
-    // The first load can be superseded and report ERR_ABORTED; the tab still opens.
-    ({ accountSpaceId, target }) => window.privateBrowser.openInAccountSpace(accountSpaceId, target)
-      .catch((error) => {
-        if (!(error instanceof Error) || !error.message.includes('ERR_ABORTED')) throw error;
-      }),
+    // No ERR_ABORTED allowance: the double-load race that produced it was fixed
+    // (3c60646), so seeing it again is a regression, not noise.
+    ({ accountSpaceId, target }) => window.privateBrowser.openInAccountSpace(accountSpaceId, target),
     { accountSpaceId: state.activeAccountSpaceId, target: `${origin}/` },
   );
   await expect.poll(async () => (await page.evaluate(() => window.privateBrowser.getState())).tabs.find((tab) => tab.url.startsWith(origin))?.favicon).toMatch(/^data:image\/png;base64,/);

@@ -28,6 +28,22 @@ async function readForm(target: string): Promise<{ username: string; password: s
   }, target);
 }
 
+/**
+ * Automatic fill retries at 0, 300, 1000 and 2500 ms after the page loads.
+ * "Nothing was filled" is only proven once the form exists and the last retry
+ * has had time to run — an empty read before that proves nothing (F-44).
+ */
+const AUTOMATIC_FILL_SETTLED_MS = 3_000;
+
+async function settledForm(target: string): Promise<{ username: string; password: string; submitted?: boolean }> {
+  await expect.poll(() => application!.evaluate(async ({ webContents }, value) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === value);
+    return contents ? contents.executeJavaScript(`Boolean(document.querySelector('input[type="password"]'))`) as Promise<boolean> : false;
+  }, target)).toBe(true);
+  await new Promise((resolve) => setTimeout(resolve, AUTOMATIC_FILL_SETTLED_MS));
+  return readForm(target);
+}
+
 test.beforeEach(async () => {
   userDataPath = mkdtempSync(join(tmpdir(), 'private-browser-autofill-'));
   const keyPath = join(userDataPath, 'fixture-key.pem');
@@ -123,7 +139,7 @@ test('automatically fills only safe empty HTTPS login forms without submitting',
 
   const occupiedUrl = `${targetOrigin}/occupied`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), occupiedUrl);
-  await expect.poll(() => readForm(occupiedUrl)).toMatchObject({ username: 'typed-user', password: 'typed-password' });
+  expect(await settledForm(occupiedUrl)).toMatchObject({ username: 'typed-user', password: 'typed-password' });
 
   const rememberedEmailUrl = `${targetOrigin}/remembered-email`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), rememberedEmailUrl);
@@ -131,9 +147,14 @@ test('automatically fills only safe empty HTTPS login forms without submitting',
 
   const signupUrl = `${targetOrigin}/sign-up`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), signupUrl);
-  await expect.poll(() => readForm(signupUrl)).toMatchObject({ username: '', password: '' });
+  expect(await settledForm(signupUrl)).toMatchObject({ username: '', password: '' });
+
+  // The new-password form itself is refused, not only its /sign-up address.
+  const changePasswordUrl = `${targetOrigin}/account/security`;
+  await page.evaluate((target) => window.privateBrowser.navigate(target), changePasswordUrl);
+  expect(await settledForm(changePasswordUrl)).toMatchObject({ username: '', password: '' });
 
   await page.evaluate(() => window.privateBrowser.switchWorkspace('development'));
   await page.evaluate((target) => window.privateBrowser.navigate(target), loginUrl);
-  await expect.poll(() => readForm(loginUrl)).toMatchObject({ username: '', password: '' });
+  expect(await settledForm(loginUrl)).toMatchObject({ username: '', password: '' });
 });

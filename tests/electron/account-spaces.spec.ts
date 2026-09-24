@@ -51,10 +51,9 @@ test('keeps the default embedded-browser identity stable across the session', as
   const page = await application!.firstWindow();
   const state = await page.evaluate(() => window.privateBrowser.getState());
   await page.evaluate(
-    ({ accountSpaceId, target }) => window.privateBrowser.openInAccountSpace(accountSpaceId, target)
-      .catch((error) => {
-        if (!(error instanceof Error) || !error.message.includes('ERR_ABORTED')) throw error;
-      }),
+    // No ERR_ABORTED allowance: the double-load race that produced it was fixed
+    // (3c60646), so seeing it again is a regression, not noise.
+    ({ accountSpaceId, target }) => window.privateBrowser.openInAccountSpace(accountSpaceId, target),
     { accountSpaceId: state.activeAccountSpaceId, target: origin },
   );
   await expect.poll(() => documentHeaders?.['user-agent']).toContain('Chrome/');

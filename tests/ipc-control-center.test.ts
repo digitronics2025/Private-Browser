@@ -63,7 +63,7 @@ describe('Control Center IPC contract', () => {
     expect(developerEvidence({ text: 'x'.repeat(40_000) })).toHaveLength(30_000);
   });
 
-  it('spends the approval before any other check, and only for the Development workspace', () => {
+  it('checks the workspace first, then spends the approval before anything else', () => {
     const main = read('electron/main.ts').replace(/\r\n/g, '\n');
     const body = (name: string) => {
       const start = main.indexOf(`  async ${name}(`);
@@ -77,6 +77,9 @@ describe('Control Center IPC contract', () => {
       expect(code).not.toMatch(/executeJavaScript|capturePage|captureDeveloperDiagnostics/); // never re-reads the page
     }
     const consume = main.slice(main.indexOf('  private consumeDeveloperApproval('), main.indexOf('  private pageOrigin('));
+    // indexOf is -1 when a call is missing, which is "less than" anything: assert presence first (F-54).
+    expect(consume.indexOf('this.consumeAiApproval(token)')).toBeGreaterThanOrEqual(0);
+    expect(consume.indexOf('this.developerPreviewIds.delete')).toBeGreaterThanOrEqual(0);
     expect(consume.indexOf('this.consumeAiApproval(token)')).toBeLessThan(consume.indexOf('this.developerPreviewIds.delete'));
   });
 });

@@ -9,7 +9,7 @@
 // TypeScript build free of an untyped .mjs import.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -41,7 +41,10 @@ describe('secret-guard blocks credentials', () => {
     ['a hard-coded password', 'f.ts', "const password = 'Tr0ub4dor&3xK';"],
     ['a hard-coded api key', 'g.ts', "apiKey: 'c9f2a7e41b8d6503fe27a9c4b1d80e6f'"],
   ])('refuses %s', (_label, name, body) => {
-    expect(scan(name, body)).not.toBe('');
+    // A crash also exits non-zero; only a real finding names the file and says so.
+    const report = scan(name, body);
+    expect(report).toContain('possible credential');
+    expect(report).toContain(name);
   });
 
   it('refuses a credential file by its name alone, whatever it holds', () => {
@@ -119,5 +122,61 @@ describe('the repository itself', () => {
       output = String(e.stderr || e.stdout || err);
     }
     expect(failed ? output : '', output).toBe('');
+  });
+});
+
+// F-77: the commit hook mode had no test, and git's default path quoting hid
+// files with non-ASCII names from both modes.
+describe('secret-guard against a real git index', () => {
+  const guard = join(process.cwd(), 'scripts', 'secret-guard.mjs');
+
+  function repository(): string {
+    const root = mkdtempSync(join(tmpdir(), 'secret-guard-repo-'));
+    const run = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+    run('init', '-q');
+    run('config', 'user.email', 'guard@example.test');
+    run('config', 'user.name', 'Guard test');
+    run('config', 'core.quotePath', 'true');
+    return root;
+  }
+
+  function guardReport(root: string, mode: 'hook' | 'tracked'): { status: number; output: string } {
+    try {
+      const output = execFileSync('node', [guard, mode], { cwd: root, encoding: 'utf8', stdio: 'pipe' });
+      return { status: 0, output };
+    } catch (error) {
+      const failure = error as { status?: number; stderr?: string };
+      return { status: failure.status ?? -1, output: String(failure.stderr ?? '') };
+    }
+  }
+
+  it('blocks a staged secret, including one in a file whose name git would quote', () => {
+    const root = repository();
+    writeFileSync(join(root, 'plain.ts'), 'const password = "Tr0ub4dor&3xK";\n');
+    writeFileSync(join(root, 'café.ts'), 'const apiKey = "c9f2a7e41b8d6503fe27a9c4b1d80e6f";\n');
+    execFileSync('git', ['add', '.'], { cwd: root });
+    const result = guardReport(root, 'hook');
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('plain.ts:1');
+    expect(result.output).toContain('café.ts:1');
+  });
+
+  it('finds a tracked credential file whose name git would quote', () => {
+    const root = repository();
+    mkdirSync(join(root, 'réglages'));
+    writeFileSync(join(root, 'réglages', '.env'), 'nothing incriminating here\n');
+    execFileSync('git', ['add', '.'], { cwd: root });
+    execFileSync('git', ['commit', '-q', '-m', 'fixture'], { cwd: root });
+    const result = guardReport(root, 'tracked');
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('réglages/.env');
+    expect(result.output).toContain('credential file');
+  });
+
+  it('passes a clean staged change without crashing', () => {
+    const root = repository();
+    writeFileSync(join(root, 'ordinary.ts'), 'export const token = randomUUID();\n');
+    execFileSync('git', ['add', '.'], { cwd: root });
+    expect(guardReport(root, 'hook')).toMatchObject({ status: 0 });
   });
 });

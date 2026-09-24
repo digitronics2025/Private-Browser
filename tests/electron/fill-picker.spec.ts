@@ -80,6 +80,22 @@ async function pickerRows(): Promise<string[] | null> {
 /** Rows ignore clicks for this long after the list is drawn (F-34); a person reads first. */
 const HUMAN_READ_MS = 700;
 
+/**
+ * Automatic fill retries at 0, 300, 1000 and 2500 ms after the page loads.
+ * "Nothing was filled" is only proven once the form exists and the last retry
+ * has had time to run — an empty read before that proves nothing (F-44).
+ */
+const AUTOMATIC_FILL_SETTLED_MS = 3_000;
+
+async function settledForm(target: string): Promise<{ username: string; password: string; submitted?: boolean }> {
+  await expect.poll(() => application!.evaluate(async ({ webContents }, value) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === value);
+    return contents ? contents.executeJavaScript(`Boolean(document.querySelector('input[type="password"]'))`) as Promise<boolean> : false;
+  }, target)).toBe(true);
+  await new Promise((resolve) => setTimeout(resolve, AUTOMATIC_FILL_SETTLED_MS));
+  return readForm(target);
+}
+
 async function clickPickerRow(index: number, options: { immediately?: boolean } = {}): Promise<void> {
   if (!options.immediately) await new Promise((resolve) => setTimeout(resolve, HUMAN_READ_MS));
   await application!.evaluate(({ webContents }, { row, rowHeight, padding }) => {
@@ -239,15 +255,23 @@ test('never opens on a new-password form or in Banking', async () => {
   await unlock(page);
   const signupUrl = `${targetOrigin}/sign-up`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), signupUrl);
-  await expect.poll(() => readForm(signupUrl)).toMatchObject({ username: '', password: '' });
+  expect(await settledForm(signupUrl)).toMatchObject({ username: '', password: '' });
   await clickField(signupUrl, 'input[type="email"]');
+  await page.waitForTimeout(500);
+  expect(await pickerRows()).toBeNull();
+
+  // The new-password form itself is refused, not only its /sign-up address.
+  const changePasswordUrl = `${targetOrigin}/account/security`;
+  await page.evaluate((target) => window.privateBrowser.navigate(target), changePasswordUrl);
+  expect(await settledForm(changePasswordUrl)).toMatchObject({ username: '', password: '' });
+  await clickField(changePasswordUrl, 'input[type="email"]');
   await page.waitForTimeout(500);
   expect(await pickerRows()).toBeNull();
 
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   const loginUrl = `${targetOrigin}/login`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), loginUrl);
-  await expect.poll(() => readForm(loginUrl)).toMatchObject({ username: '', password: '' });
+  expect(await settledForm(loginUrl)).toMatchObject({ username: '', password: '' });
   await clickField(loginUrl, 'input[type="email"]');
   await page.waitForTimeout(500);
   expect(await pickerRows()).toBeNull();
@@ -307,8 +331,7 @@ test('offers logins saved for another address of the same site, but only on requ
   const siblingUrl = `${siblingOrigin}/login`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), siblingUrl);
   // Automatic fill stays exact-origin: nothing is filled on www. by itself.
-  await page.waitForTimeout(1500);
-  expect(await readForm(siblingUrl)).toMatchObject({ username: '', password: '' });
+  expect(await settledForm(siblingUrl)).toMatchObject({ username: '', password: '' });
 
   await clickField(siblingUrl, 'input[type="email"]');
   await expect.poll(pickerRows).toEqual([NEWEST_USERNAME, OTHER_USERNAME]);
@@ -343,7 +366,7 @@ test('remembers the login picked on a site after a restart, on every address of 
 
   const siblingUrl = `${siblingOrigin}/login`;
   await restarted.evaluate((target) => window.privateBrowser.navigate(target), siblingUrl);
-  await expect.poll(() => readForm(siblingUrl)).toMatchObject({ username: '' });
+  expect(await settledForm(siblingUrl)).toMatchObject({ username: '' });
   await clickField(siblingUrl, 'input[type="email"]');
   await expect.poll(pickerRows).toEqual([OTHER_USERNAME, NEWEST_USERNAME]);
 });

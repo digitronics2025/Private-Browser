@@ -137,15 +137,45 @@ function checkPath(path) {
   return FORBIDDEN_PATHS.some((re) => re.test(normalised)) ? 'credential file' : null;
 }
 
+/**
+ * git C-quotes any path with a non-ASCII or special character by default
+ * (an accented name comes back as octal escapes inside quotes), which used to
+ * hide such files from both modes (F-77). Paths are read NUL-separated with
+ * quoting off, and quoted diff headers are decoded.
+ */
 function git(args) {
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return execFileSync('git', ['-c', 'core.quotePath=false', ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+}
+
+function gitPaths(args) {
+  return git([...args, '-z']).split('\0').filter(Boolean);
+}
+
+const C_ESCAPES = { n: 10, t: 9, r: 13, '"': 34, '\\': 92 };
+
+/** A `+++` header path; git still C-quotes it when it holds a quote, backslash or control character. */
+function diffHeaderPath(value) {
+  let decoded = value;
+  if (value.startsWith('"')) {
+    const inner = value.slice(1, value.lastIndexOf('"'));
+    const bytes = [];
+    for (let index = 0; index < inner.length; index += 1) {
+      const character = inner[index];
+      if (character !== '\\') { bytes.push(...Buffer.from(character, 'utf8')); continue; }
+      const next = inner[index + 1] ?? '';
+      if (/[0-7]/.test(next)) { bytes.push(parseInt(inner.slice(index + 1, index + 4), 8)); index += 3; continue; }
+      bytes.push(C_ESCAPES[next] ?? next.charCodeAt(0));
+      index += 1;
+    }
+    decoded = Buffer.from(bytes).toString('utf8');
+  }
+  return decoded.startsWith('b/') ? decoded.slice(2) : decoded;
 }
 
 /** Staged additions only: every `+` line in the cached diff, plus forbidden paths. */
 export function stagedFindings() {
   const findings = [];
-  for (const path of git(['diff', '--cached', '--name-only', '--diff-filter=ACMR']).split('\n')) {
-    if (!path) continue;
+  for (const path of gitPaths(['diff', '--cached', '--name-only', '--diff-filter=ACMR'])) {
     const reason = checkPath(path);
     if (reason) findings.push({ path, line: null, reason });
   }
@@ -153,8 +183,8 @@ export function stagedFindings() {
   let path = null;
   let lineNo = 0;
   for (const raw of diff.split('\n')) {
-    if (raw.startsWith('+++ b/')) {
-      path = raw.slice(6);
+    if (raw.startsWith('+++ ')) {
+      path = raw === '+++ /dev/null' ? null : diffHeaderPath(raw.slice(4));
       continue;
     }
     if (raw.startsWith('@@')) {
@@ -175,8 +205,7 @@ export function stagedFindings() {
 /** Every tracked file, so a secret cannot survive by never being re-staged. */
 export function trackedFindings() {
   const findings = [];
-  for (const path of git(['ls-files']).split('\n')) {
-    if (!path) continue;
+  for (const path of gitPaths(['ls-files'])) {
     const reason = checkPath(path);
     if (reason) findings.push({ path, line: null, reason });
     if (SELF_EXEMPT.has(path)) continue;

@@ -104,3 +104,35 @@ test('locking the active Account Space closes its page and it stays closed', asy
   expect(state.activeAccountSpaceId).not.toBe(locked);
   await expect.poll(hasView).toBe(false);
 });
+
+// F-54: the partition-isolation spec builds its own sessions; this one checks
+// the sessions the app itself gives two Account Spaces' page views.
+test("two Account Spaces' own page views do not share cookies or storage", async () => {
+  const page = await application!.firstWindow();
+  const origin = `http://127.0.0.1:${port}`;
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  await page.evaluate((target) => window.privateBrowser.navigate(target), `${origin}/first-account`);
+  const contentsFor = (url: string) => application!.evaluate(async ({ webContents }, value) => {
+    const contents = webContents.getAllWebContents().find((candidate) => !candidate.isDestroyed() && candidate.getURL() === value);
+    return contents ? { storage: contents.session.getStoragePath(), id: contents.id } : null;
+  }, url);
+  await expect.poll(() => contentsFor(`${origin}/first-account`)).not.toBeNull();
+  await application!.evaluate(async ({ webContents }, value) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === value)!;
+    await contents.executeJavaScript(`document.cookie = 'space=first; path=/'; localStorage.setItem('space', 'first'); true`);
+  }, `${origin}/first-account`);
+
+  await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Second', 'emerald'));
+  await page.evaluate((target) => window.privateBrowser.navigate(target), `${origin}/second-account`);
+  await expect.poll(() => contentsFor(`${origin}/second-account`)).not.toBeNull();
+
+  const first = (await contentsFor(`${origin}/first-account`))!;
+  const second = (await contentsFor(`${origin}/second-account`))!;
+  expect(first.storage).toBeTruthy();
+  expect(second.storage).not.toBe(first.storage);
+  const seen = await application!.evaluate(async ({ webContents }, value) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === value)!;
+    return contents.executeJavaScript(`({ cookie: document.cookie, stored: localStorage.getItem('space') })`) as Promise<{ cookie: string; stored: string | null }>;
+  }, `${origin}/second-account`);
+  expect(seen).toEqual({ cookie: '', stored: null });
+});

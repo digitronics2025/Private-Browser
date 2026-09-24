@@ -14,5 +14,9 @@ envelope reader. They are pinned to MyVault commit `ccb64aba4a58ff7af2d4b7229fc2
 
 `security/vectors.json` preserves the source JSON values unchanged from that commit. The browser's
 compatibility suite runs every vector, including the production 64 MiB KDF case.
+Its `$comment` names the source repository's files (`src/security/vectors.test.ts`,
+`scripts/make-crypto-vectors.mjs`); neither exists here. The reader in this repo is
+`tests/myvault-compatibility.test.ts`. The comment is left as copied, because the
+file is pinned byte for byte.
 Do not regenerate the vectors to make a test pass; update all readers through a
 coordinated protocol change instead.

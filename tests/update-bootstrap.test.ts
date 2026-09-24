@@ -6,8 +6,9 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({
   safeStorage: {
     isEncryptionAvailable: () => true,
-    encryptString: (value: string) => Buffer.from(value, 'utf8'),
-    decryptString: (value: Buffer) => value.toString('utf8'),
+    // Not identity: a store that skipped encryption must fail the tests (F-54).
+    encryptString: (value: string) => Buffer.from(Buffer.from(value, 'utf8').map((byte) => byte ^ 0x3c)),
+    decryptString: (value: Buffer) => Buffer.from(value.map((byte) => byte ^ 0x3c)).toString('utf8'),
   },
 }));
 
@@ -34,6 +35,7 @@ describe('packaged update bootstrap', () => {
     expect(store.bootstrap(input, '0.3.1')).toBe(true);
     expect(store.status('0.3.1')).toMatchObject({ configured: true, endpoint: input.endpoint });
     expect(readFileSync(path, 'utf8')).not.toContain(input.accessToken);
+    expect(Buffer.from(readFileSync(path, 'utf8'), 'base64').toString('utf8')).not.toContain(input.accessToken);
 
     store.clear('0.3.1');
     const restarted = new UpdateServiceStore(path);
