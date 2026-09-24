@@ -4,12 +4,12 @@ sources:
   - electron/vscode-bridge.ts
   - packages/bridge-protocol/**
   - vscode-extension/**
-verified_at: 7063e89
+verified_at: dcd6823a
 ---
 
 # VS Code Bridge
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-25
 
 ## Agent Brief
 

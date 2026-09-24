@@ -5,12 +5,12 @@ sources:
   - electron/account-space-state.ts
   - electron/runtime-state-store.ts
   - electron/ui-preferences.ts
-verified_at: 08cf6e94
+verified_at: dcd6823a
 ---
 
 # Workspaces and Persisted State
 
-> Last verified: 2026-09-24
+> Last verified: 2026-09-25
 
 ## Agent Brief
 
@@ -53,7 +53,11 @@ ordering, and bar-location metadata are retained. The active workspace and tab
 are preserved.
 
 Unknown or corrupt v2 data never falls back to defaults. It opens read-only
-recovery and preserves evidence before any confirmed restore or fresh start.
+recovery and preserves evidence before any confirmed restore or fresh start. An
+Account Space in per-account recovery stays in the manifest, its files are not
+written until it is resolved, and a workspace whose only account is in recovery
+still saves. Restore v1 preserves every per-account file first. Deleting an
+Account Space deletes its plaintext browsing file.
 
 ## Version-2 plaintext boundary
 

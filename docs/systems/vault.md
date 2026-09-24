@@ -4,12 +4,12 @@ sources:
   - electron/vault.ts
   - electron/clipboard-guard.ts
   - electron/myvault/**
-verified_at: e2c2bde6
+verified_at: dcd6823a
 ---
 
 # MyVault broker
 
-> Last verified: 2026-09-24
+> Last verified: 2026-09-25
 
 ## Agent Brief
 

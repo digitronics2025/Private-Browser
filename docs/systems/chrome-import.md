@@ -2,12 +2,12 @@
 system: chrome-import
 sources:
   - electron/chrome-importer.ts
-verified_at: 659a016
+verified_at: dcd6823a
 ---
 
 # Chrome Import
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-25
 
 ## Agent Brief
 

@@ -2,12 +2,12 @@
 system: security-boundary
 sources:
   - electron/security.ts
-verified_at: af2314bf
+verified_at: dcd6823a
 ---
 
 # Security Boundary
 
-> Last verified: 2026-09-24
+> Last verified: 2026-09-25
 
 ## Agent Brief
 

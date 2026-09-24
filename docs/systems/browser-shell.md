@@ -6,12 +6,12 @@ sources:
   - electron/chrome-layout.ts
   - electron/shortcuts.ts
   - electron/bookmark-tree.ts
-verified_at: 90100b54
+verified_at: dcd6823a
 ---
 
 # Browser Shell
 
-> Last verified: 2026-09-24
+> Last verified: 2026-09-25
 
 ## Agent Brief
 

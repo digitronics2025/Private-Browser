@@ -10,12 +10,12 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: a014e2c7
+verified_at: dcd6823a
 ---
 
 # Release and Updates
 
-> Last verified: 2026-09-14
+> Last verified: 2026-09-25
 
 ## Agent Brief
 

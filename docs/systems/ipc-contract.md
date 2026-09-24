@@ -4,12 +4,12 @@ sources:
   - electron/preload.cts
   - electron/types.ts
   - electron/ipc-guard.ts
-verified_at: 90100b54
+verified_at: dcd6823a
 ---
 
 # IPC Contract
 
-> Last verified: 2026-09-24
+> Last verified: 2026-09-25
 
 ## Agent Brief
 

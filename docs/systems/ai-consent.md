@@ -3,12 +3,12 @@ system: ai-consent
 sources:
   - electron/ai-provider.ts
   - electron/ai-account-spaces.ts
-verified_at: 7063e89
+verified_at: dcd6823a
 ---
 
 # AI Consent
 
-> Last verified: 2026-09-24
+> Last verified: 2026-09-25
 
 ## Agent Brief
 
