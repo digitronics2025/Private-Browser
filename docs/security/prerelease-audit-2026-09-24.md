@@ -568,11 +568,13 @@ Every finding F-27…F-85 was worked in §6's order in the same session, on the
 `audit-2026-09-24` worktree branch, and pushed to `main` in two releases; each
 commit names its finding ids. Most fixes carry a test that was run against the
 unfixed code and failed there. **What changed in production:** pushing
-`8592948` published installer 0.6.8 (build 121) with the five must-fixes;
-pushing `8aaab23` publishes the rest as the next patch version and, because
-`cloudflare/**` changed, redeploys the Worker with the new admin
-`/api/v1/admin/releases/activate` route (the rollback). No secret, database row
-or setting was changed by hand.
+`8592948` published installer 0.6.8 (build 121) with the five must-fixes.
+Pushing `8aaab23` redeployed the Worker with the new admin
+`/api/v1/admin/releases/activate` route (the rollback; an anonymous call gets
+the generic 404), but its release run failed at the upload step — see
+"Found while fixing" — so nothing was published from it. Pushing `361627a`
+published installer 0.6.9 (build 130), whose live end-to-end check passed. No
+secret, database row or setting was changed by hand.
 
 ### High
 
