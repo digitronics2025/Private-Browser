@@ -2,7 +2,7 @@
 system: control-center-link
 sources:
   - electron/control-center-link.ts
-verified_at: 7ec1a22
+verified_at: 90100b54
 ---
 
 # Control Center Link
