@@ -161,9 +161,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # No dependency install scripts here: this job later hands the Cloudflare
-      # token to wrangler and the admin key to the publish scripts (F-55).
+      # Install scripts are off for every dependency: this job later hands the
+      # Cloudflare token to wrangler and the admin key to the publish scripts
+      # (F-55). Only wrangler's own engine packages run theirs — the lock file,
+      # written on Windows, lists just their Windows binaries, and their install
+      # step fetches the Linux one wrangler cannot start without.
       - run: npm ci --ignore-scripts
+      - run: npm rebuild workerd esbuild
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: private-browser-windows

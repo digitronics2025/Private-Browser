@@ -33,6 +33,8 @@ describe('release workflow', () => {
   it('installs the publish job without dependency scripts and pins every action', () => {
     const publish = workflow.slice(workflow.indexOf('  publish-cloudflare-release:'));
     expect(publish).toContain('- run: npm ci --ignore-scripts');
+    // Only wrangler's engine packages may run install scripts, and nothing else.
+    expect(publish.match(/- run: npm (?:ci|install|rebuild)[^\r\n]*/g)).toEqual(['- run: npm ci --ignore-scripts', '- run: npm rebuild workerd esbuild']);
     for (const file of ['ci.yml', 'deploy-cloudflare.yml', 'codeql.yml']) {
       const text = readFileSync(join(process.cwd(), '.github/workflows', file), 'utf8');
       for (const [, reference] of text.matchAll(/uses: (\S+)/g)) expect(reference, `${file}: ${reference}`).toMatch(/@[0-9a-f]{40}$/);

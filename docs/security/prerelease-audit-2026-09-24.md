@@ -559,3 +559,135 @@ check that the state it was computed from is still current?" (F-27, F-29).
 
 Production was only ever read. The audit did not modify code, tests, secrets, the
 database, or the main checkout; it ran in a separate worktree.
+
+---
+
+## Status — 2026-09-25
+
+Every finding F-27…F-85 was worked in §6's order in the same session, on the
+`audit-2026-09-24` worktree branch, and pushed to `main` in two releases; each
+commit names its finding ids. Most fixes carry a test that was run against the
+unfixed code and failed there. **What changed in production:** pushing
+`8592948` published installer 0.6.8 (build 121) with the five must-fixes;
+pushing `8aaab23` publishes the rest as the next patch version and, because
+`cloudflare/**` changed, redeploys the Worker with the new admin
+`/api/v1/admin/releases/activate` route (the rollback). No secret, database row
+or setting was changed by hand.
+
+### High
+
+| # | Status | Commit | Evidence |
+|---|---|---|---|
+| F-27 | fixed | `a9c76b2` | `vault-sync.test.ts` "keeps a login saved while a pull is in flight…" — the pull becomes a conflict listing `Local` and `Remote`; failed on the old code (the login vanished, status `synced`) |
+| F-28 | fixed | `f1717ed` | `tests/electron/page-containment.spec.ts` "…internationalised domain keeps every page guard": a popup from an `xn--` tab becomes a tab, no new window, and `pushState` is tracked; failed on the old code (navigate threw) |
+
+### Medium
+
+| # | Status | Commit | Evidence |
+|---|---|---|---|
+| F-29 | fixed | `a9c76b2` | "leaves the vault locked when a push completes after lock"; a conflict found while locked stays `locked` |
+| F-30 | fixed | `924b995` | Electron "locking the active Account Space closes its page and it stays closed"; failed on the old code |
+| F-31 | fixed | `f1717ed` | Electron "a hidden tab cannot take the foreground…": Banking stays active, 5 of 8 popups allowed, "Popups blocked" logged |
+| F-32 | fixed | `f1717ed` | `security.test.ts`: `.msix`, `.vhdx`, `.url`, `setup.exe.`, extensionless names and others are not `ordinary`; risk is re-judged from the saved path |
+| F-33 | fixed | `a9c76b2` | `chrome-import.test.ts` "skips Android and unparsable rows…": 3 of 5 imported, BOM handled, a rerun imports nothing; one encrypted write per import |
+| F-34 | fixed | `f1717ed`, `fd1fd15` | the Electron picker test clicks row 1 from the main process at overlay load and the form does not change; it failed with the arming removed. Unit tests pin the 500 ms rule in main and in the preload |
+| F-35 | fixed | `f1717ed` | e2e "a page URL change does not replace an address the user is typing" |
+| F-36 | fixed | `8592948` | e2e updates test: no "signed" on the page |
+| F-37 | fixed | `924b995` | `account-lifecycle.test.ts`: a recovering account stays in the manifest with its file untouched; a sole-account workspace still saves; fresh start works with a corrupt browsing file. All failed on the old code |
+| F-38 | fixed | `924b995` | "preserves every per-account file before restoring version 1" |
+| F-39 | fixed | `924b995` | "deletes the removed account's plaintext browsing file" |
+| F-40 | fixed | `924b995` | `google-oauth.test.ts`: a reconnect returning another `sub` is `GOOGLE_POLICY_DENIED`; the one-sub check reads the account list at save time |
+| F-41 | fixed | `8592948` | `release-workflow.test.ts`: no cancelling on `main`; "docs only" is decided against the active release's `commitSha` (the lookup was run against production) |
+| F-42 | fixed | `8592948` | `release-workflow.test.ts`: a bundled-token build sets `ready=false` before any upload |
+| F-43 | fixed | `0abe359` | `spawn-command.test.ts` really starts `npm.cmd` on Windows; parts cmd would interpret are refused |
+| F-44 | fixed | `c229d3b` | absence checks wait for the form and 3 s past load (`settledForm`); the new-password form is also served at `/account/security` |
+| F-45 | fixed | `924b995` | `account-backup.test.ts` "re-stamps items written under another local id…" |
+| F-46 | fixed | `a9c76b2` | Hello tests use a non-identity `safeStorage` and check the file is ciphertext; enrol → Hello unlock → save → password unlock; broker-level recovery test |
+
+### Low
+
+| # | Status | Commit | Evidence |
+|---|---|---|---|
+| F-47 | fixed | `f1717ed` | the painted URL is checked before and after the capture, and capture is refused mid-load. No test: it needs a navigation paused mid-commit |
+| F-48 | fixed | `f1717ed` | `activeContents()` is empty on Home. No dedicated test |
+| F-49 | fixed | `fd1fd15` | `ipc-contract.test.ts`: every `handle()` name has a rule; unknown channels are refused |
+| F-50 | fixed | `7f0a800` | `worker.test.ts` covers the activate route (admin-only, R2 check, exact id); `release-workflow.test.ts` pins the rollback step |
+| F-51 | fixed | `7f0a800` | token paths are logged as `/download/[token]`. No test |
+| F-52 | fixed | `7f0a800` | `worker.test.ts` "rejects a lower version even under the active release id" |
+| F-53 | fixed | `c229d3b` | the tamper test uses same-length bytes |
+| F-54 | fixed | `c229d3b`, `8aaab23` | `failOnFlakyTests` in CI; the ERR_ABORTED allowance removed; real encryption in the bootstrap test; the order test checks presence first; an Electron test of the app's own partitions; e2e on its own port |
+| F-55 | fixed | `7f0a800` | `npm ci --ignore-scripts` in the publish job; the SHA256SUMS comparison was run locally with a matching and a tampered file; every action is pinned (test) |
+| F-56 | fixed | `7f0a800` | the script was run unconfigured (keeps 0.6.0) and against production (selects 0.6.9) |
+| F-57 | fixed | `7f0a800` | `worker.test.ts` "refuses an oversized publish body" (413) |
+| F-58 | fixed | `924b995` | `google-services.test.ts` "drops a refresh that completes after the account was cleared" |
+| F-59 | fixed | `924b995` | restore returns no settings (test), and main no longer applies them |
+| F-60 | fixed | `924b995` | `ai-account-spaces.test.ts`: `MAIL.google.com.` is Gmail |
+| F-61 | fixed | `924b995` | the log lines carry no label. No test |
+| F-62 | fixed | `924b995` | orphan detection is tested (none while any account is in recovery); the startup clear itself is not |
+| F-63 | fixed | `924b995` | a `javascript:` history item is dropped (test) |
+| F-64 | fixed | `56163a0` | e2e "permission prompt arms its Allow buttons late, traps focus and denies on Escape" |
+| F-65 | fixed by disclosure | `56163a0` | the copy message and SECURITY.md name the limit. Writing Windows' clipboard-history exclusion formats is not possible through Electron's clipboard API without dropping the text |
+| F-66 | fixed | `56163a0` | no test: there is no renderer component harness |
+| F-67 | fixed | `56163a0` | text only |
+| F-68 | fixed | `56163a0` | no test |
+| F-69 | fixed | `56163a0` | no test |
+| F-70 | fixed | `56163a0`, `dcd6823` | e2e covers the permission prompt; the vault view and the account manager share the same hook |
+| F-71 | fixed | `56163a0` | the size cap is applied while streaming. No test |
+| F-72 | fixed | `0abe359` | `tests/vscode-bridge.test.ts` (a real handshake): a second window is refused and the same window reconnects; a late response is dropped and the session survives. Both failed on the old code |
+| F-73 | fixed | `0abe359` | extension test: a symlink to `.env` is refused; `.env::$DATA`, `.env.`, `.npmrc` and others are secret names |
+| F-74 | fixed | `0abe359` | no test: there is no VS Code test host |
+| F-75 | fixed | `0abe359` | no test |
+| F-76 | fixed | `0abe359` | the fingerprint covers the target URL. No test |
+| F-77 | fixed | `c229d3b` | git-backed guard tests with `café.ts` and `réglages/.env`; both failed on the old guard |
+| F-78 | fixed | `a9c76b2` | 401 and 403 both map to unauthorized (test) |
+| F-79 | fixed | `fd1fd15` | the passkey signature verifies against the stored key in DER; UV is set only when verified. The provider stays gated off |
+| F-80 | fixed | `fd1fd15` | `security.test.ts` "never offers a login across google.com subdomains" |
+| F-81 | fixed | `fd1fd15` | `chrome-importer.test.ts` depth test |
+| F-82 | fixed | `a9c76b2` | `redirect: 'error'` and the size refusal (tests) |
+| F-83 | fixed | `a9c76b2` | pairing is refused unless unconfigured; install validates both halves first (token-shape test) |
+| F-84 | fixed | `a9c76b2` | no test |
+| F-85 | fixed | `dcd6823` | Dependabot groups take minor and patch updates only; the major upgrades are listed in `docs/follow-ups.md` as planned migrations |
+
+The documentation drift in §5 was corrected in the same commits, and every
+touched system doc was re-verified at `dcd6823a` (`docs-guard`: 0 failures,
+0 warnings).
+
+### Found while fixing, not in the audit
+
+- **The picker's overlay spent its single choice on an ignored click.** With
+  F-34's delay enforced only in main, an early click still used the overlay's
+  one-choice flag, so the user's real click afterwards did nothing. The overlay
+  now applies the same delay before it spends the choice. The slice pass read
+  the preload and main separately; the fault exists only in how they combine.
+- **A command script started by its quoted bare name cannot find itself.**
+  `cmd.exe` gives `"npm.cmd"` the wrong `%~dp0`, and npm's shim then looks in
+  the current folder. F-43's fix resolves scripts to a full path first. Found by
+  running the fix on this machine, not by reading code.
+- **The Electron test for F-34 could pass or fail depending on machine load.**
+  One full run failed while the machine was heavily loaded, and every repeat
+  passed. It is now deterministic: the early click is sent from the main process
+  when the overlay finishes loading.
+- **The browser e2e suite ran against whatever server held port 5173.** With
+  another session's dev server there, tests reported green against another
+  checkout. The suite now owns port 5174 with `--strictPort` (`8aaab23`).
+  Nothing in the audit's method looks at how the test runner chooses its server.
+- **F-55's first fix stopped publishing.** `npm ci --ignore-scripts` also
+  skipped workerd's install step, which fetches the Linux engine that the
+  Windows-written lock file does not list, so `wrangler` could not start. The
+  release run for `8aaab23` failed at the upload step, before R2 or D1 were
+  touched; production stayed on 0.6.8. The fix lets exactly `workerd` and
+  `esbuild` run their scripts (`npm rebuild workerd esbuild`), and the workflow
+  test pins that list. The audit could not have caught it: it is the fix's own
+  defect, visible only when the job runs on Linux.
+- **F-48 reached further than reported.** Besides back, forward and find, vault
+  form inspection and fill used `activeContents()`, and so could act on the
+  hidden previous page while Home was showing. The same one-line fix covers them.
+
+### What still needs a person
+
+- **Try the VS Code link's "Start server" once in a real VS Code window.** The
+  command wrapper is tested by really starting `npm.cmd`, but no test runs the
+  extension inside VS Code.
+- **Approve the major dependency migrations one at a time**, as listed in
+  `docs/follow-ups.md`. They are engineering work rather than decisions, but each
+  changes shipped code and needs its own green gate.
