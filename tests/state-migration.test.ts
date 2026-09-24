@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { AccountStore, type SafeStorageAdapter } from '../electron/account-store';
 import { AccountSpaceStateStore } from '../electron/account-space-state';
+import { DEFAULT_BROWSER_SETTINGS } from '../electron/browser-settings';
 
 class TestEncryption implements SafeStorageAdapter {
   isEncryptionAvailable(): boolean { return true; }
@@ -163,5 +164,49 @@ describe('v1 to Account Spaces v2 migration', () => {
     expect(recovered).toMatchObject({ status: 'ready', accountRecoveries: [] });
     expect(created.options.accountStore.require(personal.id)).toMatchObject({ workspaceId: 'personal', locked: false, kind: 'local' });
     expect(created.options.accountStore.require(digitronics.id)).toEqual(first.accounts.find((account) => account.id === digitronics.id));
+  });
+});
+
+describe('browser settings in the v2 manifest', () => {
+  function migrated() {
+    const created = fixture();
+    const result = new AccountSpaceStateStore(created.options).initialize();
+    if (result.status !== 'ready') throw new Error('migration did not complete');
+    return { ...created, manifest: result.manifest };
+  }
+  function reload(options: ReturnType<typeof fixture>['options']) {
+    const result = new AccountSpaceStateStore(options).initialize();
+    expect(result.status).toBe('ready');
+    if (result.status !== 'ready') throw new Error('state did not load');
+    return result.manifest;
+  }
+
+  it('writes defaults when migrating from v1', () => {
+    expect(migrated().manifest.settings).toEqual(DEFAULT_BROWSER_SETTINGS);
+  });
+
+  it('loads a manifest without settings, as older builds write it, with defaults', () => {
+    const { options } = migrated();
+    const saved = JSON.parse(readFileSync(options.paths.manifestFilePath, 'utf8')) as Record<string, unknown>;
+    delete saved.settings;
+    writeFileSync(options.paths.manifestFilePath, JSON.stringify(saved));
+    expect(reload(options).settings).toEqual(DEFAULT_BROWSER_SETTINGS);
+  });
+
+  it('keeps the rest of the state and never enters recovery for garbage settings', () => {
+    const { options, manifest } = migrated();
+    const saved = JSON.parse(readFileSync(options.paths.manifestFilePath, 'utf8')) as Record<string, unknown>;
+    writeFileSync(options.paths.manifestFilePath, JSON.stringify({ ...saved, settings: { searchEngine: 'custom', customSearchTemplate: 'javascript:%s', homePage: 42, startup: 'home' } }));
+    const loaded = reload(options);
+    expect(loaded.settings).toEqual({ ...DEFAULT_BROWSER_SETTINGS, startup: 'home' });
+    expect(loaded.accountSpaceIds).toEqual(manifest.accountSpaceIds);
+    expect(loaded.activeWorkspaceId).toBe(manifest.activeWorkspaceId);
+  });
+
+  it('round-trips the chosen settings', () => {
+    const { options, manifest } = migrated();
+    const settings = { searchEngine: 'custom' as const, customSearchTemplate: 'https://search.example.com/?q=%s', homePage: 'url' as const, homePageUrl: 'https://tenten.ma/', startup: 'home' as const };
+    new AccountSpaceStateStore(options).saveManifest({ ...manifest, settings });
+    expect(reload(options).settings).toEqual(settings);
   });
 });

@@ -1,20 +1,30 @@
-const SEARCH_ENDPOINT = 'https://duckduckgo.com/?q=';
+export const DEFAULT_SEARCH_TEMPLATE = 'https://duckduckgo.com/?q=%s';
 
 const TRACKING_PARAMETERS = new Set([
   'dclid', 'fbclid', 'gclid', 'gbraid', 'mc_cid', 'mc_eid', 'msclkid',
   'twclid', 'wbraid', '_hsenc', '_hsmi', 'vero_conv', 'vero_id',
 ]);
 
-export function normalizeNavigationInput(value: string): string {
+/** Turn address-bar input into a URL: a web address when it is one, otherwise a search. */
+export function normalizeNavigationInput(value: string, searchTemplate = DEFAULT_SEARCH_TEMPLATE): string {
   const input = value.trim();
   if (!input) return 'private://home';
   if (input === 'private://home') return input;
+  return parseWebAddress(input) ?? searchTemplate.replace('%s', () => encodeURIComponent(input));
+}
 
+/**
+ * The address half of `normalizeNavigationInput`: an HTTP(S) URL, a localhost or
+ * IPv4 host, or a bare domain. Anything else would be a search, and returns
+ * `undefined`. Other schemes (`file:`, `javascript:`) are not addresses either.
+ */
+export function parseWebAddress(value: string): string | undefined {
+  const input = value.trim();
   let parsed: URL | undefined;
   try {
     parsed = new URL(input);
   } catch {
-    // Continue to host/search detection.
+    // Continue to host detection.
   }
   if (parsed) {
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
@@ -29,7 +39,7 @@ export function normalizeNavigationInput(value: string): string {
   if (/^[\w.-]+\.[a-z]{2,}(?::\d+)?(?:\/.*)?$/i.test(input)) {
     return new URL(`https://${input}`).toString();
   }
-  return `${SEARCH_ENDPOINT}${encodeURIComponent(input)}`;
+  return undefined;
 }
 
 /** Remove common cross-site campaign identifiers before a URL is loaded or saved. */

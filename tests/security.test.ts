@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
+import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
 import { createDefaultState, sanitizeState } from '../electron/state-store';
 import { generateTotp } from '../electron/vault';
 
@@ -10,6 +10,24 @@ describe('navigation security', () => {
 
   it('turns plain text into a private search', () => {
     expect(normalizeNavigationInput('best television morocco')).toBe('https://duckduckgo.com/?q=best%20television%20morocco');
+  });
+
+  it('searches the chosen engine and escapes the query into its template', () => {
+    expect(normalizeNavigationInput('best television morocco', 'https://www.google.com/search?q=%s')).toBe('https://www.google.com/search?q=best%20television%20morocco');
+    expect(normalizeNavigationInput('a&b=c #x $&', 'https://www.google.com/search?q=%s')).toBe('https://www.google.com/search?q=a%26b%3Dc%20%23x%20%24%26');
+    expect(normalizeNavigationInput('tv', 'https://example.com/s/%s?src=pb')).toBe('https://example.com/s/tv?src=pb');
+    expect(normalizeNavigationInput('tenten.ma', 'https://www.google.com/search?q=%s')).toBe('https://tenten.ma/');
+    expect(normalizeNavigationInput('   ', 'https://www.google.com/search?q=%s')).toBe('private://home');
+  });
+
+  it('tells a web address apart from a search', () => {
+    expect(parseWebAddress('tenten.ma')).toBe('https://tenten.ma/');
+    expect(parseWebAddress(' https://example.com/?utm_source=x&id=1 ')).toBe('https://example.com/?id=1');
+    expect(parseWebAddress('localhost:4317')).toBe('http://localhost:4317');
+    expect(parseWebAddress('weather')).toBeUndefined();
+    expect(parseWebAddress('file:///C:/Windows')).toBeUndefined();
+    expect(parseWebAddress('javascript:alert(1)')).toBeUndefined();
+    expect(() => parseWebAddress('https://user:password@example.com')).toThrow(/credentials/); // secret-guard:allow
   });
 
   it('rejects privileged protocols', () => {

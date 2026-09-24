@@ -30,6 +30,7 @@ import { EmptyState } from './panels/common';
 import { defaultShortcutTiles } from './lib/quick-links';
 import { faviconsByHost } from './lib/format';
 import { disposer } from './lib/subscribe';
+import { DEFAULT_BROWSER_SETTINGS, searchEngineLabel, type BrowserSettings } from '../electron/browser-settings';
 
 type MenuKind = 'browser' | 'profile' | 'shield' | 'tab-search' | 'site-info' | 'zoom';
 
@@ -78,6 +79,9 @@ export default function App() {
   const activeTab = state?.tabs.find((tab) => tab.id === state.activeTabId);
   const workspace = state?.workspaces.find((item) => item.id === state.activeWorkspaceId);
   const activeAccount = state?.accountSpaces.find((account) => account.id === state.activeAccountSpaceId);
+  const browserSettings: BrowserSettings = { ...DEFAULT_BROWSER_SETTINGS, ...state?.settings };
+  const engineLabel = searchEngineLabel(browserSettings);
+  const searchPrompt = engineLabel ? `Search ${engineLabel} or enter address` : 'Search the web or enter address';
   const workspaceTabs = useMemo(() => state?.tabs.filter((tab) => tab.accountSpaceId === state.activeAccountSpaceId) ?? [], [state?.tabs, state?.activeAccountSpaceId]);
   const accountBookmarks = useMemo(() => state?.bookmarks.filter((item) => item.accountSpaceId === state.activeAccountSpaceId) ?? [], [state?.bookmarks, state?.activeAccountSpaceId]);
   const favicons = useMemo(() => faviconsByHost(state?.tabs ?? [], state?.bookmarkIcons), [state?.tabs, state?.bookmarkIcons]);
@@ -236,7 +240,7 @@ export default function App() {
       case 'hard-reload': if (!activeTab.isHome) void act(() => window.privateBrowser.hardReload()); break;
       case 'back': void act(() => window.privateBrowser.back()); break;
       case 'forward': void act(() => window.privateBrowser.forward()); break;
-      case 'home': void act(() => window.privateBrowser.navigate('private://home')); break;
+      case 'home': void act(() => window.privateBrowser.goHome()); break;
       case 'next-tab': selectTabAt((tabIndex + 1) % workspaceTabs.length); break;
       case 'previous-tab': selectTabAt((tabIndex - 1 + workspaceTabs.length) % workspaceTabs.length); break;
       case 'select-tab': selectTabAt(shortcut.index ?? 0); break;
@@ -361,7 +365,7 @@ export default function App() {
       case 'automations': return <AutomationPanel onToast={showToast} />;
       case 'downloads': return <DownloadsPanel state={state} onToast={showToast} />;
       case 'privacy': return <PrivacyPanel state={state} />;
-      case 'settings': return <SettingsPanel state={state} ui={ui} onUiChange={setUi} onToast={showToast} />;
+      case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} onUiChange={setUi} onToast={showToast} />;
       case 'bookmarks': return <BookmarksPanel bookmarks={accountBookmarks} favicons={favicons} onOpen={bookmarkActions.open} onRename={bookmarkActions.rename} onRemove={bookmarkActions.remove} onImport={bookmarkActions.importBookmarks} onExport={bookmarkActions.exportBookmarks} />;
       case 'history': return <HistoryPanel history={recentHistory} protectedWorkspace={workspace.protected} onOpen={(url) => void act(() => window.privateBrowser.navigate(url))} onClearData={clearBrowsingData} />;
       default: return null;
@@ -403,6 +407,7 @@ export default function App() {
               profileButtonRef={profileButtonRef}
               menuButtonRef={menuButtonRef}
               siteInfoOpen={menu === 'site-info'}
+              searchPrompt={searchPrompt}
               zoomOpen={menu === 'zoom'}
               zoomButtonRef={zoomButtonRef}
               profileOpen={menu === 'profile'}
@@ -412,7 +417,7 @@ export default function App() {
               onBack={() => void act(() => window.privateBrowser.back())}
               onForward={() => void act(() => window.privateBrowser.forward())}
               onReloadOrStop={() => void act(() => (activeTab.loading ? window.privateBrowser.stop() : window.privateBrowser.reload()))}
-              onHome={() => void act(() => window.privateBrowser.navigate('private://home'))}
+              onHome={() => void act(() => window.privateBrowser.goHome())}
               onSiteInfo={() => setMenu((current) => (current === 'site-info' ? null : 'site-info'))}
               onToggleBookmark={() => void act(() => window.privateBrowser.toggleBookmark())}
               onOpenVault={() => toggleTool('vault')}
@@ -429,6 +434,7 @@ export default function App() {
 
         {activeTab.isHome ? (
           <NewTabPage
+            searchPrompt={searchPrompt}
             workspace={workspace}
             account={activeAccount}
             shortcuts={shortcutTiles}

@@ -184,8 +184,22 @@ views; their webContents stay alive and keep running timers, media and network.
 ## Navigation and History
 
 `navigate(value)` runs the raw address-bar string through
-`normalizeNavigationInput` (bare host to https, localhost or IP to http, anything
-else to a DuckDuckGo search — see [security-boundary.md](security-boundary.md)).
+`normalizeNavigationInput` with the search template of the chosen engine (bare
+host to https, localhost or IP to http, anything else to a search — see
+[security-boundary.md](security-boundary.md)). `openInAccountSpace` uses the same
+template.
+
+**Home.** The Home button and Alt+Home call `goHome()` (`browser:home`), which
+navigates the active tab to `resolveHomeUrl(settings, workspace.protected)`: the
+Home address when one is set, otherwise `private://home`, and **always**
+`private://home` in a protected workspace (Banking), whatever the setting says.
+Ctrl+T, empty address input and closing the last tab still mean the New Tab page.
+
+**Startup.** After `createWindow`, `whenReady` opens a link the app was launched
+with; only when there is none does it call `openStartupHome()`. That runs when
+`settings.startup === 'home'` and no recovery is pending: it adds one tab in the
+active Account Space and sends it Home. Restored tabs are never closed. A failure
+is recorded as a `blocked` privacy event without the URL and startup carries on.
 
 - `private://home` is a branch, not a load: it rewrites the tab record to the home
   state, hides the view without destroying it, broadcasts and returns.

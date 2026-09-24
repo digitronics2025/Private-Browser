@@ -1,6 +1,8 @@
+import type { BrowserSettings } from './browser-settings.js';
 import type { UiPreferences } from './ui-preferences.js';
 
 export type { UiPreferences, UiPreferencesPatch, ThemePreference, SidePanelTool, NewTabBackground } from './ui-preferences.js';
+export type { BrowserSettings, BrowserSettingsPatch, HomePageMode, SearchEngineId, StartupMode } from './browser-settings.js';
 export type { BookmarkBarMode } from './chrome-layout.js';
 export type { Shortcut, ShortcutCommand } from './shortcuts.js';
 
@@ -315,6 +317,8 @@ export interface BrowserStateManifestV2 {
   bookmarkBarVisible: boolean;
   privacyLog: PrivacyEvent[];
   ui?: UiPreferences;
+  /** Optional: builds before 0.7.0 ignore it and fall back to defaults. */
+  settings?: BrowserSettings;
 }
 
 export interface BrowserTab {
@@ -401,6 +405,7 @@ export interface BrowserSnapshot {
   pendingPermission?: PermissionPrompt;
   bookmarkBarVisible: boolean;
   ui: UiPreferences;
+  settings: BrowserSettings;
   windowState: WindowState;
   /** Customised New Tab shortcuts keyed by Account Space; a missing key means the defaults. */
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
@@ -455,6 +460,7 @@ export interface RuntimeBrowserStateV2 {
   trackerBlocking: boolean;
   bookmarkBarVisible: boolean;
   ui: UiPreferences;
+  settings: BrowserSettings;
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
   bookmarkIconsByAccountSpace: Record<string, Record<string, string>>;
   accountSpaces: AccountSpaceSummary[];

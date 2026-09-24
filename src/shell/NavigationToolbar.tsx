@@ -4,6 +4,8 @@ import type { AccountSpaceSummary, BrowserTab } from '../../electron/types';
 import { AccountAvatar, accountNeedsAction } from '../lib/accounts';
 
 export interface NavigationToolbarProps {
+  /** "Search Google or enter address" — names the engine chosen in Settings. */
+  searchPrompt: string;
   tab: BrowserTab;
   account: AccountSpaceSummary;
   address: string;
@@ -48,7 +50,7 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
       <button type="button" className="toolbar-button" aria-label={tab.loading ? 'Stop loading' : 'Reload'} title={tab.loading ? 'Stop loading' : 'Reload (Ctrl+R)'} disabled={tab.isHome && !tab.loading} onClick={props.onReloadOrStop}>
         {tab.loading ? <X size={18} /> : <RefreshCw size={17} />}
       </button>
-      <button type="button" className="toolbar-button optional" aria-label="Home" title="New Tab page (Alt+Home)" onClick={props.onHome}><Home size={18} /></button>
+      <button type="button" className="toolbar-button optional" aria-label="Home" title="Home (Alt+Home)" onClick={props.onHome}><Home size={18} /></button>
 
       <form className={`omnibox ${warning ? 'has-warning' : ''}`} onSubmit={props.onSubmit} role="search">
         <button
@@ -74,7 +76,7 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
           value={props.address}
           onChange={(event) => props.onAddressChange(event.target.value)}
           onFocus={(event) => event.currentTarget.select()}
-          placeholder="Search privately or enter address"
+          placeholder={props.searchPrompt}
           spellCheck={false}
           autoComplete="off"
         />

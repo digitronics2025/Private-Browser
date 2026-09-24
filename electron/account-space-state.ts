@@ -25,6 +25,7 @@ import { AccountStore, type AccountSpaceRecord } from './account-store.js';
 import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation.js';
 import { pruneBookmarkIcons, sanitizeBookmarkIcons } from './bookmark-icons.js';
 import { isAllowedRemoteUrl } from './security.js';
+import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings } from './browser-settings.js';
 import { sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
 
@@ -355,6 +356,7 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
     bookmarkBarVisible: ui.bookmarkBarMode !== 'hidden',
     privacyLog: sanitizePrivacyLog(input.privacyLog),
     ui,
+    settings: sanitizeBrowserSettings(input.settings),
   };
 }
 
@@ -444,6 +446,7 @@ function createManifest(
     bookmarkBarVisible,
     privacyLog: sanitizePrivacyLog(privacyLog),
     ui: sanitizeUiPreferences(undefined, bookmarkBarVisible),
+    settings: { ...DEFAULT_BROWSER_SETTINGS },
   };
 }
 

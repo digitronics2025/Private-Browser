@@ -260,3 +260,68 @@ test('chrome keyboard shortcuts open tools and menus', async ({ page }) => {
   await expect(page.getByRole('dialog', { name: 'Search tabs' })).toBeVisible();
   noErrors();
 });
+
+async function openSettingsPanel(page: Page) {
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menu', { name: 'Browser menu' }).getByRole('menuitem', { name: 'Settings', exact: true }).click();
+  await expect(sidePanel(page).getByText('Search engine', { exact: true })).toBeVisible();
+}
+
+test('search engine setting changes what the address bar and New Tab page search', async ({ page }) => {
+  const noErrors = watchErrors(page);
+  await page.goto('/');
+  const ntp = page.getByRole('main', { name: 'New Tab' });
+  await expect(ntp.getByRole('textbox', { name: 'Search DuckDuckGo or enter address' })).toBeVisible();
+  await openSettingsPanel(page);
+  await sidePanel(page).getByLabel('Search engine').selectOption('bing');
+  await expect(ntp.getByRole('textbox', { name: 'Search Bing or enter address' })).toBeVisible();
+  const address = page.getByRole('textbox', { name: 'Address and search bar' });
+  await expect(address).toHaveAttribute('placeholder', 'Search Bing or enter address');
+  await address.fill('weather');
+  await address.press('Enter');
+  await expect(address).toHaveValue('https://www.bing.com/search?q=weather');
+
+  await sidePanel(page).getByLabel('Search engine').selectOption('custom');
+  const custom = sidePanel(page).getByRole('textbox', { name: 'Custom search address' });
+  await custom.fill('http://search.example.com/?q=%s');
+  await sidePanel(page).getByRole('button', { name: 'Save search address' }).click();
+  await expect(page.getByRole('status')).toContainText('https://');
+  await expect(custom).toHaveValue('http://search.example.com/?q=%s');
+  await custom.fill('https://search.example.com/find?q=%s');
+  await sidePanel(page).getByRole('button', { name: 'Save search address' }).click();
+  await expect(page.getByRole('status')).toContainText('Search engine saved');
+  await address.fill('tv stands');
+  await address.press('Enter');
+  await expect(address).toHaveValue('https://search.example.com/find?q=tv%20stands');
+  await expect(address).toHaveAttribute('placeholder', 'Search the web or enter address');
+  noErrors();
+});
+
+test('home page setting decides where Home goes and refuses text that is not an address', async ({ page }) => {
+  const noErrors = watchErrors(page);
+  await page.goto('/');
+  const address = page.getByRole('textbox', { name: 'Address and search bar' });
+  await openSettingsPanel(page);
+  const home = sidePanel(page).getByRole('radiogroup', { name: 'Home page' });
+  await expect(home.getByRole('radio', { name: 'New Tab page' })).toHaveAttribute('aria-checked', 'true');
+  await home.getByRole('radio', { name: 'Web address' }).click();
+  const field = sidePanel(page).getByRole('textbox', { name: 'Home page address' });
+  await field.fill('just some words');
+  await sidePanel(page).getByRole('button', { name: 'Save Home page' }).click();
+  await expect(page.getByRole('status')).toContainText('Enter a web address');
+  await field.fill('tenten.ma');
+  await sidePanel(page).getByRole('button', { name: 'Save Home page' }).click();
+  await expect(page.getByRole('status')).toContainText('Home page saved');
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await expect(address).toHaveValue('https://tenten.ma/');
+
+  await home.getByRole('radio', { name: 'New Tab page' }).click();
+  await expect(field).toHaveCount(0);
+  await page.getByRole('button', { name: 'Home', exact: true }).click();
+  await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
+
+  const startup = sidePanel(page).getByRole('radiogroup', { name: 'On startup' });
+  await startup.getByRole('radio', { name: 'Also open Home page' }).click();
+  await expect(startup.getByRole('radio', { name: 'Also open Home page' })).toHaveAttribute('aria-checked', 'true');
+  noErrors();
+});

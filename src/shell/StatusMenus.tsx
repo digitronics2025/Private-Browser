@@ -59,7 +59,7 @@ export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, o
   // carry no warning chip (they are local development servers), but they are
   // still unencrypted and must never be called secure.
   const status = tab.isHome
-    ? { ok: true, icon: Search, title: 'Private Browser page', detail: 'Search privately or enter an address.' }
+    ? { ok: true, icon: Search, title: 'Private Browser page', detail: 'Search or enter an address.' }
     : tab.securityWarning === 'insecure'
       ? { ok: false, icon: TriangleAlert, title: 'Connection is not secure', detail: `Don't enter passwords or payment details on ${host}. Information you send could be read or changed.` }
       : tab.securityWarning === 'idn'

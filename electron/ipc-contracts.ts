@@ -10,6 +10,7 @@ import {
 } from './account-space-validation.js';
 import type { ExternalBrowserId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
+import { requireBrowserSettingsPatch } from './browser-settings.js';
 import { requireUiPreferencesPatch } from './ui-preferences.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
@@ -96,6 +97,10 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     }
     case 'ui:set-preferences':
       exact(args, 1); requireUiPreferencesPatch(args[0]); return;
+    case 'settings:set':
+      exact(args, 1); requireBrowserSettingsPatch(args[0]); return;
+    case 'browser:home':
+      exact(args, 0); return;
     case 'browser:move-tab':
       exact(args, 2); requireBoundedText(args[0], 'tab identifier', 200); requireIndex(args[1]); return;
     case 'browser:zoom':

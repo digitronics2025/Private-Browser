@@ -13,6 +13,7 @@ import { AccountStore, type AccountSpaceRecord } from './account-store.js';
 import { AccountSpaceStateStore, type AccountSpaceStateInitialization } from './account-space-state.js';
 import { pruneBookmarkIcons } from './bookmark-icons.js';
 import { WORKSPACES } from './state-store.js';
+import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings } from './browser-settings.js';
 import { DEFAULT_UI_PREFERENCES, sanitizeUiPreferences } from './ui-preferences.js';
 
 export class RuntimeStateStore {
@@ -146,6 +147,7 @@ export class RuntimeStateStore {
       trackerBlocking: next.trackerBlocking,
       bookmarkBarVisible: next.ui.bookmarkBarMode !== 'hidden',
       ui: next.ui,
+      settings: next.settings,
     };
     for (const account of next.accountSpaces) {
       const tabs = next.tabs.filter((tab) => tab.accountSpaceId === account.id);
@@ -204,6 +206,7 @@ function combine(
     trackerBlocking: manifest.trackerBlocking,
     bookmarkBarVisible: manifest.bookmarkBarVisible,
     ui: sanitizeUiPreferences(manifest.ui, manifest.bookmarkBarVisible),
+    settings: sanitizeBrowserSettings(manifest.settings),
     shortcutsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.shortcuts).map((state) => [state.accountSpaceId, state.shortcuts!])),
     bookmarkIconsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.bookmarkIcons).map((state) => [state.accountSpaceId, state.bookmarkIcons!])),
     accountSpaces,
@@ -332,6 +335,7 @@ function recoveryRuntimeState(recovery: StateRecoveryStatus): RuntimeBrowserStat
     trackerBlocking: true,
     bookmarkBarVisible: true,
     ui: { ...DEFAULT_UI_PREFERENCES },
+    settings: { ...DEFAULT_BROWSER_SETTINGS },
     shortcutsByAccountSpace: {},
     bookmarkIconsByAccountSpace: {},
     accountSpaces,

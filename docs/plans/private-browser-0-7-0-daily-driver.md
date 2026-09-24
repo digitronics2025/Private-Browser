@@ -646,3 +646,4 @@ ask for confirmation, and only report back when it's finished.
 
 - 2026-09-14 — created from ~/.claude/plans/private-browser-0-7-0-merry-otter.md and the owner's brief; plan-mode approval was declined in the tool and the owner then invoked /implement-plan, which is taken as the go-ahead
 - 2026-09-14 — T5 push: the owner's brief says "Do not push to main … stop before any push unless I explicitly authorize publishing in this task", so the push is not run; it closes as parked with one question
+- 2026-09-24 — steps 11 and 15 partly delivered by [SEARCH_AND_HOME_SETTINGS_PLAN.md](SEARCH_AND_HOME_SETTINGS_PLAN.md): engine presets, the HTTPS `%s` template validator and the manifest `settings` field (`BrowserSettings`, written through `settings:set` — no `settings:get`, the snapshot carries it) plus the Settings search section. Site keywords (11) and the first-run chooser (15) remain; their boxes stay open

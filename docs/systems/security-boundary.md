@@ -7,7 +7,7 @@ verified_at: af2314bf
 
 # Security Boundary
 
-> Last verified: 2026-09-13
+> Last verified: 2026-09-24
 
 ## Agent Brief
 
@@ -111,9 +111,12 @@ such as `invoice.pdf.exe` so the shell can refuse to open them.
 
 ## normalizeNavigationInput
 
-`normalizeNavigationInput(value: string): string` — turns whatever the user typed
-into exactly one of: the home sentinel, an `http(s)` URL, or a search URL.
-([security.ts:3](../../electron/security.ts))
+`normalizeNavigationInput(value, searchTemplate = DEFAULT_SEARCH_TEMPLATE)` —
+turns whatever the user typed into exactly one of: the home sentinel, an
+`http(s)` URL, or a search URL. Steps 3-5 are `parseWebAddress(value)`, exported
+on its own so the Home page setting accepts exactly what the address bar treats
+as an address and nothing else (it returns `undefined` for text that would be a
+search). ([security.ts](../../electron/security.ts))
 
 Order of decisions:
 
@@ -124,8 +127,8 @@ Order of decisions:
    URLs. Remove the passthrough and the home tab becomes a web search.
 3. If `new URL(input)` parses **and** the protocol is `http:` or `https:`: reject
    when `username` or `password` is set — it throws
-   `URLs containing credentials are not allowed` — otherwise return
-   `parsed.toString()`. A string that parses under any other scheme (`file:`,
+   `URLs containing credentials are not allowed` — otherwise return it through
+   `stripTrackingParameters`. A string that parses under any other scheme (`file:`,
    `javascript:`, `data:`) is *not* returned here; it falls through to steps 4-6
    and, having no bare-domain shape, ends up as a search.
 4. `/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/.*)?$/i` → prefix `http://`.
@@ -134,7 +137,14 @@ Order of decisions:
    silently downgrades to http.
 5. `/^[\w.-]+\.[a-z]{2,}(?::\d+)?(?:\/.*)?$/i` → prefix `https://` and normalise
    through `new URL`. A bare domain, optional port, optional path.
-6. Anything else → `https://duckduckgo.com/?q=` + `encodeURIComponent(input)`.
+6. Anything else → `searchTemplate` with its `%s` replaced by
+   `encodeURIComponent(input)` (a replacer function, so `$&` in a query is never
+   a replacement pattern). The default is DuckDuckGo; the controller passes
+   `searchTemplateFor(settings)` from [browser-settings.ts](../../electron/browser-settings.ts).
+   A custom template is accepted only by `requireSearchTemplate`: `https:`, no
+   user name or password, at most 2048 characters, exactly one `%s`, and the
+   `%s` outside the host (two substitutions must give the same `URL.host`), so a
+   query can never pick the server it is sent to.
 
 **What breaks if weakened.** Losing the credential check (3) puts
 `user:pass@host` into history, bookmarks and the wire. Losing the search fallback

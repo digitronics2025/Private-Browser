@@ -22,3 +22,25 @@ describe('secure vault dialog contract', () => {
     expect(preload).not.toContain('resolveSecretForTrustedOperation');
   });
 });
+
+describe('browser settings channels', () => {
+  it('validates the settings patch and takes no arguments for Home', async () => {
+    const { validateIpcArguments } = await import('../electron/ipc-contracts');
+    expect(() => validateIpcArguments('settings:set', [{ searchEngine: 'google' }])).not.toThrow();
+    expect(() => validateIpcArguments('settings:set', [{ searchEngine: 'custom', customSearchTemplate: 'https://example.com/?q=%s' }])).not.toThrow();
+    for (const args of [[], [{}], [{ searchEngine: 'yahoo' }], [{ searchEngine: 'custom', customSearchTemplate: 'http://x.test/?q=%s' }], [{ homePage: 'url' }], [{ startup: 'home' }, 'extra']]) {
+      expect(() => validateIpcArguments('settings:set', args), JSON.stringify(args)).toThrow();
+    }
+    expect(() => validateIpcArguments('browser:home', [])).not.toThrow();
+    expect(() => validateIpcArguments('browser:home', ['https://example.com'])).toThrow();
+  });
+
+  it('exposes both channels through the preload bridge and the main-process handlers', () => {
+    const preload = readFileSync(new URL('../electron/preload.cts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    for (const channel of ['settings:set', 'browser:home']) {
+      expect(preload).toContain(`'${channel}'`);
+      expect(main).toContain(`handle('${channel}'`);
+    }
+  });
+});

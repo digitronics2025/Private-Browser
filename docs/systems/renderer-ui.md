@@ -218,7 +218,7 @@ Protection detail is in the shield menu, not on the page.
 | `automations` | `newTab(workspaceId, url)` only |
 | `downloads` | `openDownload`, `showDownload` |
 | `privacy` | none |
-| `settings` | default browser, update service, Chrome import, `setUiPreferences` (theme, bar mode) |
+| `settings` | default browser; Search engine (preset `<select>` or a custom `https://…%s` address), Home page (New Tab page or a web address) and On startup, through `setBrowserSettings`; update service, Chrome import, `setUiPreferences` (theme, bar mode) |
 | `bookmarks` | `openBookmark`, `renameBookmark`, `removeBookmark`, `exportBookmarks` |
 | `history` | `navigate`, `clearAccountSpaceData` (confirmed) |
 

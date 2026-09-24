@@ -175,6 +175,20 @@ node scripts/docs-find.mjs --history "<term from the entry>"
   visually until it closes. A transparent overlay view would avoid that but widens
   the trusted-sender check to a second webContents. Symbol: `freezeContent`.
   *(2026-09-14)*
+- **Search and Home settings stop at the basics.** There is no first-run engine
+  chooser, no site keywords (`yt cats`), no remote search suggestions, no
+  per-workspace Home page, no "open specific pages" at startup and no toggle to
+  hide the Home button. `BrowserSettings` is the store each of those extends;
+  0.7.0 steps 11, 12 and 15 own the first three. Symbol: `BrowserSettings`.
+  *(2026-09-24)*
+- **Links from other apps can open in Banking.** `second-instance` and
+  `open-url` call `newTab(undefined, url)`, which uses the active workspace, so a
+  link clicked elsewhere opens in Banking when Banking is in front. 0.7.0 step 19
+  owns the fix. Symbol: `BrowserController.newTab`. *(2026-09-24)*
+- **Search and Home settings are not released yet.** They live on branch
+  `feat/search-home-settings`. After it is merged and released, confirm on an
+  installed build that Settings → Search engine changes typed searches. Symbol:
+  `setBrowserSettings`. *(2026-09-24)*
 
 ---
 

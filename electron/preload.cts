@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { BookmarkEntryKeyInput, BookmarkLevelInput, FindResult, Shortcut, ShortcutTile, UiPreferencesPatch } from './types.js';
+import type { BookmarkEntryKeyInput, BookmarkLevelInput, FindResult, Shortcut, ShortcutTile, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { BackupWriteResult } from './account-backup.js';
@@ -7,6 +7,7 @@ import type { BackupWriteResult } from './account-backup.js';
 const api = {
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
   navigate: (value: string): Promise<void> => ipcRenderer.invoke('browser:navigate', value),
+  goHome: (): Promise<void> => ipcRenderer.invoke('browser:home'),
   back: (): Promise<void> => ipcRenderer.invoke('browser:back'),
   forward: (): Promise<void> => ipcRenderer.invoke('browser:forward'),
   reload: (): Promise<void> => ipcRenderer.invoke('browser:reload'),
@@ -54,6 +55,7 @@ const api = {
   openBookmark: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-bookmark', id),
   toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
   setUiPreferences: (patch: UiPreferencesPatch): Promise<void> => ipcRenderer.invoke('ui:set-preferences', patch),
+  setBrowserSettings: (patch: BrowserSettingsPatch): Promise<void> => ipcRenderer.invoke('settings:set', patch),
   freezeContent: (): Promise<string | null> => ipcRenderer.invoke('browser:freeze-content'),
   moveTab: (tabId: string, toIndex: number): Promise<void> => ipcRenderer.invoke('browser:move-tab', tabId, toIndex),
   reopenClosedTab: (): Promise<void> => ipcRenderer.invoke('browser:reopen-closed-tab'),

@@ -1,13 +1,16 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { ArrowLeft, Bookmark, Palette, Check, ChevronRight, Code2, Download, ExternalLink, Globe2, LoaderCircle, LockKeyhole, RefreshCw, Settings, Shield, ShieldCheck, Upload, TriangleAlert, X } from 'lucide-react';
-import type { AccountSpaceId, BrowserSnapshot, ChromeImportResult, ChromeProfileSource, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, UiPreferences, UiPreferencesPatch } from '../../electron/types';
+import { ArrowLeft, Bookmark, Home, Search, Palette, Check, ChevronRight, Code2, Download, ExternalLink, Globe2, LoaderCircle, LockKeyhole, RefreshCw, Settings, Shield, ShieldCheck, Upload, TriangleAlert, X } from 'lucide-react';
+import type { AccountSpaceId, BrowserSettings, BrowserSettingsPatch, BrowserSnapshot, ChromeImportResult, ChromeProfileSource, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, UiPreferences, UiPreferencesPatch } from '../../electron/types';
 import { PanelHeader } from './common';
 import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
+import { SEARCH_ENGINES, type PresetSearchEngineId } from '../../electron/browser-settings';
 
 const THEME_OPTIONS = [['system', 'Match Windows'], ['light', 'Light'], ['dark', 'Dark']] as const;
 const BOOKMARK_BAR_OPTIONS = [['always', 'Always'], ['new-tab', 'New Tab only'], ['hidden', 'Hidden']] as const;
+const HOME_PAGE_OPTIONS = [['new-tab', 'New Tab page'], ['url', 'Web address']] as const;
+const STARTUP_OPTIONS = [['continue', 'Continue where you left off'], ['home', 'Also open Home page']] as const;
 
-export function SettingsPanel({ state, ui, onUiChange, onToast }: { state: BrowserSnapshot; ui: UiPreferences; onUiChange: (patch: UiPreferencesPatch) => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { state: BrowserSnapshot; ui: UiPreferences; settings: BrowserSettings; onUiChange: (patch: UiPreferencesPatch) => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [isDefault, setIsDefault] = useState(false);
   const [settingsPage, setSettingsPage] = useState<'overview' | 'updates'>('overview');
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
@@ -144,6 +147,7 @@ export function SettingsPanel({ state, ui, onUiChange, onToast }: { state: Brows
   return <div className="side-panel">
     <PanelHeader icon={Settings} eyebrow="Application" title="Settings" />
     <div className="settings-card"><div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Default browser</strong><small>{isDefault ? 'Private Browser opens web links.' : 'Use Private Browser for HTTP and HTTPS links.'}</small></div>{isDefault ? <b><Check size={14} /> Set</b> : <button onClick={() => void makeDefault()}>Set default</button>}</div></div>
+    <SearchHomeSettings settings={settings} onToast={onToast} />
     <div className="settings-card chrome-import-settings">
       <div className="settings-row"><span><Upload size={17} /></span><div><strong>Import from Chrome</strong><small>Bookmarks, bookmark folders and browsing history stay on this computer.</small></div><button onClick={() => chromeImportOpen ? setChromeImportOpen(false) : void openChromeImport()}>{chromeImportOpen ? 'Close' : 'Import'}</button></div>
       {chromeImportOpen && <div className="chrome-import-form">
@@ -256,4 +260,53 @@ function UpdatesPage({ status, result, error, checking, editingPrivate, form, on
       </div>
     </section>
   </div>;
+}
+
+/**
+ * Search engine, Home page and startup. The main process validates and normalizes
+ * every value; a refusal comes back as a toast and the typed text stays put.
+ */
+function SearchHomeSettings({ settings, onToast }: { settings: BrowserSettings; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+  const [customOpen, setCustomOpen] = useState(settings.searchEngine === 'custom');
+  const [template, setTemplate] = useState(settings.customSearchTemplate ?? '');
+  const [homeEditing, setHomeEditing] = useState(settings.homePage === 'url');
+  const [homeUrl, setHomeUrl] = useState(settings.homePageUrl ?? '');
+  useEffect(() => { setCustomOpen(settings.searchEngine === 'custom'); setTemplate(settings.customSearchTemplate ?? ''); }, [settings.searchEngine, settings.customSearchTemplate]);
+  useEffect(() => { setHomeEditing(settings.homePage === 'url'); setHomeUrl(settings.homePageUrl ?? ''); }, [settings.homePage, settings.homePageUrl]);
+  const save = async (patch: BrowserSettingsPatch, done?: string) => {
+    try {
+      await window.privateBrowser.setBrowserSettings(patch);
+      if (done) onToast(done);
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+  };
+  const chooseEngine = (value: string) => {
+    if (value === 'custom') { setCustomOpen(true); return; }
+    setCustomOpen(false);
+    void save({ searchEngine: value as PresetSearchEngineId });
+  };
+  const saveTemplate = (event: FormEvent) => { event.preventDefault(); void save({ searchEngine: 'custom', customSearchTemplate: template }, 'Search engine saved'); };
+  const saveHome = (event: FormEvent) => { event.preventDefault(); void save({ homePage: 'url', homePageUrl: homeUrl }, 'Home page saved'); };
+  return <>
+    <div className="settings-card"><div className="settings-row"><span><Search size={17} /></span><div><strong>Search engine</strong><small>Used when what you type in the address bar is not a web address.</small></div></div>
+      <label className="settings-field"><span>Search with</span><select aria-label="Search engine" value={customOpen ? 'custom' : settings.searchEngine} onChange={(event) => chooseEngine(event.target.value)}>
+        {(Object.keys(SEARCH_ENGINES) as PresetSearchEngineId[]).map((id) => <option value={id} key={id}>{SEARCH_ENGINES[id].label}</option>)}
+        <option value="custom">Custom…</option>
+      </select></label>
+      {customOpen && <form className="settings-inline-form" onSubmit={saveTemplate}>
+        <input aria-label="Custom search address" inputMode="url" required maxLength={2048} placeholder="https://search.example.com/?q=%s" value={template} onChange={(event) => setTemplate(event.target.value)} spellCheck={false} />
+        <button type="submit" aria-label="Save search address">Save</button>
+        <small>Must start with https:// and contain %s where the search words go.</small>
+      </form>}
+    </div>
+    <div className="settings-card"><div className="settings-row"><span><Home size={17} /></span><div><strong>Home page</strong><small>What the Home button and Alt+Home open. Banking always opens the New Tab page.</small></div></div>
+      <div className="segmented" role="radiogroup" aria-label="Home page">{HOME_PAGE_OPTIONS.map(([mode, label]) => { const active = (homeEditing ? 'url' : settings.homePage) === mode; return <button type="button" key={mode} role="radio" aria-checked={active} className={active ? 'active' : ''} onClick={() => { if (mode === 'url') { setHomeEditing(true); return; } setHomeEditing(false); void save({ homePage: 'new-tab' }); }}>{label}</button>; })}</div>
+      {homeEditing && <form className="settings-inline-form" onSubmit={saveHome}>
+        <input aria-label="Home page address" inputMode="url" required maxLength={2048} placeholder="tenten.ma" value={homeUrl} onChange={(event) => setHomeUrl(event.target.value)} spellCheck={false} />
+        <button type="submit" aria-label="Save Home page">Save</button>
+      </form>}
+    </div>
+    <div className="settings-card"><div className="settings-row"><span><RefreshCw size={17} /></span><div><strong>On startup</strong><small>Your open tabs always come back. Choose whether the Home page opens as well.</small></div></div>
+      <div className="segmented" role="radiogroup" aria-label="On startup">{STARTUP_OPTIONS.map(([mode, label]) => <button type="button" key={mode} role="radio" aria-checked={settings.startup === mode} className={settings.startup === mode ? 'active' : ''} onClick={() => void save({ startup: mode })}>{label}</button>)}</div>
+    </div>
+  </>;
 }

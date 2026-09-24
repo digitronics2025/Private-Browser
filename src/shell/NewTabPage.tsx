@@ -21,7 +21,8 @@ function tileHue(value: string): number {
   return hash;
 }
 
-export function NewTabPage({ workspace, account, shortcuts, customized, history, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onResetShortcuts, onBackground, onTheme }: {
+export function NewTabPage({ searchPrompt, workspace, account, shortcuts, customized, history, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onResetShortcuts, onBackground, onTheme }: {
+  searchPrompt: string;
   workspace: Workspace;
   account: AccountSpaceSummary;
   shortcuts: ShortcutTile[];
@@ -61,7 +62,7 @@ export function NewTabPage({ workspace, account, shortcuts, customized, history,
         </div>
         <form className="ntp-search" role="search" onSubmit={submit}>
           <Search size={20} aria-hidden="true" />
-          <input aria-label="Search privately or enter address" placeholder="Search privately or enter address" value={query} onChange={(event) => setQuery(event.target.value)} spellCheck={false} autoComplete="off" />
+          <input aria-label={searchPrompt} placeholder={searchPrompt} value={query} onChange={(event) => setQuery(event.target.value)} spellCheck={false} autoComplete="off" />
         </form>
         <p className="ntp-context">
           <span className="ntp-space-dot" style={{ '--workspace-color': workspace.color } as CSSProperties} aria-hidden="true" />

@@ -1,6 +1,8 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { AccountSpaceId, Bookmark, BrowserSnapshot, BrowserTab, ShortcutTile, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, searchTemplateFor } from '../electron/browser-settings';
+import { parseWebAddress } from '../electron/security';
 import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
 
 const WORKSPACES: Workspace[] = [
@@ -44,6 +46,7 @@ export function installPreviewApi(): void {
   const google = ids.google as AccountSpaceId;
   const params = new URLSearchParams(location.search);
   const state: BrowserSnapshot = {
+    settings: { ...DEFAULT_BROWSER_SETTINGS },
     workspaces: WORKSPACES,
     activeWorkspaceId: 'personal',
     activeAccountSpaceId: google,
@@ -97,6 +100,21 @@ export function installPreviewApi(): void {
     setLayout: async (layout) => { document.documentElement.dataset.previewLayout = JSON.stringify(layout); },
     setOverlayOpen: async () => undefined,
     freezeContent: async () => null,
+    // Same rules as the main process: validated patch, Home address normalized, Banking Home is the New Tab page.
+    setBrowserSettings: async (value) => {
+      const patch = requireBrowserSettingsPatch(value);
+      if (patch.homePageUrl !== undefined) {
+        const url = parseWebAddress(patch.homePageUrl);
+        if (!url) throw new Error('Enter a web address, for example tenten.ma');
+        patch.homePageUrl = url;
+      }
+      state.settings = mergeBrowserSettings(state.settings, patch);
+      publish();
+    },
+    goHome: async () => {
+      const protectedWorkspace = WORKSPACES.find((item) => item.id === activeTab().workspaceId)?.protected ?? false;
+      await handlers.navigate(resolveHomeUrl(state.settings, protectedWorkspace));
+    },
     setUiPreferences: async (patch) => { state.ui = mergeUiPreferences(state.ui, patch as UiPreferencesPatch); syncDarkMode(); publish(); },
     toggleBookmarkBar: async () => { state.ui = mergeUiPreferences(state.ui, { bookmarkBarMode: state.ui.bookmarkBarMode === 'hidden' ? 'always' : 'hidden' }); publish(); },
     activateTab: async (value) => { const tab = state.tabs.find((item) => item.id === value); if (tab) { state.activeTabId = tab.id; publish(); } },
@@ -117,7 +135,7 @@ export function installPreviewApi(): void {
       const tab = activeTab();
       if (text === 'private://home') Object.assign(tab, { url: text, title: 'New tab', isHome: true });
       else {
-        const url = /^https?:\/\//.test(text) ? text : `https://duckduckgo.com/?q=${encodeURIComponent(text)}`;
+        const url = /^https?:\/\//.test(text) ? text : searchTemplateFor(state.settings).replace('%s', () => encodeURIComponent(text));
         Object.assign(tab, { url, title: new URL(url).hostname, isHome: false, zoomPercent: 100, securityWarning: url.startsWith('http:') ? 'insecure' : undefined });
       }
       publish();

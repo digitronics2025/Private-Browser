@@ -67,6 +67,20 @@ manifest without `ui` from the legacy `bookmarkBarVisible` flag, which is still
 written (`bookmarkBarMode !== 'hidden'`) so an older build reads the same bar
 state. IPC patches use the stricter `requireUiPreferencesPatch`.
 
+The manifest also carries an optional `settings` object (`BrowserSettings`,
+[browser-settings.ts](../../electron/browser-settings.ts)): `searchEngine`
+(`duckduckgo` default, `google`, `bing`, `brave`, `startpage`, `ecosia`,
+`custom`), `customSearchTemplate` (only with `custom`), `homePage` (`new-tab`
+default, `url`), `homePageUrl` (only with `url`) and `startup` (`continue`
+default, `home`). It is browser-wide, not per Account Space, and holds no
+secrets. `sanitizeBrowserSettings` falls back **field by field** — `custom`
+without a valid template becomes `duckduckgo`, `url` without an HTTP(S) address
+becomes `new-tab` — and never opens recovery. v1 migration writes the defaults.
+Builds before this field rebuild the manifest without it, so after a downgrade
+the choices reset to defaults on the next save; nothing else is lost. IPC patches
+use `requireBrowserSettingsPatch`, and the controller normalizes `homePageUrl`
+through `parseWebAddress` before `mergeBrowserSettings`.
+
 Per-account browsing files contain URLs, titles, bookmark hierarchy, and history
 plus workspace/account IDs, and an optional `shortcuts` list (≤ 12 HTTP(S)
 New Tab tiles, sanitised by `sanitizeShortcutTiles`) that is present only once the

@@ -110,6 +110,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | --- | --- | --- | --- |
 | `browser:get-state` | `getState()` | — | `BrowserSnapshot` |
 | `browser:navigate` | `navigate(value)` | `value: string` | `void` |
+| `browser:home` | `goHome()` | none (exactly zero arguments) | `void` |
 | `browser:back` | `back()` | — | `void` |
 | `browser:forward` | `forward()` | — | `void` |
 | `browser:reload` | `reload()` | — | `void` |
@@ -144,6 +145,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
 | `ui:set-preferences` | `setUiPreferences(patch)` | non-empty `UiPreferencesPatch`, validated by `requireUiPreferencesPatch` | `void` |
+| `settings:set` | `setBrowserSettings(patch)` | non-empty `BrowserSettingsPatch`, validated by `requireBrowserSettingsPatch` (search template rules, `custom`/`url` need their value); the controller then normalizes `homePageUrl` with `parseWebAddress` | `void` |
 | `bookmarks:move` | `moveBookmark(level, key, toIndex)` | `BookmarkLevelInput`, `BookmarkEntryKeyInput`, integer | `void` |
 | `bookmarks:rename` | `renameBookmark(id, title)` | id, non-blank title ≤ 500 | `void` |
 | `bookmarks:remove` | `removeBookmark(id)` | id | `void` |
@@ -270,6 +272,8 @@ out of a `useEffect`.
 
 `browser:state` is a full snapshot every time — there are no deltas, and there is
 no acknowledgement. The snapshot now also carries `ui` (`UiPreferences`),
+`settings` (`BrowserSettings`; the renderer merges it over `DEFAULT_BROWSER_SETTINGS`
+like `ui`, so a snapshot without it still renders),
 `windowState` (`maximized`, `fullscreen`, `darkMode`), `shortcutsByAccountSpace`
 (customised New Tab tiles; a missing key means defaults), `canReopenClosedTab`,
 and per-tab `audible`, `muted` and `zoomPercent`. `bookmarkBarVisible` remains as
