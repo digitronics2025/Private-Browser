@@ -42,6 +42,8 @@ import type {
   GoogleModule,
   AiApproval,
   AiPagePreview,
+  ControlCenterRecheckInput,
+  ControlCenterSendInput,
   AiProviderInput,
   BookmarkEntryKeyInput,
   BookmarkLevelInput,
@@ -96,6 +98,7 @@ import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type Gm
 import { AccountBackupManager, type BackupWriteResult } from './account-backup.js';
 import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
+import { ControlCenterLink, developerEvidence } from './control-center-link.js';
 import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
 import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-status.js';
 import { listChromeProfiles, readChromeProfile } from './chrome-importer.js';
@@ -188,6 +191,8 @@ class BrowserController {
   private readonly configuredSessions = new Set<string>();
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
+  /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
+  private readonly developerPreviewIds = new Set<string>();
   private readonly clipboardGuard = new ClipboardGuard(clipboard);
   private readonly permissions: AccountPermissionManager;
   private pendingPermission?: {
@@ -227,6 +232,7 @@ class BrowserController {
     private readonly aiProvider: AiProviderStore,
     private readonly updates: UpdateServiceStore,
     private readonly vscodeBridge: VscodeBridgeServer,
+    private readonly controlCenter: ControlCenterLink,
   ) {
     this.permissions = new AccountPermissionManager(accounts);
     const state = this.store.get();
@@ -1355,7 +1361,81 @@ class BrowserController {
       ...(screenshotDataUrl ? { screenshotDataUrl } : {}),
     };
     this.pendingAiPreviews.set(preview.id, { preview, expiresAt: Date.now() + 5 * 60_000 });
+    this.developerPreviewIds.add(preview.id);
+    if (this.developerPreviewIds.size > 50) this.developerPreviewIds.delete(this.developerPreviewIds.values().next().value!);
     return preview;
+  }
+
+  // ---- AI Development Control Center (docs/systems/control-center-link.md) ----
+  // The browser is always the client. Every send spends one approval of a
+  // Developer-panel preview, exactly as the VS Code handoff does, and the page
+  // is never re-read after approval.
+
+  async controlCenterStatus() {
+    return this.controlCenter.status();
+  }
+
+  async pairControlCenter(code: string) {
+    this.requireDeveloperWorkspace();
+    const status = await this.controlCenter.pair(code);
+    this.addPrivacyEvent('vault', 'Paired with the Control Center', `Key ${status.fingerprint ?? 'unknown'} at ${status.url}`);
+    return status;
+  }
+
+  async disconnectControlCenter() {
+    this.controlCenter.disconnect();
+    this.addPrivacyEvent('vault', 'Control Center link removed', 'The saved link was deleted from this computer');
+    return this.controlCenter.status();
+  }
+
+  async controlCenterRepositories() {
+    this.requireDeveloperWorkspace();
+    return this.controlCenter.repositories(this.pageOrigin(this.activeTab(this.store.get()).url));
+  }
+
+  async controlCenterTasks() {
+    this.requireDeveloperWorkspace();
+    return this.controlCenter.tasks();
+  }
+
+  async sendToControlCenter(input: ControlCenterSendInput) {
+    this.requireDeveloperWorkspace();
+    const preview = this.consumeDeveloperApproval(input.approvalToken);
+    const tab = this.activeTab(this.store.get());
+    const jpeg = 'data:image/jpeg;base64,';
+    const screenshot = preview.screenshotDataUrl?.startsWith(jpeg) ? preview.screenshotDataUrl.slice(jpeg.length) : undefined;
+    this.addPrivacyEvent('cloud-approved', 'Control Center handoff approved', `${preview.title} · to the Control Center on this computer`);
+    return this.controlCenter.createTask({
+      repositoryId: input.repositoryId,
+      note: input.note.trim(),
+      sourceUrl: sanitizeDiagnosticUrl(tab.url).text,
+      pageOrigin: this.pageOrigin(tab.url),
+      evidence: developerEvidence(preview),
+      ...(screenshot ? { screenshotJpegBase64: screenshot } : {}),
+    });
+  }
+
+  async recheckControlCenterTask(input: ControlCenterRecheckInput) {
+    this.requireDeveloperWorkspace();
+    const preview = this.consumeDeveloperApproval(input.approvalToken);
+    this.addPrivacyEvent('cloud-approved', 'Control Center re-check approved', `${preview.title} · ${input.taskId}`);
+    return this.controlCenter.addEvidence(input.taskId, developerEvidence(preview));
+  }
+
+  /** Spends the approval first, like every AI path, then insists it approved a Developer-panel preview. */
+  private consumeDeveloperApproval(token: string): AiPagePreview {
+    const preview = this.consumeAiApproval(token);
+    if (!this.developerPreviewIds.delete(preview.id)) throw new Error('Only Developer panel diagnostics can go to the Control Center; capture them again');
+    return preview;
+  }
+
+  private pageOrigin(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : null;
+    } catch {
+      return null;
+    }
   }
 
   async installBridgeExtension(): Promise<string> {
@@ -2451,6 +2531,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   vault.initialize();
   const aiProvider = new AiProviderStore(join(userDataPath, 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(userDataPath, 'update-service.enc'));
+  const controlCenter = new ControlCenterLink({ filePath: join(userDataPath, 'control-center-link.enc'), storage: safeStorage });
   const bridgeDataRoot = join(process.env.LOCALAPPDATA ?? userDataPath, 'Private Browser Bridge');
   vscodeBridge = new VscodeBridgeServer(join(userDataPath, 'vscode-bridge.enc'), join(bridgeDataRoot, 'rendezvous.json'), app.getVersion(), () => controller?.broadcast());
   try {
@@ -2475,7 +2556,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     removeUpdateBootstrap(updateBootstrapPath);
   }
   const migration = new VaultMigrationService(join(userDataPath, 'vault.enc'), join(userDataPath, 'myvault', 'migration-journal.enc'), safeStorage, vault);
-  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge);
+  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge, controlCenter);
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
@@ -2562,6 +2643,13 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('developer:inspect-page', (_event, selectElement: boolean) => controller!.inspectDeveloperPage(Boolean(selectElement)));
   handle('developer:prepare-ai-preview', (_event, options: DeveloperAiPreviewOptions) => controller!.prepareDeveloperAiPreview({ includeDom: Boolean(options?.includeDom), includeScreenshot: Boolean(options?.includeScreenshot) }));
   handle('developer:install-extension', () => controller!.installBridgeExtension());
+  handle('control-center:status', () => controller!.controlCenterStatus());
+  handle('control-center:pair', (_event, code: string) => controller!.pairControlCenter(code));
+  handle('control-center:disconnect', () => controller!.disconnectControlCenter());
+  handle('control-center:repositories', () => controller!.controlCenterRepositories());
+  handle('control-center:tasks', () => controller!.controlCenterTasks());
+  handle('control-center:send', (_event, input: ControlCenterSendInput) => controller!.sendToControlCenter(input));
+  handle('control-center:recheck', (_event, input: ControlCenterRecheckInput) => controller!.recheckControlCenterTask(input));
   handle('ai:prepare-preview', () => controller!.prepareAiPreview());
   handle('ai:approve-preview', (_event, previewId: string) => controller!.approveAiPreview(previewId));
   handle('ai:provider-status', () => controller!.getAiProvider());

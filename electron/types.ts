@@ -619,3 +619,48 @@ export interface UpdateCheckResult {
   checkedAt: string;
 }
 export type { BridgeStatus, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';
+
+/** The AI Development Control Center link (docs/systems/control-center-link.md). */
+export type ControlCenterState = 'not-paired' | 'connected' | 'unreachable' | 'identity-changed' | 'unavailable';
+
+export interface ControlCenterStatus {
+  state: ControlCenterState;
+  /** The address the Control Center answers at (loopback only). */
+  url: string;
+  /** The pinned key's fingerprint, to compare with the Control Center's pairing dialog. */
+  fingerprint?: string;
+  /** Plain reason for any state other than connected. */
+  detail?: string;
+}
+
+export interface ControlCenterRepository {
+  id: string;
+  name: string;
+  devOrigin: string | null;
+}
+
+export interface ControlCenterTask {
+  id: string;
+  title: string;
+  repositoryName: string;
+  status: string;
+  currentStageName: string | null;
+  blocker: string | null;
+  finalStatus: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** Where the task opens in the Control Center dashboard. */
+  dashboardUrl: string;
+}
+
+export interface ControlCenterSendInput {
+  approvalToken: string;
+  repositoryId: string;
+  /** The operator's own words: what should be fixed. */
+  note: string;
+}
+
+export interface ControlCenterRecheckInput {
+  approvalToken: string;
+  taskId: string;
+}

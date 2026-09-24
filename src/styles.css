@@ -529,7 +529,7 @@ kbd { font: inherit; }
 }
 .bridge-status-card button:hover, .bridge-pane button:not(.primary-button):hover:not(:disabled), .project-summary button:hover, .inspection-result button:hover, .ai-context-preview button:hover { background: var(--hover); }
 .bridge-pane button:disabled { opacity: .45; }
-.bridge-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; margin: 12px 0; padding: 3px; border-radius: var(--radius-pill); background: var(--surface-3); }
+.bridge-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; margin: 12px 0; padding: 3px; border-radius: var(--radius-pill); background: var(--surface-3); }
 .bridge-tabs button { min-height: 28px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-muted); font-size: var(--fs-sm); font-weight: 600; }
 .bridge-tabs button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
 .bridge-pane { display: flex; flex-direction: column; gap: 10px; animation: fade-in var(--motion-slow) var(--ease); }
@@ -562,7 +562,21 @@ kbd { font: inherit; }
 .report-row > span.passed { background: var(--ok); } .report-row > span.failed { background: var(--danger); } .report-row > span.attention { background: var(--warn); }
 .report-row > button:first-of-type { min-height: 26px !important; border: 0 !important; background: transparent !important; padding: 0 !important; text-align: left; font-size: var(--fs-sm) !important; }
 .report-row small { color: var(--text-muted); font-size: var(--fs-xs); }
+/* Developer panel → Tasks: the Control Center link (docs/systems/control-center-link.md). */
+.bridge-label textarea { min-width: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--field); color: var(--text); padding: 8px 10px; font-size: var(--fs-sm); outline: none; resize: vertical; }
+.bridge-label textarea:focus { border-color: var(--accent-ring); }
+.control-center-detail { margin: 0; color: var(--text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.control-center-pair { grid-template-columns: 1fr; }
+.control-center-pair span { color: var(--text-muted); font-size: var(--fs-xs); margin-top: 4px; }
+.control-center-tasks { display: flex; flex-direction: column; gap: 6px; }
+.control-center-heading { color: var(--text-muted); font-size: var(--fs-xs); font-weight: 700; }
+.control-center-task { grid-template-columns: 9px minmax(0, 1fr) auto auto; }
+.control-center-task > div { display: flex; flex-direction: column; min-width: 0; }
+.control-center-task strong { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.control-center-task small { overflow-wrap: anywhere; }
+.report-row > span.running { background: var(--accent); }
 .report-row > button:last-child { width: 28px; min-height: 28px !important; padding: 0 !important; display: grid; place-items: center; }
+.control-center-task > button:last-child:not(:first-of-type) { width: auto; padding: 0 8px !important; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .report-controls { display: grid; grid-template-columns: 1fr 1fr auto auto; align-items: end; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); }
 .report-controls label { display: flex; flex-direction: column; gap: 3px; color: var(--text-muted); font-size: var(--fs-xs); }
 .ai-privacy-note, .local-banner, .vault-health { display: flex; gap: 10px; padding: 11px 12px; border-radius: var(--radius-lg); background: var(--ok-soft); color: var(--ok); }

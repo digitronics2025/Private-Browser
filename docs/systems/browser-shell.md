@@ -11,7 +11,7 @@ verified_at: 08cf6e94
 
 # Browser Shell
 
-> Last verified: 2026-09-14
+> Last verified: 2026-09-24
 
 ## Agent Brief
 
@@ -332,6 +332,12 @@ may run from Development Home so a server can be started before navigation;
 page inspection and diagnostic capture still require a non-home, non-protected
 target. Element selection uses an internal CDP session and never opens a remote
 debugging port.
+
+The Developer panel's Tasks tab sends to the local AI Development Control
+Center through the `controlCenter*`, `sendToControlCenter` and
+`recheckControlCenterTask` controller methods, which spend one approval of a
+Developer-panel preview each (`developerPreviewIds`); see
+[control-center-link.md](control-center-link.md).
 
 ## Chrome Import and Bookmarks Bar
 

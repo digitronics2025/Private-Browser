@@ -179,6 +179,12 @@ export function installPreviewApi(): void {
     },
     listVault: async () => ({ available: true, items: [], lifecycle: 'unlocked', sync: 'idle', dirty: false, generation: 1 }),
     getVaultMigrationStatus: async () => ({ legacyAvailable: false }),
+    // The Control Center link, paired, with one task (docs/systems/control-center-link.md).
+    getControlCenterStatus: async () => ({ state: 'connected', url: 'http://127.0.0.1:4317', fingerprint: '4F1C 9A2E 77D0 13B8 C6E5 0A94 2D61 F3B7' }),
+    listControlCenterRepositories: async () => ({ repositories: [{ id: 'repo-shop', name: 'shop', devOrigin: 'http://127.0.0.1:5173' }, { id: 'repo-site', name: 'site', devOrigin: null }], suggestedId: 'repo-shop' }),
+    listControlCenterTasks: async () => [{ id: 'TASK-0042', title: 'The cart page crashes when it is empty', repositoryName: 'shop', status: 'COMPLETED', currentStageName: 'Complete', blocker: null, finalStatus: 'READY', createdAt: '2026-09-24T10:00:00.000Z', updatedAt: '2026-09-24T10:20:00.000Z', dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0042' }],
+    sendToControlCenter: async () => ({ id: 'TASK-0043', title: 'Preview task', repositoryName: 'shop', status: 'QUEUED', currentStageName: 'Investigate', blocker: null, finalStatus: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0043' }),
+    recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md' }),
     inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),
   };
   const api = new Proxy(handlers, { get(target, property) { return target[String(property)] ?? (async () => undefined); } });

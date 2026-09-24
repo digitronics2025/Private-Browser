@@ -8,7 +8,7 @@ verified_at: 7063e89
 
 # AI Consent
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-24
 
 ## Agent Brief
 
@@ -180,6 +180,16 @@ from `prepareAiPreview` only — expiry itself is enforced at the point of use b
 the checks above, so pruning is about bounding memory, not about correctness.
 Both maps are in-process only: quitting the app revokes every outstanding
 capability.
+
+### Other destinations for an approved preview
+
+The same single-use approval is also spent by the VS Code handoff
+(`ai.handoff`, [vscode-bridge.md](vscode-bridge.md)) and by the Developer
+panel's Tasks tab, which sends to the AI Development Control Center on this
+computer ([control-center-link.md](control-center-link.md)). The Control Center
+path accepts only previews built by `prepareDeveloperAiPreview`, checks the
+Development workspace before spending the approval, and sends the approved
+preview verbatim.
 
 ## Provider Configuration
 

@@ -32,6 +32,7 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - OS-encrypted update-service configuration with startup and daily release checks.
 - A Development-workspace cockpit with native Chromium Elements, Console, Sources, Network, Performance, Application and Recorder tools; F12/Ctrl+Shift+I shortcuts; right-click element inspection; and sanitized AI-ready diagnostic reports.
 - A private VS Code companion with authenticated named-pipe pairing, explicit workspace/command grants, project adapters, isolated Playwright checks, local reports, source handoff, and reviewed AI edits.
+- A link to the AI Development Control Center on the same computer: from the Development workspace, one approved send turns a page problem into a task, the task's progress shows in the Developer panel, and "Check again" attaches fresh evidence after it ran. The browser is always the client; the Control Center gets no access to the browser.
 - Hardened Electron fuses, explicit certificate/webview denial, bounded IPC,
   strict site permissions, risky-download blocking and a locked-down Banking workspace.
 

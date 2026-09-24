@@ -70,6 +70,9 @@ node scripts/docs-guard.mjs ratchet --write # tighten allowances that gained sla
   single-use approval token, and the cloud provider it is spent on.
 - [vscode-bridge.md](vscode-bridge.md) — authenticated local pairing, workspace
   and command grants, project adapters, isolated tests, reports, and guarded AI edits.
+- [control-center-link.md](control-center-link.md) — the Developer panel's Tasks
+  tab: approved page problems sent to the local AI Development Control Center as
+  tasks, their status, and re-checks; pinned key, loopback only.
 
 **The desktop app — renderer**
 

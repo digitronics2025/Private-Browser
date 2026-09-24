@@ -9,7 +9,7 @@ verified_at: 08cf6e94
 
 # IPC Contract
 
-> Last verified: 2026-09-14
+> Last verified: 2026-09-24
 
 ## Agent Brief
 
@@ -179,6 +179,22 @@ the renderer's disabled state is only presentation. `DevToolsMode` is
 before this bridge can return them.
 The bridge channels are still chrome-renderer IPC; the authenticated named-pipe
 protocol behind them is documented in [vscode-bridge.md](vscode-bridge.md).
+
+### control-center: — 7 channels
+
+| Channel | Preload method | Arguments | Resolves with |
+| --- | --- | --- | --- |
+| `control-center:status` | `getControlCenterStatus()` | — | `ControlCenterStatus` |
+| `control-center:pair` | `pairControlCenter(code)` | eight digits | `ControlCenterStatus` |
+| `control-center:disconnect` | `disconnectControlCenter()` | — | `ControlCenterStatus` |
+| `control-center:repositories` | `listControlCenterRepositories()` | — | `{repositories, suggestedId}` |
+| `control-center:tasks` | `listControlCenterTasks()` | — | `ControlCenterTask[]` |
+| `control-center:send` | `sendToControlCenter(input)` | exactly `{approvalToken, repositoryId, note}` | `ControlCenterTask` |
+| `control-center:recheck` | `recheckControlCenterTask(input)` | exactly `{approvalToken, taskId}` | `{name}` |
+
+The contract refuses any extra field: evidence and screenshots come from the
+approved preview in main, never from the renderer. Behaviour:
+[control-center-link.md](control-center-link.md).
 
 ### ai: — 6 channels
 

@@ -178,6 +178,33 @@ node scripts/docs-find.mjs --history "<term from the entry>"
 
 ---
 
+## Control Center link
+
+- **Agents never drive the browser (2026-09-24, `ControlCenterLink`).** The
+  link is one-way on purpose: the browser sends approved evidence, the Control
+  Center sends nothing back but task status. Letting Control Center agents
+  drive pages would need a separate, empty "Agent" Account Space with no saved
+  logins and no vault, its own threat model, and a change to SECURITY.md —
+  never the operator's signed-in spaces.
+- **Opening a task's app in Private Browser from the Control Center is not
+  built (2026-09-24, `sendToControlCenter`).** It fits the 0.7.0
+  default-browser handling (single-instance URLs), which has not shipped.
+- **The Control Center channels are checked by their own parity test
+  (2026-09-24, `tests/ipc-control-center.test.ts`).** When the 0.7.0 IPC
+  parity test lands, fold these seven channels into it and drop the duplicate
+  file-reading assertions.
+- **The Turnstile Electron test is intermittent (2026-09-24,
+  `tests/electron/account-spaces.spec.ts` "completes the official Turnstile
+  test-key flow").** `accounts:open-in` sometimes rejects with
+  `ERR_ABORTED (-3)` loading the local fixture. Measured on unchanged
+  `origin/main` (7ec1a22): 1 failure in 6 runs, so it is not caused by the
+  Control Center link; likely a navigation superseding the first load. Not
+  investigated further here.
+- **Starting the Control Center from the browser is not offered (2026-09-24,
+  `ControlCenterLink.status`).** It would give the browser a
+  process-spawning power; the panel says the Control Center is not running
+  instead.
+
 ## Owner decisions — not engineering debt
 
 Things that are deliberately open because they are a judgement call for the

@@ -143,9 +143,33 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if (!['retry', 'open-backup-location', 'restore-v1', 'fresh-start'].includes(String(args[0]))) throw new Error('Invalid recovery action');
       if (args[1] !== undefined) requireBoundedText(args[1], 'recovery confirmation', 64);
       return;
+    case 'control-center:status':
+    case 'control-center:disconnect':
+    case 'control-center:repositories':
+    case 'control-center:tasks':
+      exact(args, 0); return;
+    case 'control-center:pair':
+      exact(args, 1); if (typeof args[0] !== 'string' || !/^\d{8}$/.test(args[0])) throw new Error('The pairing code has eight digits'); return;
+    case 'control-center:send': {
+      exact(args, 1); const input = requireExactKeys(args[0], ['approvalToken', 'repositoryId', 'note']);
+      requireUuid(input.approvalToken, 'approval'); requireNonEmptyText(input.repositoryId, 'repository', 100); requireNonEmptyText(input.note, 'note', 2000); return;
+    }
+    case 'control-center:recheck': {
+      exact(args, 1); const input = requireExactKeys(args[0], ['approvalToken', 'taskId']);
+      requireUuid(input.approvalToken, 'approval');
+      if (typeof input.taskId !== 'string' || !/^TASK-\d{1,8}$/.test(input.taskId)) throw new Error('Invalid Control Center task'); return;
+    }
     default:
       return;
   }
+}
+
+/** An object carrying exactly these keys: an extra field is refused, never passed along. */
+function requireExactKeys(value: unknown, keys: string[]): Record<string, unknown> {
+  const input = requireObject(value);
+  const extra = Object.keys(input).filter((key) => !keys.includes(key));
+  if (extra.length) throw new Error('Unexpected field');
+  return input;
 }
 
 function requireBoundedNumber(value: unknown, field: string, minimum: number, maximum: number): number { if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) throw new Error(`Invalid ${field}`); return value; }
