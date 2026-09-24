@@ -86,9 +86,13 @@ const tampered = new URL(manifest.downloadUrl);
 const signature = tampered.searchParams.get('signature') ?? '';
 tampered.searchParams.set('signature', `${signature.slice(0, -1)}${signature.endsWith('A') ? 'B' : 'A'}`);
 await expectStatus(tampered, 404);
-const expired = new URL(manifest.downloadUrl);
-expired.searchParams.set('expires', '1000000000');
-await expectStatus(expired, 404);
+// A link whose expiry was edited no longer matches its signature. This probe
+// cannot sign, so it proves only that a changed expiry is refused; the rule
+// that a correctly signed but expired link is refused is tested in
+// cloudflare/tests/worker.test.ts, which holds a signing key.
+const editedExpiry = new URL(manifest.downloadUrl);
+editedExpiry.searchParams.set('expires', '1000000000');
+await expectStatus(editedExpiry, 404);
 
 process.stdout.write(`${JSON.stringify({ ok: true, version: manifest.version, buildNumber: manifest.buildNumber, filename: expectedFilename, sizeBytes: expectedSize, sha256: expectedHash })}\n`);
 

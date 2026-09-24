@@ -27,6 +27,10 @@ class Statement {
   bind(...values: unknown[]) { this.values = values; return this; }
 
   async first<T>() {
+    if (this.sql.includes('WHERE id = ?1')) {
+      const [id, appId, channel] = this.values as [string, string, string];
+      return (this.database.rows.find((row) => row.id === id && row.app_id === appId && row.channel === channel) ?? null) as T | null;
+    }
     if (this.sql.includes('SELECT object_key')) {
       const [appId] = this.values as [string];
       const row = this.database.active(appId);
@@ -59,6 +63,16 @@ class Statement {
       const existing = this.database.rows.findIndex((candidate) => candidate.id === id);
       if (existing >= 0) this.database.rows[existing] = row;
       else this.database.rows.push(row);
+      return;
+    }
+    if (this.sql.startsWith('UPDATE releases SET is_active = 0 WHERE')) {
+      const [appId, channel, keep] = this.values as [string, string, string];
+      for (const row of this.database.rows) if (row.app_id === appId && row.channel === channel && row.id !== keep) row.is_active = 0;
+      return;
+    }
+    if (this.sql.startsWith('UPDATE releases SET is_active = 1 WHERE')) {
+      const [id, appId, channel] = this.values as [string, string, string];
+      for (const row of this.database.rows) if (row.id === id && row.app_id === appId && row.channel === channel) row.is_active = 1;
       return;
     }
     if (this.sql.includes('UPDATE releases SET is_active')) {
@@ -479,6 +493,49 @@ ${expires}`));
     expect(item.sha256).toBe('a'.repeat(64));
   });
 
+  // F-52: re-posting the active id with a smaller version used to pass.
+  it('rejects a lower version even under the active release id', async () => {
+    const input = {
+      id: release.id, version: '0.1.0', buildNumber: 9, channel: 'stable', objectKey: release.object_key,
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'release_downgrade_rejected' });
+    expect(database.batches).toBe(0);
+  });
+
+  // F-57: the body ceiling is enforced before the body is parsed.
+  it('refuses an oversized publish body', async () => {
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify({ padding: 'x'.repeat(40_000) }) });
+    expect(response.status).toBe(413);
+    expect(database.batches).toBe(0);
+  });
+
+  // F-50: the pipeline's rollback when a new release fails its live check.
+  it('re-activates an earlier release on an admin request, and only then', async () => {
+    const newer = {
+      version: '0.3.1', buildNumber: 4, channel: 'stable', objectKey: release.object_key,
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    database.rows[0]!.object_key = 'releases/older.exe';
+    const published = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(newer) });
+    expect(published.status).toBe(201);
+    expect(database.active('private-browser', 'stable')).toMatchObject({ version: '0.3.1' });
+
+    const anonymous = await request('/api/v1/admin/releases/activate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: release.id, channel: 'stable' }) });
+    expect(anonymous.status).toBe(404);
+    // The earlier installer is no longer in R2: activation refuses rather than pointing at nothing.
+    const missing = await request('/api/v1/admin/releases/activate', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify({ id: release.id, channel: 'stable' }) });
+    expect(missing.status).toBe(409);
+    database.rows[0]!.object_key = release.object_key;
+    const rolledBack = await request('/api/v1/admin/releases/activate', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify({ id: release.id, channel: 'stable' }) });
+    expect(rolledBack.status).toBe(200);
+    expect(database.rows.filter((row) => row.is_active === 1).map((row) => row.id)).toEqual([release.id]);
+    const unknown = await request('/api/v1/admin/releases/activate', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify({ id: 'stable-9.9.9-99', channel: 'stable' }) });
+    expect(unknown.status).toBe(404);
+  });
+
   it('rejects a release build-number downgrade', async () => {
     const input = {
       version: '0.2.9', buildNumber: 2, channel: 'stable', objectKey: release.object_key,
@@ -486,6 +543,7 @@ ${expires}`));
     };
     const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: 'release_downgrade_rejected' });
     expect(database.batches).toBe(0);
   });
 });

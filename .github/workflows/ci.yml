@@ -20,8 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: npm
@@ -36,7 +36,7 @@ jobs:
       # keep the screenshots and traces (preview mock data only) to diagnose them.
       - name: Keep browser test evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: playwright-evidence
           path: |
@@ -52,8 +52,8 @@ jobs:
     # No job-level secrets: `npm ci` must not run with credentials in its
     # environment, or any dependency's install script can read them.
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: npm
@@ -70,7 +70,6 @@ jobs:
         shell: pwsh
         env:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
-          PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
         run: |
           $version = (node cloudflare/scripts/prepare-release-version.mjs).Trim()
           "Selected release version $version"
@@ -124,7 +123,7 @@ jobs:
           "${{ steps.packaged-version.outputs.version }}" | Set-Content release\VERSION.txt -NoNewline
           npm sbom --sbom-format cyclonedx | Out-File -Encoding utf8 release\SBOM.cdx.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: private-browser-windows
           path: |
@@ -134,7 +133,7 @@ jobs:
             release/SBOM.cdx.json
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: private-browser-bridge-vsix
           path: release/private-browser-bridge-*.vsix
@@ -154,16 +153,18 @@ jobs:
     # Secrets are attached per step below, never to the job, so `npm ci` runs
     # without them in scope.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # Needed to diff this push against its predecessor below.
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - uses: actions/download-artifact@v5
+      # No dependency install scripts here: this job later hands the Cloudflare
+      # token to wrangler and the admin key to the publish scripts (F-55).
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: private-browser-windows
           path: release
@@ -233,6 +234,16 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "Cloudflare release publishing is not configured; the verified GitHub artifact remains available."
           fi
+      - name: Record the release being replaced
+        if: steps.configured.outputs.ready == 'true'
+        id: previous
+        shell: bash
+        env:
+          PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
+        run: |
+          previous="$(curl -fsS --max-time 20 --proto '=https' "${PRIVATE_BROWSER_DOWNLOAD_URL%/}/api/v1/releases/public/latest" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s);if(/^\d+\.\d+\.\d+$/.test(v.version)&&Number.isSafeInteger(v.buildNumber))process.stdout.write(`stable-${v.version}-${v.buildNumber}`)}catch{}})' || true)"
+          echo "id=$previous" >> "$GITHUB_OUTPUT"
+          echo "Release being replaced: ${previous:-<none>}"
       - name: Upload installer to private R2 bucket
         if: steps.configured.outputs.ready == 'true'
         id: upload
@@ -259,4 +270,17 @@ jobs:
         env:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
           PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
-        run: node cloudflare/scripts/verify-live-release.mjs "${{ steps.upload.outputs.installer }}"
+          PRIVATE_BROWSER_ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
+          PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.id }}
+        shell: bash
+        run: |
+          # The new release is already active here; if users would not get
+          # exactly the installer that was built, put the previous one back (F-50).
+          if node cloudflare/scripts/verify-live-release.mjs "${{ steps.upload.outputs.installer }}"; then exit 0; fi
+          if [[ -n "$PREVIOUS_RELEASE_ID" ]]; then
+            echo "::error::Live verification failed; re-activating $PREVIOUS_RELEASE_ID"
+            node cloudflare/scripts/activate-release.mjs "$PREVIOUS_RELEASE_ID"
+          else
+            echo "::error::Live verification failed and there is no earlier release to restore"
+          fi
+          exit 1

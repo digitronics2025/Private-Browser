@@ -218,15 +218,27 @@ async function handleBinary(request: Request, env: Env, url: URL): Promise<Respo
   return new Response(object.body, { status: range ? 206 : 200, headers });
 }
 
+/** Release metadata is a few hundred bytes; the ceiling is checked before the body is buffered. */
+const MAX_ADMIN_BODY_BYTES = 32 * 1024;
+
+async function readAdminJson(request: Request): Promise<unknown> {
+  const declared = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_ADMIN_BODY_BYTES) throw new RangeError('Request body is too large');
+  const text = await request.text();
+  if (text.length > MAX_ADMIN_BODY_BYTES) throw new RangeError('Request body is too large');
+  return JSON.parse(text) as unknown;
+}
+
 async function handlePublish(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed('POST');
   if (!(await isAdminAuthorized(request, env))) return notFound();
   if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return json({ error: 'unsupported_media_type' }, 415);
   let input;
   try {
-    const body = await request.json();
+    const body = await readAdminJson(request);
     input = validateReleaseInput(body);
   } catch (error) {
+    if (error instanceof RangeError) return json({ error: 'payload_too_large' }, 413, { 'cache-control': PRIVATE_CACHE });
     return json({ error: 'invalid_release', detail: error instanceof Error ? error.message : 'Invalid JSON' }, 400, { 'cache-control': PRIVATE_CACHE });
   }
   const object = await env.RELEASES.head(input.objectKey);
@@ -234,7 +246,10 @@ async function handlePublish(request: Request, env: Env): Promise<Response> {
   const id = input.id ?? `${input.channel}-${input.version}-${input.buildNumber}`;
   const publishedAt = input.publishedAt ? new Date(input.publishedAt).toISOString() : new Date().toISOString();
   const current = await env.DB.prepare('SELECT id, version, build_number FROM releases WHERE app_id = ?1 AND channel = ?2 AND is_active = 1 ORDER BY build_number DESC LIMIT 1').bind(APP_ID, input.channel).first<{ id: string; version: string; build_number: number }>();
-  if (current && (current.build_number > input.buildNumber || (current.build_number === input.buildNumber && (current.id !== id || current.version !== input.version)))) {
+  // Re-posting the active id with a smaller version is a downgrade too; it
+  // used to slip past the new-id version check below (F-52).
+  if (current && (current.build_number > input.buildNumber || (current.id === id && compareSemver(input.version, current.version) < 0)
+    || (current.build_number === input.buildNumber && (current.id !== id || current.version !== input.version)))) {
     return json({ error: 'release_downgrade_rejected' }, 409, { 'cache-control': PRIVATE_CACHE });
   }
   // The desktop client decides whether an update exists on the version alone, so
@@ -257,6 +272,40 @@ async function handlePublish(request: Request, env: Env): Promise<Response> {
     env.DB.prepare('UPDATE releases SET is_active = CASE WHEN id = ?1 THEN 1 ELSE 0 END WHERE app_id = ?2 AND channel = ?3').bind(id, APP_ID, input.channel),
   ]);
   return json({ ok: true, id, version: input.version, buildNumber: input.buildNumber }, 201, { 'cache-control': PRIVATE_CACHE });
+}
+
+/**
+ * Makes an existing release the active one again — the publish pipeline's
+ * rollback when the live end-to-end check of a new release fails (F-50). It is
+ * a deliberate downgrade, so it is admin-only, names an exact id, and requires
+ * that release's installer to still be in R2 at its recorded size.
+ */
+async function handleActivate(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'POST') return methodNotAllowed('POST');
+  if (!(await isAdminAuthorized(request, env))) return notFound();
+  if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return json({ error: 'unsupported_media_type' }, 415);
+  let id: string;
+  let channel: 'stable' | 'beta';
+  try {
+    const body = await readAdminJson(request) as { id?: unknown; channel?: unknown } | null;
+    if (!body || typeof body !== 'object' || typeof body.id !== 'string' || !/^[a-z]+-[0-9A-Za-z.+-]{1,120}$/.test(body.id) || (body.channel !== 'stable' && body.channel !== 'beta')) throw new Error('An exact release id and channel are required');
+    id = body.id;
+    channel = body.channel;
+  } catch (error) {
+    if (error instanceof RangeError) return json({ error: 'payload_too_large' }, 413, { 'cache-control': PRIVATE_CACHE });
+    return json({ error: 'invalid_activation', detail: error instanceof Error ? error.message : 'Invalid JSON' }, 400, { 'cache-control': PRIVATE_CACHE });
+  }
+  const row = await env.DB.prepare('SELECT id, object_key, size_bytes, version, build_number FROM releases WHERE id = ?1 AND app_id = ?2 AND channel = ?3').bind(id, APP_ID, channel).first<{ id: string; object_key: string; size_bytes: number; version: string; build_number: number }>();
+  if (!row) return json({ error: 'release_not_found' }, 404, { 'cache-control': PRIVATE_CACHE });
+  const object = await env.RELEASES.head(row.object_key);
+  if (!object || object.size !== row.size_bytes) return json({ error: 'r2_object_missing_or_size_mismatch' }, 409, { 'cache-control': PRIVATE_CACHE });
+  // Deactivate first, then activate: the downgrade trigger refuses to activate a
+  // lower build while a higher one is still active.
+  await env.DB.batch([
+    env.DB.prepare('UPDATE releases SET is_active = 0 WHERE app_id = ?1 AND channel = ?2 AND id <> ?3').bind(APP_ID, channel, id),
+    env.DB.prepare('UPDATE releases SET is_active = 1 WHERE id = ?1 AND app_id = ?2 AND channel = ?3').bind(id, APP_ID, channel),
+  ]);
+  return json({ ok: true, id, version: row.version, buildNumber: row.build_number }, 200, { 'cache-control': PRIVATE_CACHE });
 }
 
 async function handleHealth(request: Request, env: Env): Promise<Response> {
@@ -282,13 +331,16 @@ export default {
       if (url.pathname === '/api/v1/releases/public/latest') return handlePublicLatest(request, env);
       if (url.pathname === '/api/v1/releases/latest' || url.pathname === '/update.json') return handleLatest(request, env);
       if (url.pathname === '/api/v1/admin/releases') return handlePublish(request, env);
+      if (url.pathname === '/api/v1/admin/releases/activate') return handleActivate(request, env);
       if (url.pathname === '/' || url.pathname === '/download') return handlePublicDownloadPage(request, env);
       if (url.pathname === '/download/latest.exe') return handleBinary(request, env, url);
       const pageToken = stableDownloadToken(url.pathname);
       if (pageToken) return handleStableDownloadPage(request, env, pageToken);
       return notFound();
     } catch (error) {
-      console.error('request_failed', { path: url.pathname, message: error instanceof Error ? error.message : 'unknown' });
+      // Never log a private page's path: its last segment is the download token (F-51).
+      const path = stableDownloadToken(url.pathname) ? '/download/[token]' : url.pathname;
+      console.error('request_failed', { path, message: error instanceof Error ? error.message : 'unknown' });
       return json({ error: 'internal_error' }, 500, { 'cache-control': PRIVATE_CACHE });
     }
   },

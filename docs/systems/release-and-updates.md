@@ -122,7 +122,8 @@ message and returns 500 `internal_error`.
 | `/api/v1/releases/public/latest` | GET, HEAD | none | `handlePublicLatest`. Returns the active stable signed manifest for installed-app version checks. Requires deployment secrets, returns 404 when no release exists, and never returns a client or administrator credential. |
 | `/api/v1/releases/latest` | GET, HEAD | client bearer | `handleLatest`. 404 on bad token or no release. Returns the signed manifest; HEAD returns the headers with no body. |
 | `/update.json` | GET, HEAD | client bearer | **The same handler.** This is the path the desktop client calls. |
-| `/api/v1/admin/releases` | POST | admin `x-api-key` | `handlePublish`. Registers a release. See below. |
+| `/api/v1/admin/releases` | POST | admin `x-api-key` | `handlePublish`. Registers a release (body ≤ 32 KB, else 413). See below. |
+| `/api/v1/admin/releases/activate` | POST | admin `x-api-key` | `handleActivate`: `{id, channel}` re-activates an existing release whose R2 object still matches; the pipeline's rollback. |
 | `/download` | GET, HEAD | none | Alias of the canonical public page. Existing signed manifest URLs continue to work, but each page load creates a new installer signature rather than extending or reusing the query expiry. |
 | `/download/<token>` | GET, HEAD | client token in path | `handleStableDownloadPage`. Permanent private entry page for a human browser; always shows the active release and mints a fresh signed installer link on each load. Wrong tokens return the generic 404. |
 | `/download/latest.exe` | GET, HEAD | signed link | `handleBinary`. Streams the R2 object, with single-range support. |
@@ -304,12 +305,12 @@ rejected')`:
 | `prevent_active_release_insert_downgrade` | BEFORE INSERT | `NEW.is_active = 1` and an active row with the same `app_id` + `channel` has a higher `build_number` |
 | `prevent_active_release_update_downgrade` | BEFORE UPDATE OF `build_number`, `is_active` | the same, excluding the row being updated by `id` |
 
-State this plainly: **within one `app_id` and `channel`, a newer build number can
-never be superseded by an older one.** The database refuses it. The Worker's
-409 in `handlePublish` checks the same thing first, but that check is a courtesy
-that returns a clean error — the trigger is the guarantee, and it holds against a
-hand-run `wrangler d1 execute`, a bug in the handler, or any future second
-writer.
+**Within one `app_id` and `channel`, a newer build number can never be
+superseded by an older one** — the triggers enforce it against any writer.
+They check build numbers only; **version** order is enforced by `handlePublish`
+alone (a new id must raise the version; the active id may not lower it). The
+admin `activate` route deactivates the others first, so a deliberate rollback
+passes the triggers.
 
 ## Bindings and Configuration
 
@@ -425,7 +426,8 @@ An app change whose run never published still ships with the next push (F-41). B
 active release — including docs commits (F-04).
 
 **Application releases are versioned automatically.** On a `main` push,
-`prepare-release-version.mjs` reads the authenticated active manifest. It keeps
+`prepare-release-version.mjs` reads the public manifest (no configured URL or no
+release yet: it keeps the declared version, so forks still build). It keeps
 a manually raised stable version from `package.json`, or increments the active
 patch version when the declared version is not higher. The Windows job patches
 both package files only in its runner, builds that version and adds `VERSION.txt`
@@ -436,7 +438,7 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 | --- | --- | --- |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
 | `windows-installer` | windows, 25 min, needs `verify` | Runs the Electron MyVault boundary and Windows named-pipe journeys, selects the stable version on `main`, writes the bundled update bootstrap, runs `npm run dist`, writes checksum, version and CycloneDX SBOM artifacts, smoke-installs the VSIX in an isolated profile, and uploads both private artifacts for 30 days |
-| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Restores the artifact's recorded version, skips documentation-only pushes, otherwise uploads the exe to R2, registers metadata in D1, then re-downloads it through the live authenticated route to prove the whole path works ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)) |
+| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Restores the artifact's recorded version, skips documentation-only pushes, installs with `npm ci --ignore-scripts`, records the active release id, uploads the exe to R2, registers metadata in D1, then re-downloads it through the live route ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)); if that fails it re-activates the recorded release ([activate-release.mjs](../../cloudflare/scripts/activate-release.mjs)) and fails (F-50) |
 
 ### codeql.yml
 
@@ -445,17 +447,15 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 requests, and every Monday. It has read-only repository access plus the minimum
 `security-events: write` permission required to publish findings.
 
-The publish job validates `VERSION.txt`, applies it to its local package files
-with npm's same-version mode enabled (the selected stable version may already be
-declared), then uploads with
-`wrangler r2 object put private-browser-releases/releases/<version>/<run-number>/<basename> --file <exe> --content-type application/vnd.microsoft.portable-executable --remote`,
-then runs
-[publish-release.mjs](../../cloudflare/scripts/publish-release.mjs), which reads
-the version from `package.json`, takes `buildNumber` from `GITHUB_RUN_NUMBER` and
-`commitSha` from `GITHUB_SHA`, computes the installer's SHA-256 and size locally,
-and POSTs the metadata to `<PRIVATE_BROWSER_DOWNLOAD_URL>/api/v1/admin/releases`
-with `redirect: 'error'` and a 30-second timeout, throwing with the first 500
-characters of the body on any non-2xx.
+The publish job applies the validated `VERSION.txt`, uploads the exe with
+`wrangler r2 object put private-browser-releases/releases/<version>/<run-number>/<basename> --remote`,
+then runs [publish-release.mjs](../../cloudflare/scripts/publish-release.mjs):
+version from `package.json`, `buildNumber` from `GITHUB_RUN_NUMBER`, `commitSha`
+from `GITHUB_SHA`, SHA-256 and size computed locally and required to equal the
+Windows job's `SHA256SUMS.txt`, POSTed to `/api/v1/admin/releases` with
+`redirect: 'error'` and a 30-second timeout.
+
+Every action is pinned to a commit SHA (Dependabot updates the pins).
 
 **Both Cloudflare jobs no-op gracefully.** A "Detect … configuration" step writes
 `ready=true` to `$GITHUB_OUTPUT` only when every required credential is present

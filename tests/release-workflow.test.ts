@@ -28,6 +28,26 @@ describe('release workflow', () => {
     expect(changes.indexOf('commitSha')).toBeLessThan(changes.indexOf('github.event.before'));
   });
 
+  // F-55: nothing that runs before the credentialed steps gets to execute
+  // dependency install scripts, and every action is pinned to a commit.
+  it('installs the publish job without dependency scripts and pins every action', () => {
+    const publish = workflow.slice(workflow.indexOf('  publish-cloudflare-release:'));
+    expect(publish).toContain('- run: npm ci --ignore-scripts');
+    for (const file of ['ci.yml', 'deploy-cloudflare.yml', 'codeql.yml']) {
+      const text = readFileSync(join(process.cwd(), '.github/workflows', file), 'utf8');
+      for (const [, reference] of text.matchAll(/uses: (\S+)/g)) expect(reference, `${file}: ${reference}`).toMatch(/@[0-9a-f]{40}$/);
+    }
+  });
+
+  // F-50: a release that fails its live check is replaced by the one before it.
+  it('restores the previous release when live verification fails', () => {
+    expect(step('Record the release being replaced')).toContain('/api/v1/releases/public/latest');
+    const verify = step('Verify authenticated download end to end');
+    expect(verify).toContain('PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.id }}');
+    expect(verify).toContain('node cloudflare/scripts/activate-release.mjs "$PREVIOUS_RELEASE_ID"');
+    expect(verify.trim().endsWith('exit 1')).toBe(true);
+  });
+
   // F-42: distribution is public, so an installer carrying the shared token is never published.
   it('refuses to publish an installer built with the bundled download token', () => {
     const configured = step('Detect publishing configuration');

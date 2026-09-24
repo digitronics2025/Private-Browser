@@ -29,33 +29,35 @@ function writeVersion(path, version) {
   writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`);
 }
 
-const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
-const accessToken = process.env.PRIVATE_BROWSER_DOWNLOAD_TOKEN;
-if (!accessToken || accessToken.length < 32) {
-  throw new Error('PRIVATE_BROWSER_DOWNLOAD_TOKEN must contain at least 32 characters');
+/**
+ * The version the service currently offers, or undefined when there is none to
+ * compare with: publishing is not configured (a fork, a first setup) or nothing
+ * has been published yet. Then the declared version is used as it is, so the
+ * build still produces an installer (F-56). Any other failure stops the build —
+ * guessing a version could publish one that reaches nobody.
+ */
+async function activeVersion() {
+  if (!process.env.PRIVATE_BROWSER_DOWNLOAD_URL) return undefined;
+  const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
+  const response = await fetch(`${endpoint}/api/v1/releases/public/latest`, {
+    headers: { accept: 'application/json' },
+    redirect: 'error',
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (response.status === 404) return undefined;
+  if (!response.ok) throw new Error(`Cannot read the active release (${response.status})`);
+  return (await response.json()).version;
 }
 
-const response = await fetch(`${endpoint}/update.json`, {
-  headers: {
-    accept: 'application/json',
-    authorization: `Bearer ${accessToken}`,
-  },
-  redirect: 'error',
-  signal: AbortSignal.timeout(30_000),
-});
-if (!response.ok) {
-  throw new Error(`Cannot read the active release (${response.status})`);
-}
-
-const manifest = await response.json();
+const activeText = await activeVersion();
 const packagePath = resolve('package.json');
 const packageLockPath = resolve('package-lock.json');
 const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
 const declared = parseStableVersion(packageJson.version, 'package.json version');
-const active = parseStableVersion(manifest.version, 'active release version');
+const active = activeText === undefined ? undefined : parseStableVersion(activeText, 'active release version');
 
 let selected = declared.text;
-if (compareVersions(declared, active) <= 0) {
+if (active && compareVersions(declared, active) <= 0) {
   if (!Number.isSafeInteger(active.patch + 1)) {
     throw new Error('Active release patch number cannot be incremented safely');
   }
