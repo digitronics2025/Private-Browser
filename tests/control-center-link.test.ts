@@ -59,8 +59,8 @@ function fakeControlCenter(options: FakeOptions = {}) {
     const path = new URL(url).pathname;
     const authed = (init.headers as Record<string, string> | undefined)?.authorization === `Bearer ${token}`;
     if (path === '/api/connected-app/pair') return json(201, { appId, token, identityKey: options.identityKey ?? IDENTITY, signature: await sign('pair', body.nonce), kind: 'private-browser' });
+    if (path === '/api/connected-app/hello') return json(200, { appId: body.appId, identityKey: options.identityKey ?? IDENTITY, signature: await sign('hello', body.nonce) });
     if (options.revoked || !authed) return json(401, { error: { code: 'UNAUTHORIZED', message: 'Missing or invalid app token.' } });
-    if (path === '/api/connected-app/hello') return json(200, { appId, identityKey: options.identityKey ?? IDENTITY, signature: await sign('hello', body.nonce), name: 'Private Browser' });
     if (path === '/api/connected-app/repositories') return json(200, [{ id: 'r1', name: 'shop', devOrigin: 'http://127.0.0.1:5173' }, { id: 'r2', name: 'site', devOrigin: null }]);
     if (path === '/api/connected-app/tasks' && init.method === 'POST') {
       const custom = options.onTask?.(body);
@@ -117,7 +117,8 @@ describe('Control Center link', () => {
     // A fresh process reads the sealed file back and proves the key again.
     const again = h.make();
     expect((await again.status()).state).toBe('connected');
-    expect(h.fake.calls.filter((c) => c.url.endsWith('/hello'))).toHaveLength(1);
+    // Every hello goes out without the token.
+    expect(h.fake.calls.filter((c) => c.url.endsWith('/hello')).every((c) => !('authorization' in c.headers))).toBe(true);
     expect(h.fake.calls.every((c) => c.redirect === 'error' && c.url.startsWith('http://127.0.0.1:4999/'))).toBe(true);
     expect(h.fake.calls.some((c) => 'origin' in c.headers)).toBe(false);
   });
@@ -143,11 +144,13 @@ describe('Control Center link', () => {
     const squatterKey = (await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])) as webcrypto.CryptoKeyPair;
     const squatter = fakeControlCenter({ signingJwk: await subtle.exportKey('jwk', squatterKey.privateKey), identityKey: Buffer.from(await subtle.exportKey('raw', squatterKey.publicKey)).toString('base64url') });
     const link = new ControlCenterLink({ filePath: h.filePath, storage: storage(), runtimeFile: null, fetch: squatter.fetcher });
-    // The squatter does not know our token either; even a 401 must not unpair us.
     const status = await link.status();
-    expect(['identity-changed', 'not-paired']).toContain(status.state);
+    expect(status.state).toBe('identity-changed');
     await expect(link.createTask({ repositoryId: 'r1', note: 'x', sourceUrl: 'http://127.0.0.1:5173/', pageOrigin: null, evidence: '{}' })).rejects.toBeTruthy();
     expect(squatter.calls.some((c) => c.url.endsWith('/api/connected-app/tasks'))).toBe(false);
+    // The squatter never saw the token, in any request.
+    const pairedToken = h.fake.token;
+    expect(JSON.stringify(squatter.calls)).not.toContain(pairedToken);
     expect(existsSync(h.filePath)).toBe(true);
   });
 

@@ -53,11 +53,13 @@ its Account Spaces, cookies or the vault. Agents never drive Private Browser.
 6. **The key is pinned.**
    - Pairing keeps the Control Center identity key only if it signed
      `acc-connected-app-v1 pair\n<appId>\n<nonce>`.
-   - Before the first call of each run at an address, a fresh signed `hello`
-     must verify against the pinned key. Otherwise nothing is sent
-     (`identity-changed`).
-   - A 401 forgets the token only after the pinned key answered at that
-     address, so a program squatting the port can't unpair the browser.
+   - Before **every** call that carries the token (retries included), a fresh
+     signed `hello` must verify against the pinned key. Otherwise nothing is
+     sent (`identity-changed`).
+   - The `hello` itself carries no token, only `{appId, nonce}`, so a program
+     squatting the port is never handed it.
+   - A 401 forgets the token only right after the pinned key answered at that
+     address, so a squatter can't unpair the browser.
    - Test vectors:
      [tests/fixtures/acc-connected-app-v1.vectors.json](../../tests/fixtures/acc-connected-app-v1.vectors.json),
      byte-identical to the Control Center's copy.

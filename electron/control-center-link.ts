@@ -143,7 +143,7 @@ export interface ControlCenterLinkOptions {
 export class ControlCenterLink {
   private link?: StoredLink;
   private corrupt = false;
-  /** The pinned key answered a fresh hello at this base URL during this run. */
+  /** The address where the pinned key answered the latest hello; a 401 there really is the Control Center. */
   private verifiedBase: string | null = null;
   private readonly fetcher: typeof fetch;
   private readonly runtimeFile: string | null;
@@ -227,7 +227,6 @@ export class ControlCenterLink {
    * retries, so a lost answer never creates a second task.
    */
   async createTask(input: { repositoryId: string; note: string; sourceUrl: string; pageOrigin: string | null; evidence: string; screenshotJpegBase64?: string }): Promise<ControlCenterTask> {
-    const base = await this.verify();
     const requestId = nonce();
     const body = {
       requestId,
@@ -237,7 +236,11 @@ export class ControlCenterLink {
       evidence: input.evidence,
       ...(input.screenshotJpegBase64 ? { screenshotJpegBase64: input.screenshotJpegBase64 } : {}),
     };
-    const task = parseTask(await this.withRetry(() => this.request(base, 'POST', '/api/connected-app/tasks', body, this.link!.token)), base);
+    const sent = await this.withRetry(async () => {
+      const at = await this.verify();
+      return { at, value: await this.request(at, 'POST', '/api/connected-app/tasks', body, this.link!.token) };
+    });
+    const task = parseTask(sent.value, sent.at);
     if (input.pageOrigin && this.link!.originRepos[input.pageOrigin] !== input.repositoryId) {
       const originRepos = { ...this.link!.originRepos, [input.pageOrigin]: input.repositoryId };
       // Keep the memory small: the 50 most recent origins.
@@ -257,22 +260,25 @@ export class ControlCenterLink {
 
   async addEvidence(taskId: string, evidence: string): Promise<{ name: string }> {
     if (!/^TASK-\d{1,8}$/.test(taskId)) throw new ControlCenterError('Invalid task', 'REJECTED');
-    const base = await this.verify();
     const body = { requestId: nonce(), evidence };
-    const result = (await this.withRetry(() => this.request(base, 'POST', `/api/connected-app/tasks/${taskId}/evidence`, body, this.link!.token))) as Record<string, unknown>;
+    const result = (await this.withRetry(async () => this.request(await this.verify(), 'POST', `/api/connected-app/tasks/${taskId}/evidence`, body, this.link!.token))) as Record<string, unknown>;
     if (!isText(result?.name, 200)) throw new ControlCenterError('The Control Center sent an unexpected answer', 'REJECTED');
     return { name: result.name };
   }
 
   // ---- internals ----
 
-  /** The base URL, once the pinned key has signed a fresh hello there during this run. */
+  /**
+   * The base URL, once the pinned key has signed a fresh hello there. Runs
+   * before every call that carries the token, and the hello itself carries
+   * none: whatever answers on the port is proven before it is handed anything.
+   */
   private async verify(): Promise<string> {
     if (!this.link) throw new ControlCenterError('Pair with the Control Center first', 'NOT_PAIRED');
     const base = this.baseUrl();
-    if (this.verifiedBase === base) return base;
+    this.verifiedBase = null;
     const n = nonce();
-    const body = (await this.request(base, 'POST', '/api/connected-app/hello', { nonce: n }, this.link.token)) as Record<string, unknown>;
+    const body = (await this.request(base, 'POST', '/api/connected-app/hello', { appId: this.link.appId, nonce: n }, null)) as Record<string, unknown>;
     const signed =
       body?.identityKey === this.link.identityKey &&
       isText(body?.signature, 200) &&
@@ -320,7 +326,7 @@ export class ControlCenterLink {
     if (response.ok) return parsed;
     const message = (parsed as { error?: { message?: unknown } } | null)?.error?.message;
     if (response.status === 401 && token) {
-      // Forget the token only when the pinned key already answered at this
+      // Forget the token only when the pinned key just answered at this
       // address: a program squatting the port must not be able to unpair us.
       if (this.verifiedBase === base) this.disconnect();
       throw new ControlCenterError('The Control Center no longer accepts this browser. Disconnect here and pair again.', 'NOT_PAIRED', 401);

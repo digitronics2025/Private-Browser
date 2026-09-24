@@ -50,8 +50,9 @@ test.beforeAll(async () => {
     received.push({ path, headers: request.headers, body });
     const send = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
     if (path === '/api/connected-app/pair') return body?.code === '24681357' ? send(201, { appId, token, identityKey: vectors.identity.publicKey, signature: await sign('pair', body.nonce), kind: 'private-browser' }) : send(400, { error: { code: 'CODE_REJECTED', message: 'Code not accepted.' } });
+    // Like the real one, hello needs no token (and the browser sends none).
+    if (path === '/api/connected-app/hello') return send(200, { appId: body.appId, identityKey: vectors.identity.publicKey, signature: await sign('hello', body.nonce) });
     if (request.headers.authorization !== `Bearer ${token}`) return send(401, { error: { code: 'UNAUTHORIZED', message: 'no' } });
-    if (path === '/api/connected-app/hello') return send(200, { appId, identityKey: vectors.identity.publicKey, signature: await sign('hello', body.nonce), name: 'Private Browser' });
     if (path === '/api/connected-app/repositories') return send(200, [{ id: 'repo-shop', name: 'shop', devOrigin: siteOrigin }, { id: 'repo-other', name: 'other', devOrigin: null }]);
     if (path === '/api/connected-app/tasks' && request.method === 'POST') return send(201, task());
     if (path === '/api/connected-app/tasks') return send(200, received.some((r) => r.path === '/api/connected-app/tasks' && r.body) ? [task()] : []);
@@ -123,8 +124,9 @@ test('pairs, sends the exact approved context, follows the task and attaches a r
     expect(sent.body.evidence).toContain(MARKER);
     expect(JSON.stringify(sent.body)).not.toContain('secret-value');
     expect(sent.body.screenshotJpegBase64).toBeUndefined();
-    // Every call came from the main process: no Origin, bearer only after pairing.
+    // Every call came from the main process: no Origin, and no hello carried the token.
     expect(received.every((r) => r.headers.origin === undefined)).toBe(true);
+    expect(received.filter((r) => r.path === '/api/connected-app/hello').every((r) => r.headers.authorization === undefined)).toBe(true);
 
     // The task shows; once it finishes, Check again attaches fresh evidence.
     await expect(page.getByText('TASK-0001 · The cart crashes')).toBeVisible({ timeout: 10_000 });
