@@ -90,6 +90,7 @@ import { VaultSyncController } from './myvault/sync-controller.js';
 import type { PairDialogValue } from './myvault/secure-dialog-contract.js';
 import { VaultMigrationService } from './myvault/vault-migration.js';
 import { canInstallPasskeyProvider, InternalPasskeyController, type PasskeyOptIns } from './myvault/passkey-controller.js';
+import { PlatformUnlockError, WindowsHelloSigner } from './myvault/windows-hello.js';
 import { UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
@@ -216,6 +217,10 @@ class BrowserController {
   private appliedFrame?: (typeof FRAME_COLORS)[keyof typeof FRAME_COLORS];
   private window!: BrowserWindow;
   private readonly secureDialogs = new SecureVaultDialogs(() => this.window);
+  private readonly windowsHello = new WindowsHelloSigner();
+  /** Probed once, off the startup path; undefined until the answer arrives. */
+  private windowsHelloAvailable?: boolean;
+  private windowsHelloProbe?: Promise<boolean>;
   private readonly fillCapabilities = new FillCapabilityStore();
   private readonly fillPicker: FillPicker = new FillPicker(() => this.window, { choose: (choice) => void this.handleFillPickerChoice(choice) });
   private readonly vaultSync: VaultSyncController;
@@ -1633,8 +1638,55 @@ class BrowserController {
       lifecycle: status.lifecycle,
       sync: status.sync,
       dirty: status.dirty,
+      platformUnlock: status.platformUnlockEnrolled ? 'enrolled' as const : this.probeWindowsHello() ? 'available' as const : 'unavailable' as const,
       generation: status.generation,
     };
+  }
+
+  /** Returns the cached answer; the first call starts the probe and repaints the panel when it lands. */
+  private probeWindowsHello(): boolean {
+    if (this.windowsHelloAvailable !== undefined) return this.windowsHelloAvailable;
+    this.windowsHelloProbe ??= this.windowsHello.isAvailable().then((available) => {
+      this.windowsHelloAvailable = available;
+      if (this.window && !this.window.isDestroyed()) this.window.webContents.send('vault:state');
+      return available;
+    });
+    return false;
+  }
+
+  async unlockVaultWithHello() {
+    this.assertVaultSurface();
+    try {
+      await this.vault.unlockWithPlatform(this.windowsHello);
+    } catch (error) {
+      if (error instanceof PlatformUnlockError && error.status === 'UserCanceled') return this.listVault();
+      throw error;
+    }
+    void this.vaultSync.syncNow().catch(() => undefined);
+    this.addPrivacyEvent('vault', 'MyVault unlocked with Windows Hello', 'Decrypted state is held only by the trusted broker');
+    return this.listVault();
+  }
+
+  async enableVaultHello() {
+    this.assertVaultSurface();
+    if (!(await (this.windowsHelloProbe ?? this.windowsHello.isAvailable()))) throw new Error('Windows Hello is not set up on this computer.');
+    const value = await this.secureDialogs.open('enroll-hello') as UnlockDialogValue | undefined;
+    if (!value) return this.listVault();
+    try {
+      await this.vault.enrollPlatformUnlock(value.password, this.windowsHello);
+    } catch (error) {
+      if (error instanceof PlatformUnlockError && error.status === 'UserCanceled') return this.listVault();
+      throw error;
+    }
+    this.addPrivacyEvent('vault', 'Windows Hello unlock turned on', 'The vault key was wrapped under a key only Windows Hello can release');
+    return this.listVault();
+  }
+
+  async disableVaultHello() {
+    this.assertVaultSurface();
+    await this.vault.removePlatformUnlock(this.windowsHello);
+    this.addPrivacyEvent('vault', 'Windows Hello unlock turned off', 'The Hello-wrapped vault key and the Hello key were deleted');
+    return this.listVault();
   }
 
   async requestVaultUnlock() {
@@ -2882,6 +2934,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:revoke', () => controller!.revokeAiContext());
   handle('vault:list', () => controller!.listVault());
   handle('vault:request-unlock', () => controller!.requestVaultUnlock());
+  handle('vault:hello-unlock', () => controller!.unlockVaultWithHello());
+  handle('vault:hello-enable', () => controller!.enableVaultHello());
+  handle('vault:hello-disable', () => controller!.disableVaultHello());
   handle('vault:request-pairing', () => controller!.requestVaultPairing());
   handle('vault:lock', () => controller!.lockVault());
   handle('vault:sync', () => controller!.syncVaultNow());

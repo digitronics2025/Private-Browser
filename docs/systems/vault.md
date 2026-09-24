@@ -78,7 +78,18 @@ memory wiping.
 9. Banking disables AI, extraction, DevTools, extensions, capture, automatic fill
    and password clipboard and reconfirms every manual fill. Development exposes
    neither vault metadata nor broker operations.
-10. The internal passkey provider is disabled by default and release-gated.
+10. Windows Hello unlock is opt-in and never replaces the master password.
+    Turning it on needs the vault unlocked *and* the master password again in the
+    `enroll-hello` secure dialog, checked before any Hello prompt. Hello keeps an
+    RSA key (`PrivateBrowser-MyVault-<vaultId>`) and signs a stored random
+    challenge; the deterministic signature is HKDF-stretched into a key that wraps
+    the data key a second time under its own AAD. That wrap sits in
+    `myvault/platform-unlock.enc` (`safeStorage`). A wrong key or a missing Hello
+    key deletes the record; a cancel keeps it; an unreadable record is discarded,
+    never blocking. Installing a different vault identity drops it. The WinRT
+    call runs in a short-lived `powershell.exe` addressed by absolute path, with
+    the challenge on stdin.
+11. The internal passkey provider is disabled by default and release-gated.
     Registration appends one immutable encrypted record, authentication does not
     mutate, and every refusal preserves the original OS WebAuthn operation.
 
@@ -101,6 +112,9 @@ memory wiping.
   only; `tldts` must not reach the renderer bundle).
 - `vault-migration.ts` — verified backup, protected journal, stable duplicates,
   direct Chrome CSV import and explicit cleanup.
+- `windows-hello.ts` — the Hello signer (`KeyCredentialManager` via PowerShell),
+  status mapping and key naming; the broker's `enrollPlatformUnlock`,
+  `unlockWithPlatform` and `removePlatformUnlock` own the wrap.
 - `passkey-controller.ts` / `security/passkeys/*` — disabled gated provider core.
 
 ## Compatibility

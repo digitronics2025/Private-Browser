@@ -590,6 +590,8 @@ export interface VaultStatus {
   lifecycle?: 'unconfigured' | 'locked' | 'unlocked' | 'conflict' | 'recovery-required';
   sync?: 'disabled' | 'idle' | 'dirty' | 'syncing' | 'synced' | 'conflict' | 'error';
   dirty?: boolean;
+  /** 'enrolled' offers Windows Hello unlock; 'available' offers turning it on. */
+  platformUnlock?: 'unavailable' | 'available' | 'enrolled';
   generation?: number;
 }
 

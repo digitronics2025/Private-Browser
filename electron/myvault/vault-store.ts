@@ -1,7 +1,7 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { isVaultEnvelope, serializeVaultArchive } from './security/vault-crypto.js';
-import type { VaultEnvelope } from './types.js';
+import { isEncryptedField, isVaultEnvelope, serializeVaultArchive } from './security/vault-crypto.js';
+import type { EncryptedField, VaultEnvelope } from './types.js';
 
 export interface SafeStorageAdapter {
   isEncryptionAvailable(): boolean;
@@ -15,6 +15,21 @@ export interface BrokerConnectionState {
   remoteVersion: number;
   dirty: boolean;
   lastSyncAt?: string;
+}
+
+/**
+ * The data key wrapped a second time under a Windows Hello-derived key. It is a
+ * convenience copy: the master-password wrap in the envelope stays authoritative,
+ * so an unreadable record is discarded rather than blocking the vault.
+ */
+export interface PlatformUnlockRecord {
+  version: 1;
+  vaultId: string;
+  keyName: string;
+  challenge: string;
+  hkdfSalt: string;
+  wrappedKey: EncryptedField;
+  createdAt: string;
 }
 
 export type StoreBlockReason = 'envelope-corrupt' | 'envelope-unsupported' | 'connection-corrupt';
@@ -56,10 +71,25 @@ function isConnectionState(value: unknown): value is BrokerConnectionState {
     && (state.lastSyncAt === undefined || typeof state.lastSyncAt === 'string');
 }
 
+const BASE64_32_BYTES = /^[A-Za-z0-9+/]{43}=$/;
+
+function isPlatformUnlockRecord(value: unknown): value is PlatformUnlockRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<PlatformUnlockRecord>;
+  return record.version === 1
+    && typeof record.vaultId === 'string'
+    && typeof record.keyName === 'string'
+    && typeof record.challenge === 'string' && BASE64_32_BYTES.test(record.challenge)
+    && typeof record.hkdfSalt === 'string' && BASE64_32_BYTES.test(record.hkdfSalt)
+    && isEncryptedField(record.wrappedKey)
+    && typeof record.createdAt === 'string';
+}
+
 /** Owns only ciphertext and OS-protected connection state; it never sees plaintext vault data. */
 export class MyVaultDiskStore {
   readonly envelopePath: string;
   readonly connectionPath: string;
+  readonly platformUnlockPath: string;
   private blocked?: StoreBlockReason;
   private recoveryPath?: string;
 
@@ -71,6 +101,7 @@ export class MyVaultDiskStore {
     const directory = join(rootDirectory, 'myvault');
     this.envelopePath = join(directory, 'envelope.myvault');
     this.connectionPath = join(directory, 'connection.enc');
+    this.platformUnlockPath = join(directory, 'platform-unlock.enc');
   }
 
   load(): StoreSnapshot {
@@ -97,6 +128,32 @@ export class MyVaultDiskStore {
     if (!isConnectionState(connection)) throw new Error('Invalid MyVault connection state');
     const encrypted = this.safeStorage.encryptString(JSON.stringify(connection));
     atomicWrite(this.connectionPath, encrypted.toString('base64'));
+  }
+
+  readPlatformUnlock(): PlatformUnlockRecord | undefined {
+    if (!existsSync(this.platformUnlockPath) || !this.safeStorage.isEncryptionAvailable()) return undefined;
+    try {
+      const encoded = readFileSync(this.platformUnlockPath, 'utf8');
+      const parsed: unknown = JSON.parse(this.safeStorage.decryptString(Buffer.from(encoded, 'base64')));
+      if (isPlatformUnlockRecord(parsed)) return parsed;
+    } catch {
+      // Unreadable: fall through and discard it. The password path is unaffected.
+    }
+    this.deletePlatformUnlock();
+    return undefined;
+  }
+
+  writePlatformUnlock(record: PlatformUnlockRecord): void {
+    this.assertWritable();
+    if (!this.safeStorage.isEncryptionAvailable()) {
+      throw new Error('Secure operating-system credential storage is unavailable');
+    }
+    if (!isPlatformUnlockRecord(record)) throw new Error('Invalid Windows Hello unlock record');
+    atomicWrite(this.platformUnlockPath, this.safeStorage.encryptString(JSON.stringify(record)).toString('base64'));
+  }
+
+  deletePlatformUnlock(): void {
+    rmSync(this.platformUnlockPath, { force: true });
   }
 
   /** The caller must have shown and confirmed the recovery consequence first. */

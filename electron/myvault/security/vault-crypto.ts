@@ -326,7 +326,7 @@ export function createEmptyVaultPayload(): VaultPayload {
   };
 }
 
-function isEncryptedField(value: unknown): value is EncryptedField {
+export function isEncryptedField(value: unknown): value is EncryptedField {
   if (!value || typeof value !== 'object') return false;
   const field = value as Partial<EncryptedField>;
   return (

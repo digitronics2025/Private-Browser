@@ -33,6 +33,8 @@ covered by page content.
 
 Credentials and TOTP secrets are encrypted using Electron `safeStorage` before being written to disk. The vault file and browser-state file are created with owner-only permissions where the operating system supports them. Vault metadata exposed to the UI never contains passwords or TOTP secrets. Passwords and TOTP values are copied directly by the main process and cleared from the clipboard after 30 seconds if unchanged.
 
+Windows Hello unlock is optional and requires the master password to turn on. It stores a second copy of the vault data key, encrypted under a key derived from a Windows Hello signature that the TPM-backed Hello container produces only after face, fingerprint or PIN; that copy is itself `safeStorage`-encrypted. It never replaces the master password, which remains the only way to unlock on another device or after the Hello key is removed.
+
 If the vault cannot be decrypted, writes are disabled to prevent silent data loss. The recovery action preserves the unreadable encrypted file as a timestamped backup before creating a new vault.
 
 Automatic fill and the side panel's Fill are restricted to an exact hostname and port match. The scheme is checked asymmetrically: a credential saved for `https` is never filled into an `http` page, while a page served over `https` is always acceptable. A website can still observe credentials entered into its own form, just as it can in any password manager; users must verify the domain before filling.

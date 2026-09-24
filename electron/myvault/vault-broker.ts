@@ -1,8 +1,9 @@
 import { randomInt, randomUUID } from 'node:crypto';
-import { decryptWithSession, encryptVaultPayload, unlockVault, type VaultSession } from './security/vault-crypto.js';
+import { BiometricUnlockRejectedError, base64ToBytes, bytesToBase64, decryptWithSession, deriveBiometricUnlockKey, encryptVaultPayload, prepareBiometricWrap, randomBytes, unlockVault, unlockVaultWithBiometricKey, type VaultSession } from './security/vault-crypto.js';
 import type { TotpConfig, VaultEnvelope, VaultItem, VaultPayload } from './types.js';
 import type { PasskeyCredential } from './security/passkeys/types.js';
 import { MyVaultDiskStore, type BrokerConnectionState, type StoreBlockReason } from './vault-store.js';
+import { PlatformUnlockError, platformUnlockKeyName, type PlatformUnlockSigner } from './windows-hello.js';
 
 export type BrokerLifecycle = 'unconfigured' | 'locked' | 'unlocked' | 'conflict' | 'recovery-required';
 export type BrokerSyncState = 'disabled' | 'idle' | 'dirty' | 'syncing' | 'synced' | 'conflict' | 'error';
@@ -29,6 +30,7 @@ export interface BrokerStatus {
   lastSyncAt?: string;
   blockedReason?: StoreBlockReason;
   recoveryPath?: string;
+  platformUnlockEnrolled: boolean;
   generation: number;
 }
 
@@ -88,6 +90,7 @@ export class VaultBroker {
   private blockedReason?: StoreBlockReason;
   private recoveryPath?: string;
   private generation = 0;
+  private platformEnrolled = false;
   private conflictRemote?: { envelope: VaultEnvelope; version: number; updatedAt: string };
   private readonly listeners = new Set<(status: BrokerStatus) => void>();
 
@@ -101,6 +104,7 @@ export class VaultBroker {
     this.recoveryPath = snapshot.recoveryPath;
     this.lifecycle = snapshot.blocked ? 'recovery-required' : snapshot.envelope ? 'locked' : 'unconfigured';
     this.syncState = snapshot.connection ? snapshot.connection.dirty ? 'dirty' : 'idle' : 'disabled';
+    this.refreshPlatformUnlock();
     return this.status();
   }
 
@@ -115,6 +119,7 @@ export class VaultBroker {
       lastSyncAt: this.connection?.lastSyncAt,
       blockedReason: this.blockedReason,
       recoveryPath: this.recoveryPath,
+      platformUnlockEnrolled: this.platformEnrolled,
       generation: this.generation,
     };
   }
@@ -129,8 +134,10 @@ export class VaultBroker {
     if (!this.store.isCredentialPersistenceAvailable()) throw new Error('Secure operating-system credential storage is unavailable');
     this.store.writeEnvelope(envelope);
     this.store.writeConnection(connection);
+    if (this.envelope?.vaultId !== envelope.vaultId) this.store.deletePlatformUnlock();
     this.envelope = envelope;
     this.connection = connection;
+    this.refreshPlatformUnlock();
     this.releaseSecrets();
     this.lifecycle = 'locked';
     this.syncState = connection.dirty ? 'dirty' : 'idle';
@@ -152,6 +159,84 @@ export class VaultBroker {
     this.payload = unlocked.payload;
     this.session = unlocked.session;
     this.lifecycle = 'unlocked';
+    this.changed();
+    return this.status();
+  }
+
+  /**
+   * Windows Hello unlock. Enrollment takes the master password even though the
+   * vault is already open: binding a device gesture to the vault is an
+   * authorization decision for whoever knows the password, not for whoever sits
+   * at an unlocked session. The password is checked before the Hello prompt, so
+   * a typo costs no gesture and leaves no orphan key.
+   */
+  async enrollPlatformUnlock(masterPassword: string, signer: PlatformUnlockSigner): Promise<BrokerStatus> {
+    this.requireUnlocked();
+    if (!this.envelope) throw new Error('MyVault is not configured');
+    const envelope = this.envelope;
+    const keyName = platformUnlockKeyName(envelope.vaultId);
+    const challenge = randomBytes(32);
+    const hkdfSalt = randomBytes(32);
+    const prepared = await prepareBiometricWrap(masterPassword, envelope);
+    let wrappedKey;
+    try {
+      const signature = await signer.enroll(keyName, challenge);
+      wrappedKey = await prepared.wrap(await deriveBiometricUnlockKey(signature, hkdfSalt, envelope.vaultId));
+    } catch (error) {
+      prepared.dispose();
+      throw error;
+    }
+    this.store.writePlatformUnlock({
+      version: 1,
+      vaultId: envelope.vaultId,
+      keyName,
+      challenge: bytesToBase64(challenge),
+      hkdfSalt: bytesToBase64(hkdfSalt),
+      wrappedKey,
+      createdAt: new Date().toISOString(),
+    });
+    this.refreshPlatformUnlock();
+    this.changed();
+    return this.status();
+  }
+
+  async unlockWithPlatform(signer: PlatformUnlockSigner): Promise<BrokerStatus> {
+    if (this.lifecycle === 'recovery-required') throw new Error('Recovery acknowledgement is required');
+    if (!this.envelope) throw new Error('MyVault is not configured');
+    const record = this.store.readPlatformUnlock();
+    if (!record || record.vaultId !== this.envelope.vaultId) {
+      if (record) this.store.deletePlatformUnlock();
+      this.refreshPlatformUnlock();
+      this.changed();
+      throw new Error('Windows Hello is not set up for this vault. Unlock with the master password.');
+    }
+    const envelope = this.envelope;
+    try {
+      const signature = await signer.sign(record.keyName, base64ToBytes(record.challenge));
+      const key = await deriveBiometricUnlockKey(signature, base64ToBytes(record.hkdfSalt), envelope.vaultId);
+      const unlocked = await unlockVaultWithBiometricKey(record.wrappedKey, key, envelope);
+      if (this.envelope !== envelope) throw new Error('MyVault changed while Windows Hello was open. Try again.');
+      this.payload = unlocked.payload;
+      this.session = unlocked.session;
+      this.lifecycle = 'unlocked';
+      this.changed();
+      return this.status();
+    } catch (error) {
+      // A stale enrollment can never succeed again; drop it so the panel stops offering it.
+      if (error instanceof BiometricUnlockRejectedError || (error instanceof PlatformUnlockError && error.status === 'NotFound')) {
+        this.store.deletePlatformUnlock();
+        this.refreshPlatformUnlock();
+        this.changed();
+      }
+      throw error;
+    }
+  }
+
+  async removePlatformUnlock(signer: PlatformUnlockSigner): Promise<BrokerStatus> {
+    const record = this.store.readPlatformUnlock();
+    this.store.deletePlatformUnlock();
+    this.refreshPlatformUnlock();
+    if (record) await signer.remove(record.keyName);
     this.changed();
     return this.status();
   }
@@ -326,6 +411,10 @@ export class VaultBroker {
   private requireUnlocked(): VaultPayload {
     if (this.lifecycle !== 'unlocked' || !this.payload || !this.session) throw new Error('MyVault is locked');
     return this.payload;
+  }
+
+  private refreshPlatformUnlock(): void {
+    this.platformEnrolled = Boolean(this.envelope && this.store.readPlatformUnlock()?.vaultId === this.envelope.vaultId);
   }
 
   private releaseSecrets(): void {
