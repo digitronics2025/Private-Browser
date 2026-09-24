@@ -2,7 +2,7 @@
 title: Login picker scrolls instead of covering, offers same-site logins, remembers the pick
 source: ~/.claude/plans/quiet-petting-clock.md (second revision, approved 2026-09-24)
 created: 2026-09-24
-status: in-progress
+status: done
 ---
 
 # Login picker scrolls instead of covering, offers same-site logins, remembers the pick
@@ -37,7 +37,7 @@ only on pick; the last pick is remembered per site, across restarts.
 
 - [x] T1. Review — done when: defects fixed — check: `git diff` reviewed
 - [x] T2. Gate — check: `npm run check`
-- [ ] T3. Released — check: push to main, release run green
+- [x] T3. Released — check: push to main, release run green
 
 ## Ledger
 
@@ -48,3 +48,4 @@ only on pick; the last pick is remembered per site, across restarts.
 - 2026-09-24 23:40 — T2 — first gate run failed at the secret guard: two inert test values (a fixture password in the e2e, a `user:pass@` URL asserting refusal) now carry `secret-guard:allow`, the repo's marker for fixtures. The same run's build showed `tldts`'s suffix list inside the renderer bundle, because `electron/security.ts` is also imported by `src/preview-api.ts`; moved `registrableSite` / `isSameSiteFillCandidate` to main-only `electron/myvault/site-match.ts` (a deviation from the plan's "in security.ts") and confirmed no suffix data in `dist/assets`. T2/T3 had been ticked in this file before running; unticked until they pass.
 - 2026-09-24 23:55 — T1 — whole-diff review found one gap, recorded rather than fixed: `fill-preferences.enc` outlives a vault disconnect/reset (site names + random ids, no secrets) — follow-ups.md.
 - 2026-09-25 00:10 — T2 — second gate run: 1 Electron failure, "Process failed to launch" in chrome-layout.spec.ts (unrelated to the picker; same launch failure seen twice earlier under heavy PC load, ~158 Electron/Node processes from other programs); that spec passed alone, and a third full `npm run check` exited 0: 329 + 7 + 6 + 24 unit, 22 browser e2e, 18 Electron incl. all 7 fill-picker specs, Worker dry-run.
+- 2026-09-25 00:40 — T3 — rebased onto 586e1fa (another session: always open maximised); full gate on the combined tree exit 0 (330 + 7 + 6 + 24 unit, 22 browser e2e, 18 Electron incl. all 7 fill-picker specs, Worker dry-run). browser-shell.md not touched: this round's main.ts changes are vault logic documented in vault.md; no listener or layout behaviour changed. Pushed to main as a fast-forward; release run result is in the final report.
