@@ -20,6 +20,28 @@ describe('workspace security', () => {
     expect(isSecretPath(join(root, 'profile', 'Cookies'))).toBe(true);
   });
 
+  // F-73: the rule used to look only at the typed path and a narrow name list.
+  it('judges the resolved file and Windows spellings of a secret name', async () => {
+    const root = await fixture();
+    await mkdir(join(root, 'config'));
+    await writeFile(join(root, '.env'), 'TOKEN=fixture');
+    await symlink(join(root, '.env'), join(root, 'config', 'notes.txt'), 'file').catch(async () => {
+      // Creating file symlinks can need a Windows privilege; a hard link resolves the same way for this rule.
+      const { link } = await import('node:fs/promises');
+      await link(join(root, '.env'), join(root, 'config', 'notes.txt'));
+    });
+    const linked = resolveInsideWorkspace(root, 'config/notes.txt');
+    // A hard link has no target to resolve to, so only a real symlink can be refused here.
+    const { lstat } = await import('node:fs/promises');
+    if ((await lstat(join(root, 'config', 'notes.txt'))).isSymbolicLink()) await expect(linked).rejects.toThrow(/secret/i);
+    else await linked;
+    for (const name of ['.env.', '.env ', '.env::$DATA', 'credentials.json', 'secrets.json', '.npmrc', '.netrc', '.git-credentials', 'id_ecdsa', 'release.keystore']) {
+      expect(isSecretPath(join(root, name)), name).toBe(true);
+    }
+    expect(isSecretPath(join(root, 'src', 'environment.ts'))).toBe(false);
+    expect(isSecretPath('C:\\work\\app\\src\\main.ts')).toBe(false);
+  });
+
   it('rejects a symlink that resolves outside the approved root', async () => {
     const root = await fixture(); const outside = await fixture();
     await writeFile(join(outside, 'outside.ts'), 'export {};');

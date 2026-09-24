@@ -40,6 +40,11 @@ interface Rendezvous {
 }
 
 type Handler = (method: BridgeMethod, payload: unknown) => Promise<unknown>;
+type OutgoingMessage = Parameters<typeof sealMessage>[3];
+interface LiveSession { socket: Socket; key: Buffer; sessionId: string }
+
+/** After the browser says another window holds the session, retry this rarely. */
+const BUSY_RETRY_MS = 60_000;
 type StatusListener = (state: 'disconnected' | 'connecting' | 'connected' | 'error', detail?: string) => void;
 
 export class BridgeClient implements vscode.Disposable {
@@ -54,12 +59,15 @@ export class BridgeClient implements vscode.Disposable {
   private heartbeatTimer?: NodeJS.Timeout;
   private disposed = false;
   private connecting = false;
+  /** One id for this window's whole life, so the browser can tell a reconnect from another window. */
+  private readonly instanceId = randomUUID();
+  private busyUntil = 0;
 
   constructor(private readonly context: vscode.ExtensionContext, private readonly handler: Handler, private readonly onStatus: StatusListener) {}
 
   async start(): Promise<void> {
     await this.tryConnect();
-    this.reconnectTimer = setInterval(() => { if (!this.socket && !this.connecting) void this.tryConnect(); }, 5_000);
+    this.reconnectTimer = setInterval(() => { if (!this.socket && !this.connecting && Date.now() >= this.busyUntil) void this.tryConnect(); }, 5_000);
     this.heartbeatTimer = setInterval(() => void this.notify('activity', { heartbeatAt: Date.now() }), 10_000);
   }
 
@@ -70,7 +78,7 @@ export class BridgeClient implements vscode.Disposable {
     await this.tryConnect(code, true);
   }
 
-  async reconnect(): Promise<void> { await this.disconnect(false); await this.tryConnect(undefined, true); }
+  async reconnect(): Promise<void> { this.busyUntil = 0; await this.disconnect(false); await this.tryConnect(undefined, true); }
 
   async disconnect(revoke: boolean): Promise<void> {
     if (revoke) {
@@ -82,9 +90,34 @@ export class BridgeClient implements vscode.Disposable {
   }
 
   async notify(event: BridgeEvent['event'], payload: unknown): Promise<void> {
-    if (!this.socket || !this.key || !this.sessionId) return;
-    const message: BridgeEvent = { version: PROTOCOL_VERSION, kind: 'event', id: randomUUID(), event, payload };
-    this.socket.write(encodeFrame(sealMessage(this.key, this.sessionId, this.outgoingSequence++, message)));
+    const session = this.live();
+    if (!session) return;
+    this.send(session, { version: PROTOCOL_VERSION, kind: 'event', id: randomUUID(), event, payload });
+  }
+
+  private live(): LiveSession | undefined {
+    return this.socket && this.key && this.sessionId ? { socket: this.socket, key: this.key, sessionId: this.sessionId } : undefined;
+  }
+
+  /**
+   * Seals and writes one message for the session it belongs to. The sequence
+   * number is spent only once the frame is built: a reply too large to send
+   * used to skip a number and break the session (F-72). An oversized response
+   * is replaced by an error response; a message for a session that has since
+   * been replaced is dropped rather than sent into the new one.
+   */
+  private send(session: LiveSession, message: OutgoingMessage): void {
+    if (this.sessionId !== session.sessionId || this.socket !== session.socket) return;
+    let frame: Buffer;
+    try {
+      frame = encodeFrame(sealMessage(session.key, session.sessionId, this.outgoingSequence, message));
+    } catch (error) {
+      if (message.kind !== 'response' || !message.ok) return;
+      this.send(session, { version: PROTOCOL_VERSION, kind: 'response', id: message.id, ok: false, error: sanitizeError(new Error('The answer was too large to send to Private Browser')) });
+      return;
+    }
+    this.outgoingSequence += 1;
+    session.socket.write(frame);
   }
 
   dispose(): void {
@@ -123,16 +156,25 @@ export class BridgeClient implements vscode.Disposable {
       const identity = await this.identity(); const ephemeral = generateEphemeralKeyPair();
       const unsigned = {
         kind: 'hello' as const, minVersion: MIN_PROTOCOL_VERSION, maxVersion: PROTOCOL_VERSION,
-        deviceId: identity.deviceId, instanceId: randomUUID(), vscodeVersion: vscode.version,
+        deviceId: identity.deviceId, instanceId: this.instanceId, vscodeVersion: vscode.version,
         extensionVersion: this.context.extension.packageJSON.version as string, identityPublicKey: identity.publicKey,
         ephemeralPublicKey: ephemeral.publicKey, challenge: rendezvous.challenge, pairingCode: code,
       };
       const hello = helloSchema.parse({ ...unsigned, signature: signText(identity.privateKey, helloTranscript(unsigned)) });
       const socket = connect(rendezvous.pipePath); this.socket = socket; this.handshakeCode = code; this.decoder = new FrameDecoder();
       const timeout = setTimeout(() => socket.destroy(new Error('Private Browser handshake timed out')), 30_000);
-      socket.once('connect', () => socket.write(encodeFrame(hello)));
+      let reached = false;
+      socket.once('connect', () => { reached = true; socket.write(encodeFrame(hello)); });
       socket.on('data', (chunk) => void this.onData(chunk, hello, ephemeral.privateKey, rendezvous, timeout));
-      socket.once('close', () => { clearTimeout(timeout); this.socket = undefined; this.key = undefined; this.sessionId = undefined; if (!this.disposed) this.onStatus('disconnected'); });
+      socket.once('close', () => {
+        clearTimeout(timeout);
+        // Reached the browser but got no session: another window holds it. Back
+        // off instead of knocking every five seconds (a browser that is not
+        // running is never reached, so that case keeps the short retry).
+        if (reached && !this.key && !this.disposed) this.busyUntil = Date.now() + BUSY_RETRY_MS;
+        this.socket = undefined; this.key = undefined; this.sessionId = undefined;
+        if (!this.disposed) this.onStatus('disconnected');
+      });
       socket.once('error', (error) => { clearTimeout(timeout); this.onStatus('error', error.message); });
     } catch (error) {
       this.socket = undefined; this.onStatus('disconnected', error instanceof Error ? error.message : String(error));
@@ -160,18 +202,19 @@ export class BridgeClient implements vscode.Disposable {
         }
         const message = openMessage(this.key, frame, this.sessionId!, this.incomingSequence++);
         if (message.kind !== 'request') throw new Error('Unexpected bridge message');
-        await this.respond(message);
+        // Frames are opened in order here, but handled concurrently: a long test
+        // must not hold up the cancel request that follows it (F-72).
+        void this.respond(message, this.live()!);
       }
     } catch (error) { this.socket?.destroy(error instanceof Error ? error : new Error(String(error))); }
   }
 
-  private async respond(request: BridgeRequest): Promise<void> {
-    if (!this.socket || !this.key || !this.sessionId) return;
+  private async respond(request: BridgeRequest, session: LiveSession): Promise<void> {
     try {
       const payload = await this.handler(request.method, request.payload);
-      this.socket.write(encodeFrame(sealMessage(this.key, this.sessionId, this.outgoingSequence++, { version: PROTOCOL_VERSION, kind: 'response', id: request.id, ok: true, payload })));
+      this.send(session, { version: PROTOCOL_VERSION, kind: 'response', id: request.id, ok: true, payload });
     } catch (error) {
-      this.socket.write(encodeFrame(sealMessage(this.key, this.sessionId, this.outgoingSequence++, { version: PROTOCOL_VERSION, kind: 'response', id: request.id, ok: false, error: sanitizeError(error) })));
+      this.send(session, { version: PROTOCOL_VERSION, kind: 'response', id: request.id, ok: false, error: sanitizeError(error) });
     }
   }
 }

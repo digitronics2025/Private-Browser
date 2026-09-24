@@ -32,10 +32,13 @@ commands, live origins, and edits.
 2. A project is unusable until VS Code Workspace Trust and the per-folder modal
    grant both pass.
 3. Paths are canonicalized through `realpath`; traversal, UNC paths, symlink
-   escapes, secrets, and browser profiles fail closed.
+   escapes, secrets, and browser profiles fail closed. The secret-name rule is
+   applied to both the typed and the resolved path, after stripping Windows
+   stream suffixes and trailing dots/spaces.
 4. Commands come only from detected immutable specifications. VS Code displays
    the exact executable, arguments, and working directory and remembers only
-   that specification's SHA-256 fingerprint.
+   that specification's SHA-256 fingerprint (for a Playwright run: runner, kind,
+   project and target URL).
 5. Test browser contexts begin empty. Cookies, storage, headers, and browser
    profiles are never imported.
 6. AI context is a visible, five-minute, single-use capability. Structural DOM
@@ -68,7 +71,15 @@ changes, expired sessions, and incompatible schemas close the connection. The
 extension emits a ten-second heartbeat and reconnects/rekeys when the 15-minute
 session expires.
 
-Ordinary calls time out after 30 seconds; test calls may run for 15 minutes.
+Ordinary calls time out after 30 seconds, calls that wait on a VS Code modal or
+language model after 5 minutes, test calls after 15 minutes. A response to a call
+the browser already gave up on is dropped, not treated as a replay. Only one VS
+Code window holds the session: a live session (heartbeat within 25 s) is replaced
+only by the same window (its per-window `instanceId`) or by pairing; another
+window is refused quietly and retries once a minute. The extension opens frames
+in order but handles requests concurrently, spends a sequence number only once a
+frame is built (an oversized answer becomes an error response), sends dev-server
+progress at most once a second, and drops a reply whose session was replaced.
 The browser accepts no extension-initiated privileged browser request. Incoming
 traffic is limited to 120 messages per minute, and the extension permits at most
 five command starts per minute.
@@ -87,7 +98,13 @@ run commands, test pages, or apply edits. The extension recalculates command
 fingerprints from package scripts and adapter metadata; a changed configuration
 therefore invalidates a remembered command approval. Commands use argument
 arrays with `shell: false`, sanitized bounded output, and whole-process-tree
-cancellation on Windows.
+cancellation on Windows. A `.cmd`/`.bat` (npm, pnpm, yarn, `gradlew.bat`,
+`wrangler.cmd`) cannot be spawned without a shell since Node's CVE-2024-27980
+fix, so `spawn-command.ts` resolves it to a full path and runs it through
+`System32cmd.exe /d /s /c` with every part quoted — refusing any part containing
+`% ! ^ & | < > "`. `ai.handoff` requires Workspace Trust and the folder grant
+like every other project action; `ai.apply-edits` hashes the editor buffer,
+refuses unsaved files and re-checks after the review.
 
 ## Inspect and Test
 
@@ -134,10 +151,11 @@ are not supported.
 
 Outcomes normalize to Passed, Needs attention, Failed, or Skipped. Findings
 carry a cause, evidence, optional location, and recommendation. JSON reports and
-their bounded artifacts are written with user-only permissions under extension
-global storage. Stored report size and content are checked through one open file
-handle before schema validation, preventing a check/read swap. The browser
-receives summaries and artifact metadata only.
+their bounded artifacts are written under extension global storage (mode `0o600`,
+which Windows ignores; there the user profile's access control protects them). Stored report size and content are checked through one open file
+handle before schema validation, preventing a check/read swap. `reports.list`
+sends the 20 newest reports with evidence cut to 200 characters; full reports
+open in VS Code.
 Users can list, open, delete, clear, and change retention (1–365 days, 10–500
 reports). Defaults are 30 days and 100 reports.
 

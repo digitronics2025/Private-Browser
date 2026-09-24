@@ -37,7 +37,17 @@ interface PendingRequest { resolve(value: unknown): void; reject(error: Error): 
 interface SessionState {
   socket: Socket; key: Buffer; sessionId: string; expiresAt: number; incomingSequence: number; outgoingSequence: number;
   extensionVersion: string; vscodeVersion: string; instanceId: string; deviceId: string; requestsInWindow: number; windowStartedAt: number;
+  lastActivityAt: number;
 }
+
+/** Methods that wait on a VS Code modal or a language model: a person may take minutes. */
+const SLOW_METHODS: ReadonlySet<BridgeMethod> = new Set(['project.authorize', 'server.start', 'server.restart', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits']);
+/** A session is live while its heartbeats (every 10 s) keep arriving. */
+const SESSION_LIVE_MS = 25_000;
+const MAX_EXPIRED_IDS = 200;
+
+/** A second window knocking while one is connected: refused, but not an error the user must see. */
+class SessionBusyError extends Error {}
 
 export class VscodeBridgeServer {
   private server?: Server;
@@ -50,6 +60,11 @@ export class VscodeBridgeServer {
   private activity?: string;
   private error?: string;
   private readonly pending = new Map<string, PendingRequest>();
+  /**
+   * Requests this side stopped waiting for. Their late answers are dropped
+   * quietly; before, one was treated as a replay and tore the session down (F-72).
+   */
+  private readonly expired = new Set<string>();
 
   constructor(private readonly secretPath: string, private readonly rendezvousPath: string, private readonly browserVersion: string, private readonly onChange: () => void) {}
 
@@ -90,9 +105,14 @@ export class VscodeBridgeServer {
   async request(method: BridgeMethod, payload: unknown): Promise<unknown> {
     const session = this.requireSession(); const id = randomUUID();
     const request: BridgeRequest = { version: PROTOCOL_VERSION, kind: 'request', id, method, payload };
-    const timeout = method.startsWith('test.') ? 15 * 60_000 : 30_000;
+    const timeout = method.startsWith('test.') ? 15 * 60_000 : SLOW_METHODS.has(method) ? 5 * 60_000 : 30_000;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('VS Code bridge request timed out')); }, timeout);
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        this.expired.add(id);
+        if (this.expired.size > MAX_EXPIRED_IDS) this.expired.delete(this.expired.values().next().value!);
+        reject(new Error('VS Code bridge request timed out'));
+      }, timeout);
       this.pending.set(id, { resolve, reject, timer });
       session.socket.write(encodeFrame(sealMessage(session.key, session.sessionId, session.outgoingSequence++, request)));
     });
@@ -124,7 +144,11 @@ export class VscodeBridgeServer {
           if (!handshaken) { this.handleHello(socket, raw); handshaken = true; socket.setTimeout(0); }
           else this.handleSecure(socket, raw);
         }
-      } catch (error) { this.error = sanitizeError(error).message; socket.destroy(); this.onChange(); }
+      } catch (error) {
+        socket.destroy();
+        if (error instanceof SessionBusyError) return;
+        this.error = sanitizeError(error).message; this.onChange();
+      }
     });
     socket.on('close', () => { if (this.session?.socket === socket) { this.closeSession('VS Code disconnected'); this.onChange(); } });
     socket.on('error', () => undefined);
@@ -148,12 +172,18 @@ export class VscodeBridgeServer {
       if (this.secrets) this.secrets.trustedDevices[hello.deviceId] = hello.identityPublicKey;
       void this.saveSecrets(); this.pairing = undefined;
     } else if (!knownKey || knownKey !== hello.identityPublicKey) throw new Error('VS Code client is not paired');
+    // One VS Code window at a time: a live session is only replaced by the same
+    // window reconnecting, or by an explicit pairing. Two windows used to take it
+    // from each other every five seconds (F-72).
+    if (this.session && !hello.pairingCode && this.session.instanceId !== hello.instanceId && Date.now() - this.session.lastActivityAt < SESSION_LIVE_MS) {
+      throw new SessionBusyError('Another VS Code window is connected');
+    }
     if (this.session) this.closeSession('Replaced by a new VS Code connection');
     const ephemeral = generateEphemeralKeyPair(); const sessionId = randomUUID(); const expiresAt = Date.now() + SESSION_TTL_MS;
     const unsignedWelcome = { kind: 'welcome' as const, version: PROTOCOL_VERSION, sessionId, expiresAt, browserVersion: this.browserVersion, browserIdentityPublicKey: this.secrets!.identity.publicKey, ephemeralPublicKey: ephemeral.publicKey };
     const welcome = { ...unsignedWelcome, signature: signText(this.secrets!.identity.privateKey, welcomeTranscript(hello, unsignedWelcome)) };
     socket.write(encodeFrame(welcome));
-    this.session = { socket, key: deriveSessionKey({ privateKey: ephemeral.privateKey, peerPublicKey: hello.ephemeralPublicKey, challenge: hello.challenge, pairingCode: hello.pairingCode }), sessionId, expiresAt, incomingSequence: 0, outgoingSequence: 0, extensionVersion: hello.extensionVersion, vscodeVersion: hello.vscodeVersion, instanceId: hello.instanceId, deviceId: hello.deviceId, requestsInWindow: 0, windowStartedAt: Date.now() };
+    this.session = { socket, key: deriveSessionKey({ privateKey: ephemeral.privateKey, peerPublicKey: hello.ephemeralPublicKey, challenge: hello.challenge, pairingCode: hello.pairingCode }), sessionId, expiresAt, incomingSequence: 0, outgoingSequence: 0, extensionVersion: hello.extensionVersion, vscodeVersion: hello.vscodeVersion, instanceId: hello.instanceId, deviceId: hello.deviceId, requestsInWindow: 0, windowStartedAt: Date.now(), lastActivityAt: Date.now() };
     this.error = undefined; this.activity = 'VS Code connected'; this.onChange();
     setTimeout(() => { if (this.session?.sessionId === sessionId) { this.closeSession('Session expired; reconnecting'); this.onChange(); } }, SESSION_TTL_MS).unref();
   }
@@ -165,8 +195,11 @@ export class VscodeBridgeServer {
     const now = Date.now(); if (now - session.windowStartedAt > 60_000) { session.windowStartedAt = now; session.requestsInWindow = 0; }
     if (++session.requestsInWindow > 120) throw new Error('Bridge rate limit exceeded');
     const message = openMessage(session.key, raw, session.sessionId, session.incomingSequence++);
+    session.lastActivityAt = now;
     if (message.kind === 'response') {
-      const pending = this.pending.get(message.id); if (!pending) throw new Error('Unknown or replayed bridge response');
+      const pending = this.pending.get(message.id);
+      if (!pending && this.expired.delete(message.id)) return;
+      if (!pending) throw new Error('Unknown or replayed bridge response');
       this.pending.delete(message.id); clearTimeout(pending.timer);
       if (message.ok) pending.resolve(message.payload); else pending.reject(new Error(message.error?.message ?? 'VS Code request failed'));
     } else if (message.kind === 'event') this.handleEvent(message);

@@ -125,7 +125,8 @@ VS Code Workspace Trust and a separate modal folder grant are both mandatory.
 Every path is canonicalized and kept beneath that folder; traversal, symlinks,
 UNC escapes, secret names, and browser profiles are refused. Commands are
 detected from trusted files, executed without a browser-supplied shell string,
-and require an exact executable/argument/cwd approval keyed to a fingerprint.
+and require an exact executable/argument/cwd approval keyed to a fingerprint
+(for a Playwright run, the runner, test kind, project and target URL).
 Live checks are passive and origin-approved; payment, banking, checkout, crawl,
 attack, and credential-guessing targets are blocked.
 

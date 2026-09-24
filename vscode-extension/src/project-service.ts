@@ -7,10 +7,14 @@ import type { BridgeMethod, CommandSpec, ProjectInfo, ProjectSummary, TestKind, 
 import { MAX_TASK_OUTPUT_BYTES, projectInfoSchema, testKindSchema, testReportSchema } from '@private-browser/bridge-protocol';
 import { detectProject } from './adapters.js';
 import { ReportStore } from './report-store.js';
+import { spawnCommand } from './spawn-command.js';
 import { resolveInsideWorkspace, safeLiveOrigin, sanitizeOutput, stableFingerprint } from './security.js';
 
 type EventSink = (event: string, payload: unknown) => void;
 interface RunningProcess { process: ChildProcessWithoutNullStreams; output: string; command: CommandSpec; url?: string; }
+
+/** Dev-server output is forwarded at most this often. */
+const PROGRESS_INTERVAL_MS = 1_000;
 
 export class ProjectService {
   private readonly running = new Map<string, RunningProcess>();
@@ -47,7 +51,10 @@ export class ProjectService {
       case 'test.rerun': return this.rerun();
       case 'test.save-artifact': return this.saveTestArtifact(payload);
       case 'test.cancel': return this.cancelTask(String(this.record(payload).projectId ?? ''));
-      case 'reports.list': return this.reports.list();
+      // The list is a summary: the 20 newest reports with short evidence. Full
+      // reports stay in VS Code ("Open in VS Code"); the complete list used to
+      // outgrow a bridge frame after about a dozen runs (F-72).
+      case 'reports.list': return (await this.reports.list()).slice(0, 20).map((report) => ({ ...report, findings: report.findings.map((finding) => ({ ...finding, evidence: finding.evidence.slice(0, 200) })) }));
       case 'reports.get': return this.reports.get(String(this.record(payload).reportId ?? ''));
       case 'reports.delete': return this.reports.delete(String(this.record(payload).reportId ?? ''));
       case 'reports.clear': return this.reports.clear();
@@ -159,15 +166,29 @@ export class ProjectService {
     await this.approveCommand(projectId, command);
     this.guardCommandStart();
     if (this.running.has(projectId)) throw new Error('A project task is already running');
-    const child = spawn(command.executable, command.args, { cwd: command.cwd, shell: false, windowsHide: true, env: { ...process.env, BROWSER: 'none' } });
+    const child = spawnCommand(command.executable, command.args, { cwd: command.cwd, windowsHide: true, env: { ...process.env, BROWSER: 'none' } });
     const running: RunningProcess = { process: child, output: '', command };
     this.running.set(projectId, running);
-    const onData = (data: Buffer) => {
-      running.output = sanitizeOutput(`${running.output}${data.toString()}`, MAX_TASK_OUTPUT_BYTES);
-      const match = running.output.match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+(?:\/[^\s]*)?/i);
-      if (match) running.url = match[0];
+    // At most one progress event a second (plus the one that first reveals the
+    // server address): a chatty dev server used to exceed the browser's 120
+    // messages-a-minute limit and drop the connection (F-72).
+    let lastProgressAt = 0;
+    let progressTimer: NodeJS.Timeout | undefined;
+    const sendProgress = () => {
+      progressTimer = undefined;
+      lastProgressAt = Date.now();
       this.emit('task.progress', { projectId, command: command.label, url: running.url, output: running.output.slice(-4_000) });
     };
+    const onData = (data: Buffer) => {
+      running.output = sanitizeOutput(`${running.output}${data.toString()}`, MAX_TASK_OUTPUT_BYTES);
+      const hadUrl = Boolean(running.url);
+      const match = running.output.match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+(?:\/[^\s]*)?/i);
+      if (match) running.url = match[0];
+      if (!hadUrl && running.url) { if (progressTimer) clearTimeout(progressTimer); sendProgress(); return; }
+      if (progressTimer) return;
+      progressTimer = setTimeout(sendProgress, Math.max(0, PROGRESS_INTERVAL_MS - (Date.now() - lastProgressAt)));
+    };
+    child.once('exit', () => { if (progressTimer) clearTimeout(progressTimer); });
     child.stdout.on('data', onData); child.stderr.on('data', onData);
     child.once('exit', (code) => { this.running.delete(projectId); this.emit('task.complete', { projectId, command: command.label, code, url: running.url, output: running.output.slice(-8_000) }); });
     child.once('error', (error) => { this.running.delete(projectId); this.emit('task.complete', { projectId, command: command.label, code: -1, error: sanitizeOutput(error.message) }); });
@@ -233,7 +254,7 @@ export class ProjectService {
   private exec(projectId: string, command: CommandSpec): Promise<{ code: number; output: string }> {
     return new Promise((resolvePromise, reject) => {
       if (this.activeTasks.has(projectId)) { reject(new Error('A project test is already running')); return; }
-      const child = spawn(command.executable, command.args, { cwd: command.cwd, shell: false, windowsHide: true, env: command.source === 'playwright' ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env });
+      const child = spawnCommand(command.executable, command.args, { cwd: command.cwd, windowsHide: true, env: command.source === 'playwright' ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env });
       this.activeTasks.set(projectId, child);
       let output = ''; const capture = (data: Buffer) => { output = sanitizeOutput(`${output}${data.toString()}`, MAX_TASK_OUTPUT_BYTES); };
       child.stdout.on('data', capture); child.stderr.on('data', capture);
@@ -259,7 +280,7 @@ export class ProjectService {
     const artifactRoot = this.reports.artifactRoot(reportId); await mkdir(artifactRoot, { recursive: true });
     const runner = join(this.context.extensionPath, 'dist', 'playwright-runner.cjs');
     const runnerInput = Buffer.from(JSON.stringify({ reportId, projectId: info.project.id, startedAt, kind, url: kind === 'live-site' ? approvedLiveUrl : parsed.toString(), liveUrl: approvedLiveUrl, root: info.project.path, artifactRoot })).toString('base64url');
-    const command: CommandSpec = { id: `playwright:${kind}`, label: `Playwright ${kind}`, executable: process.execPath, args: [runner, runnerInput], cwd: info.project.path, source: 'playwright', category: 'test', fingerprint: stableFingerprint({ runner, kind, root: info.project.path }) };
+    const command: CommandSpec = { id: `playwright:${kind}`, label: `Playwright ${kind}`, executable: process.execPath, args: [runner, runnerInput], cwd: info.project.path, source: 'playwright', category: 'test', fingerprint: stableFingerprint({ runner, kind, root: info.project.path, target: kind === 'live-site' ? approvedLiveUrl : parsed.toString(), liveUrl: approvedLiveUrl }) };
     try {
       await this.approveCommand(info.project.id, command);
       this.guardCommandStart();
@@ -346,7 +367,11 @@ export class ProjectService {
   }
 
   private async aiHandoff(payloadValue: unknown): Promise<{ opened: true; modelUsed: boolean }> {
-    const payload = this.record(payloadValue); const context = sanitizeOutput(String(payload.context ?? ''), 200_000);
+    const payload = this.record(payloadValue);
+    // Workspace Trust and the folder grant apply here too: the approved context is
+    // sent to a VS Code language model on behalf of that project (F-75).
+    await this.folderFor(String(payload.projectId ?? ''));
+    const context = sanitizeOutput(String(payload.context ?? ''), 200_000);
     const action = sanitizeOutput(String(payload.action ?? 'Diagnose'), 100);
     let answer = '';
     try {
@@ -368,14 +393,16 @@ export class ProjectService {
     const payload = this.record(payloadValue); const projectId = String(payload.projectId ?? '');
     const folder = await this.folderFor(projectId); const edits = Array.isArray(payload.edits) ? payload.edits : [];
     if (!edits.length || edits.length > 20) throw new Error('A patch must contain between 1 and 20 edits');
-    const prepared: Array<{ uri: vscode.Uri; text: string; languageId: string }> = [];
+    const prepared: Array<{ uri: vscode.Uri; text: string; languageId: string; version: number }> = [];
     for (const value of edits) {
       const edit = this.record(value); const path = await resolveInsideWorkspace(folder.uri.fsPath, String(edit.path ?? ''));
-      const current = await readFile(path, 'utf8');
-      if (createHash('sha256').update(current).digest('hex') !== String(edit.expectedHash ?? '')) throw new Error(`File changed since the patch was proposed: ${basename(path)}`);
-      const text = String(edit.newText ?? ''); if (Buffer.byteLength(text) > 512 * 1024) throw new Error('A proposed file edit is too large');
+      // The hash is taken from the editor buffer, not the file on disk, and a file
+      // with unsaved changes is refused: the whole buffer is replaced below (F-74).
       const document = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
-      prepared.push({ uri: vscode.Uri.file(path), text, languageId: document.languageId });
+      if (document.isDirty) throw new Error(`Save or discard the unsaved changes in ${basename(path)} first`);
+      if (createHash('sha256').update(document.getText()).digest('hex') !== String(edit.expectedHash ?? '')) throw new Error(`File changed since the patch was proposed: ${basename(path)}`);
+      const text = String(edit.newText ?? ''); if (Buffer.byteLength(text) > 512 * 1024) throw new Error('A proposed file edit is too large');
+      prepared.push({ uri: vscode.Uri.file(path), text, languageId: document.languageId, version: document.version });
     }
     for (const item of prepared) {
       const proposed = await vscode.workspace.openTextDocument({ language: item.languageId, content: item.text });
@@ -383,6 +410,11 @@ export class ProjectService {
     }
     const answer = await vscode.window.showWarningMessage(`Apply ${prepared.length} Private Browser AI edit${prepared.length === 1 ? '' : 's'}?`, { modal: true, detail: prepared.map((item) => relative(folder.uri.fsPath, item.uri.fsPath)).join('\n') }, 'Apply approved edits');
     if (answer !== 'Apply approved edits') throw new Error('Patch approval was cancelled');
+    // Anything typed during the review (the diff is editable) would be overwritten.
+    for (const item of prepared) {
+      const document = await vscode.workspace.openTextDocument(item.uri);
+      if (document.version !== item.version || document.isDirty) throw new Error(`${basename(item.uri.fsPath)} changed during review; propose the patch again`);
+    }
     const workspaceEdit = new vscode.WorkspaceEdit();
     for (const item of prepared) {
       const document = await vscode.workspace.openTextDocument(item.uri);
