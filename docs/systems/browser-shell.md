@@ -123,6 +123,10 @@ and the tab strip leaves that space free via CSS `env(titlebar-area-*)`.
   page view.
 
 - `show: false` plus a `ready-to-show` handler — no white flash on launch. The
+  window always opens **maximised**: `maximize()` runs before `loadURL` (on
+  Windows it also shows the window, on its dark `backgroundColor`), so the resize
+  settles before any page or login picker exists — maximising at `ready-to-show`
+  instead made the picker tests flaky. 1500x940 is only the restore size. The
   handler is attached **before** `loadURL`, and the window is shown after the load
   resolves if it is still hidden: `ready-to-show` can fire before `loadURL`
   resolves, and a late listener left the window invisible on some launches.

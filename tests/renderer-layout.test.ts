@@ -43,6 +43,12 @@ describe('browser chrome geometry', () => {
     expect(main).toContain('if (!this.window.isDestroyed() && !this.window.isVisible()) this.window.show();');
   });
 
+  it('opens the window maximised before the chrome loads', () => {
+    const maximize = main.indexOf('this.window.maximize();');
+    expect(maximize).toBeGreaterThan(-1);
+    expect(maximize).toBeLessThan(main.indexOf('await this.window.loadURL(devUrl ?? productionUrl)'));
+  });
+
   it('moves workspace switching into the profile menu', () => {
     expect(app).not.toContain('<WorkspaceRail');
     expect(styles).not.toContain('.workspace-rail');

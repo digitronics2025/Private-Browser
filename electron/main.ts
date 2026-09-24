@@ -324,6 +324,9 @@ class BrowserController {
     // Listen before loading: `ready-to-show` can fire before `loadURL` resolves,
     // and a listener attached afterwards would leave the window hidden for good.
     this.window.once('ready-to-show', () => { if (!this.window.isDestroyed()) this.window.show(); });
+    // The window always opens maximised. Maximising before the chrome loads lets the
+    // resize settle before any page exists; a later resize would close an open login picker.
+    this.window.maximize();
     await this.window.loadURL(devUrl ?? productionUrl);
     if (!this.window.isDestroyed() && !this.window.isVisible()) this.window.show();
     await this.showActiveTab();
