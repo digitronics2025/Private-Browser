@@ -276,6 +276,8 @@ export interface AccountBrowsingStateV2 {
   history: AccountSpaceHistoryEntry[];
   /** Absent until the user customises the New Tab shortcuts for this Account Space. */
   shortcuts?: ShortcutTile[];
+  /** Remembered icons of bookmarked hosts, host → `data:` URL. See `bookmark-icons.ts`. */
+  bookmarkIcons?: Record<string, string>;
 }
 
 export interface ShortcutTile {
@@ -402,6 +404,8 @@ export interface BrowserSnapshot {
   windowState: WindowState;
   /** Customised New Tab shortcuts keyed by Account Space; a missing key means the defaults. */
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
+  /** Remembered bookmark icons of the active Account Space only, host → `data:` URL. */
+  bookmarkIcons: Record<string, string>;
   canReopenClosedTab: boolean;
 }
 
@@ -452,6 +456,7 @@ export interface RuntimeBrowserStateV2 {
   bookmarkBarVisible: boolean;
   ui: UiPreferences;
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
+  bookmarkIconsByAccountSpace: Record<string, Record<string, string>>;
   accountSpaces: AccountSpaceSummary[];
   accountHealth: AccountSpaceHealth[];
   recovery?: StateRecoveryStatus;

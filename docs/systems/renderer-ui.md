@@ -172,8 +172,9 @@ and the rest go to the » overflow menu. Folders open nested `SubmenuItem` menus
 Top-level entries drag-reorder (`moveBookmark`). Right-click offers Open in new
 tab, Copy link, Edit name, Delete; folders offer Open all (confirm above 8), Rename
 and Delete; the empty bar offers the visibility modes, the manager, import and
-export. Icons reuse favicons the main process already fetched for open tabs —
-the bar never fetches an icon. The import hint appears only while the bar is empty
+export. Icons reuse favicons the main process already fetched — live tab icons
+first, then the active space's remembered `bookmarkIcons` — and the bar never
+fetches an icon. The import hint appears only while the bar is empty
 and until dismissed (per-viewer `localStorage` flag).
 
 ## Side Panel

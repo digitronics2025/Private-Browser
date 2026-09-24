@@ -75,6 +75,7 @@ export function installPreviewApi(): void {
     ui: { ...DEFAULT_UI_PREFERENCES, sidePanelOpen: params.get('panel') === 'open', theme: params.get('theme') === 'light' ? 'light' : params.get('theme') === 'dark' ? 'dark' : 'system' },
     windowState: { maximized: false, fullscreen: false, darkMode: true },
     shortcutsByAccountSpace: {},
+    bookmarkIcons: {},
     canReopenClosedTab: false,
   };
   const media = matchMedia('(prefers-color-scheme: dark)');

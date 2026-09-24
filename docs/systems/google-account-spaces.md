@@ -24,7 +24,7 @@ verified_at: 90100b54
 
 # Google Account Spaces
 
-> Last verified: 2026-09-14
+> Last verified: 2026-09-24
 
 ## Agent Brief
 
@@ -65,8 +65,10 @@ The plaintext `browser-state-v2.json` manifest contains only active workspace,
 opaque Account Space references, active account references, tracker preference,
 interface preferences (`ui`: theme, bookmarks-bar mode, side panel and New Tab
 background) and the privacy log. Each account has a separate plaintext browsing
-file for tabs, bookmarks, history and, once customised, up to 12 HTTP(S) New Tab
-shortcuts. Deleting an Account Space removes its shortcuts with its other state.
+file for tabs, bookmarks, history, once customised, up to 12 HTTP(S) New Tab
+shortcuts and, once visited, up to 300 remembered icons of bookmarked hosts
+(`bookmarkIcons`, inert image `data:` URLs). Deleting an Account Space removes its
+shortcuts and icons with its other state.
 Details: [workspaces-and-state.md](workspaces-and-state.md). Encrypted `<uuid>.account.enc` records hold label,
 colour, workspace ownership, partition key, Google identity, refresh token,
 grants, modules, permissions and backup settings.

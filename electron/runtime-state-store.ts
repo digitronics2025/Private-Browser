@@ -11,6 +11,7 @@ import type {
 } from './types.js';
 import { AccountStore, type AccountSpaceRecord } from './account-store.js';
 import { AccountSpaceStateStore, type AccountSpaceStateInitialization } from './account-space-state.js';
+import { pruneBookmarkIcons } from './bookmark-icons.js';
 import { WORKSPACES } from './state-store.js';
 import { DEFAULT_UI_PREFERENCES, sanitizeUiPreferences } from './ui-preferences.js';
 
@@ -114,6 +115,7 @@ export class RuntimeStateStore {
       state.history = state.history.filter((entry) => entry.accountSpaceId !== id);
       delete state.activeTabByAccountSpace[id];
       delete state.shortcutsByAccountSpace[id];
+      delete state.bookmarkIconsByAccountSpace[id];
       if (state.activeAccountSpaceByWorkspace[account.workspaceId] === id) state.activeAccountSpaceByWorkspace[account.workspaceId] = replacement.id;
     });
     this.records.delete(id);
@@ -156,6 +158,7 @@ export class RuntimeStateStore {
         bookmarks: next.bookmarks.filter((item) => item.accountSpaceId === account.id),
         history: next.history.filter((item) => item.accountSpaceId === account.id),
         ...(next.shortcutsByAccountSpace[account.id] ? { shortcuts: next.shortcutsByAccountSpace[account.id] } : {}),
+        ...(next.bookmarkIconsByAccountSpace[account.id] ? { bookmarkIcons: next.bookmarkIconsByAccountSpace[account.id] } : {}),
       };
       this.persistedStore.saveAccountState(state);
     }
@@ -202,6 +205,7 @@ function combine(
     bookmarkBarVisible: manifest.bookmarkBarVisible,
     ui: sanitizeUiPreferences(manifest.ui, manifest.bookmarkBarVisible),
     shortcutsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.shortcuts).map((state) => [state.accountSpaceId, state.shortcuts!])),
+    bookmarkIconsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.bookmarkIcons).map((state) => [state.accountSpaceId, state.bookmarkIcons!])),
     accountSpaces,
     accountHealth,
     recovery: firstRecovery,
@@ -271,6 +275,14 @@ function normalizeRuntimeState(state: RuntimeBrowserStateV2): void {
     if (!tabs.some((tab) => tab.id === state.activeTabByAccountSpace[account.id])) state.activeTabByAccountSpace[account.id] = tabs[0].id;
   }
   state.bookmarks = state.bookmarks.filter((item) => accountsById.get(item.accountSpaceId)?.workspaceId === item.workspaceId);
+  // An icon outlives neither its Account Space nor the last bookmark on its host.
+  const bookmarkIcons: RuntimeBrowserStateV2['bookmarkIconsByAccountSpace'] = {};
+  for (const [id, icons] of Object.entries(state.bookmarkIconsByAccountSpace)) {
+    if (!accountsById.has(id as AccountSpaceId)) continue;
+    const kept = pruneBookmarkIcons(icons, state.bookmarks.filter((item) => item.accountSpaceId === id));
+    if (kept) bookmarkIcons[id] = kept;
+  }
+  state.bookmarkIconsByAccountSpace = bookmarkIcons;
   state.history = state.history.filter((item) => accountsById.get(item.accountSpaceId)?.workspaceId === item.workspaceId).slice(0, 10_000);
   state.privacyLog = state.privacyLog.slice(0, 100);
 }
@@ -321,6 +333,7 @@ function recoveryRuntimeState(recovery: StateRecoveryStatus): RuntimeBrowserStat
     bookmarkBarVisible: true,
     ui: { ...DEFAULT_UI_PREFERENCES },
     shortcutsByAccountSpace: {},
+    bookmarkIconsByAccountSpace: {},
     accountSpaces,
     accountHealth: accountSpaces.map((account) => ({ accountSpaceId: account.id, status: 'locked', checkedAt: now })),
     recovery,

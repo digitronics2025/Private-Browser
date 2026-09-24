@@ -331,8 +331,9 @@ preload and the renderer.
 ### The two aggregate shapes
 
 - `BrowserSnapshot` — `workspaces`, `activeWorkspaceId`, `activeTabId`, `tabs`,
-  `bookmarks`, `history`, `downloads`, `privacyLog`, `trackerBlocking`. What the
-  renderer sees.
+  `bookmarks`, `history`, `downloads`, `privacyLog`, `trackerBlocking`, and
+  `bookmarkIcons` (the active Account Space's remembered bookmark icons, host →
+  `data:` URL). What the renderer sees.
 - `PersistedState` — `version: 1`, `activeWorkspaceId`,
   `tabs: Array<Pick<BrowserTab, 'id' | 'workspaceId' | 'title' | 'url' | 'isHome'>>`,
   `activeTabByWorkspace: Partial<Record<WorkspaceId, string>>`, `bookmarks`,

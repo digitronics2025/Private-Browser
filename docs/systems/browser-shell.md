@@ -410,6 +410,16 @@ session partition — and passes the renderer a `data:` URL it built itself.
 - A 5-second timeout, and a 200-entry URL cache so repeated navigations do not
   refetch.
 - Failures are silent: a site without a reachable icon is ordinary.
+- **Remembered for bookmarks.** When the fetched (or cached) icon belongs to a
+  tab whose host — `hostname` minus `www.`, the renderer's `domainFromUrl` key —
+  has a bookmark in the tab's own Account Space, `rememberBookmarkIcon` stores it
+  in that space's `bookmarkIcons` map, so the bookmark keeps its icon after the
+  tab closes and across restarts. Adding a bookmark stores the tab's current icon
+  the same way. Nothing is fetched for this: a bookmark never opened in this
+  browser keeps the globe. Pure helpers in
+  [bookmark-icons.ts](../../electron/bookmark-icons.ts); the map is capped at
+  `MAX_BOOKMARK_ICONS` (300) per space, pruned when a host's last bookmark goes,
+  and only the active space's map is sent in the snapshot (`bookmarkIcons`).
 
 **Why it is not just `<img src={page-chosen-url}>`.** The chrome `BrowserWindow`
 declares no `session`, so it uses the default one — outside the tracker filter

@@ -23,6 +23,7 @@ import type {
 } from './types.js';
 import { AccountStore, type AccountSpaceRecord } from './account-store.js';
 import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation.js';
+import { pruneBookmarkIcons, sanitizeBookmarkIcons } from './bookmark-icons.js';
 import { isAllowedRemoteUrl } from './security.js';
 import { sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
@@ -387,7 +388,8 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
   }));
   const history = sanitizeAccountItems<AccountSpaceHistoryEntry>(input.history, input.accountSpaceId, workspaceId, 10_000);
   const shortcuts = sanitizeShortcutTiles(input.shortcuts);
-  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs, activeTabId, bookmarks, history, ...(shortcuts ? { shortcuts } : {}) };
+  const bookmarkIcons = pruneBookmarkIcons(sanitizeBookmarkIcons(input.bookmarkIcons), bookmarks);
+  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs, activeTabId, bookmarks, history, ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}) };
 }
 
 export const MAX_SHORTCUT_TILES = 12;

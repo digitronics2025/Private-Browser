@@ -79,7 +79,7 @@ export default function App() {
   const activeAccount = state?.accountSpaces.find((account) => account.id === state.activeAccountSpaceId);
   const workspaceTabs = useMemo(() => state?.tabs.filter((tab) => tab.accountSpaceId === state.activeAccountSpaceId) ?? [], [state?.tabs, state?.activeAccountSpaceId]);
   const accountBookmarks = useMemo(() => state?.bookmarks.filter((item) => item.accountSpaceId === state.activeAccountSpaceId) ?? [], [state?.bookmarks, state?.activeAccountSpaceId]);
-  const favicons = useMemo(() => faviconsByHost(state?.tabs ?? []), [state?.tabs]);
+  const favicons = useMemo(() => faviconsByHost(state?.tabs ?? [], state?.bookmarkIcons), [state?.tabs, state?.bookmarkIcons]);
   const ui: UiPreferences = { ...DEFAULT_UI_PREFERENCES, ...state?.ui, ...pendingUi };
   const windowState = state?.windowState ?? DEFAULT_WINDOW_STATE;
 

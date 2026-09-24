@@ -32,6 +32,7 @@ import { AccountSpaceStateStore } from './account-space-state.js';
 import { RuntimeStateStore } from './runtime-state-store.js';
 import { CHROME, contentBounds, DEFAULT_CONTENT_INSETS, FRAME_COLORS, sanitizeContentInsets, ZERO_INSETS, type ContentInsets } from './chrome-layout.js';
 import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
+import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
@@ -124,8 +125,6 @@ type Layout = ContentInsets;
 const ZOOM_PERCENTS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
 const MAX_CLOSED_TABS = 25;
 
-const FAVICON_TYPES = new Set(['image/png', 'image/x-icon', 'image/vnd.microsoft.icon', 'image/svg+xml', 'image/jpeg', 'image/gif', 'image/webp']);
-const MAX_FAVICON_BYTES = 32 * 1024;
 const AUTOMATIC_FILL_RETRY_DELAYS_MS = [0, 300, 1_000, 2_500] as const;
 
 function safeOrigin(value: string): string {
@@ -364,6 +363,7 @@ class BrowserController {
         darkMode: nativeTheme.shouldUseDarkColors,
       },
       shortcutsByAccountSpace: persisted.shortcutsByAccountSpace,
+      bookmarkIcons: persisted.bookmarkIconsByAccountSpace[activeAccountSpaceId] ?? {},
       canReopenClosedTab: (this.closedTabs.get(activeAccountSpaceId)?.length ?? 0) > 0,
     };
   }
@@ -958,6 +958,8 @@ class BrowserController {
         next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order, orderPath: [order] });
       }
     });
+    const favicon = this.runtimeTabs.get(tab.id)?.favicon;
+    if (favicon) this.rememberBookmarkIcon(tab.id, favicon);
     this.broadcast();
   }
 
@@ -2376,6 +2378,7 @@ class BrowserController {
     const cacheKey = `${tab.accountSpaceId}:${url}`;
     const cached = this.faviconCache.get(cacheKey);
     if (cached) {
+      this.rememberBookmarkIcon(tabId, cached);
       this.updateRuntime(tabId, { favicon: cached });
       return;
     }
@@ -2391,9 +2394,29 @@ class BrowserController {
       const dataUrl = `data:${type};base64,${bytes.toString('base64')}`;
       if (this.faviconCache.size >= 200) this.faviconCache.delete(this.faviconCache.keys().next().value!);
       this.faviconCache.set(cacheKey, dataUrl);
+      this.rememberBookmarkIcon(tabId, dataUrl);
       this.updateRuntime(tabId, { favicon: dataUrl });
     } catch {
       // A site without a reachable icon is ordinary, not an error worth showing.
+    }
+  }
+
+  /**
+   * Keep a fetched favicon on disk when the tab's host is bookmarked in the
+   * tab's own Account Space, so the bookmark shows it after the tab closes.
+   * The icon was already fetched for a page the user opened; this never fetches.
+   */
+  private rememberBookmarkIcon(tabId: string, dataUrl: string): void {
+    const state = this.store.get();
+    const tab = state.tabs.find((candidate) => candidate.id === tabId);
+    if (!tab || tab.isHome || this.store.isReadOnly()) return;
+    const bookmarks = state.bookmarks.filter((item) => item.accountSpaceId === tab.accountSpaceId);
+    const icons = rememberBookmarkIcon(state.bookmarkIconsByAccountSpace[tab.accountSpaceId], bookmarks, tab.url, dataUrl);
+    if (!icons) return;
+    try {
+      this.store.update((next) => { next.bookmarkIconsByAccountSpace[tab.accountSpaceId] = icons; });
+    } catch {
+      // A missed icon is cosmetic; the live tab still shows it.
     }
   }
 

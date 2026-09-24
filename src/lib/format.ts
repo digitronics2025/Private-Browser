@@ -21,13 +21,17 @@ export function formatReleaseDate(value: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
-/** Tab favicons already fetched by the main process, keyed by host. The chrome never fetches icons itself. */
-export function faviconsByHost(tabs: Array<{ url: string; favicon?: string }>): Map<string, string> {
+/**
+ * Favicons already fetched by the main process, keyed by host: live tab icons
+ * first, then the icons remembered for bookmarked hosts. The chrome never fetches icons itself.
+ */
+export function faviconsByHost(tabs: Array<{ url: string; favicon?: string }>, remembered: Record<string, string> = {}): Map<string, string> {
   const icons = new Map<string, string>();
   for (const tab of tabs) {
     if (!tab.favicon) continue;
     const host = domainFromUrl(tab.url);
     if (!icons.has(host)) icons.set(host, tab.favicon);
   }
+  for (const [host, icon] of Object.entries(remembered)) if (!icons.has(host)) icons.set(host, icon);
   return icons;
 }
