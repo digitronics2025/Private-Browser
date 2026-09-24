@@ -160,6 +160,7 @@ img { max-width: 100%; }
 .secondary-button:disabled { opacity: .45; }
 .text-button { border: 0; background: transparent; color: var(--accent); font-size: var(--fs-sm); width: 100%; padding: 8px; display: flex; align-items: center; justify-content: center; gap: 6px; border-radius: var(--radius-md); }
 .text-button:hover { background: var(--hover); }
+.text-button.vault-hello-toggle { margin: 6px 0 10px; }
 .danger-text { color: var(--danger) !important; }
 .link-button { border: 0; background: transparent; padding: 0 3px; color: var(--accent); font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .count-badge { min-width: 16px; height: 16px; padding: 0 4px; display: inline-grid; place-items: center; border-radius: var(--radius-pill); background: var(--accent); color: var(--on-accent); font-size: var(--fs-xs); font-weight: 700; }

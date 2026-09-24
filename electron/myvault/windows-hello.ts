@@ -28,7 +28,8 @@ export type PlatformUnlockStatus =
   | 'Error';
 
 export class PlatformUnlockError extends Error {
-  constructor(readonly status: PlatformUnlockStatus) {
+  /** `detail` is the raw Windows message for logs; it never carries key material. */
+  constructor(readonly status: PlatformUnlockStatus, readonly detail?: string) {
     super(platformUnlockMessage(status));
     this.name = 'PlatformUnlockError';
   }
@@ -80,7 +81,6 @@ try {
   $asTaskOperation = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation${'`'}1' } | Select-Object -First 1
   $asTaskAction = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction' } | Select-Object -First 1
   [void][Windows.Security.Credentials.KeyCredentialManager, Windows.Security.Credentials, ContentType = WindowsRuntime]
-  [void][Windows.Security.Cryptography.CryptographicBuffer, Windows.Security.Cryptography, ContentType = WindowsRuntime]
   $focus = $false
   if ($request.op -eq 'enroll' -or $request.op -eq 'sign') { try {
     Add-Type -Namespace PrivateBrowser -Name HelloWindow -MemberDefinition '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string className, string windowName); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr handle);'
@@ -114,17 +114,21 @@ try {
     $retrieval = Await ($manager::OpenAsync($request.keyName)) ([Windows.Security.Credentials.KeyCredentialRetrievalResult])
   }
   if ($retrieval.Status -ne 'Success') { Emit @{ ok = $false; status = [string]$retrieval.Status }; return }
-  $challenge = [Windows.Security.Cryptography.CryptographicBuffer]::DecodeFromBase64String($request.challenge)
+  # PowerShell 5.1 cannot hand a native IBuffer back to a WinRT method, so bytes cross
+  # the boundary as managed buffers: AsBuffer going in, ToArray (via reflection) coming out.
+  $bufferExtensions = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions]
+  $challenge = $bufferExtensions::AsBuffer([Convert]::FromBase64String($request.challenge))
   $signed = Await ($retrieval.Credential.RequestSignAsync($challenge)) ([Windows.Security.Credentials.KeyCredentialOperationResult])
   if ($signed.Status -ne 'Success') { Emit @{ ok = $false; status = [string]$signed.Status }; return }
-  Emit @{ ok = $true; signature = [Windows.Security.Cryptography.CryptographicBuffer]::EncodeToBase64String($signed.Result) }
+  $toArray = $bufferExtensions.GetMethod('ToArray', [Type[]]@([Windows.Storage.Streams.IBuffer]))
+  Emit @{ ok = $true; signature = [Convert]::ToBase64String($toArray.Invoke($null, @($signed.Result))) }
 } catch {
-  Emit @{ ok = $false; status = 'Error' }
+  Emit @{ ok = $false; status = 'Error'; detail = [string]$_.Exception.Message }
 }
 `;
 
 interface HelloRequest { op: 'available' | 'enroll' | 'sign' | 'remove'; keyName?: string; challenge?: string }
-interface HelloReply { ok?: unknown; available?: unknown; signature?: unknown; status?: unknown }
+interface HelloReply { ok?: unknown; available?: unknown; signature?: unknown; status?: unknown; detail?: unknown }
 
 export type HelloRunner = (request: HelloRequest) => Promise<HelloReply>;
 
@@ -161,7 +165,7 @@ function signatureFrom(reply: HelloReply): Uint8Array {
     if (signature.length >= 128) return new Uint8Array(signature);
   }
   const status = typeof reply.status === 'string' && STATUSES.has(reply.status as PlatformUnlockStatus) ? reply.status as PlatformUnlockStatus : 'Error';
-  throw new PlatformUnlockError(status);
+  throw new PlatformUnlockError(status, typeof reply.detail === 'string' ? reply.detail.slice(0, 500) : undefined);
 }
 
 export class WindowsHelloSigner implements PlatformUnlockSigner {
