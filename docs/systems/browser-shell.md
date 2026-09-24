@@ -179,6 +179,11 @@ Ordering matters in the three switchers:
   call `showActiveTab()`. Showing an already-loaded tab schedules the same guarded
   automatic-fill check, which also makes unlocking MyVault on an open login page
   behave like Chrome without requiring a reload.
+- `showActiveTab` starts a load only when the view has no committed URL **and**
+  is not already loading. A navigation in flight has no URL yet, so without the
+  `isLoading()` guard a second caller (for example `createWindow`'s final
+  `showActiveTab` racing `openInAccountSpace` at startup) loaded the same URL
+  again and the first `loadURL` rejected with `ERR_ABORTED (-3)`.
 
 `closeTab` picks the successor as `siblings[Math.min(closedIndex, siblings.length - 1)]`,
 removes the child view from `window.contentView`, closes its webContents, deletes

@@ -2488,7 +2488,9 @@ class BrowserController {
       const view = this.ensureView(tab.id);
       view.setVisible(true);
       this.applyLayout();
-      if (!view.webContents.getURL()) await view.webContents.loadURL(tab.url);
+      // A navigation already in flight has no committed URL yet; loading again
+      // would abort it with ERR_ABORTED (-3), so only start one when idle.
+      if (!view.webContents.getURL() && !view.webContents.isLoading()) await view.webContents.loadURL(tab.url);
       this.scheduleAutomaticFill(tab.id);
     }
     this.broadcast();
