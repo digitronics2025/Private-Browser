@@ -41,7 +41,8 @@ cross the preload bridge.
 - **Bookmarks:** reads Chrome's `Bookmarks` JSON, preserving bookmark-bar versus
   other-bookmarks placement, nested folder names and per-level source order.
   Empty folders are not represented because the app persists URL entries rather
-  than folder nodes. The hard safety cap is 25,000 URL bookmarks.
+  than folder nodes. The hard safety caps are 25,000 URL bookmarks and 20 folder
+  levels (deeper entries are counted as skipped).
 - **History:** copies and opens the selected profile's `History` SQLite database
   read-only, selecting up to 10,000 newest visible URLs and converting Chrome's
   1601-based microsecond timestamps to ISO time.

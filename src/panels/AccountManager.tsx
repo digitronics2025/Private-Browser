@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Cloud, CalendarDays, ExternalLink, HardDrive, KeyRound, LoaderCircle, LogOut, LockKeyhole, Mail, Plus, RefreshCw, Shield, Trash2, TriangleAlert, UsersRound, X } from 'lucide-react';
 import type { AccountSpaceColor, BrowserSnapshot, GoogleModule, GoogleOperationResult } from '../../electron/types';
 import { AccountAvatar } from '../lib/accounts';
+import { useModalFocus } from '../lib/dialog';
 
 const ACCOUNT_COLORS: AccountSpaceColor[] = ['indigo', 'sky', 'emerald', 'amber', 'rose', 'violet', 'slate'];
 const GOOGLE_MODULE_OPTIONS: Array<{ id: GoogleModule; label: string; detail: string; highRisk?: boolean }> = [
@@ -31,13 +32,9 @@ export function AccountManager({ state, onClose, onToast }: { state: BrowserSnap
   const [recoveryVerification, setRecoveryVerification] = useState('');
   const [busy, setBusy] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { dialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus(); }, []);
+  // Focus moves in and stays in; Escape closes; focus returns afterwards (F-70).
+  useModalFocus(dialogRef, onClose, 'button');
   useEffect(() => { if (selected) { setEditLabel(selected.label); setModules(selected.enabledModules); } }, [selected?.id, selected?.label]);
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', close);
-    return () => window.removeEventListener('keydown', close);
-  }, []);
   const run = async (action: () => Promise<unknown>, success?: string) => {
     setBusy(true);
     try { await action(); if (success) onToast(success); }

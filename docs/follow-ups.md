@@ -230,6 +230,17 @@ node scripts/docs-find.mjs --history "<term from the entry>"
   process-spawning power; the panel says the Control Center is not running
   instead.
 
+- **Major dependency upgrades are pending as separate migrations (2026-09-25,
+  F-85).** Dependabot now groups only minor/patch updates; each major arrives
+  as its own PR. Open ones at the time of the 2026-09-24 audit: React and
+  react-dom 19 with `@types/react` 19 (fails typecheck: `RefObject<T | null>`,
+  `useRef` needs an argument — `src/App.tsx`, `src/shell/Menu.tsx`),
+  `lucide-react` 1.x, TypeScript 7, Vite 8 with `@vitejs/plugin-react` 6,
+  `@types/node` 26, `@electron/fuses` 2, `concurrently` 10, `cross-env` 10,
+  `wait-on` 9, and the GitHub Actions majors (checkout 7, setup-node 7,
+  upload-artifact 7, download-artifact 8). Each needs `npm run check` green on
+  its own branch before merging.
+
 ## Owner decisions — not engineering debt
 
 Things that are deliberately open because they are a judgement call for the

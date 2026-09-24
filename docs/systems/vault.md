@@ -57,7 +57,8 @@ memory wiping.
    click, Tab, or ArrowDown in the page), never on page script. It lists (up to
    50, scrolling) the logins for this exact origin, then those saved for other
    addresses of the same site (`isSameSiteFillCandidate`: same registrable domain
-   per the Public Suffix List, same port, no https-to-http), each labelled with
+   per the Public Suffix List, same port, no https-to-http; never across
+   `google.com`, whose subdomains are unrelated products), each labelled with
    its saved host. Only a pick from the list may fill a same-site login
    (`fillEntryInto(..., 'same-site')`); automatic fill and the side panel's Fill
    stay exact-origin. The list opens below the field, or above it when there is

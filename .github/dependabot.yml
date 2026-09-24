@@ -8,11 +8,17 @@ updates:
       time: "06:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 5
+    # Minor and patch updates are grouped so they can land together. Majors
+    # are left out of the groups and arrive one per pull request: grouping them
+    # (React 19, TypeScript 7, Vite 8, ...) produced PRs that could never pass
+    # CI, so nothing merged at all (F-85).
     groups:
       production-dependencies:
         dependency-type: production
+        update-types: [minor, patch]
       development-dependencies:
         dependency-type: development
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
