@@ -402,16 +402,15 @@ checks in addition to unit and Worker tests.
 ### ci.yml
 
 [ci.yml](../../.github/workflows/ci.yml) — on every push to `main` and every pull
-request. `permissions: contents: read`; concurrency per ref with
-`cancel-in-progress: true`. Node 22 with npm cache in all three jobs.
+request. `permissions: contents: read`; concurrency per ref, cancelling superseded
+runs **only for pull requests** — a `main` run is never cancelled. Node 22 with
+npm cache in all three jobs.
 
 **No job declares secrets.** Every credential is attached to the one step that
 uses it, so `npm ci` and the test suite never run with production values in their
 environment where a dependency's install script could read them (audit finding
-F-11). `publish-cloudflare-release` overrides the workflow concurrency with its
-own group and `cancel-in-progress: false`: the ref-level group could otherwise
-kill it between the R2 upload and the D1 registration and strand a ~114 MB object
-nothing references (F-21).
+F-11). `publish-cloudflare-release` has its own non-cancelling group; a cancel
+between the R2 upload and D1 registration would strand the object (F-21, F-41).
 
 **A failed `verify` keeps its browser test evidence.** The `playwright-evidence`
 artifact (`test-results/` and `blob-report/`, 7 days) is uploaded only on failure.
@@ -419,9 +418,10 @@ It holds screenshots and traces of the preview mock and throwaway Electron
 profiles, never real browsing data.
 
 **A documentation-only push publishes nothing.** The publish job checks out at
-`fetch-depth: 0`, diffs against `github.event.before` (falling back to `HEAD~1`
-when that ref is absent or all-zeros), and skips when every changed path is under
-`docs/` or a top-level `.md`. Before this, every push to `main` minted a new
+`fetch-depth: 0` and diffs against the commit production runs (the public
+manifest's `commitSha`, if an ancestor), else `github.event.before`, else
+`HEAD~1`; it skips when every changed path is under `docs/` or a top-level `.md`.
+An app change whose run never published still ships with the next push (F-41). Before this, every push to `main` minted a new
 active release — including docs commits (F-04).
 
 **Application releases are versioned automatically.** On a `main` push,
@@ -615,7 +615,8 @@ carries no credential and the `extraResources` filter finds nothing to copy. Whe
 it is set, the build prints a warning: the token is shared by every client, not
 issued per device, and anyone holding the installer can extract it (F-02). Rotate
 `PRIVATE_BROWSER_DOWNLOAD_TOKEN` before such an installer leaves the machine it
-was built for.
+was built for. The publish job refuses such a build: it stays a private GitHub
+artifact (F-42).
 
 Whatever the outcome — stored, invalid, or refused because `safeStorage` is
 unavailable — the file is deleted in a `finally`. It used to be removed only on

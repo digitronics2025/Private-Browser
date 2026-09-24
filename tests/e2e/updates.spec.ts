@@ -52,6 +52,9 @@ test('shows a focused full-width download action when a newer release exists', a
   const box = await download.boundingBox();
   expect(box?.width).toBeGreaterThan(240);
   await expect(page.getByText('Build 83')).toBeVisible();
+  // F-36: releases are unsigned, so the page must not promise a signed installer.
+  await expect(page.getByText(/checksum is checked/)).toBeVisible();
+  await expect(page.getByText(/\bsigned\b/i)).toHaveCount(0);
   expectNoBrowserIssues();
 });
 

@@ -31,13 +31,13 @@ covered by page content.
 
 ## Vault
 
-Credentials and TOTP secrets are encrypted using Electron `safeStorage` before being written to disk. The vault file and browser-state file are created with owner-only permissions where the operating system supports them. Vault metadata exposed to the UI never contains passwords or TOTP secrets. Passwords and TOTP values are copied directly by the main process and cleared from the clipboard after 30 seconds if unchanged.
+MyVault stores credentials, TOTP secrets and passkeys in one envelope encrypted with AES-256-GCM under a random data key, which is itself wrapped by a key derived from the master password with Argon2id. The device token, sync state, Windows Hello wrap and remembered picks are separate files encrypted with Electron `safeStorage`. Files are written with owner-only mode bits, which Windows ignores; there the protection is the user profile's own access control. Vault metadata exposed to the UI never contains passwords or TOTP secrets. Passwords and TOTP values are copied directly by the main process and cleared from the clipboard after 30 seconds if unchanged.
 
 Windows Hello unlock is optional and requires the master password to turn on. It stores a second copy of the vault data key, encrypted under a key derived from a Windows Hello signature that the TPM-backed Hello container produces only after face, fingerprint or PIN; that copy is itself `safeStorage`-encrypted. It never replaces the master password, which remains the only way to unlock on another device or after the Hello key is removed.
 
 If the vault cannot be decrypted, writes are disabled to prevent silent data loss. The recovery action preserves the unreadable encrypted file as a timestamped backup before creating a new vault.
 
-Automatic fill and the side panel's Fill are restricted to an exact hostname and port match. The scheme is checked asymmetrically: a credential saved for `https` is never filled into an `http` page, while a page served over `https` is always acceptable. A website can still observe credentials entered into its own form, just as it can in any password manager; users must verify the domain before filling.
+Automatic fill and the side panel's Fill require an exact origin match — scheme, host and port. Only the login picker (below) relaxes the scheme, and only upward: a login saved for `http` may be picked on the `https` page of the same address, and a credential saved for `https` is never filled into an `http` page. A website can still observe credentials entered into its own form, just as it can in any password manager; users must verify the domain before filling.
 
 The login picker (the list of saved accounts under a focused sign-in field) is drawn by the browser, not the page. It is a separate sandboxed view with context isolation, no Node, no DevTools, a nonce CSP and a preload with exactly two channels (`fill-picker:choose`, `fill-picker:highlight`). The page receives nothing from it, and it receives only usernames, titles and saved hosts, never an entry id or a secret. Besides exact-origin logins it offers, as Chrome does, logins saved for other addresses of the same site: same registrable domain per the Public Suffix List (so `a.co.ma` and `b.co.ma` are different sites), same port, never an https credential into an http page, and never for IP addresses, `localhost` or punycode. Each is labelled with the address it was saved for and fills only when the user picks it; nothing fills a same-site login automatically. The last pick per site is remembered on this device in `safeStorage` ciphertext only. It opens only in response to genuine user input, and a choice is a row index honoured once, from that view, while the fill context is unchanged. Banking and Development never show it.
 
@@ -71,7 +71,7 @@ Google-host-only, redirect-free, bounded and magic-byte validated.
   keyword list is a safety net. It errs towards refusing.
 - Page extraction reads rendered text only and never reads input values, cookies, local storage or authentication headers.
 - Sensitive-pattern redaction runs locally before preview.
-- Query parameters, URL paths and fragments are never shared; only the page origin is included.
+- Page previews for the AI assistant include only the page origin: query parameters, paths and fragments are never shared. Developer diagnostics previews (Development workspace only) include the sanitized origin and path, never the query or fragment, and are shown in full before approval.
 - The user approves the exact sanitized preview through a five-minute, single-use capability token.
 - Approval also binds the opaque Account Space, exact tab, Google-service class
   and source revision. Mailbox content is never cloud-model input.
@@ -94,8 +94,8 @@ changes and AI-initiated writes require payload-bound single-use confirmations.
 Encrypted Drive backup uses AES-256-GCM and `drive.appdata`; it excludes cookies,
 tokens, mail/file contents, downloads, AI logs and My Vault.
 
-Those two permissions require a top-level HTTPS page (or localhost development
-page). Banking denies every site permission, popup and download. Common campaign
+Every site permission requires a top-level HTTPS page (or a localhost
+development page). Banking denies every site permission, popup and download. Common campaign
 identifiers are removed from navigations, DNT and Global Privacy Control headers
 are sent, common tracker hosts are blocked, and cleartext or punycode domains are
 visibly marked in the address bar.
@@ -137,15 +137,43 @@ VS Code review, and modal approval before `WorkspaceEdit` can apply them.
 
 ## Release service
 
-Installer binaries are private R2 objects. D1 contains only release metadata and the R2 object key. Desktop checks use a client-only bearer token stored through Electron `safeStorage`; the renderer receives status and signed URLs, never the token. Publishing uses a separate administrator key.
+**Distribution is public.** Anyone may download the current stable installer
+from the Worker's landing page, which is deliberately indexable
+(`x-robots-tag: index, follow`), and anyone may read the release manifest at
+`/api/v1/releases/public/latest`. The premise this service protects is that
+the installer a user receives is exactly the one built from this repository —
+not that only some people can obtain it. That was decided when the public page
+was added (`bbdb394`) and recorded in the 2026-09-24 pre-release audit.
 
-Download-page and binary URLs are HMAC-signed, purpose-bound and expire after 15 minutes. Signatures bind binary access to the active D1 release ID, so replacing the active release invalidates prior installer links. Invalid or expired credentials return a generic `404`. Responses disable caching and referrers, and the page uses a restrictive Content Security Policy and `noindex` controls.
+Installer binaries are R2 objects with no public bucket access; every download
+goes through the Worker. D1 contains only release metadata and the R2 object
+key. Desktop update checks use the public manifest by default; an optional
+client bearer token, stored through Electron `safeStorage`, selects the
+private `/update.json` feed instead. The renderer receives status and signed
+URLs, never a token. Publishing uses a separate administrator key.
 
-Installers ship **without** an embedded download credential by default. A private single-user build may opt in by setting the repository variable `PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN` to `true`, which bundles a CI-generated bootstrap holding the shared client download token so the build connects on first launch. The app copies it into OS-encrypted storage and removes the bootstrap file — and removes it even when OS encryption is unavailable and the value could not be stored, rather than leaving a shared credential readable on disk.
+Binary and private-page URLs are HMAC-signed, purpose-bound and expire after 15
+minutes. Signatures bind binary access to the active D1 release ID, so replacing
+the active release invalidates prior installer links. Invalid or expired
+credentials return a generic `404`. Responses disable caching and referrers and
+carry a restrictive Content Security Policy; the private token pages
+(`/download/<token>`) are `noindex`.
 
-That opt-in is deliberately awkward, because a credential distributed inside a desktop installer can be extracted by anyone holding the file, and this one is shared by every client rather than issued per device. Any installer built with it must be treated as carrying a public token: rotate `PRIVATE_BROWSER_DOWNLOAD_TOKEN` before the file goes anywhere beyond the machine it was built for. Production enrollment should issue revocable device-specific credentials instead.
+Installers ship **without** an embedded download credential. The repository
+variable `PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN=true` builds a private
+single-user installer that bundles the shared client token; because
+distribution is public, **CI refuses to publish such a build** — it stays a
+GitHub artifact for the one machine it was made for, and the token must be
+rotated before that file goes anywhere else. The app copies the bundled token
+into OS-encrypted storage and removes the bootstrap file, even when OS
+encryption is unavailable. Production enrollment should issue revocable
+device-specific credentials instead.
 
-The Worker checks R2 object size against D1 before publication and again before serving. The release workflow calculates SHA-256 from the exact installer uploaded to R2. Resumable downloads are restricted to one validated byte range per request.
+The Worker checks R2 object size against D1 before publication and again before
+serving. The release workflow calculates SHA-256 from the exact installer
+uploaded to R2, and the desktop app verifies a downloaded installer against the
+manifest before it will open it. Resumable downloads are restricted to one
+validated byte range per request.
 
 ## Credentials in the repository
 
@@ -153,14 +181,13 @@ No credential is ever stored in a tracked file. `.gitignore` is itself committed
 
 It reads credential assignments in both forms, because both have appeared here: a quoted literal in source, and an unquoted `NAME=VALUE` dotenv line — the latter only when the whole line has that shape, so ordinary code such as `const token = randomUUID()` is not flagged. Names are matched as substrings of the surrounding identifier: `PRIVATE_BROWSER_ADMIN_API_KEY` must match, and a word-boundary anchor never fires there because `_` is a word character. Values are dismissed as fixtures only on evidence — a documented placeholder, a repeated character, a run of six consecutive characters, or lowercase words joined by separators with no digit anywhere. One uppercase letter or one digit is enough to disqualify a value from that dismissal.
 
-It runs in two places: `.githooks/pre-commit` scans staged additions and blocks the commit, and `npm run secrets:check` scans every tracked file as the first step of `npm run check`, so a secret cannot survive by never being re-staged. A deliberate fixture is exempted with a `secret-guard:allow` marker on the line — the exemption is per line, visible in review, and never a directory or file-wide silence.
+It runs in two places: `.githooks/pre-commit` scans staged additions and blocks the commit, and `npm run secrets:check` scans every tracked file as the first step of `npm run check`, so a secret cannot survive by never being re-staged. A deliberate fixture is exempted with a `secret-guard:allow` marker on the line — the exemption is per line, visible in review, and never a directory silence. The guard itself and its test are the only whole-file exemptions, because they must contain the patterns they hunt for.
 
 Local values belong in `.env` or `cloudflare/.dev.vars`; production values are set with `wrangler secret put`, which cannot be read back, so the value is recorded in the operator's own vault first. A credential that reaches a commit stays in history after deletion. Rotate it; do not delete it and assume it is gone.
 
 ## Known external requirement
 
-The generated Windows installer is reproducible and the workflow is ready to
-sign when `WINDOWS_CODE_SIGNING_CERTIFICATE` and
+The workflow is ready to sign the Windows installer when `WINDOWS_CODE_SIGNING_CERTIFICATE` and
 `WINDOWS_CODE_SIGNING_PASSWORD` repository secrets are configured. Until then,
 the release remains unsigned and Windows can show an unknown-publisher warning.
 A commercial URL-reputation feed is also still required for live phishing and

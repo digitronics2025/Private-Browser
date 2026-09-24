@@ -205,7 +205,7 @@ function UpdatesPage({ status, result, error, checking, editingPrivate, form, on
     : state === 'error'
       ? error ?? 'The update service could not be reached.'
       : state === 'available'
-        ? 'A newer signed Windows installer is ready on the public download page.'
+        ? 'A newer Windows installer is ready on the public download page. Its checksum is checked before Private Browser will open it.'
         : `Version ${result?.currentVersion ?? status?.currentVersion ?? '—'} is the latest stable release.`;
 
   return <div className="side-panel updates-page" data-testid="updates-page">

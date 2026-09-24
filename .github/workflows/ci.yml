@@ -8,9 +8,12 @@ on:
 permissions:
   contents: read
 
+# Pull requests cancel superseded runs. Pushes to main never do: a cancelled
+# run could stop between the R2 upload and the D1 registration, and a job-level
+# group cannot shield a job from its whole run being cancelled (F-21, F-41).
 concurrency:
   group: private-browser-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -141,9 +144,8 @@ jobs:
   publish-cloudflare-release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: windows-installer
-    # Its own group, and never cancelled: the workflow-level group cancels in
-    # progress, which could kill this job between the R2 upload and the D1
-    # registration and leave an orphaned ~114 MB object nothing references.
+    # One publish at a time across runs, never cancelled. Main-branch runs are
+    # not cancelled at the workflow level either (see the top of this file).
     concurrency:
       group: private-browser-publish-release
       cancel-in-progress: false
@@ -177,10 +179,25 @@ jobs:
       - name: Detect whether this push changes the application
         id: changes
         shell: bash
+        env:
+          PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
         run: |
-          before="${{ github.event.before }}"
-          if [[ -z "$before" || "$before" =~ ^0+$ ]] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
-            before="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+          # Compare with what production actually runs, not with the previous
+          # push: if an app change's run never published (cancelled, failed), a
+          # later docs-only push must still release it.
+          before=""
+          if [[ -n "$PRIVATE_BROWSER_DOWNLOAD_URL" ]]; then
+            active="$(curl -fsS --max-time 20 --proto '=https' "${PRIVATE_BROWSER_DOWNLOAD_URL%/}/api/v1/releases/public/latest" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s).commitSha;if(/^[0-9a-f]{40}$/.test(v))process.stdout.write(v)}catch{}})' || true)"
+            if [[ -n "$active" ]] && git cat-file -e "${active}^{commit}" 2>/dev/null && git merge-base --is-ancestor "$active" "${{ github.sha }}"; then
+              before="$active"
+              echo "Comparing with the active release commit $active"
+            fi
+          fi
+          if [[ -z "$before" ]]; then
+            before="${{ github.event.before }}"
+            if [[ -z "$before" || "$before" =~ ^0+$ ]] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+              before="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+            fi
           fi
           changed="$(git diff --name-only "$before" "${{ github.sha }}" || true)"
           echo "Changed paths:"; echo "${changed:-<none>}"
@@ -199,7 +216,15 @@ jobs:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
           PRIVATE_BROWSER_ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
           PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
+          PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN: ${{ vars.PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN }}
         run: |
+          # An installer carrying the shared download token is a private build.
+          # Distribution is public, so it must never become the active release.
+          if [[ "$PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN" == "true" ]]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::This installer embeds the shared download token (PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN=true); it is kept as a private artifact and not published."
+            exit 0
+          fi
           if [[ "${{ steps.changes.outputs.app }}" == "true" && -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" && ${#PRIVATE_BROWSER_DOWNLOAD_TOKEN} -ge 32 ]]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           elif [[ "${{ steps.changes.outputs.app }}" != "true" ]]; then
