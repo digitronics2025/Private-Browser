@@ -39,7 +39,9 @@ export type ShortcutCommand =
   | 'tab-search'
   | 'clear-browsing-data'
   | 'next-account-space'
-  | 'previous-account-space';
+  | 'previous-account-space'
+  /** No key: sent by the login picker's "Manage logins…" row. */
+  | 'open-vault';
 
 export interface Shortcut {
   command: ShortcutCommand;

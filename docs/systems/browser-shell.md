@@ -163,6 +163,13 @@ so the OS window title never follows the page), `page-favicon-updated`,
 and after short delays so client-rendered login forms can appear. The fill path
 rechecks active tab, navigation generation, Account Space, workspace, HTTPS
 origin, certificate state and vault lock state before any isolated-world injection.
+`before-input-event` first offers the key to `handleFillPickerKey` (arrows, Enter
+and Escape drive an open login picker; any other key closes it) before
+`handleShortcut`. `input-event` closes the picker on wheel or click, and a left
+click, like Tab or ArrowDown, schedules the focused-field probe that may open it.
+The window's `blur`, a click in the chrome, `hideAllViews`, `scheduleLayout`, a
+changed `setLayout`, `setOverlayOpen(true)` and lock close it too. The rules are in
+[vault.md](vault.md).
 
 Ordering matters in the three switchers:
 
@@ -285,6 +292,8 @@ There is one table: `resolveShortcut(input)` in
 `needsChromeFocus(command)` (address bar, find, menus, panels), and sends the
 result on `browser:command`. The renderer's `keydown` listener (chrome focus)
 resolves the same table and both paths run one dispatcher in App.tsx.
+`open-vault` has no key: the login picker's "Manage logins…" row sends it on the
+same channel to open the Vault side panel.
 
 | Keys | Command |
 | --- | --- |

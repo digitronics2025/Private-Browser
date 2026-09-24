@@ -261,6 +261,7 @@ export default function App() {
       case 'clear-browsing-data': clearBrowsingData(); break;
       case 'next-account-space': cycleAccountSpace(1); break;
       case 'previous-account-space': cycleAccountSpace(-1); break;
+      case 'open-vault': openTool('vault'); break;
       default:
     }
   };

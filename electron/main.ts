@@ -78,9 +78,11 @@ import { MyVaultDiskStore } from './myvault/vault-store.js';
 import { SecureVaultDialogs } from './myvault/secure-dialog.js';
 import type { ConfirmDeleteDialogValue, EditLoginDialogValue, UnlockDialogValue } from './myvault/secure-dialog-contract.js';
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
-import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape } from './myvault/isolated-fill.js';
+import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape, probeFocusedLoginField } from './myvault/isolated-fill.js';
+import { FillPicker } from './myvault/fill-picker.js';
+import { fillPickerBounds, type FillPickerChoice } from './myvault/fill-picker-model.js';
 import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
-import { isAutomaticFillPageUrl, selectAutomaticFillEntry } from './myvault/automatic-fill.js';
+import { FILL_PICKER_MAX_ROWS, isAutomaticFillPageUrl, orderFillCandidates, selectAutomaticFillEntry } from './myvault/automatic-fill.js';
 import { MyVaultSyncClient } from './myvault/vault-sync.js';
 import { VaultSyncController } from './myvault/sync-controller.js';
 import type { PairDialogValue } from './myvault/secure-dialog-contract.js';
@@ -214,6 +216,7 @@ class BrowserController {
   private readonly secureDialogs = new SecureVaultDialogs(() => this.window);
   private readonly fillCapabilities = new FillCapabilityStore();
   private readonly preferredFillEntryByOrigin = new Map<string, string>();
+  private readonly fillPicker: FillPicker = new FillPicker(() => this.window, { choose: (choice) => void this.handleFillPickerChoice(choice) });
   private readonly vaultSync: VaultSyncController;
   private dirtySyncTimer?: NodeJS.Timeout;
   private readonly passkeyController = new InternalPasskeyController();
@@ -242,6 +245,7 @@ class BrowserController {
     this.vaultSync = new VaultSyncController(vault, new MyVaultSyncClient());
     this.vault.subscribe((status) => {
       if (this.window && !this.window.isDestroyed()) this.window.webContents.send('vault:state');
+      if (status.lifecycle !== 'unlocked') this.fillPicker.close();
       if (status.lifecycle === 'unlocked' && this.window && !this.window.isDestroyed()) {
         const activeTabId = this.activeTab(this.store.get()).id;
         this.scheduleAutomaticFill(activeTabId);
@@ -278,6 +282,9 @@ class BrowserController {
       },
     });
     Menu.setApplicationMenu(null);
+    // The login picker is anchored to one field; anything that moves or covers it closes the list.
+    this.window.on('blur', () => this.fillPicker.close());
+    this.window.webContents.on('input-event', (_event, input) => { if (input.type === 'mouseDown') this.fillPicker.close(); });
     this.window.on('resize', () => this.scheduleLayout());
     // Maximise, restore and full screen report their events while Windows is still
     // settling the frame, so the content size read then can be one DIP short.
@@ -416,7 +423,9 @@ class BrowserController {
   }
 
   setLayout(layout: Layout): void {
-    this.layout = sanitizeContentInsets(layout);
+    const next = sanitizeContentInsets(layout);
+    if (JSON.stringify(next) !== JSON.stringify(this.layout)) this.fillPicker.close();
+    this.layout = next;
     this.applyLayout();
   }
 
@@ -481,6 +490,7 @@ class BrowserController {
 
   async closeTab(tabId: string): Promise<void> {
     this.fillCapabilities.invalidateTab(tabId);
+    if (this.fillPicker.context?.tabId === tabId) this.fillPicker.close();
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
@@ -534,7 +544,10 @@ class BrowserController {
   async setOverlayOpen(open: boolean): Promise<void> {
     // Menus and dialogs only cover the page: hide the views but keep docked
     // DevTools attached, unlike a tab or workspace switch.
-    if (open) for (const runtime of this.runtimeTabs.values()) runtime.view?.setVisible(false);
+    if (open) {
+      this.fillPicker.close();
+      for (const runtime of this.runtimeTabs.values()) runtime.view?.setVisible(false);
+    }
     else await this.showActiveTab();
   }
 
@@ -882,6 +895,7 @@ class BrowserController {
   }
 
   private closeAccountViews(accountSpaceId: AccountSpaceId): void {
+    this.fillPicker.close();
     const ids = new Set(this.store.get().tabs.filter((tab) => tab.accountSpaceId === accountSpaceId).map((tab) => tab.id));
     for (const id of ids) {
       const runtime = this.runtimeTabs.get(id);
@@ -1630,6 +1644,7 @@ class BrowserController {
 
   async lockVault() {
     this.secureDialogs.closeAll();
+    this.fillPicker.close();
     this.fillCapabilities.invalidateAll();
     if (this.dirtySyncTimer) clearTimeout(this.dirtySyncTimer);
     this.dirtySyncTimer = undefined;
@@ -1771,6 +1786,16 @@ class BrowserController {
       if (!approval?.confirmed) return;
       if (JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) throw new Error('Vault fill expired because the page context changed');
     }
+    await this.fillEntryInto(initial, id);
+    this.addPrivacyEvent('vault', 'Credential autofilled', new URL(initial.origin).hostname);
+  }
+
+  /**
+   * Deliberate fill shared by the side panel's Fill and the login picker.
+   * `initial` is the context the user saw when choosing; if the page has moved
+   * on since, the capability redemption throws and nothing is filled.
+   */
+  private async fillEntryInto(initial: FillContext, id: string): Promise<void> {
     const capability = this.fillCapabilities.issue(initial, id, 'fill-login');
     this.fillCapabilities.redeem(capability, this.currentFillContext(), id, 'fill-login');
     const match = this.vault.searchMetadata('', initial.origin).find((entry) => entry.id === id);
@@ -1785,7 +1810,98 @@ class BrowserController {
     this.preferredFillEntryByOrigin.set(initial.origin, id);
     const runtime = this.runtimeTabs.get(initial.tabId);
     if (runtime) runtime.automaticFillGeneration = initial.navigationGeneration;
-    this.addPrivacyEvent('vault', 'Credential autofilled', new URL(initial.origin).hostname);
+  }
+
+  /**
+   * Keys typed in the page while the login picker is open. Focus stays in the
+   * page field, so arrows, Enter and Escape are read here, the way Chrome
+   * drives its own list. Returns true when the key was consumed.
+   */
+  private handleFillPickerKey(tabId: string, event: Electron.Event, input: Electron.Input): boolean {
+    const picker = this.fillPicker;
+    const plain = !input.control && !input.alt && !input.meta && !input.shift;
+    if (input.type === 'keyUp') {
+      if (input.key === 'Tab' && !picker?.isOpen) this.scheduleFillPickerProbe(tabId);
+      return false;
+    }
+    if (input.type !== 'keyDown') return false;
+    if (!picker?.isOpen || picker.context?.tabId !== tabId) {
+      if (plain && input.key === 'ArrowDown') this.scheduleFillPickerProbe(tabId);
+      return false;
+    }
+    if (plain && (input.key === 'ArrowDown' || input.key === 'ArrowUp')) {
+      event.preventDefault();
+      picker.moveHighlight(input.key === 'ArrowDown' ? 1 : -1);
+      return true;
+    }
+    if (plain && input.key === 'Enter' && picker.chooseHighlighted()) {
+      event.preventDefault();
+      return true;
+    }
+    if (input.key === 'Escape') {
+      event.preventDefault();
+      picker.close();
+      return true;
+    }
+    if (!['Shift', 'Control', 'Alt', 'Meta'].includes(input.key)) picker.close();
+    return false;
+  }
+
+  private scheduleFillPickerProbe(tabId: string): void {
+    const generation = this.runtimeTabs.get(tabId)?.navigationGeneration;
+    if (generation === undefined) return;
+    // Let the click or Tab move focus before asking which field has it.
+    const timer = setTimeout(() => void this.openFillPicker(tabId, generation), 60);
+    timer.unref();
+  }
+
+  private async openFillPicker(tabId: string, generation: number): Promise<void> {
+    const picker = this.fillPicker;
+    if (!picker || this.window.isDestroyed()) return;
+    const state = this.store.get();
+    const tab = state.tabs.find((candidate) => candidate.id === tabId);
+    const runtime = this.runtimeTabs.get(tabId);
+    const view = runtime?.view;
+    if (!tab || tab.isHome || this.activeTab(state).id !== tabId || !runtime || !view || !view.getVisible()) return;
+    if (!workspaceVaultPolicy(tab.workspaceId).fillPicker || this.vault.status().lifecycle !== 'unlocked') return;
+    if (runtime.navigationGeneration !== generation || runtime.certificateError || this.htmlFullscreenOwner) return;
+    const contents = view.webContents;
+    if (!isAutomaticFillPageUrl(contents.getURL())) return;
+    try {
+      const context = this.currentFillContext();
+      if (context.tabId !== tabId || context.navigationGeneration !== generation || !context.origin.startsWith('https://')) return;
+      const candidates = orderFillCandidates(
+        this.vault.searchMetadata('', context.origin).filter((entry) => Boolean(entry.url) && isAutofillTarget(entry.url!, context.origin)),
+        this.preferredFillEntryByOrigin.get(context.origin),
+      ).slice(0, FILL_PICKER_MAX_ROWS);
+      if (!candidates.length) return;
+      const field = await probeFocusedLoginField(contents);
+      if (!field || JSON.stringify(this.currentFillContext()) !== JSON.stringify(context)) return;
+      const bounds = fillPickerBounds(field.rect, contents.getZoomFactor(), view.getBounds(), candidates.length);
+      if (!bounds) return;
+      picker.show(context, candidates.map((entry) => ({ entryId: entry.id, username: entry.username, title: entry.title })), bounds, contents);
+    } catch {
+      // A locked vault, a navigation or a vanished field just means no list.
+    }
+  }
+
+  private async handleFillPickerChoice(choice: FillPickerChoice): Promise<void> {
+    if (choice.kind === 'manage') {
+      if (this.window.isDestroyed()) return;
+      this.window.webContents.focus();
+      this.window.webContents.send('browser:command', { command: 'open-vault' });
+      return;
+    }
+    // Clicking the overlay took focus from the page; give it back to the field.
+    const contents = this.activeContents();
+    if (contents && contents.id === choice.context.webContentsId) contents.focus();
+    try {
+      if (!workspaceVaultPolicy(choice.context.workspaceId).fillPicker) return;
+      await this.fillEntryInto(choice.context, choice.entryId);
+      this.addPrivacyEvent('vault', 'Credential filled from picker', new URL(choice.context.origin).hostname);
+    } catch {
+      // The page moved on after the list opened: fail closed and fill nothing.
+    }
   }
 
   private scheduleAutomaticFill(tabId: string): void {
@@ -1963,6 +2079,7 @@ class BrowserController {
       if (runtime.view?.webContents.id === webContentsId) runtime.certificateError = true;
     }
     this.fillCapabilities.invalidateAll();
+    this.fillPicker.close();
   }
 
   private activeVaultPolicy() {
@@ -2119,6 +2236,7 @@ class BrowserController {
       runtime.automaticFillGeneration = undefined;
       runtime.automaticFillPending = false;
       this.fillCapabilities.invalidateTab(tabId);
+      if (this.fillPicker.context?.tabId === tabId) this.fillPicker.close();
       this.secureDialogs.closeAll();
     });
     view.webContents.on('did-start-loading', () => this.updateRuntime(tabId, { loading: true }));
@@ -2156,7 +2274,17 @@ class BrowserController {
         { label: 'Reload', click: () => view.webContents.reload() },
       ]).popup({ window: this.window });
     });
-    view.webContents.on('before-input-event', (event, input) => this.handleShortcut(event, input));
+    view.webContents.on('before-input-event', (event, input) => {
+      if (this.handleFillPickerKey(tabId, event, input)) return;
+      this.handleShortcut(event, input);
+    });
+    // Only genuine user input opens the login picker; nothing the page does can.
+    view.webContents.on('input-event', (_event, input) => {
+      if (input.type === 'mouseWheel' || input.type === 'gestureScrollBegin') this.fillPicker.close();
+      if (input.type !== 'mouseDown') return;
+      this.fillPicker.close();
+      if ((input as Electron.MouseInputEvent).button === 'left') this.scheduleFillPickerProbe(tabId);
+    });
     view.webContents.on('audio-state-changed', () => this.broadcast());
     // Electron only reports Ctrl+wheel and touchpad pinch; applying the step is the embedder's job.
     // One wheel notch reports twice and a pinch reports a burst, so take at most one step per window.
@@ -2367,6 +2495,7 @@ class BrowserController {
   }
 
   private hideAllViews(): void {
+    this.fillPicker.close();
     for (const runtime of this.runtimeTabs.values()) {
       runtime.view?.webContents.closeDevTools();
       runtime.view?.setVisible(false);
@@ -2379,6 +2508,7 @@ class BrowserController {
    * the previous state while the event is being delivered.
    */
   private scheduleLayout(windowStateChanged = false): void {
+    this.fillPicker.close();
     this.applyLayout();
     this.settleBroadcast ||= windowStateChanged;
     if (this.settleLayoutTimer) clearTimeout(this.settleLayoutTimer);

@@ -68,7 +68,7 @@ describe('isolated-world fill source', () => {
 describe('central workspace vault policy', () => {
   it('hard-disables Banking extraction, capture, DevTools, extensions, and password clipboard', () => {
     expect(workspaceVaultPolicy('banking')).toEqual({
-      vaultSurface: true, manualFill: true, automaticFill: false, saveCapture: false, passwordClipboard: false,
+      vaultSurface: true, manualFill: true, automaticFill: false, fillPicker: false, saveCapture: false, passwordClipboard: false,
       requireFillConfirmation: true, aiExtraction: false, devTools: false, extensions: false, passkeys: false,
     });
   });

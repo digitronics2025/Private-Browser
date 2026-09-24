@@ -153,6 +153,14 @@ node scripts/docs-find.mjs --history "<term from the entry>"
   `system:copy` channel writes up to 100,000 characters straight to the clipboard
   with no clear at all. Nothing stops a renderer panel from using the generic
   channel for something sensitive. Symbol: `copySensitiveValue`. *(2026-09-10)*
+
+- **The login picker covers only main-frame sign-in forms.** A form inside an
+  iframe (some banks and SSO widgets) gets no list, because the focus probe runs
+  in the main frame, and fill already refuses cross-origin frames. It also fills
+  the first visible username and password fields, as the side panel's Fill does,
+  not necessarily the exact field clicked. It offers no "suggest a strong
+  password" row and no passkey rows. Symbol: `probeFocusedLoginField`.
+  *(2026-09-24)*
 ## Browser chrome (Chrome Precision redesign)
 
 - **No second window, private window, extensions, tab groups or pinned tabs.** The

@@ -35,7 +35,9 @@ Credentials and TOTP secrets are encrypted using Electron `safeStorage` before b
 
 If the vault cannot be decrypted, writes are disabled to prevent silent data loss. The recovery action preserves the unreadable encrypted file as a timestamped backup before creating a new vault.
 
-Autofill is deliberately manual and restricted to an exact hostname and port match. The scheme is checked asymmetrically: a credential saved for `https` is never filled into an `http` page, while a page served over `https` is always acceptable. A website can still observe credentials entered into its own form, just as it can in any password manager; users must verify the domain before filling.
+Autofill is restricted to an exact hostname and port match. The scheme is checked asymmetrically: a credential saved for `https` is never filled into an `http` page, while a page served over `https` is always acceptable. A website can still observe credentials entered into its own form, just as it can in any password manager; users must verify the domain before filling.
+
+The login picker (the list of saved accounts under a focused sign-in field) is drawn by the browser, not the page. It is a separate sandboxed view with context isolation, no Node, no DevTools, a nonce CSP and a preload with exactly two channels (`fill-picker:choose`, `fill-picker:highlight`). The page receives nothing from it, and it receives only usernames and titles for the exact origin, never an entry id or a secret. It opens only in response to genuine user input, and a choice is a row index honoured once, from that view, while the fill context is unchanged. Banking and Development never show it.
 
 ## Account Spaces and local browsing data
 

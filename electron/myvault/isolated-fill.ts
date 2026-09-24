@@ -5,6 +5,10 @@ export const VAULT_ISOLATED_WORLD_ID = 1007;
 export interface LoginFormShape { hasUsername: boolean; hasPassword: boolean }
 export interface CapturedLogin { username: string; password: string }
 export type AutomaticFillResult = 'filled' | 'no-login-form' | 'occupied' | 'new-password-form';
+export interface FocusedLoginField {
+  kind: 'username' | 'password';
+  rect: { x: number; y: number; width: number; height: number };
+}
 
 function literal(value: string): string {
   return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
@@ -69,6 +73,44 @@ export async function fillLoginAutomaticallyInIsolatedWorld(
   })()` }], true) as unknown;
   if (result === 'filled' || result === 'no-login-form' || result === 'occupied' || result === 'new-password-form') return result;
   return 'no-login-form';
+}
+
+/**
+ * Which recognized sign-in field the user just focused, and where it sits in
+ * the page viewport (CSS pixels). Uses the same selectors and refusals as
+ * automatic fill, so the picker never offers logins on a signup or
+ * change-password form. Only the main frame is inspected: focus inside an
+ * iframe makes `activeElement` the frame itself, which is not a match.
+ */
+export async function probeFocusedLoginField(contents: WebContents): Promise<FocusedLoginField | undefined> {
+  const result = await contents.executeJavaScriptInIsolatedWorld(VAULT_ISOLATED_WORLD_ID, [{ code: `(() => {
+    const visible = (element) => element instanceof HTMLInputElement
+      && !element.disabled && !element.readOnly && element.getClientRects().length > 0;
+    const field = document.activeElement;
+    if (!visible(field)) return null;
+    if ([...document.querySelectorAll('input[autocomplete="new-password"]')].some(visible)) return null;
+    const passwordFields = [...document.querySelectorAll('input[type="password"], input[autocomplete="current-password"]')].filter(visible);
+    if (passwordFields.length !== 1) return null;
+    const usernameField = [...document.querySelectorAll('input[autocomplete="username"], input[type="email"], input[name*="user" i], input[name*="email" i]')]
+      .find(visible);
+    const kind = field === passwordFields[0] ? 'password' : field === usernameField ? 'username' : null;
+    if (!kind) return null;
+    const rect = field.getBoundingClientRect();
+    return { kind, x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+  })()` }], true) as unknown;
+  return parseFocusedLoginField(result);
+}
+
+/** The probe runs beside page script, so its shape is checked like any page-sourced value. */
+export function parseFocusedLoginField(value: unknown): FocusedLoginField | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== 'username' && candidate.kind !== 'password') return undefined;
+  const numbers = [candidate.x, candidate.y, candidate.width, candidate.height];
+  if (!numbers.every((number) => typeof number === 'number' && Number.isFinite(number))) return undefined;
+  const [x, y, width, height] = numbers as number[];
+  if (width <= 0 || height <= 0) return undefined;
+  return { kind: candidate.kind, rect: { x, y, width, height } };
 }
 
 export async function fillTotpInIsolatedWorld(contents: WebContents, code: string): Promise<void> {

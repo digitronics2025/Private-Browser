@@ -9,7 +9,7 @@ verified_at: af49b2e8
 
 # MyVault broker
 
-> Last verified: 2026-09-12
+> Last verified: 2026-09-24
 
 ## Agent Brief
 
@@ -49,6 +49,18 @@ memory wiping.
    client-rendered forms, never overwrites populated fields, refuses signup,
    reset and new-password forms, and picks the most recently updated login unless
    a manual Fill established a preferred login for that origin during the session.
+   The same three workspaces (policy flag `fillPicker`) show a Chrome-style login
+   list under a focused sign-in field. It opens only on genuine input (a left
+   click, Tab, or ArrowDown in the page), never on page script. It lists up to
+   eight matching logins in the same order automatic fill uses, and fills through
+   the same capability path as the side panel's Fill. The list is a separate sandboxed
+   `WebContentsView` with its own two-channel preload. The page never sees the
+   usernames, and the overlay never sees an entry id: it returns a row index that
+   main maps back, once, only from that view and with its nonce. The page keeps
+   keyboard focus (arrows, Enter and Escape are read in `before-input-event`).
+   Navigation, a tab, workspace or layout change, lock, window blur, a click
+   elsewhere or 10 s idle all close it, and a choice made after the context moved
+   on fills nothing.
 7. Clipboard writes go broker-to-OS. Only a digest survives for unchanged-value
    clearing; lock and quit flush pending secret content.
 8. Page inspection exposes shape only. Explicit Save/Update reads minimum login
@@ -68,7 +80,12 @@ memory wiping.
 - `vault-sync.ts` / `sync-controller.ts` — redemption, CAS and dirty scheduling.
 - `secure-dialog.ts` / `secure-preload.cts` — isolated one-shot secret UI.
 - `fill-capability.ts` / `automatic-fill.ts` / `isolated-fill.ts` — exact-context
-  manual and Chrome-style automatic browser operations.
+  manual and Chrome-style automatic browser operations; `orderFillCandidates` is
+  the one ordering both automatic fill and the picker use, and
+  `probeFocusedLoginField` reports which sign-in field has focus and where.
+- `fill-picker.ts` / `fill-picker-model.ts` / `fill-picker-preload.cts` — the
+  login picker overlay: view lifecycle, single-use sessions, placement under or
+  above the field, and escaped static markup.
 - `vault-migration.ts` — verified backup, protected journal, stable duplicates,
   direct Chrome CSV import and explicit cleanup.
 - `passkey-controller.ts` / `security/passkeys/*` — disabled gated provider core.
