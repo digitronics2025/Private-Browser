@@ -10,7 +10,7 @@ verified_at: 08cf6e94
 
 # Workspaces and Persisted State
 
-> Last verified: 2026-09-14
+> Last verified: 2026-09-24
 
 ## Agent Brief
 
@@ -70,8 +70,11 @@ state. IPC patches use the stricter `requireUiPreferencesPatch`.
 Per-account browsing files contain URLs, titles, bookmark hierarchy, and history
 plus workspace/account IDs, and an optional `shortcuts` list (≤ 12 HTTP(S)
 New Tab tiles, sanitised by `sanitizeShortcutTiles`) that is present only once the
-user customises them. Deleting an Account Space drops its shortcuts; clearing its
-browsing data keeps them, like bookmarks. They do
+user customises them. An optional `bookmarkIcons` map (host → image `data:` URL,
+≤ 300, sanitised by `sanitizeBookmarkIcons` and pruned to hosts that still have a
+bookmark) keeps the favicons of visited bookmarked sites. Deleting an Account Space
+drops its shortcuts and icons; clearing its browsing data keeps them, like
+bookmarks. They do
 not contain email, display name, Google subject, partition key, OAuth data,
 permission grants, or descriptive account metadata. Those fields live in
 independent `safeStorage`-encrypted account records.
