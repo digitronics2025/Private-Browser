@@ -1,5 +1,5 @@
 import type { FormEvent, RefObject } from 'react';
-import { ArrowLeft, ArrowRight, Home, KeyRound, MoreVertical, PanelRight, RefreshCw, Search, SlidersHorizontal, Sparkles, Star, TriangleAlert, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Home, KeyRound, MoreVertical, PanelRight, RefreshCw, Search, SlidersHorizontal, Sparkles, Star, TriangleAlert, X, ZoomIn, ZoomOut } from 'lucide-react';
 import type { AccountSpaceSummary, BrowserTab } from '../../electron/types';
 import { AccountAvatar, accountNeedsAction } from '../lib/accounts';
 
@@ -16,6 +16,8 @@ export interface NavigationToolbarProps {
   profileButtonRef: RefObject<HTMLButtonElement>;
   menuButtonRef: RefObject<HTMLButtonElement>;
   siteInfoOpen: boolean;
+  zoomOpen: boolean;
+  zoomButtonRef: RefObject<HTMLButtonElement>;
   profileOpen: boolean;
   menuOpen: boolean;
   onAddressChange: (value: string) => void;
@@ -27,7 +29,7 @@ export interface NavigationToolbarProps {
   onSiteInfo: () => void;
   onToggleBookmark: () => void;
   onOpenVault: () => void;
-  onResetZoom: () => void;
+  onZoomMenu: () => void;
   onToggleSidePanel: () => void;
   onAssistant: () => void;
   onProfile: () => void;
@@ -76,8 +78,10 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
           spellCheck={false}
           autoComplete="off"
         />
-        {zoom !== 100 && !tab.isHome && (
-          <button type="button" className="omnibox-chip" aria-label={`Zoom ${zoom}%. Reset to 100%`} title="Reset zoom (Ctrl+0)" onClick={props.onResetZoom}>{zoom}%</button>
+        {(zoom !== 100 || props.zoomOpen) && !tab.isHome && (
+          <button ref={props.zoomButtonRef} type="button" className={`omnibox-action ${props.zoomOpen ? 'active' : ''}`} aria-label={`Zoom: ${zoom}%`} aria-haspopup="dialog" aria-expanded={props.zoomOpen} title={`Zoom: ${zoom}%`} onClick={props.onZoomMenu}>
+            {zoom > 100 ? <ZoomIn size={16} /> : <ZoomOut size={16} />}
+          </button>
         )}
         {props.vaultAvailable && (
           <button type="button" className="omnibox-action" aria-label="Open MyVault" title="Passwords and MyVault" onClick={props.onOpenVault}><KeyRound size={16} /></button>

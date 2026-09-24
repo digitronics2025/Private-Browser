@@ -381,6 +381,9 @@ kbd { font: inherit; }
 .menu-zoom-row button { width: 32px; height: 30px; display: grid; place-items: center; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); }
 .menu-zoom-row button:hover:not(:disabled) { background: var(--hover); }
 .menu-zoom-row button:disabled { opacity: .4; }
+.zoom-menu .menu-zoom-row { gap: 6px; padding: 6px 8px 6px 12px; min-width: 250px; }
+.zoom-menu .menu-zoom-label { text-align: left; }
+.zoom-menu .menu-zoom-row .zoom-reset { width: auto; padding: 0 12px; font-size: var(--fs-sm); }
 .menu-zoom-row output { min-width: 48px; text-align: center; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 .browser-menu { width: 320px; }
 .bookmark-menu { min-width: 220px; max-width: 360px; }

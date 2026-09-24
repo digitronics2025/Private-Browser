@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Code2, Globe2, Landmark, Layers, LockKeyhole, ScrollText, Search, Settings, Shield, ShieldAlert, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { Code2, Globe2, Landmark, Minus, Plus, Layers, LockKeyhole, ScrollText, Search, Settings, Shield, ShieldAlert, ShieldCheck, TriangleAlert } from 'lucide-react';
 import type { AccountSpaceSummary, BrowserSnapshot, BrowserTab, Workspace } from '../../electron/types';
 import { domainFromUrl } from '../lib/format';
 import { BrandMark } from './BrandMark';
@@ -83,6 +83,24 @@ export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, o
       {zoom !== 100 && <MenuItem icon={Globe2} label={`Reset zoom (${zoom}%)`} onSelect={onResetZoom} />}
       {!tab.isHome && <MenuItem icon={Code2} label="Developer tools" shortcut="F12" disabled={!tab.developerToolsAllowed} onSelect={onToggleDeveloperTools} />}
       <MenuItem icon={ScrollText} label="Privacy log" onSelect={onOpenPrivacy} />
+    </MenuSurface>
+  );
+}
+
+export function ZoomMenu({ anchor, zoom, onZoom, onClose }: {
+  anchor: HTMLElement | null;
+  zoom: number;
+  onZoom: (direction: 'in' | 'out' | 'reset') => void;
+  onClose: () => void;
+}) {
+  return (
+    <MenuSurface anchor={anchor} placement="bottom-end" label="Page zoom" role="dialog" className="zoom-menu" onClose={onClose}>
+      <div className="menu-zoom-row" role="group" aria-label="Zoom">
+        <output className="menu-zoom-label" aria-live="polite">Zoom: {zoom}%</output>
+        <button type="button" aria-label="Zoom out" title="Zoom out (Ctrl+-)" onClick={() => onZoom('out')}><Minus size={15} /></button>
+        <button type="button" aria-label="Zoom in" title="Zoom in (Ctrl++)" onClick={() => onZoom('in')}><Plus size={15} /></button>
+        <button type="button" className="zoom-reset" title="Reset to 100% (Ctrl+0)" disabled={zoom === 100} onClick={() => onZoom('reset')}>Reset</button>
+      </div>
     </MenuSurface>
   );
 }
