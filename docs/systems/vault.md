@@ -4,7 +4,7 @@ sources:
   - electron/vault.ts
   - electron/clipboard-guard.ts
   - electron/myvault/**
-verified_at: 5e64091c
+verified_at: e2c2bde6
 ---
 
 # MyVault broker
@@ -78,19 +78,8 @@ memory wiping.
 9. Banking disables AI, extraction, DevTools, extensions, capture, automatic fill
    and password clipboard and reconfirms every manual fill. Development exposes
    neither vault metadata nor broker operations.
-10. Windows Hello unlock is opt-in and never replaces the master password.
-    Turning it on needs the vault unlocked *and* the master password again in the
-    `enroll-hello` secure dialog, checked before any Hello prompt. Hello keeps an
-    RSA key (`PrivateBrowser-MyVault-<vaultId>`) and signs a stored random
-    challenge; the deterministic signature is HKDF-stretched into a key that wraps
-    the data key a second time under its own AAD. That wrap sits in
-    `myvault/platform-unlock.enc` (`safeStorage`). A wrong key or a missing Hello
-    key deletes the record; a cancel keeps it; an unreadable record is discarded,
-    never blocking. Installing a different vault identity drops it. The WinRT
-    call runs in a short-lived `powershell.exe` addressed by absolute path, with
-    the challenge on stdin. PowerShell 5.1 cannot pass a native WinRT `IBuffer`
-    back into a WinRT call, so bytes cross as managed buffers (`AsBuffer` in,
-    `ToArray` out).
+10. Windows Hello unlock is opt-in and never replaces the master password,
+    which is re-checked before any Hello prompt. Details: **Windows Hello unlock**.
 11. The internal passkey provider is disabled by default and release-gated.
     Registration appends one immutable encrypted record, authentication does not
     mutate, and every refusal preserves the original OS WebAuthn operation.
@@ -118,6 +107,20 @@ memory wiping.
   status mapping and key naming; the broker's `enrollPlatformUnlock`,
   `unlockWithPlatform` and `removePlatformUnlock` own the wrap.
 - `passkey-controller.ts` / `security/passkeys/*` — disabled gated provider core.
+
+## Windows Hello unlock
+
+Turning it on needs the vault unlocked and the master password again (the
+`enroll-hello` secure dialog). Hello keeps an RSA key named
+`PrivateBrowser-MyVault-<vaultId>` and signs a stored random challenge; the
+deterministic signature is HKDF-stretched into a key that wraps the data key a
+second time under its own AAD. The wrap lives in `myvault/platform-unlock.enc`
+(`safeStorage`). A wrong or missing Hello key deletes the record, a cancel keeps
+it, an unreadable record is discarded without blocking, and installing a
+different vault identity drops it. The WinRT call runs in a short-lived
+`powershell.exe` addressed by absolute path, with the challenge on stdin.
+PowerShell 5.1 cannot pass a native WinRT `IBuffer` back into a WinRT call, so
+bytes cross as managed buffers (`AsBuffer` in, `ToArray` out).
 
 ## Compatibility
 
