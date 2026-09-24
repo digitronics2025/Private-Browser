@@ -80,6 +80,8 @@ export function installPreviewApi(): void {
     shortcutsByAccountSpace: {},
     bookmarkIcons: {},
     canReopenClosedTab: false,
+    // ?permission=prompt shows a pending site-permission prompt for the e2e suite.
+    ...(params.get('permission') === 'prompt' ? { pendingPermission: { id: 'preview-permission', accountSpaceId: ids.personal as AccountSpaceId, workspaceId: 'personal' as const, origin: 'https://meet.google.com', capability: 'notifications' as const, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } } : {}),
   };
   const media = matchMedia('(prefers-color-scheme: dark)');
   const syncDarkMode = () => { state.windowState.darkMode = state.ui.theme === 'system' ? media.matches : state.ui.theme === 'dark'; };
@@ -99,6 +101,7 @@ export function installPreviewApi(): void {
     // Recorded on the document so browser tests can compare it with the visible chrome.
     setLayout: async (layout) => { document.documentElement.dataset.previewLayout = JSON.stringify(layout); },
     setOverlayOpen: async () => undefined,
+    respondToPermissionPrompt: async (_id, decision) => { document.documentElement.dataset.previewPermission = String(decision); state.pendingPermission = undefined; publish(); },
     freezeContent: async () => null,
     // Same rules as the main process: validated patch, Home address normalized, Banking Home is the New Tab page.
     setBrowserSettings: async (value) => {

@@ -3,7 +3,8 @@ import type { AccountSpaceId, BridgeStatus, BrowserSnapshot } from '../electron/
 import { DEFAULT_BROWSER_SETTINGS } from '../electron/browser-settings';
 
 export function installLocalBridgePreview(): void {
-  if (window.privateBrowser || !['127.0.0.1', 'localhost'].includes(location.hostname) || new URLSearchParams(location.search).get('preview') !== 'bridge') return;
+  // Development servers only, like the preview API: a shipped build never installs a mock bridge.
+  if (!import.meta.env.DEV || window.privateBrowser || !['127.0.0.1', 'localhost'].includes(location.hostname) || new URLSearchParams(location.search).get('preview') !== 'bridge') return;
   const workspaces = [
     { id: 'digitronics' as const, name: 'Digitronics', color: '#5b8cff', icon: 'D', protected: false },
     { id: 'tenten' as const, name: 'TenTen', color: '#ffbd59', icon: 'T', protected: false },

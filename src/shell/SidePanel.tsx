@@ -32,7 +32,15 @@ export function SidePanel({ tool, width, activeDownloads, onSelectTool, onClose,
   const callbacks = useRef({ onLiveWidth, onCommitWidth });
   callbacks.current = { onLiveWidth, onCommitWidth };
   const detach = useRef<(() => void) | null>(null);
-  useEffect(() => () => detach.current?.(), []);
+  // Closing the panel mid-drag must still unfreeze the page and drop the live
+  // width; before, the overlay stayed held and the page stayed hidden (F-68).
+  useEffect(() => () => {
+    const dragging = release.current !== null;
+    detach.current?.();
+    release.current?.();
+    release.current = null;
+    if (dragging) callbacks.current.onLiveWidth(null);
+  }, []);
 
   const beginResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || release.current) return;

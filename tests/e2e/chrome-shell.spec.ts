@@ -339,3 +339,23 @@ test('home page setting decides where Home goes and refuses text that is not an 
   await expect(startup.getByRole('radio', { name: 'Also open Home page' })).toHaveAttribute('aria-checked', 'true');
   noErrors();
 });
+
+// F-64 / F-70: a site's permission prompt cannot be clicked through as it
+// appears, keeps focus inside it, and Escape denies.
+test('permission prompt arms its Allow buttons late, traps focus and denies on Escape', async ({ page }) => {
+  const noErrors = watchErrors(page);
+  await page.goto('/?permission=prompt');
+  const dialog = page.getByRole('alertdialog', { name: /Allow notifications/ });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Always here' })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: 'Deny' })).toBeFocused();
+  await expect(dialog.getByRole('button', { name: 'Always here' })).toBeEnabled();
+  for (let index = 0; index < 6; index += 1) {
+    await page.keyboard.press('Tab');
+    expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+  }
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.dataset.previewPermission)).toBe('deny');
+  noErrors();
+});

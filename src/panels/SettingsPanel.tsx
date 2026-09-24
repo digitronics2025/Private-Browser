@@ -134,11 +134,11 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
       checking={checking}
       editingPrivate={editingUpdates}
       form={updateForm}
-      onBack={() => setSettingsPage('overview')}
+      onBack={() => { setUpdateForm((value) => ({ ...value, accessToken: '' })); setSettingsPage('overview'); }}
       onCheck={() => void checkUpdates()}
       onOpenDownload={() => void window.privateBrowser.openUpdatePage().catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}
       onOpenDeveloper={() => void window.privateBrowser.newTab('development', 'https://dr-badawi-abdalsalam.com/')}
-      onTogglePrivate={() => setEditingUpdates((value) => !value)}
+      onTogglePrivate={() => { setEditingUpdates((value) => !value); setUpdateForm((value) => ({ ...value, accessToken: '' })); }}
       onConfigure={configureUpdates}
       onFormChange={setUpdateForm}
       onDisconnect={() => void disconnectUpdates()}

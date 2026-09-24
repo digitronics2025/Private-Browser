@@ -225,8 +225,13 @@ Protection detail is in the shield menu, not on the page.
 
 The two-step AI flow is unchanged: preview locally, approve for a single-use
 token, ask once, then the token is cleared; leaving the panel revokes the
-context. Secret form fields are cleared in `finally`. Toasts carry `ok`/`error`
-so a refusal never looks like success. Automations open tabs and stop — they
+context. Secret form fields are cleared in `finally` and whenever their form is
+collapsed, cancelled or left. Toasts carry `ok`/`error` so a refusal never looks
+like success, and every IPC action has a rejection handler. Decision dialogs
+(permission, recovery, full vault view) use `useModalFocus` (`src/lib/dialog.ts`):
+focus stays inside, Escape denies or closes, focus returns afterwards. The
+permission prompt is keyed by prompt id and its Allow buttons arm after 500 ms.
+A page URL change never overwrites an address the user is editing. Automations open tabs and stop — they
 never send, buy, publish or delete.
 
 ## Keyboard
@@ -290,8 +295,11 @@ Existing panel class names were kept and restyled on the tokens.
   page tabs with a long title, an audible tab and an insecure `http:` tab, nested
   bookmark folders with enough entries to overflow, and in-memory implementations
   of the new tab, bookmark, preference and shortcut methods. `?theme=` and
-  `?panel=open` seed preferences; `setLayout` records the insets on
-  `<html data-preview-layout>` for tests. Production always uses the preload.
+  `?panel=open` seed preferences, `?permission=prompt` shows a pending
+  permission prompt; `setLayout` records the insets on
+  `<html data-preview-layout>` for tests. [preview-bridge.ts](../../src/preview-bridge.ts)
+  is the same kind of dev-only mock for the VS Code bridge (`?preview=bridge`).
+  Production always uses the preload.
 
 ## Related Systems
 

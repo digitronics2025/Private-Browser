@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Check, KeyRound, LoaderCircle, ShieldCheck, X } from 'lucide-react';
 import type { AccountSpaceId, Bookmark, BookmarkLevelInput, BrowserSnapshot, Shortcut, ShortcutTile, SidePanelTool, UiPreferences, UiPreferencesPatch, WindowState } from '../electron/types';
 import { CHROME, computeChromeLayout, FRAME_COLORS } from '../electron/chrome-layout';
@@ -17,6 +17,7 @@ import { ShieldStatusMenu, SiteInfoMenu, TabSearchMenu, ZoomMenu } from './shell
 import { PromptDialog, type PromptRequest } from './shell/PromptDialog';
 import { AccountManager } from './panels/AccountManager';
 import { PermissionOverlay, RecoveryOverlay } from './panels/Overlays';
+import { useModalFocus } from './lib/dialog';
 import { AssistantPanel } from './panels/AssistantPanel';
 import { DeveloperPanel } from './panels/DeveloperPanel';
 import { VaultPanel } from './panels/VaultPanel';
@@ -535,14 +536,21 @@ export default function App() {
           />
         )}
 
-        {state.pendingPermission && <PermissionOverlay state={state} onRespond={(decision, sourceId) => void act(() => window.privateBrowser.respondToPermissionPrompt(state.pendingPermission!.id, decision, sourceId))} />}
+        {state.pendingPermission && <PermissionOverlay key={state.pendingPermission.id} state={state} onRespond={(decision, sourceId) => void act(() => window.privateBrowser.respondToPermissionPrompt(state.pendingPermission!.id, decision, sourceId))} />}
         {state.recovery && <RecoveryOverlay state={state} />}
         {accountManagerOpen && <AccountManager state={state} onClose={() => { setAccountManagerOpen(false); profileButtonRef.current?.focus(); }} onToast={showToast} />}
-        {vaultFullOpen && <div className="vault-full-overlay" role="dialog" aria-modal="true" aria-label="MyVault metadata"><div className="vault-full-shell"><button className="toolbar-button vault-full-close" aria-label="Close full MyVault view" onClick={() => setVaultFullOpen(false)}><X size={18} /></button><VaultPanel workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></div></div>}
+        {vaultFullOpen && <VaultFullView onClose={() => setVaultFullOpen(false)}><VaultPanel workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></VaultFullView>}
         {prompt && <PromptDialog request={prompt} onDone={() => setPrompt(null)} />}
 
         {toast && <div className={`toast ${toast.kind}`} role="status">{toast.kind === 'error' ? <X size={15} /> : <Check size={15} />} {toast.text}</div>}
       </div>
     </OverlayContext.Provider>
   );
+}
+
+/** The full-window vault view: focus stays inside it and Escape closes it (F-70). */
+function VaultFullView({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useModalFocus(ref, onClose);
+  return <div className="vault-full-overlay" ref={ref} role="dialog" aria-modal="true" aria-label="MyVault metadata"><div className="vault-full-shell"><button className="toolbar-button vault-full-close" aria-label="Close full MyVault view" onClick={onClose}><X size={18} /></button>{children}</div></div>;
 }

@@ -142,6 +142,21 @@ const POPUP_WINDOW_MS = 10_000;
  * opt-in. Never throws: `normalizedWebOrigin` refuses punycode hosts, and a
  * throw during view creation used to leave the view without its guards.
  */
+/** A response body, or undefined as soon as it grows past `limit` bytes. */
+async function readAtMost(response: Response, limit: number): Promise<Buffer | undefined> {
+  if (!response.body) return undefined;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return Buffer.concat(chunks);
+    total += value.byteLength;
+    if (total > limit) { await reader.cancel(); return undefined; }
+    chunks.push(value);
+  }
+}
+
 function passkeyOriginFor(url: string): string {
   try {
     return url === 'private://home' ? 'https://invalid.local' : normalizedWebOrigin(url);
@@ -2728,9 +2743,13 @@ class BrowserController {
       if (!response.ok) return;
       const type = (response.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
       if (!FAVICON_TYPES.has(type)) return;
-      const bytes = Buffer.from(await response.arrayBuffer());
+      // The page chooses this URL: the size limit is applied while reading, not
+      // after the whole body is in memory (F-71).
+      const declared = Number(response.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > MAX_FAVICON_BYTES) { void response.body?.cancel(); return; }
+      const bytes = await readAtMost(response, MAX_FAVICON_BYTES);
       // The icon rides along in every state broadcast, so keep it small.
-      if (!bytes.byteLength || bytes.byteLength > MAX_FAVICON_BYTES) return;
+      if (!bytes?.byteLength) return;
       const dataUrl = `data:${type};base64,${bytes.toString('base64')}`;
       if (this.faviconCache.size >= 200) this.faviconCache.delete(this.faviconCache.keys().next().value!);
       this.faviconCache.set(cacheKey, dataUrl);
