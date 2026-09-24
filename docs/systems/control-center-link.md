@@ -89,8 +89,10 @@ its Account Spaces, cookies or the vault. Agents never drive Private Browser.
 3. **Follow.** "Sent from this browser" polls every 5 s while the tab is open.
    It shows the stage, outcome and blocker of the app's own tasks, and a link
    that opens the task in the Control Center in a new Development tab.
-4. **Re-check.** On a finished task, **Check again** reloads the page, waits for
-   it to load, and builds a fresh preview. **Attach to TASK-…** approves and
+4. **Re-check.** On a finished task, **Check again** clears the tab's captured
+   console and network entries (they otherwise survive a reload, and a re-check
+   would repeat the old error), reloads the page, waits for it to load, and
+   builds a fresh preview. **Attach to TASK-…** approves and
    sends it as re-check evidence.
 
 A create or re-check that loses its answer is retried up to twice with the

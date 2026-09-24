@@ -27,6 +27,8 @@ let siteOrigin = '';
 const token = randomBytes(32).toString('base64url');
 const appId = 'e2e-app-0000000000001';
 let taskStatus = 'RUNNING';
+/** The fixture page logs an error until the "fix" lands. */
+let broken = true;
 
 async function sign(purpose: string, nonce: string): Promise<string> {
   const key = await webcrypto.subtle.importKey('jwk', vectors.identity.privateJwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
@@ -61,7 +63,7 @@ test.beforeAll(async () => {
   site = createServer((request, response) => {
     if (request.url?.startsWith('/missing')) { response.writeHead(404); response.end(); return; }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end(`<!doctype html><title>Cart</title><main><h1>Cart</h1><button id="pay">Pay</button></main><script>console.error('${MARKER}'); fetch('/missing.json');</script>`);
+    response.end(`<!doctype html><title>Cart</title><main><h1>Cart</h1><button id="pay">Pay</button></main>${broken ? `<script>console.error('${MARKER}'); fetch('/missing.json');</script>` : ''}`);
   });
   await new Promise<void>((ready) => site.listen(0, '127.0.0.1', ready));
   siteOrigin = `http://127.0.0.1:${(site.address() as AddressInfo).port}`;
@@ -127,12 +129,17 @@ test('pairs, sends the exact approved context, follows the task and attaches a r
     // The task shows; once it finishes, Check again attaches fresh evidence.
     await expect(page.getByText('TASK-0001 · The cart crashes')).toBeVisible({ timeout: 10_000 });
     taskStatus = 'COMPLETED';
+    broken = false; // the task "fixed" the page
     await expect(page.getByRole('button', { name: 'Check again' })).toBeVisible({ timeout: 10_000 });
     await page.getByRole('button', { name: 'Check again' }).click();
     await expect(page.getByText(/RE-CHECK FOR TASK-0001/)).toBeVisible({ timeout: 20_000 });
     await page.getByRole('button', { name: 'Attach to TASK-0001' }).click();
     await expect.poll(() => received.filter((r) => r.path === '/api/connected-app/tasks/TASK-0001/evidence').length).toBe(1);
-    expect(received.find((r) => r.path === '/api/connected-app/tasks/TASK-0001/evidence')!.body.evidence).toContain(MARKER);
+    // Only what the page does after the reload: the old error and failed request are gone.
+    const recheck = received.find((r) => r.path === '/api/connected-app/tasks/TASK-0001/evidence')!.body.evidence as string;
+    expect(recheck).not.toContain(MARKER);
+    expect(recheck).not.toContain('missing.json');
+    expect(recheck).toContain('"title": "Cart"');
 
     // Optional evidence for a person to look at: the chrome window only, never the whole screen.
     if (process.env.PB_EVIDENCE_DIR) {

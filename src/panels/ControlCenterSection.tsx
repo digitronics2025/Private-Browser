@@ -97,6 +97,9 @@ export function ControlCenterSection({ activeTab, onToast }: { activeTab: Browse
   });
 
   const checkAgain = (task: ControlCenterTask) => run(async () => {
+    // The tab keeps console and network entries across reloads; a re-check must
+    // show only what the page does now, so the old entries go first.
+    await window.privateBrowser.clearDeveloperDiagnostics();
     await window.privateBrowser.reload();
     await waitForLoad(activeTab.id);
     setRecheckFor(task);
