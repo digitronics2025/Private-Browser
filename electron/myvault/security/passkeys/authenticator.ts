@@ -38,13 +38,31 @@ export async function authenticatorData(rpId: string, userVerified: boolean, att
   return concatBytes([base, new Uint8Array(16), length, attested.credentialId, attested.coseKey]);
 }
 
-export async function createCredential(input: { rpId: string; rpName: string; origin: string; challenge: Uint8Array; userHandle: Uint8Array; userName: string; userDisplayName: string }) {
+/**
+ * WebAuthn ES256 signatures are ASN.1 DER `Ecdsa-Sig-Value`; Web Crypto returns
+ * the raw 64-byte `r || s`. Every relying party would reject the raw form (F-79).
+ */
+export function ecdsaRawToDer(raw: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (raw.length !== 64) throw new Error('Expected a 64-byte P-256 signature');
+  const integer = (bytes: Uint8Array) => {
+    let start = 0;
+    while (start < bytes.length - 1 && bytes[start] === 0) start += 1;
+    const trimmed = bytes.subarray(start);
+    const body = trimmed[0]! & 0x80 ? concatBytes([Uint8Array.of(0), trimmed]) : trimmed;
+    return concatBytes([Uint8Array.of(0x02, body.length), body]);
+  };
+  const sequence = concatBytes([integer(raw.subarray(0, 32)), integer(raw.subarray(32))]);
+  return concatBytes([Uint8Array.of(0x30, sequence.length), sequence]);
+}
+
+export async function createCredential(input: { rpId: string; rpName: string; origin: string; challenge: Uint8Array; userHandle: Uint8Array; userName: string; userDisplayName: string; userVerified: boolean }) {
   const keys = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const jwk = await crypto.subtle.exportKey('jwk', keys.publicKey);
   if (!jwk.x || !jwk.y) throw new Error('ES256 public key export failed');
   const raw = concatBytes([Uint8Array.of(4), base64UrlDecode(jwk.x), base64UrlDecode(jwk.y)]);
   const credentialId = crypto.getRandomValues(new Uint8Array(32));
-  const authData = await authenticatorData(input.rpId, true, { credentialId, coseKey: coseKeyFromRawPublicKey(raw) });
+  // The UV flag reports what actually happened; the caller must have verified the user to set it.
+  const authData = await authenticatorData(input.rpId, input.userVerified, { credentialId, coseKey: coseKeyFromRawPublicKey(raw) });
   const client = clientDataJson('webauthn.create', input.challenge, input.origin);
   const privateKeyPkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keys.privateKey));
   const publicKeySpki = new Uint8Array(await crypto.subtle.exportKey('spki', keys.publicKey));
@@ -56,11 +74,11 @@ export async function createCredential(input: { rpId: string; rpName: string; or
   return { record, clientDataJson: client, authenticatorData: authData, attestationObject: cborMap([[cborText('fmt'), cborText('none')], [cborText('attStmt'), cborMap([])], [cborText('authData'), cborBytes(authData)]]) };
 }
 
-export async function signAssertion(record: PasskeyCredential, challenge: Uint8Array, origin: string) {
+export async function signAssertion(record: PasskeyCredential, challenge: Uint8Array, origin: string, userVerified: boolean) {
   const privateKey = await crypto.subtle.importKey('pkcs8', Buffer.from(record.privateKeyPkcs8, 'base64'), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
   const client = clientDataJson('webauthn.get', challenge, origin);
-  const authData = await authenticatorData(record.rpId, true);
+  const authData = await authenticatorData(record.rpId, userVerified);
   const signatureBase = concatBytes([authData, await digest(client)]);
-  const signature = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privateKey, signatureBase));
+  const signature = ecdsaRawToDer(new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privateKey, signatureBase)));
   return { clientDataJson: client, authenticatorData: authData, signature, userHandle: base64UrlDecode(record.userHandle) };
 }

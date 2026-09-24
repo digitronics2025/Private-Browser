@@ -629,10 +629,10 @@ and requires `version === 1` plus string `endpoint` and `accessToken`. It does
 which applies `isSafeUpdateEndpoint` and the token-length rule, so a bad bundled
 endpoint throws rather than being stored.
 
-At startup `electron/main.ts` reads the file, calls `updates.bootstrap(...)`, and
-on success calls `removeUpdateBootstrap` to delete it. The whole block is wrapped
-in a `try/catch` that logs `update_bootstrap_invalid` and continues — a malformed
-bundled config never stops the app launching, and the file is left in place.
+At startup `electron/main.ts` reads the file and calls `updates.bootstrap(...)`
+inside a `try/catch` that logs `update_bootstrap_invalid` and continues — a
+malformed bundled config never stops the app launching — and `removeUpdateBootstrap`
+runs in `finally`, so the file is deleted whatever happened.
 
 **The bundled file contains the download token in plain text** until first run
 deletes it. That is the trade for an installer that works without the user

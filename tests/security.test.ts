@@ -192,6 +192,12 @@ describe('same-site login picker candidates', () => {
     expect(isSameSiteFillCandidate('https://digitronics.ma/', 'https://digitronics.ma:443/')).toBe(true);
   });
 
+  // F-80: google.com hosts many unrelated products; only exact origins match there.
+  it('never offers a login across google.com subdomains', () => {
+    expect(isSameSiteFillCandidate('https://accounts.google.com/', 'https://sites.google.com/view/anything')).toBe(false);
+    expect(isSameSiteFillCandidate('https://accounts.google.com/', 'https://accounts.google.com/signin')).toBe(true);
+  });
+
   it('keeps sites under a shared public suffix apart', () => {
     expect(isSameSiteFillCandidate('https://shop.co.ma/', 'https://evil.co.ma/')).toBe(false);
     expect(isSameSiteFillCandidate('https://a.co.uk/', 'https://b.co.uk/')).toBe(false);

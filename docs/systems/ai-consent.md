@@ -110,10 +110,9 @@ Banking continues to deny before extraction.
 Implemented in `electron/main.ts` (owned by
 [browser-shell.md](browser-shell.md)). Three IPC calls in order —
 `ai:prepare-preview`, `ai:approve-preview`, `ai:ask` — with two short-lived
-in-memory maps between them, `pendingAiPreviews` and `aiApprovals`
-(`main.ts:63-64`).
+in-memory maps between them, `pendingAiPreviews` and `aiApprovals`.
 
-### 1. Local extraction — `prepareAiPreview()` (`main.ts:289-307`)
+### 1. Local extraction — `prepareAiPreview()`
 
 1. `pruneAiCapabilities()` runs first, so expired entries are cleared before
    anything new is created.
@@ -139,7 +138,7 @@ in-memory maps between them, `pendingAiPreviews` and `aiApprovals`
    and returned to the renderer, which shows the text alongside "*N* redacted"
    ([src/App.tsx:430](../../src/App.tsx)).
 
-### 2. Approval — `approveAiPreview(previewId)` (`main.ts:309-321`)
+### 2. Approval — `approveAiPreview(previewId)`
 
 1. The pending entry is fetched and **deleted immediately**, before any check. A
    preview id is good for exactly one approval attempt; a failed attempt does not
@@ -158,13 +157,14 @@ in-memory maps between them, `pendingAiPreviews` and `aiApprovals`
 Note what is *not* here: no re-extraction. The approved preview object is the one
 built in step 1, and it is what will be sent verbatim.
 
-### 3. The single request — `askAi(token, question)` (`main.ts:339-351`)
+### 3. The single request — `askAi(token, question)`
 
-1. The approval is fetched and **deleted immediately**, again before validation.
-   The token is single-use whatever happens next.
-2. Missing or expired → `AI approval expired; approve the page again`.
-3. The question is trimmed and must be non-empty and ≤2,000 characters (the
-   renderer's textarea carries the same `maxLength`).
+1. The question is trimmed and must be non-empty and ≤2,000 characters (the
+   renderer's textarea carries the same `maxLength`). An invalid question is
+   refused **before** the token is touched, so a typo does not spend it.
+2. `consumeAiApproval` then fetches the approval and **deletes it immediately**,
+   before any other check: from here the token is single-use whatever happens.
+3. Missing or expired → `AI approval expired; approve the page again`.
 4. The active tab is checked against `sourceUrl` and `isProtectedPage` **again** —
    the third protection check, covering the window between approval and send.
 5. `aiProvider.ask(approval.preview, question)` performs the one outbound call.
@@ -172,7 +172,7 @@ built in step 1, and it is what will be sent verbatim.
 
 Asking again requires approving again, which requires reading the page again.
 
-### Expiry and pruning — `pruneAiCapabilities()` (`main.ts:638-644`)
+### Expiry and pruning — `pruneAiCapabilities()`
 
 Deletes entries past `expiresAt` from both maps, then evicts oldest-first while
 either map exceeds **20** entries (`Map` preserves insertion order). It is called
@@ -194,8 +194,7 @@ preview verbatim.
 ## Provider Configuration
 
 `AiProviderStore` ([electron/ai-provider.ts](../../electron/ai-provider.ts)),
-constructed once at startup over `userData/ai-provider.enc`
-(`electron/main.ts:705`). The stored shape is
+constructed once at startup over `userData/ai-provider.enc`. The stored shape is
 `{ version: 1, endpoint, model, apiKey }`.
 
 **At rest.** `save()` mirrors the vault exactly: `safeStorage.encryptString` of
@@ -233,7 +232,7 @@ is never returned, on any path.**
 **`clear()`** drops the in-memory config, resets `corrupt`, and unlinks the file.
 It is the only way out of the corrupt state.
 
-The controller wrappers (`main.ts:323-337`) add a privacy-log entry for configure
+The controller wrappers add a privacy-log entry for configure
 and for clear; the configure entry records the endpoint, never the key.
 
 ## The Outbound Request

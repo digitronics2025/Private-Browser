@@ -8,6 +8,7 @@ import { isAllowedRemoteUrl } from './security.js';
 
 const MAX_BOOKMARK_FILE_BYTES = 32 * 1024 * 1024;
 const MAX_IMPORTED_BOOKMARKS = 25_000;
+const MAX_BOOKMARK_DEPTH = 20;
 const MAX_IMPORTED_HISTORY = 10_000;
 const CHROME_EPOCH_OFFSET_MS = 11_644_473_600_000;
 
@@ -87,6 +88,9 @@ export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, 
 
   const visit = (node: ChromeNode, location: Bookmark['location'], folderPath: string[], orderPath: number[]): void => {
     if (bookmarks.length >= MAX_IMPORTED_BOOKMARKS) { truncated = true; return; }
+    // Each leaf copies its whole path, so depth is bounded as well as count; the
+    // saved state keeps at most this many levels anyway (F-81).
+    if (orderPath.length > MAX_BOOKMARK_DEPTH) { skipped += 1; return; }
     if (node.type === 'url') {
       if (!node.url || !isAllowedRemoteUrl(node.url)) { skipped += 1; return; }
       bookmarks.push({

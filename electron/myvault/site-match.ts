@@ -17,6 +17,13 @@ export function registrableSite(hostname: string): string | undefined {
 }
 
 /**
+ * Registrable domains whose subdomains serve different parties or products, so
+ * "same site" means nothing there. Chrome turns same-site matching off for
+ * google.com for this reason; logins for them match their exact origin only (F-80).
+ */
+const SAME_SITE_EXCLUDED: ReadonlySet<string> = new Set(['google.com']);
+
+/**
  * Whether a saved credential may be OFFERED in the login picker on this page:
  * the exact origin, or another address of the same site (same registrable
  * domain, same effective port). The scheme rule is `isAutofillTarget`'s: never an
@@ -33,6 +40,7 @@ export function isSameSiteFillCandidate(credentialUrl: string, pageUrl: string):
     const effectivePort = (url: URL) => url.port || (url.protocol === 'https:' ? '443' : '80');
     if (effectivePort(credential) !== effectivePort(page)) return false;
     const credentialSite = registrableSite(credential.hostname);
+    if (credentialSite && SAME_SITE_EXCLUDED.has(credentialSite)) return false;
     return Boolean(credentialSite) && credentialSite === registrableSite(page.hostname);
   } catch {
     return false;

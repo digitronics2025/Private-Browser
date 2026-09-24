@@ -44,3 +44,28 @@ describe('browser settings channels', () => {
     }
   });
 });
+
+// F-49: the validator used to let every channel it did not list through.
+describe('IPC argument validation covers every channel', () => {
+  const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+  const channels = [...main.matchAll(/handle\('([^']+)'/g)].map((match) => match[1]!);
+
+  it('has a rule for every registered channel', async () => {
+    const { validateIpcArguments } = await import('../electron/ipc-contracts');
+    expect(channels.length).toBeGreaterThan(100);
+    const unknown = channels.filter((channel) => {
+      try { validateIpcArguments(channel, []); return false; } catch (error) { return (error as Error).message === 'Unknown browser command'; }
+    });
+    expect(unknown).toEqual([]);
+  });
+
+  it('refuses an unknown channel and extra arguments on an argument-free one', async () => {
+    const { validateIpcArguments } = await import('../electron/ipc-contracts');
+    expect(() => validateIpcArguments('browser:not-a-channel', [])).toThrow('Unknown browser command');
+    expect(() => validateIpcArguments('vault:lock', [])).not.toThrow();
+    expect(() => validateIpcArguments('vault:lock', ['unexpected'])).toThrow();
+    expect(() => validateIpcArguments('browser:switch-account-space', ['not-an-id'])).toThrow();
+    expect(() => validateIpcArguments('vault:resolve-conflict', ['both'])).toThrow();
+    expect(() => validateIpcArguments('browser:new-tab', [undefined, undefined, undefined])).not.toThrow();
+  });
+});

@@ -115,7 +115,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:forward` | `forward()` | — | `void` |
 | `browser:reload` | `reload()` | — | `void` |
 | `browser:stop` | `stop()` | — | `void` |
-| `browser:new-tab` | `newTab(workspaceId?, url?)` | `workspaceId?: WorkspaceId`, `url?: string` | `void` |
+| `browser:new-tab` | `newTab(workspaceId?, url?, accountSpaceId?)` | `workspaceId?: WorkspaceId`, `url?: string`, `accountSpaceId?: AccountSpaceId` | `void` |
 | `browser:close-tab` | `closeTab(tabId)` | `tabId: string` | `void` |
 | `browser:activate-tab` | `activateTab(tabId)` | `tabId: string` | `void` |
 | `browser:switch-workspace` | `switchWorkspace(workspaceId)` | `workspaceId: WorkspaceId` | `void` |
@@ -198,7 +198,7 @@ The contract refuses any extra field: evidence and screenshots come from the
 approved preview in main, never from the renderer. Behaviour:
 [control-center-link.md](control-center-link.md).
 
-### ai: — 6 channels
+### ai: — 7 channels
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
@@ -213,17 +213,25 @@ approved preview in main, never from the renderer. Behaviour:
 The two-step preview-then-approve shape and the token are the consent mechanism,
 not a caching optimisation — see [ai-consent.md](ai-consent.md).
 
-### vault: — 7 channels
+### vault: — 23 channels
 
-| Channel | Preload method | Arguments | Resolves with |
-| --- | --- | --- | --- |
-| `vault:list` | `listVault()` | — | `VaultStatus` |
-| `vault:add` | `addVaultItem(input)` | `input: VaultItemInput` | `VaultItemMeta` |
-| `vault:remove` | `removeVaultItem(id)` | `id: string` | `boolean` |
-| `vault:reset-corrupt` | `resetCorruptVault()` | — | `boolean` |
-| `vault:copy-password` | `copyPassword(id)` | `id: string` | `void` |
-| `vault:copy-totp` | `copyTotp(id)` | `id: string` | `{ secondsRemaining: number }` |
-| `vault:autofill` | `autofill(id)` | `id: string` | `void` |
+All are intents; the main process opens secure dialogs for anything secret.
+
+| Channel | Arguments | Resolves with |
+| --- | --- | --- |
+| `vault:list`, `vault:request-unlock`, `vault:hello-unlock`, `vault:hello-enable`, `vault:hello-disable`, `vault:request-pairing`, `vault:lock`, `vault:sync`, `vault:acknowledge-recovery` | — | `VaultStatus` |
+| `vault:reconnect` | — | `VaultStatus | undefined` (sync only when unlocked) |
+| `vault:conflict-review` | — | `{ local, cloud }` metadata lists |
+| `vault:resolve-conflict` | `'cloud' | 'local'` | `VaultStatus` |
+| `vault:migration-status`, `vault:migrate-legacy`, `vault:cleanup-legacy` | — | migration status / report / `boolean` |
+| `vault:open-editor` | `origin?: string` | `VaultItemMeta | undefined` |
+| `vault:form-shape` | — | `{ hasUsername, hasPassword }` |
+| `vault:save-from-page` | — | `VaultItemMeta | undefined` |
+| `vault:request-delete` | `id: string` | `boolean` (false when not confirmed) |
+| `vault:copy-password` | `id: string` | `void` |
+| `vault:copy-totp` | `id: string` | `{ secondsRemaining: number }` |
+| `vault:copy-generated` | `'password' | 'passphrase' | 'pin'` | `void` |
+| `vault:autofill` | `id: string` | `void` |
 
 No channel ever returns a password or a TOTP secret. `copyPassword` and
 `copyTotp` resolve with nothing useful because the value goes to the clipboard in
@@ -296,9 +304,11 @@ never partition keys, Google subjects, refresh/access tokens or wrapped recovery
 keys. Account-aware tab/bookmark/history types carry both workspace and account
 IDs.
 
-Every Account Space channel passes a declarative validator from
-`ipc-contracts.ts`, then the trusted-main-frame guard and global/per-channel rate
-budgets. Validators cap UUIDs, labels, arrays, messages, search strings and write
+Every channel passes the trusted-main-frame guard and global/per-channel rate
+budgets, then a declarative validator from `ipc-contracts.ts`. The validator has a
+rule for every registered channel (argument count, types and bounds; channels
+without arguments must receive none) and refuses an unknown channel; a unit test
+checks that every `handle()` name has a rule. Validators cap UUIDs, labels, arrays, messages, search strings and write
 bodies; controller membership checks are a second boundary.
 
 All in [types.ts](../../electron/types.ts), imported by the main process, the
@@ -454,7 +464,7 @@ response field by field before it is cast — see
 
 ## Related Systems
 
-- [browser-shell.md](browser-shell.md) — registers all 40 channels and sends all
+- [browser-shell.md](browser-shell.md) — registers all 132 channels and sends all
   three events.
 - [renderer-ui.md](renderer-ui.md) — the only consumer of the bridge.
 - [workspaces-and-state.md](workspaces-and-state.md) — owns `PersistedState` and
@@ -468,11 +478,9 @@ response field by field before it is cast — see
 - **`AiPagePreview.protectedPage` is dead.** Its only construction site sets it to
   `false` unconditionally, and nothing reads it. A protected page never produces a
   preview at all — the call throws instead — so the field cannot ever be `true`.
-- **Two channels report failure as `false`, not as a rejection.** `vault:remove`
-  and `vault:reset-corrupt` resolve `boolean`, so "there was nothing to do" and
-  "it worked" arrive through the same path and only the value tells them apart.
-  Every other failure in the contract is a thrown error that surfaces as a
-  rejected `invoke`.
+- **`vault:request-delete` reports "not confirmed" as `false`, not as a
+  rejection**, so cancelling the secure dialog and a refused delete differ only by
+  value. Other failures are thrown errors that surface as a rejected `invoke`.
 - **`browser:state` has no sequence number.** A renderer that starts an action and
   then receives a snapshot cannot tell whether the snapshot reflects its action or
   predates it.

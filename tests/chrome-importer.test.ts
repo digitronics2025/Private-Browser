@@ -33,6 +33,16 @@ describe('Chrome data importer', () => {
     expect(result.bookmarks.every((item) => item.accountSpaceId === ACCOUNT_ID)).toBe(true);
   });
 
+  // F-81: depth is bounded, not only count.
+  it('skips bookmarks nested deeper than the saved state can hold', () => {
+    let node: Record<string, unknown> = { type: 'url', name: 'Deep', url: 'https://deep.example' };
+    for (let level = 0; level < 40; level += 1) node = { type: 'folder', name: `L${level}`, children: [node] };
+    const input = JSON.stringify({ roots: { bookmark_bar: { children: [node, { type: 'url', name: 'Shallow', url: 'https://shallow.example' }] } } });
+    const result = parseChromeBookmarks(input, 'personal', ACCOUNT_ID);
+    expect(result.bookmarks.map((item) => item.title)).toEqual(['Shallow']);
+    expect(result.skipped).toBe(1);
+  });
+
   it('drops Chrome internal and unsafe bookmark URLs', () => {
     const input = JSON.stringify({ roots: { bookmark_bar: { children: [
       { type: 'url', name: 'Chrome', url: 'chrome://settings' },

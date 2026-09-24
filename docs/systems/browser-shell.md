@@ -35,7 +35,7 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
 - **URL and text safety** → [security-boundary.md](security-boundary.md). Owns
   `normalizeNavigationInput`, `isAllowedRemoteUrl`, `isProtectedPage`, redaction.
 - **The channel surface** → [ipc-contract.md](ipc-contract.md). Owns the table of
-  the 40 channels this file registers and their payload types.
+  the 132 channels this file registers and their payload types.
 - **What survives a restart** → [workspaces-and-state.md](workspaces-and-state.md).
   Owns `WORKSPACES`, `PersistedState`, `sanitizeState`, the atomic save.
 - **The React chrome** → [renderer-ui.md](renderer-ui.md). Owns `src/`. It imports
@@ -51,7 +51,7 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
 3. **Vault actions use Electron-derived context, never renderer authority.**
    Navigation, workspace changes and lock invalidate pending capabilities.
 4. **Configure a session exactly once per partition.** A second registration
-   double-counts downloads. → **Per-Workspace Sessions and Permissions**
+   double-counts downloads. → **Per-Account-Space Sessions and Permissions**
 5. **Register channels through `handle()`, never `ipcMain.handle` directly.** That
    wrapper is where the sender check lives. → **IPC Registration and the Trusted-Sender Check**
 6. **A view may only ever reach http and https.** Three guards enforce it and all
@@ -71,7 +71,7 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
 | the download list or opening a downloaded file | [Downloads](#downloads) |
 | the tracker denylist or the shield toggle | [Tracker Blocking](#tracker-blocking) |
 | an entry in the privacy timeline | [Privacy Log](#privacy-log) |
-| cookie isolation, the user agent, or a permission request | [Per-Workspace Sessions and Permissions](#per-workspace-sessions-and-permissions) |
+| cookie isolation, the user agent, or a permission request | [Per-Account-Space Sessions and Permissions](#per-account-space-sessions-and-permissions) |
 | window.open, target=_blank, or blocking a scheme | [Popups and Navigation Guards](#popups-and-navigation-guards) |
 | startup, a second launch, or a link opened from outside | [Launch, Single Instance and Deep Links](#launch-single-instance-and-deep-links) |
 | adding an IPC handler, or the sender check | [IPC Registration and the Trusted-Sender Check](#ipc-registration-and-the-trusted-sender-check) |
@@ -196,7 +196,8 @@ removes the child view from `window.contentView`, closes its webContents, delete
 the runtime entry, and — if the workspace has no tabs left — calls
 `newTab(tab.workspaceId)`.
 
-`closeTab` is the **only** path that destroys a view. Switching workspaces hides
+`closeTab` and `closeAccountViews` (lock, clear, delete of an Account Space) are the
+only paths that destroy a view. Switching workspaces hides
 views; their webContents stay alive and keep running timers, media and network.
 
 ## Navigation and History
@@ -231,7 +232,7 @@ committed URL:
 - `did-navigate-in-page` calls it with `false`, and only for the main frame. SPA
   route changes therefore move the address bar but never write history.
 - It re-checks `isAllowedRemoteUrl` before touching state.
-- History is unshifted and sliced to 500 on write; `getSnapshot()` ships the
+- History is unshifted and sliced to 2,500 on write; `getSnapshot()` ships the
   newest 100.
 
 `goBack`, `goForward`, `reload` and `stop` all route through `activeContents()`,
@@ -496,12 +497,13 @@ not only for the password vault.
 Every event is a full `store.update(...)`, which means a synchronous rewrite of
 the whole state file per event.
 
-## Per-Workspace Sessions and Permissions
+## Per-Account-Space Sessions and Permissions
 
-`ensureView` derives the partition from the tab's workspace:
-`persist:private-browser-${workspaceId}`. Five workspaces means up to five
-persistent partitions, and cookies, storage and cache never cross one. This is
-the isolation the workspace concept sells.
+`ensureView` derives the partition from the tab's **Account Space**
+(`store.partitionFor(accountSpaceId)`): `persist:private-browser-account-<id>`,
+or the workspace's legacy `persist:private-browser-<workspace>` for an account
+migrated from v1. Cookies, storage and cache never cross Account Spaces. See
+[google-account-spaces.md](google-account-spaces.md).
 
 `configureSession(ses, partition, workspaceId)` returns immediately if `configuredSessions`
 already holds the partition. That guard is load-bearing: the second tab in a
@@ -515,10 +517,13 @@ What it configures, once per partition:
   guidance requires a consistent default User-Agent and stable browser
   characteristics; presenting the legacy header as Google Chrome while Client
   Hints exposed Chromium caused its verification flow to reject the page.
-- **Permissions** — both handlers allow only top-frame `fullscreen` and
-  `clipboard-sanitized-write` from HTTPS or localhost. Banking denies everything.
-  Camera, microphone, geolocation, notifications and the rest are denied without
-  prompting. The two handlers must keep agreeing:
+- **Permissions** — Banking and subframe requests are denied first. Other
+  requests go through `AccountPermissionManager`, keyed by Account Space, exact
+  origin and capability, with a deny/once/session/always prompt: notifications
+  only for the Gmail, Calendar and Meet origins, camera, microphone and display
+  capture only for Meet (display capture also needs the visible active tab and a
+  source pick every time). Anything else falls back to top-frame `fullscreen` and
+  `clipboard-sanitized-write` from HTTPS or localhost. The two handlers must keep agreeing:
   allowing something in one and not the other hands a page an API that fails when
   it is called.
 - **Request filtering** — the tracker denylist above.
@@ -615,7 +620,7 @@ be that webContents' main frame.
   reach these channels at all. The sender check is the second layer, not the first.
 - `IpcGuard` rejects payloads over 256 KiB and throttles a compromised trusted
   renderer after 300 calls in ten seconds.
-- All 40 channels are registered **before** `createWindow()`. The renderer calls
+- All 132 channels are registered **before** `createWindow()`. The renderer calls
   `getState()` on mount, so registration has to precede the page load.
 - The wrapper body is `async`, so a synchronous `throw` inside any controller
   method becomes a rejected `invoke` in the renderer, which App.tsx turns into a
@@ -649,9 +654,9 @@ event each writes, and any shell-level decision embedded in them.
   `askAi`, `getAiProvider`, `configureAiProvider`, `clearAiProvider`, the private
   `pruneAiCapabilities`, and the two capability maps `pendingAiPreviews` and
   `aiApprovals`.
-- **Vault** → [vault.md](vault.md). `listVault`, `addVaultItem`, `removeVaultItem`,
-  `resetCorruptVault`, `copyPassword`, `copyTotp`, `autofill`, and the private
-  `copySensitiveValue` clipboard helper.
+- **Vault** → [vault.md](vault.md). The `vault:*` intents (unlock, Hello, pairing,
+  sync, conflict, migration, editor, save-from-page, delete, copy, autofill) and
+  the clipboard guard.
 - **Updates** → [release-and-updates.md](release-and-updates.md).
   `getUpdateService`, `configureUpdateService`, `clearUpdateService`,
   `checkForUpdates`, `openUpdatePage`, `checkForUpdatesInBackground`.
@@ -718,4 +723,4 @@ only if the application window has already been destroyed.
   `browser:close-tab` channel accepts any tab id; today the UI only offers the
   active workspace's tabs, so this is latent rather than reachable.
 - **Hidden is not closed.** A workspace switch hides views and leaves their
-  webContents running. Only `closeTab` destroys one.
+  webContents running. Only `closeTab` and `closeAccountViews` destroy one.

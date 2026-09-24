@@ -35,8 +35,6 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       between(args, 1, 2); requireAccountSpaceId(args[0]); if (args[1] !== undefined) requireBoolean(args[1]); return;
     case 'accounts:clear-data':
     case 'google:cancel':
-    case 'google:gmail-overview':
-    case 'google:contacts-list':
     case 'backup:create-recovery':
     case 'backup:disable':
       exact(args, 1); requireAccountSpaceId(args[0]); return;
@@ -53,12 +51,6 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); requireBoundedText(args[0], 'Google client identifier', 512); return;
     case 'google:connect':
       exact(args, 3); requireAccountSpaceId(args[0]); requireGoogleModules(args[1]); requireExternalBrowser(args[2]); return;
-    case 'google:gmail-search':
-    case 'google:drive-list':
-    case 'google:calendar-list':
-      between(args, 1, 3); requireAccountSpaceId(args[0]);
-      if (args[1] !== undefined) requireBoundedText(args[1], 'Google search query', 500);
-      if (channel === 'google:drive-list' && args[2] !== undefined) requireBoolean(args[2]); return;
     case 'google:gmail-search-run':
     case 'google:calendar-list-run':
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); if (args[2] !== undefined) requireBoundedText(args[2], 'Google search query', 500); return;
@@ -164,10 +156,82 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       requireUuid(input.approvalToken, 'approval');
       if (typeof input.taskId !== 'string' || !/^TASK-\d{1,8}$/.test(input.taskId)) throw new Error('Invalid Control Center task'); return;
     }
+    // Channels that take one identifier chosen from state the renderer was given.
+    case 'browser:activate-tab':
+    case 'browser:close-tab':
+    case 'browser:open-download':
+    case 'browser:show-download':
+    case 'vault:autofill':
+    case 'vault:copy-password':
+    case 'vault:copy-totp':
+    case 'vault:request-delete':
+    case 'developer:bridge-select-project':
+      exact(args, 1); requireNonEmptyText(args[0], 'identifier', 200); return;
+    case 'browser:switch-account-space':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'browser:switch-workspace':
+      exact(args, 1); requireWorkspaceId(args[0]); return;
+    case 'browser:navigate':
+      exact(args, 1); requireBoundedText(args[0], 'address', 4096); return;
+    case 'browser:new-tab':
+      between(args, 0, 3);
+      if (args[0] !== undefined) requireWorkspaceId(args[0]);
+      if (args[1] !== undefined) requireBoundedText(args[1], 'address', 4096);
+      if (args[2] !== undefined) requireAccountSpaceId(args[2]); return;
+    case 'ai:approve-preview':
+      exact(args, 1); requireUuid(args[0], 'preview'); return;
+    case 'ai:ask':
+      exact(args, 2); requireNonEmptyText(args[0], 'approval', 200); requireBoundedText(args[1], 'question', 2000); return;
+    case 'ai:configure-provider': {
+      exact(args, 1); const input = requireExactKeys(args[0], ['endpoint', 'model', 'apiKey']);
+      requireBoundedText(input.endpoint, 'provider address', 2048); requireBoundedText(input.model, 'model', 200); requireBoundedText(input.apiKey, 'API key', 4096); return;
+    }
+    case 'updates:configure': {
+      exact(args, 1); const input = requireExactKeys(args[0], ['endpoint', 'accessToken']);
+      requireBoundedText(input.endpoint, 'service address', 2048); requireBoundedText(input.accessToken, 'access token', 4096); return;
+    }
+    case 'developer:bridge-action':
+      between(args, 1, 2); requireNonEmptyText(args[0], 'VS Code action', 40);
+      if (args[1] !== undefined && JSON.stringify(requireObject(args[1])).length > 256 * 1024) throw new Error('VS Code action payload is too large'); return;
+    case 'developer:bridge-disconnect':
+    case 'developer:inspect-page':
+      between(args, 0, 1); if (args[0] !== undefined) requireBoolean(args[0]); return;
+    case 'developer:prepare-ai-preview': {
+      exact(args, 1); const input = requireExactKeys(args[0], ['includeDom', 'includeScreenshot']);
+      requireBoolean(input.includeDom); requireBoolean(input.includeScreenshot); return;
+    }
+    case 'developer:toggle-tools':
+      exact(args, 1); if (!['right', 'bottom', 'detach'].includes(String(args[0]))) throw new Error('Invalid DevTools position'); return;
+    case 'system:copy':
+      exact(args, 1); requireBoundedText(args[0], 'copied text', 2 * 1024 * 1024); return;
+    case 'vault:copy-generated':
+      exact(args, 1); if (!['password', 'passphrase', 'pin'].includes(String(args[0]))) throw new Error('Invalid generated credential kind'); return;
+    case 'vault:resolve-conflict':
+      exact(args, 1); if (args[0] !== 'cloud' && args[0] !== 'local') throw new Error('Choose the cloud or local vault explicitly'); return;
+    case 'vault:open-editor':
+      between(args, 0, 1); if (args[0] !== undefined) requireBoundedText(args[0], 'origin', 2048); return;
     default:
-      return;
+      if (NO_ARGUMENT_CHANNELS.has(channel)) { exact(args, 0); return; }
+      // Every channel is listed; one that is not is refused rather than
+      // passed through unchecked (F-49).
+      throw new Error('Unknown browser command');
   }
 }
+
+/** Channels that carry no arguments at all. */
+const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
+  'ai:clear-provider', 'ai:prepare-preview', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
+  'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
+  'browser:import-chrome-passwords', 'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
+  'browser:reopen-closed-tab', 'browser:stop', 'browser:stop-find', 'browser:toggle-bookmark', 'browser:toggle-bookmark-bar',
+  'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-pair', 'developer:bridge-projects',
+  'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',
+  'google:clear-configuration', 'system:is-default-browser', 'system:set-default-browser', 'updates:check', 'updates:clear',
+  'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review',
+  'vault:form-shape', 'vault:hello-disable', 'vault:hello-enable', 'vault:hello-unlock', 'vault:list', 'vault:lock',
+  'vault:migrate-legacy', 'vault:migration-status', 'vault:reconnect', 'vault:request-pairing', 'vault:request-unlock',
+  'vault:save-from-page', 'vault:sync',
+]);
 
 /** An object carrying exactly these keys: an extra field is refused, never passed along. */
 function requireExactKeys(value: unknown, keys: string[]): Record<string, unknown> {

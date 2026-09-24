@@ -96,8 +96,8 @@ async function settledForm(target: string): Promise<{ username: string; password
   return readForm(target);
 }
 
-async function clickPickerRow(index: number, options: { immediately?: boolean } = {}): Promise<void> {
-  if (!options.immediately) await new Promise((resolve) => setTimeout(resolve, HUMAN_READ_MS));
+async function clickPickerRow(index: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, HUMAN_READ_MS));
   await application!.evaluate(({ webContents }, { row, rowHeight, padding }) => {
     const overlay = webContents.getAllWebContents().find((candidate) => !candidate.isDestroyed()
       && candidate.getURL().startsWith('data:text/html') && decodeURIComponent(candidate.getURL()).includes('<title>Saved logins</title>'));
@@ -195,17 +195,32 @@ test('lists every saved login under the field and fills the one chosen, without 
   // Automatic fill still picks the newest login first.
   await expect.poll(() => readForm(loginUrl)).toMatchObject({ username: NEWEST_USERNAME, password: NEWEST_PASSWORD });
 
+  // A click that arrives as the list appears (the second half of a double-click
+  // a page asked for) picks nothing and leaves the list open. It is sent from the
+  // main process the moment the overlay finishes loading, so load on the test
+  // machine cannot push it past the arming delay.
+  await application!.evaluate(({ app }, { rowHeight, padding }) => {
+    const state = globalThis as unknown as { __earlyPickerClick?: boolean };
+    state.__earlyPickerClick = false;
+    const onCreated = (_event: unknown, contents: Electron.WebContents) => {
+      contents.once('did-finish-load', () => {
+        if (!decodeURIComponent(contents.getURL()).includes('<title>Saved logins</title>')) return;
+        app.off('web-contents-created', onCreated);
+        const y = padding + rowHeight + rowHeight / 2;
+        contents.sendInputEvent({ type: 'mouseDown', x: 40, y, button: 'left', clickCount: 1 });
+        contents.sendInputEvent({ type: 'mouseUp', x: 40, y, button: 'left', clickCount: 1 });
+        state.__earlyPickerClick = true;
+      });
+    };
+    app.on('web-contents-created', onCreated);
+  }, { rowHeight: ROW_HEIGHT, padding: PADDING });
   await clickField(loginUrl, 'input[type="email"]');
   await expect.poll(pickerRows).toEqual([NEWEST_USERNAME, OTHER_USERNAME]);
+  await expect.poll(() => application!.evaluate(() => (globalThis as unknown as { __earlyPickerClick?: boolean }).__earlyPickerClick)).toBe(true);
+  expect(await readForm(loginUrl)).toMatchObject({ username: NEWEST_USERNAME, password: NEWEST_PASSWORD });
   expect(await pageText(loginUrl)).not.toContain(OTHER_USERNAME);
   // Typing must still land in the field: the overlay never keeps keyboard focus.
   await expect.poll(() => pageHasFocus(loginUrl)).toBe(true);
-
-  // A click that arrives as the list appears (the second half of a double-click
-  // a page asked for) picks nothing and leaves the list open.
-  await clickPickerRow(1, { immediately: true });
-  await expect.poll(pickerRows).toEqual([NEWEST_USERNAME, OTHER_USERNAME]);
-  expect(await readForm(loginUrl)).toMatchObject({ username: NEWEST_USERNAME, password: NEWEST_PASSWORD });
 
   await clickPickerRow(1);
   await expect.poll(() => readForm(loginUrl)).toEqual({ username: OTHER_USERNAME, password: OTHER_PASSWORD, submitted: false });
