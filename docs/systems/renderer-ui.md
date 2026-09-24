@@ -215,7 +215,7 @@ Protection detail is in the shield menu, not on the page.
 | --- | --- |
 | `assistant` | `getAiProvider`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi`, `revokeAiContext` |
 | `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview, `copyText`; the Tasks tab ([ControlCenterSection.tsx](../../src/panels/ControlCenterSection.tsx)) uses the `control-center:*` methods ([control-center-link.md](control-center-link.md)) |
-| `vault` | `listVault`, unlock/pair/lock/sync/conflict intents, `openVaultEditor`, `requestSaveFromPage`, migration, generators, `copyPassword`, `copyTotp`, `autofill` |
+| `vault` | `listVault`, unlock/pair/lock/sync/conflict intents, Windows Hello unlock/enable/disable intents, `openVaultEditor`, `requestSaveFromPage`, migration, generators, `copyPassword`, `copyTotp`, `autofill` |
 | `automations` | `newTab(workspaceId, url)` only |
 | `downloads` | `openDownload`, `showDownload` |
 | `privacy` | none |
