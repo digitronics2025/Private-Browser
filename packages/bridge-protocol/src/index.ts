@@ -240,7 +240,10 @@ export function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
   const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
+  // Keys holding `undefined` are skipped, as JSON.stringify skips them: a signed
+  // object crosses the pipe as JSON, so the verifier never sees such a key. Keeping
+  // it made every signature over `pairingCode: undefined` fail to verify.
+  return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(',')}}`;
 }
 export function sanitizeError(error: unknown): { code: string; message: string } {
   const message = error instanceof Error ? error.message : 'Bridge request failed';

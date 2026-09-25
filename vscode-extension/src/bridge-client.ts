@@ -62,20 +62,27 @@ export class BridgeClient implements vscode.Disposable {
   /** One id for this window's whole life, so the browser can tell a reconnect from another window. */
   private readonly instanceId = randomUUID();
   private busyUntil = 0;
+  /** Set while an explicit pairing runs, so the background reconnect cannot take its turn. */
+  private pairing = false;
 
   constructor(private readonly context: vscode.ExtensionContext, private readonly handler: Handler, private readonly onStatus: StatusListener) {}
 
   async start(): Promise<void> {
     await this.tryConnect();
-    this.reconnectTimer = setInterval(() => { if (!this.socket && !this.connecting && Date.now() >= this.busyUntil) void this.tryConnect(); }, 5_000);
+    this.reconnectTimer = setInterval(() => { if (!this.socket && !this.connecting && !this.pairing && Date.now() >= this.busyUntil) void this.tryConnect(); }, 5_000);
     this.heartbeatTimer = setInterval(() => void this.notify('activity', { heartbeatAt: Date.now() }), 10_000);
   }
 
   async pair(code: string): Promise<void> {
     if (!/^\d{8}$/.test(code)) throw new Error('Enter the eight-digit code shown in Private Browser');
-    await this.disconnect(false);
-    this.handshakeCode = code;
-    await this.tryConnect(code, true);
+    this.pairing = true;
+    try {
+      await this.disconnect(false);
+      this.handshakeCode = code;
+      await this.tryConnect(code, true);
+    } finally {
+      this.pairing = false;
+    }
   }
 
   async reconnect(): Promise<void> { this.busyUntil = 0; await this.disconnect(false); await this.tryConnect(undefined, true); }
@@ -158,7 +165,7 @@ export class BridgeClient implements vscode.Disposable {
         kind: 'hello' as const, minVersion: MIN_PROTOCOL_VERSION, maxVersion: PROTOCOL_VERSION,
         deviceId: identity.deviceId, instanceId: this.instanceId, vscodeVersion: vscode.version,
         extensionVersion: this.context.extension.packageJSON.version as string, identityPublicKey: identity.publicKey,
-        ephemeralPublicKey: ephemeral.publicKey, challenge: rendezvous.challenge, pairingCode: code,
+        ephemeralPublicKey: ephemeral.publicKey, challenge: rendezvous.challenge, ...(code ? { pairingCode: code } : {}),
       };
       const hello = helloSchema.parse({ ...unsigned, signature: signText(identity.privateKey, helloTranscript(unsigned)) });
       const socket = connect(rendezvous.pipePath); this.socket = socket; this.handshakeCode = code; this.decoder = new FrameDecoder();

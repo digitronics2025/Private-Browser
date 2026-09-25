@@ -147,6 +147,9 @@ export class VscodeBridgeServer {
       } catch (error) {
         socket.destroy();
         if (error instanceof SessionBusyError) return;
+        // A bad handshake on some other socket says nothing about a session that
+        // is working: it must not replace "connected" with an error on screen.
+        if (this.session && this.session.socket !== socket && !this.session.socket.destroyed) { this.activity = `Refused a connection: ${sanitizeError(error).message}`; this.onChange(); return; }
         this.error = sanitizeError(error).message; this.onChange();
       }
     });

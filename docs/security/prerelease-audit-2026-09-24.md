@@ -681,6 +681,19 @@ touched system doc was re-verified at `dcd6823a` (`docs-guard`: 0 failures,
   `esbuild` run their scripts (`npm rebuild workerd esbuild`), and the workflow
   test pins that list. The audit could not have caught it: it is the fix's own
   defect, visible only when the job runs on Linux.
+- **F-86 · Every VS Code reconnect after pairing failed with "Invalid VS Code
+  identity signature".** Found when the operator tried the link on 2026-09-25.
+  The extension signed its hello with `pairingCode: undefined`; the signed
+  transcript kept the key while JSON dropped it in transit, so the browser
+  verified different bytes. Pairing (which carries a code) worked, every later
+  connection did not, and the failed attempt also replaced a live session's
+  "connected" status with the error. Fixed by making `stableStringify` skip
+  `undefined` like JSON, omitting the field in the extension, blocking the
+  background reconnect during pairing, and keeping a live session's status on a
+  stray failed handshake. `tests/vscode-bridge.test.ts` now signs exactly as the
+  extension does; three tests failed before the fix. The audit's bridge slice
+  and F-72's tests both used a fake client that omitted the key, so neither could
+  see it — test clients must build messages the way the real one does.
 - **F-48 reached further than reported.** Besides back, forward and find, vault
   form inspection and fill used `activeContents()`, and so could act on the
   hidden previous page while Home was showing. The same one-line fix covers them.

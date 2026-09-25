@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { FrameDecoder, MAX_FRAME_BYTES, PROTOCOL_VERSION, bridgeStatusSchema, chunkEnvelopeSchema, deriveSessionKey, encodeFrame, generateEphemeralKeyPair, generateIdentity, helloSchema, openMessage, progressEnvelopeSchema, sealMessage, signText, testReportSchema, verifyText, type BridgeRequest } from './index.js';
+import { FrameDecoder, MAX_FRAME_BYTES, PROTOCOL_VERSION, bridgeStatusSchema, chunkEnvelopeSchema, deriveSessionKey, encodeFrame, generateEphemeralKeyPair, generateIdentity, helloSchema, openMessage, progressEnvelopeSchema, sealMessage, signText, testReportSchema, verifyText, helloTranscript, type BridgeRequest } from './index.js';
 
 describe('bridge protocol', () => {
   it('signs identities and derives the same ephemeral session key', () => {
@@ -49,5 +49,15 @@ describe('bridge protocol', () => {
     const base = { version: PROTOCOL_VERSION, id: randomUUID(), requestId: randomUUID() };
     expect(progressEnvelopeSchema.parse({ ...base, kind: 'progress', progress: 0.5, message: 'Running' }).progress).toBe(0.5);
     expect(() => chunkEnvelopeSchema.parse({ ...base, kind: 'chunk', artifactId: randomUUID(), index: 0, total: 1, totalBytes: 11 * 1024 * 1024, data: 'x' })).toThrow();
+  });
+});
+
+describe('signed transcripts', () => {
+  // A signed object crosses the pipe as JSON, which drops undefined fields; the
+  // transcript must agree, or the verifier checks different bytes (reconnect bug).
+  it('treats an undefined field exactly as JSON does: as absent', () => {
+    const withUndefined = { kind: 'hello', pairingCode: undefined, deviceId: 'd' };
+    const overTheWire = JSON.parse(JSON.stringify(withUndefined)) as Record<string, unknown>;
+    expect(helloTranscript(withUndefined as never)).toBe(helloTranscript(overTheWire as never));
   });
 });

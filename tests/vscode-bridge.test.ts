@@ -49,7 +49,10 @@ async function client(rendezvous: { pipePath: string; challenge: string }, optio
   const unsigned = {
     kind: 'hello' as const, minVersion: PROTOCOL_VERSION, maxVersion: PROTOCOL_VERSION, deviceId: device.deviceId, instanceId: options.instanceId,
     vscodeVersion: '1.95.0', extensionVersion: '0.6.0', identityPublicKey: device.identity.publicKey, ephemeralPublicKey: ephemeral.publicKey,
-    challenge: rendezvous.challenge, ...(options.pairingCode ? { pairingCode: options.pairingCode } : {}),
+    // Exactly as the extension builds it: the key is present even when there is
+    // no code. JSON drops it in transit, so signer and verifier must agree on
+    // what an undefined field means — they did not, and every reconnect failed.
+    challenge: rendezvous.challenge, pairingCode: options.pairingCode,
   };
   const hello = { ...unsigned, signature: signText(device.identity.privateKey, helloTranscript(unsigned)) };
   const socket: Socket = connect(rendezvous.pipePath);
@@ -102,6 +105,27 @@ describe('VS Code bridge sessions', () => {
     const again = await client(rendezvous, { instanceId });
     expect(again.accepted).toBe(true);
     expect(server.status()).toMatchObject({ state: 'connected', instanceId });
+  });
+
+  // A failed handshake from another socket must not make a live session look
+  // disconnected; it showed "Invalid VS Code identity signature" over a working one.
+  it('keeps showing a live session as connected when another handshake fails', async () => {
+    const { server, rendezvous, window } = await paired();
+    if (!window.accepted) throw new Error('unreachable');
+    const stray = connect(rendezvous.pipePath);
+    await new Promise<void>((resolve) => stray.once('connect', () => resolve()));
+    stray.write(encodeFrame({ kind: 'hello', broken: true }));
+    await new Promise<void>((resolve) => stray.once('close', () => resolve()));
+    expect(server.status().state).toBe('connected');
+  });
+
+  it('accepts a paired window reconnecting without a code', async () => {
+    const { server, rendezvous } = await paired();
+    const window = server.status().instanceId!;
+    await server.disconnect(false);
+    const again = await client(rendezvous, { instanceId: window });
+    expect(again.accepted).toBe(true);
+    expect(server.status().state).toBe('connected');
   });
 
   // F-72: a slow answer to a request the browser gave up on used to be treated

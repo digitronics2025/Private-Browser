@@ -71,6 +71,11 @@ changes, expired sessions, and incompatible schemas close the connection. The
 extension emits a ten-second heartbeat and reconnects/rekeys when the 15-minute
 session expires.
 
+Signed transcripts use `stableStringify`, which skips `undefined` fields exactly
+as JSON does, so a hello signed with no pairing code verifies after crossing the
+pipe; the extension also omits the field and never auto-reconnects mid-pairing.
+A failed handshake on another socket never replaces a live session's status.
+
 Ordinary calls time out after 30 seconds, calls that wait on a VS Code modal or
 language model after 5 minutes, test calls after 15 minutes. A response to a call
 the browser already gave up on is dropped, not treated as a replay. Only one VS
