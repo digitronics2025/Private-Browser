@@ -29,6 +29,14 @@ hidden view; those show a neutral backdrop instead. Page layout insets sent by t
 renderer are clamped so the address bar and its security warning can never be
 covered by page content.
 
+The Claude side panel is a remote page under the same rules: its own sandboxed
+view with no preload, its own session partition that no tab shares, no access to
+any tab's content, top-level navigation limited to Claude's own and its sign-in
+providers' hosts (everything else opens as an ordinary tab), only clipboard
+write permission, dangerous downloads refused, and a renderer-supplied rectangle
+clamped to the side panel. It is hidden and cannot open tabs while Banking is
+active. Browser extensions are not supported.
+
 ## Vault
 
 MyVault stores credentials, TOTP secrets and passkeys in one envelope encrypted with AES-256-GCM under a random data key, which is itself wrapped by a key derived from the master password with Argon2id. The device token, sync state, Windows Hello wrap and remembered picks are separate files encrypted with Electron `safeStorage`. Files are written with owner-only mode bits, which Windows ignores; there the protection is the user profile's own access control. Vault metadata exposed to the UI never contains passwords or TOTP secrets. Passwords and TOTP values are copied directly by the main process and cleared from the clipboard after 30 seconds if unchanged; only a digest of the copied value is kept for that check. Windows clipboard history (Win+V), when the user has it turned on, keeps its own copy that this clear does not reach — the copy message says so, and Fill avoids the clipboard entirely.

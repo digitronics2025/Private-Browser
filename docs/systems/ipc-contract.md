@@ -9,7 +9,7 @@ verified_at: dcd6823a
 
 # IPC Contract
 
-> Last verified: 2026-09-25
+> Last verified: 2026-09-26
 
 ## Agent Brief
 
@@ -120,6 +120,9 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:activate-tab` | `activateTab(tabId)` | `tabId: string` | `void` |
 | `browser:switch-workspace` | `switchWorkspace(workspaceId)` | `workspaceId: WorkspaceId` | `void` |
 | `browser:set-layout` | `setLayout(layout)` | `{ top; left; right; bottom }` (`ContentInsets`) — finite 0–4000 | `void` |
+| `side-app:set-bounds` | `setSideAppBounds(id, rect)` | `'claude'`, `{ x; y; width; height }` finite 0–16000 (no other keys) or `null` | `void` |
+| `side-app:command` | `sideAppCommand(id, command)` | `'claude'`, `'back' \| 'forward' \| 'reload' \| 'home' \| 'open-in-tab'` | `void` |
+| `side-app:clear-data` | `clearSideAppData(id)` | `'claude'` | `void` |
 | `browser:freeze-content` | `freezeContent()` | — | JPEG `data:` URL, or `null` for home/protected pages |
 | `browser:move-tab` | `moveTab(tabId, toIndex)` | tab id, integer 0–25000 | `void` |
 | `browser:reopen-closed-tab` | `reopenClosedTab()` | — | `void` |
@@ -464,7 +467,7 @@ response field by field before it is cast — see
 
 ## Related Systems
 
-- [browser-shell.md](browser-shell.md) — registers all 132 channels and sends all
+- [browser-shell.md](browser-shell.md) — registers all 135 channels and sends all
   three events.
 - [renderer-ui.md](renderer-ui.md) — the only consumer of the bridge.
 - [workspaces-and-state.md](workspaces-and-state.md) — owns `PersistedState` and

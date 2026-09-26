@@ -56,6 +56,9 @@ node scripts/docs-guard.mjs ratchet --write # tighten allowances that gained sla
 - [google-account-spaces.md](google-account-spaces.md) — dynamic per-account
   containers, encrypted records, migration/recovery, Google OAuth and APIs,
   exact-origin permissions, session isolation and encrypted Drive backup.
+- [side-apps.md](side-apps.md) — Claude docked in the side panel: an isolated
+  remote view pinned to its own sites, hidden in Banking, under menus and in
+  full screen.
 - [chrome-import.md](chrome-import.md) — local Chrome profile discovery,
   Account-Space-aware bookmark/history migration, and secure password-CSV parsing.
 

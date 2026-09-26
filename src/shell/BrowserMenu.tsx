@@ -1,4 +1,4 @@
-import { Code2, Download, FileDown, History, Info, KeyRound, Link2, LogOut, Maximize2, Minus, Palette, Plus, Printer, RotateCcw, ScrollText, Search, Settings, Shield, Sparkles, SquarePlus, Star, Trash2, Upload, UsersRound, Wrench, Zap } from 'lucide-react';
+import { Asterisk, Code2, Download, FileDown, History, Info, KeyRound, Link2, LogOut, Maximize2, Minus, Palette, Plus, Printer, RotateCcw, ScrollText, Search, Settings, Shield, Sparkles, SquarePlus, Star, Trash2, Upload, UsersRound, Wrench, Zap } from 'lucide-react';
 import type { AccountSpaceId, BookmarkBarMode, BrowserSnapshot, BrowserTab, SidePanelTool, ThemePreference, UiPreferences } from '../../electron/types';
 import { AccountAvatar } from '../lib/accounts';
 import { MenuItem, MenuSeparator, MenuSurface, SubmenuItem } from './Menu';
@@ -95,6 +95,7 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
         <MenuItem role="menuitemcheckbox" checked={state.trackerBlocking} icon={Shield} label="Block trackers" keepOpen onSelect={actions.toggleTrackers} />
       </SubmenuItem>
       <MenuSeparator />
+      <MenuItem icon={Asterisk} label="Claude" onSelect={() => actions.openTool('claude')} />
       <MenuItem icon={Sparkles} label="Privacy and AI" onSelect={() => actions.openTool('assistant')} />
       <SubmenuItem id="appearance" icon={Palette} label="Appearance">
         {THEMES.map((theme) => <MenuItem key={theme.id} role="menuitemradio" checked={ui.theme === theme.id} label={theme.label} onSelect={() => actions.setUi({ theme: theme.id })} />)}

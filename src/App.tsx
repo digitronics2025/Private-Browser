@@ -19,6 +19,7 @@ import { AccountManager } from './panels/AccountManager';
 import { PermissionOverlay, RecoveryOverlay } from './panels/Overlays';
 import { useModalFocus } from './lib/dialog';
 import { AssistantPanel } from './panels/AssistantPanel';
+import { SideAppPanel } from './panels/SideAppPanel';
 import { DeveloperPanel } from './panels/DeveloperPanel';
 import { VaultPanel } from './panels/VaultPanel';
 import { AutomationPanel } from './panels/AutomationPanel';
@@ -375,6 +376,10 @@ export default function App() {
 
   const sidePanelContent = (() => {
     switch (ui.sidePanelTool) {
+      case 'claude': {
+        const claude = state.sideApps.find((app) => app.id === 'claude');
+        return claude ? <SideAppPanel app={claude} protectedWorkspace={workspace.protected} onToast={showToast} /> : null;
+      }
       case 'assistant': return <AssistantPanel onToast={showToast} />;
       case 'developer': return <DeveloperPanel activeTab={activeTab} onToast={showToast} />;
       case 'vault': return state.activeWorkspaceId === 'development'
@@ -421,6 +426,7 @@ export default function App() {
               vaultAvailable={vaultAvailable}
               sidePanelOpen={ui.sidePanelOpen}
               assistantOpen={ui.sidePanelOpen && ui.sidePanelTool === 'assistant'}
+              claudeOpen={ui.sidePanelOpen && ui.sidePanelTool === 'claude'}
               siteInfoButtonRef={siteInfoButtonRef}
               profileButtonRef={profileButtonRef}
               menuButtonRef={menuButtonRef}
@@ -442,6 +448,7 @@ export default function App() {
               onZoomMenu={() => setMenu((current) => (current === 'zoom' ? null : 'zoom'))}
               onToggleSidePanel={() => setUi({ sidePanelOpen: !ui.sidePanelOpen })}
               onAssistant={() => toggleTool('assistant')}
+              onClaude={() => toggleTool('claude')}
               onProfile={() => setMenu((current) => (current === 'profile' ? null : 'profile'))}
               onMenu={() => setMenu((current) => (current === 'browser' ? null : 'browser'))}
             />

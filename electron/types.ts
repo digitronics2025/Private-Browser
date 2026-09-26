@@ -1,6 +1,8 @@
 import type { BrowserSettings } from './browser-settings.js';
 import type { UiPreferences } from './ui-preferences.js';
 
+export type { SideAppCommand, SideAppId, SideAppRect, SideAppSnapshot, SideAppStatus } from './side-app-registry.js';
+import type { SideAppSnapshot } from './side-app-registry.js';
 export type { UiPreferences, UiPreferencesPatch, ThemePreference, SidePanelTool, NewTabBackground } from './ui-preferences.js';
 export type { BrowserSettings, BrowserSettingsPatch, HomePageMode, SearchEngineId, StartupMode } from './browser-settings.js';
 export type { BookmarkBarMode } from './chrome-layout.js';
@@ -412,6 +414,8 @@ export interface BrowserSnapshot {
   /** Remembered bookmark icons of the active Account Space only, host → `data:` URL. */
   bookmarkIcons: Record<string, string>;
   canReopenClosedTab: boolean;
+  /** Web apps docked in the side panel, such as Claude. */
+  sideApps: SideAppSnapshot[];
 }
 
 export interface PersistedState {

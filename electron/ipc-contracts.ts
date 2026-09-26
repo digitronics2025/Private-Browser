@@ -12,6 +12,7 @@ import type { ExternalBrowserId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
 import { requireBrowserSettingsPatch } from './browser-settings.js';
 import { requireUiPreferencesPatch } from './ui-preferences.js';
+import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
@@ -87,6 +88,17 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       for (const side of ['top', 'left', 'right', 'bottom'] as const) requireBoundedNumber(layout[side], 'layout inset', 0, 4000);
       return;
     }
+    case 'side-app:set-bounds': {
+      exact(args, 2); requireSideAppId(args[0]);
+      if (args[1] === null) return;
+      const rect = requireExactKeys(args[1], ['x', 'y', 'width', 'height']);
+      for (const side of ['x', 'y', 'width', 'height'] as const) requireBoundedNumber(rect[side], 'side app bounds', 0, 16_000);
+      return;
+    }
+    case 'side-app:command':
+      exact(args, 2); requireSideAppId(args[0]); if (!isSideAppCommand(args[1])) throw new Error('Invalid side app command'); return;
+    case 'side-app:clear-data':
+      exact(args, 1); requireSideAppId(args[0]); return;
     case 'ui:set-preferences':
       exact(args, 1); requireUiPreferencesPatch(args[0]); return;
     case 'settings:set':
@@ -242,6 +254,7 @@ function requireExactKeys(value: unknown, keys: string[]): Record<string, unknow
 }
 
 function requireBoundedNumber(value: unknown, field: string, minimum: number, maximum: number): number { if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) throw new Error(`Invalid ${field}`); return value; }
+function requireSideAppId(value: unknown): void { if (!isSideAppId(value)) throw new Error('Invalid side app'); }
 function requireIndex(value: unknown): void { if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 25_000) throw new Error('Invalid position'); }
 function requireNonEmptyText(value: unknown, field: string, maximum: number): string { const text = requireBoundedText(value, field, maximum); if (!text.trim()) throw new Error(`A ${field} is required`); return text; }
 function requireBookmarkLevel(value: unknown): void {

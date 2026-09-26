@@ -1,5 +1,5 @@
 import type { FormEvent, RefObject } from 'react';
-import { ArrowLeft, ArrowRight, Home, KeyRound, MoreVertical, PanelRight, RefreshCw, Search, SlidersHorizontal, Sparkles, Star, TriangleAlert, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeft, Asterisk, ArrowRight, Home, KeyRound, MoreVertical, PanelRight, RefreshCw, Search, SlidersHorizontal, Sparkles, Star, TriangleAlert, X, ZoomIn, ZoomOut } from 'lucide-react';
 import type { AccountSpaceSummary, BrowserTab } from '../../electron/types';
 import { AccountAvatar, accountNeedsAction } from '../lib/accounts';
 
@@ -14,6 +14,7 @@ export interface NavigationToolbarProps {
   vaultAvailable: boolean;
   sidePanelOpen: boolean;
   assistantOpen: boolean;
+  claudeOpen: boolean;
   siteInfoButtonRef: RefObject<HTMLButtonElement>;
   profileButtonRef: RefObject<HTMLButtonElement>;
   menuButtonRef: RefObject<HTMLButtonElement>;
@@ -34,6 +35,7 @@ export interface NavigationToolbarProps {
   onZoomMenu: () => void;
   onToggleSidePanel: () => void;
   onAssistant: () => void;
+  onClaude: () => void;
   onProfile: () => void;
   onMenu: () => void;
 }
@@ -96,6 +98,7 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
       </form>
 
       <button type="button" className={`toolbar-button ${props.sidePanelOpen ? 'selected' : ''}`} aria-label="Side panel" aria-pressed={props.sidePanelOpen} title="Show side panel" onClick={props.onToggleSidePanel}><PanelRight size={18} /></button>
+      <button type="button" className={`toolbar-button optional ${props.claudeOpen ? 'selected' : ''}`} aria-label="Claude" aria-pressed={props.claudeOpen} title="Claude" onClick={props.onClaude}><Asterisk size={18} /></button>
       <button type="button" className={`toolbar-button optional ${props.assistantOpen ? 'selected' : ''}`} aria-label="AI assistant" aria-pressed={props.assistantOpen} title="Private AI assistant" onClick={props.onAssistant}><Sparkles size={18} /></button>
       <button
         ref={props.profileButtonRef}

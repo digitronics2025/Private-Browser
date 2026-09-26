@@ -178,6 +178,13 @@ node scripts/docs-find.mjs --history "<term from the entry>"
   model or pin state, so the browser menu deliberately omits those entries rather
   than showing actions that do nothing. Each is a main-process feature, not a
   styling task. Symbol: `BrowserController.createWindow`. *(2026-09-14)*
+- **Claude in the side panel cannot see or act on the page.** Chrome's Claude
+  extension needs `chrome.sidePanel` and `chrome.debugger`, which Electron does
+  not implement, so the side panel runs claude.ai as an isolated site instead.
+  Page-aware help remains the AI panel's consent flow. A bridge that hands
+  Claude an approved page preview, voice mode (microphone), company-SSO sign-in
+  hosts and listing side-app downloads in the Files panel were not built.
+  Symbol: `SideAppHost`. *(2026-09-26)*
 - **The address bar has no suggestion dropdown.** History and bookmark
   suggestions would need a ranked local index and a popup that uses the
   freeze-frame on every keystroke. Symbol: `NavigationToolbar`. *(2026-09-14)*

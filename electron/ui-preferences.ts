@@ -1,7 +1,7 @@
 import { clampSidePanelWidth, SIDE_PANEL, type BookmarkBarMode } from './chrome-layout.js';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
-export type SidePanelTool = 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings' | 'bookmarks' | 'history';
+export type SidePanelTool = 'claude' | 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings' | 'bookmarks' | 'history';
 export type NewTabBackground = 'plain' | 'lagoon' | 'dusk' | 'mist' | 'graphite';
 
 export interface UiPreferences {
@@ -17,7 +17,7 @@ export type UiPreferencesPatch = Partial<UiPreferences>;
 
 export const THEMES: readonly ThemePreference[] = ['system', 'dark', 'light'];
 export const BOOKMARK_BAR_MODES: readonly BookmarkBarMode[] = ['always', 'new-tab', 'hidden'];
-export const SIDE_PANEL_TOOLS: readonly SidePanelTool[] = ['assistant', 'developer', 'vault', 'automations', 'downloads', 'privacy', 'settings', 'bookmarks', 'history'];
+export const SIDE_PANEL_TOOLS: readonly SidePanelTool[] = ['claude', 'assistant', 'developer', 'vault', 'automations', 'downloads', 'privacy', 'settings', 'bookmarks', 'history'];
 export const NEW_TAB_BACKGROUNDS: readonly NewTabBackground[] = ['plain', 'lagoon', 'dusk', 'mist', 'graphite'];
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {

@@ -113,6 +113,8 @@ import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-stat
 import { listChromeProfiles, readChromeProfile } from './chrome-importer.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
 import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
+import { SideAppHost } from './side-apps.js';
+import type { SideAppCommand, SideAppId, SideAppRect } from './side-app-registry.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -261,6 +263,17 @@ class BrowserController {
   private dirtySyncTimer?: NodeJS.Timeout;
   private readonly passkeyController = new InternalPasskeyController();
   private readonly passkeyOptIns: PasskeyOptIns = { global: false, workspaces: {}, sites: {} };
+  private readonly sideApps = new SideAppHost({
+    window: () => this.window,
+    packaged: app.isPackaged,
+    openInTab: (url) => this.openFromSideApp(url),
+    handleShortcut: (event, input) => this.handleShortcut(event, input),
+    isBlockedRequest: (url) => this.isBlockedTrackerRequest(url),
+    privacyEvent: (kind, title, detail) => this.addPrivacyEvent(kind, title, detail),
+    changed: () => { if (this.window && !this.window.isDestroyed()) this.broadcast(); },
+  });
+  /** A menu or dialog covers the chrome: the side app hides with the page. */
+  private overlayOpen = false;
 
   constructor(
     private readonly store: RuntimeStateStore,
@@ -350,6 +363,7 @@ class BrowserController {
         runtime.view?.webContents.close();
         runtime.view = undefined;
       }
+      this.sideApps.closeAll();
     });
 
     const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -419,6 +433,7 @@ class BrowserController {
       shortcutsByAccountSpace: persisted.shortcutsByAccountSpace,
       bookmarkIcons: persisted.bookmarkIconsByAccountSpace[activeAccountSpaceId] ?? {},
       canReopenClosedTab: (this.closedTabs.get(activeAccountSpaceId)?.length ?? 0) > 0,
+      sideApps: this.sideApps.snapshot(),
     };
   }
 
@@ -483,6 +498,9 @@ class BrowserController {
         if (target) Object.assign(target, { url, title: 'New tab', isHome: true });
       });
       const runtime = this.runtimeTabs.get(tab.id);
+      // A page still loading would otherwise commit after this and take the tab
+      // back from Home; `commitNavigation` also ignores it.
+      runtime?.view?.webContents.stop();
       runtime?.view?.webContents.closeDevTools();
       runtime?.view?.setVisible(false);
       this.broadcast();
@@ -615,11 +633,56 @@ class BrowserController {
   async setOverlayOpen(open: boolean): Promise<void> {
     // Menus and dialogs only cover the page: hide the views but keep docked
     // DevTools attached, unlike a tab or workspace switch.
+    this.overlayOpen = open;
     if (open) {
       this.fillPicker.close();
       for (const runtime of this.runtimeTabs.values()) runtime.view?.setVisible(false);
+      this.layoutSideApps();
     }
     else await this.showActiveTab();
+  }
+
+  setSideAppBounds(id: SideAppId, rect: SideAppRect | null): void {
+    this.sideApps.setBounds(id, rect);
+    this.layoutSideApps();
+  }
+
+  sideAppCommand(id: SideAppId, command: SideAppCommand): Promise<void> {
+    return this.sideApps.command(id, command);
+  }
+
+  clearSideAppData(id: SideAppId): Promise<void> {
+    return this.sideApps.clearData(id);
+  }
+
+  /**
+   * A link out of a side app opens as a foreground tab in the active Account
+   * Space. Banking never receives one: nothing outside it may open a page there.
+   */
+  private openFromSideApp(url: string): void {
+    const state = this.store.get();
+    const workspace = WORKSPACES.find((item) => item.id === state.activeWorkspaceId);
+    if (!workspace || workspace.protected) {
+      this.addPrivacyEvent('blocked', 'Link blocked in Banking', 'Side panel links cannot open in the Banking workspace');
+      return;
+    }
+    if (!isAllowedRemoteUrl(url)) return;
+    const accountSpaceId = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+    void this.newTab(state.activeWorkspaceId, url, accountSpaceId).catch(() => undefined);
+  }
+
+  /** Side apps show only beside an unprotected workspace, never over a menu or in full screen. */
+  private layoutSideApps(): void {
+    if (!this.window || this.window.isDestroyed()) return;
+    const state = this.store.get();
+    const protectedWorkspace = WORKSPACES.find((item) => item.id === state.activeWorkspaceId)?.protected ?? true;
+    const [contentWidth, contentHeight] = this.window.getContentSize();
+    this.sideApps.layout({
+      insets: this.layout,
+      contentWidth,
+      contentHeight,
+      suppressed: this.overlayOpen || this.window.isFullScreen() || protectedWorkspace,
+    });
   }
 
   async recoveryAction(action: StateRecoveryAction, confirmation?: string): Promise<void> {
@@ -2560,17 +2623,7 @@ class BrowserController {
         deny();
       }
     }, { useSystemPicker: false });
-    ses.webRequest.onBeforeRequest((details, callback) => {
-      const blocking = this.store.get().trackerBlocking;
-      let blocked = false;
-      if (blocking) {
-        try {
-          const hostname = new URL(details.url).hostname;
-          blocked = TRACKER_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
-        } catch { blocked = false; }
-      }
-      callback({ cancel: blocked });
-    });
+    ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: this.isBlockedTrackerRequest(details.url) }));
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
     });
@@ -2655,7 +2708,19 @@ class BrowserController {
       if (!view.webContents.getURL() && !view.webContents.isLoading()) await view.webContents.loadURL(tab.url);
       this.scheduleAutomaticFill(tab.id);
     }
+    // A Home tab skips `applyLayout`, and a switch into Banking must still hide the side app.
+    this.layoutSideApps();
     this.broadcast();
+  }
+
+  private isBlockedTrackerRequest(url: string): boolean {
+    if (!this.store.get().trackerBlocking) return false;
+    try {
+      const hostname = new URL(url).hostname;
+      return TRACKER_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
+    } catch {
+      return false;
+    }
   }
 
   private hideAllViews(): void {
@@ -2688,6 +2753,7 @@ class BrowserController {
   }
 
   private applyLayout(): void {
+    this.layoutSideApps();
     const state = this.store.get();
     const active = this.activeTab(state);
     const runtime = this.runtimeTabs.get(active.id);
@@ -2783,9 +2849,11 @@ class BrowserController {
     if (isProtectedPage(sanitizedUrl)) this.runtimeTabs.get(tabId)?.view?.webContents.closeDevTools();
     this.store.update((state) => {
       const tab = state.tabs.find((candidate) => candidate.id === tabId);
-      if (!tab) return;
+      // A Home tab's hidden view can still finish a load started before Home was
+      // chosen. Every deliberate navigation clears `isHome` before it loads, so a
+      // commit arriving while it is set is stale and must not leave Home.
+      if (!tab || tab.isHome) return;
       tab.url = sanitizedUrl;
-      tab.isHome = false;
       if (addHistory && tab.workspaceId !== 'banking') {
         state.history.unshift({ id: randomUUID(), title: tab.title, url: sanitizedUrl, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, visitedAt: new Date().toISOString() });
         state.history = state.history.slice(0, 2500);
@@ -2982,6 +3050,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('recovery:act', (_event, action: StateRecoveryAction, confirmation?: string) => controller!.recoveryAction(action, confirmation));
   handle('browser:set-layout', (_event, layout: Layout) => controller!.setLayout(layout));
   handle('browser:set-overlay-open', (_event, open: boolean) => controller!.setOverlayOpen(open));
+  handle('side-app:set-bounds', (_event, id: SideAppId, rect: SideAppRect | null) => controller!.setSideAppBounds(id, rect));
+  handle('side-app:command', (_event, id: SideAppId, command: SideAppCommand) => controller!.sideAppCommand(id, command));
+  handle('side-app:clear-data', (_event, id: SideAppId) => controller!.clearSideAppData(id));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());

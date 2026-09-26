@@ -929,3 +929,10 @@ kbd { font: inherit; }
   .toolbar-button.selected, .side-panel-tab.selected, .menu-item:focus-visible { outline: 2px solid Highlight; }
   .security-chip { border: 1px solid CanvasText; }
 }
+
+/* ---------- Side apps (Claude) ---------- */
+.side-app { height: 100%; display: flex; flex-direction: column; }
+.side-app-toolbar { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+.side-app-status { min-width: 0; flex: 1; overflow: hidden; padding: 0 6px; color: var(--text-muted); font-size: var(--fs-xs); white-space: nowrap; text-overflow: ellipsis; }
+.side-app-slot { position: relative; min-height: 0; flex: 1; background: var(--surface); }
+.side-app-placeholder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; color: var(--text-subtle); font-size: var(--fs-sm); }

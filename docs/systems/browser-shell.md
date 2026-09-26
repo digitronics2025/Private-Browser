@@ -7,7 +7,7 @@ sources:
   - electron/shortcuts.ts
   - electron/bookmark-tree.ts
   - electron/popup-windows.ts
-verified_at: dcd6823a
+verified_at: 4c3ea363
 ---
 
 # Browser Shell
@@ -36,7 +36,7 @@ wiring into IPC. See [Facades Owned by Other Docs](#facades-owned-by-other-docs)
 - **URL and text safety** → [security-boundary.md](security-boundary.md). Owns
   `normalizeNavigationInput`, `isAllowedRemoteUrl`, `isProtectedPage`, redaction.
 - **The channel surface** → [ipc-contract.md](ipc-contract.md). Owns the table of
-  the 132 channels this file registers and their payload types.
+  the 135 channels this file registers and their payload types.
 - **What survives a restart** → [workspaces-and-state.md](workspaces-and-state.md).
   Owns `WORKSPACES`, `PersistedState`, `sanitizeState`, the atomic save.
 - **The React chrome** → [renderer-ui.md](renderer-ui.md). Owns `src/`. It imports
@@ -222,7 +222,11 @@ active Account Space and sends it Home. Restored tabs are never closed. A failur
 is recorded as a `blocked` privacy event without the URL and startup carries on.
 
 - `private://home` is a branch, not a load: it rewrites the tab record to the home
-  state, hides the view without destroying it, broadcasts and returns.
+  state, stops any load in flight, hides the view without destroying it,
+  broadcasts and returns. `commitNavigation` ignores a commit for a tab whose
+  `isHome` is set (every deliberate navigation clears it before loading), so a
+  page that finishes loading after Home was chosen cannot take the tab back —
+  it did, intermittently, even in Banking.
 - Anything that fails `isAllowedRemoteUrl` throws `Only HTTP and HTTPS pages are
   allowed`. Thrown errors cross IPC as a rejected `invoke` and surface as a toast.
 
@@ -297,6 +301,12 @@ renderer. The check covers both the stored tab URL and the URL the view is
 painting, refuses while a main-frame load is in flight, and discards the capture
 if the painted URL changed during it. Nothing is written to disk and the image is dropped when the overlay
 closes.
+
+**The side app.** `applyLayout` first calls `layoutSideApps()`, which places or
+hides the Claude view in the side panel (hidden while `overlayOpen`, in full
+screen and in a protected workspace); `showActiveTab` and `setOverlayOpen` call
+it too. Links out of it go through `openFromSideApp`. Owned by
+[side-apps.md](side-apps.md).
 
 ## Keyboard Shortcuts
 
@@ -635,7 +645,7 @@ be that webContents' main frame.
   reach these channels at all. The sender check is the second layer, not the first.
 - `IpcGuard` rejects payloads over 256 KiB and throttles a compromised trusted
   renderer after 300 calls in ten seconds.
-- All 132 channels are registered **before** `createWindow()`. The renderer calls
+- All 135 channels are registered **before** `createWindow()`. The renderer calls
   `getState()` on mount, so registration has to precede the page load.
 - The wrapper body is `async`, so a synchronous `throw` inside any controller
   method becomes a rejected `invoke` in the renderer, which App.tsx turns into a

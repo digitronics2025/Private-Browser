@@ -80,6 +80,7 @@ export function installPreviewApi(): void {
     shortcutsByAccountSpace: {},
     bookmarkIcons: {},
     canReopenClosedTab: false,
+    sideApps: [{ id: 'claude', name: 'Claude', status: 'ready', canGoBack: false, canGoForward: false }],
     // ?permission=prompt shows a pending site-permission prompt for the e2e suite.
     ...(params.get('permission') === 'prompt' ? { pendingPermission: { id: 'preview-permission', accountSpaceId: ids.personal as AccountSpaceId, workspaceId: 'personal' as const, origin: 'https://meet.google.com', capability: 'notifications' as const, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } } : {}),
   };
@@ -101,6 +102,10 @@ export function installPreviewApi(): void {
     // Recorded on the document so browser tests can compare it with the visible chrome.
     setLayout: async (layout) => { document.documentElement.dataset.previewLayout = JSON.stringify(layout); },
     setOverlayOpen: async () => undefined,
+    // A normal browser has no native view to place; record the slot for browser tests instead.
+    setSideAppBounds: async (_id, rect) => { document.documentElement.dataset.previewSideApp = JSON.stringify(rect); },
+    sideAppCommand: async () => undefined,
+    clearSideAppData: async () => undefined,
     respondToPermissionPrompt: async (_id, decision) => { document.documentElement.dataset.previewPermission = String(decision); state.pendingPermission = undefined; publish(); },
     freezeContent: async () => null,
     // Same rules as the main process: validated patch, Home address normalized, Banking Home is the New Tab page.

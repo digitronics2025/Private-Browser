@@ -1,10 +1,11 @@
 import { useContext, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { Code2, Download, KeyRound, ShieldCheck, Sparkles, X, Zap } from 'lucide-react';
+import { Asterisk, Code2, Download, KeyRound, ShieldCheck, Sparkles, X, Zap } from 'lucide-react';
 import type { SidePanelTool } from '../../electron/types';
 import { clampSidePanelWidth, SIDE_PANEL } from '../../electron/chrome-layout';
 import { OverlayContext } from './overlay';
 
 export const SIDE_PANEL_TABS: Array<{ id: SidePanelTool; label: string; title: string; icon: typeof Sparkles }> = [
+  { id: 'claude', label: 'Claude', title: 'Claude', icon: Asterisk },
   { id: 'assistant', label: 'AI', title: 'AI assistant', icon: Sparkles },
   { id: 'developer', label: 'DevTools', title: 'Developer cockpit', icon: Code2 },
   { id: 'vault', label: 'Vault', title: 'MyVault', icon: KeyRound },
