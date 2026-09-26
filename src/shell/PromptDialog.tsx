@@ -8,6 +8,8 @@ export interface PromptField {
   type?: 'text' | 'url';
   maxLength?: number;
   placeholder?: string;
+  /** May be submitted empty. */
+  optional?: boolean;
 }
 
 export interface PromptRequest {
@@ -35,7 +37,7 @@ export function PromptDialog({ request, onDone }: { request: PromptRequest; onDo
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (request.fields.some((field) => !values[field.name]?.trim())) {
+    if (request.fields.some((field) => !field.optional && !values[field.name]?.trim())) {
       setError('Fill in every field.');
       return;
     }

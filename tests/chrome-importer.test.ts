@@ -43,6 +43,11 @@ describe('Chrome data importer', () => {
     expect(result.skipped).toBe(1);
   });
 
+  it('keeps a nameless Chrome bookmark nameless, so the bar shows its icon alone', () => {
+    const input = JSON.stringify({ roots: { bookmark_bar: { children: [{ type: 'url', name: '', url: 'https://chatgpt.com/' }] } } });
+    expect(parseChromeBookmarks(input, 'personal', ACCOUNT_ID).bookmarks[0]).toEqual(expect.objectContaining({ title: '', url: 'https://chatgpt.com/' }));
+  });
+
   it('drops Chrome internal and unsafe bookmark URLs', () => {
     const input = JSON.stringify({ roots: { bookmark_bar: { children: [
       { type: 'url', name: 'Chrome', url: 'chrome://settings' },

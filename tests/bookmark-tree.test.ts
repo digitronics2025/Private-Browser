@@ -46,7 +46,7 @@ describe('bookmark tree', () => {
 
   it('renames and removes bookmarks and folders only in the given Account Space', () => {
     expect(renameBookmark(tree(), 'one', '  Renamed  ').find((entry) => entry.id === 'one')?.title).toBe('Renamed');
-    expect(() => renameBookmark(tree(), 'one', '   ')).toThrow();
+    expect(renameBookmark(tree(), 'one', '   ').find((entry) => entry.id === 'one')?.title).toBe('');
     expect(removeBookmark(tree(), 'two').map((entry) => entry.id)).not.toContain('two');
     const renamed = renameBookmarkFolder(tree(), A, { location: 'bar', path: [] }, 'Work', 'Clients');
     expect(names(renamed, A)).toEqual(['one', '[Clients]', 'two']);

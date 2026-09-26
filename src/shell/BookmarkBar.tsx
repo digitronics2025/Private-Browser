@@ -168,8 +168,9 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
               <button
                 key={key}
                 type="button"
-                className={`bookmark-item ${dragging ? 'dragging' : ''}`}
-                title={`${entry.item.title}\n${entry.item.url}`}
+                className={`bookmark-item ${entry.item.title ? '' : 'icon-only'} ${dragging ? 'dragging' : ''}`}
+                aria-label={entry.item.title || domainFromUrl(entry.item.url)}
+                title={entry.item.title ? `${entry.item.title}\n${entry.item.url}` : entry.item.url}
                 {...common}
                 onPointerUp={(event) => { suppressClick.current = endDrag(event, entry); }}
                 onClick={() => { if (suppressClick.current) { suppressClick.current = false; return; } actions.open(entry.item.id); }}
@@ -178,7 +179,7 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
                 onContextMenu={(event) => { event.preventDefault(); setMenu({ kind: 'context-bookmark', item: entry.item, point: { x: event.clientX, y: event.clientY } }); }}
               >
                 <BookmarkIcon item={entry.item} favicons={favicons} />
-                <span>{entry.item.title || domainFromUrl(entry.item.url)}</span>
+                {entry.item.title && <span>{entry.item.title}</span>}
               </button>
             );
           }
@@ -222,7 +223,10 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
         </button>
       )}
       <div className="bookmark-measure" aria-hidden="true" ref={measureRef}>
-        {entries.map((entry) => <span key={entryKey(entry)} className="bookmark-item"><Globe2 size={14} /><span>{entry.kind === 'bookmark' ? entry.item.title || domainFromUrl(entry.item.url) : entry.name}</span></span>)}
+        {entries.map((entry) => {
+          const label = entry.kind === 'bookmark' ? entry.item.title : entry.name;
+          return <span key={entryKey(entry)} className={`bookmark-item ${label ? '' : 'icon-only'}`}><Globe2 size={14} />{label && <span>{label}</span>}</span>;
+        })}
       </div>
 
       {menu?.kind === 'folder' && (
@@ -241,7 +245,7 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
         </MenuSurface>
       )}
       {menu?.kind === 'context-bookmark' && (
-        <MenuSurface point={menu.point} label={`${menu.item.title} actions`} className="context-menu" onClose={() => setMenu(null)}>
+        <MenuSurface point={menu.point} label={`${menu.item.title || domainFromUrl(menu.item.url)} actions`} className="context-menu" onClose={() => setMenu(null)}>
           <MenuItem icon={ExternalLink} label="Open in new tab" onSelect={() => actions.open(menu.item.id)} />
           <MenuItem icon={Copy} label="Copy link" onSelect={() => actions.copyLink(menu.item.url)} />
           <MenuSeparator />

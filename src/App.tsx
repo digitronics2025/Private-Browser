@@ -350,7 +350,7 @@ export default function App() {
       void act(async () => { for (const item of items.slice(0, 50)) await window.privateBrowser.openBookmark(item.id); });
     },
     copyLink: (url) => void act(() => window.privateBrowser.copyText(url), 'Link copied'),
-    rename: (item) => setPrompt({ title: 'Edit bookmark name', confirmLabel: 'Save', fields: [{ name: 'title', label: 'Name', value: item.title, maxLength: 500 }], submit: (values) => window.privateBrowser.renameBookmark(item.id, values.title) }),
+    rename: (item) => setPrompt({ title: 'Edit bookmark name', description: 'Leave the name empty to show only the icon on the bookmarks bar.', confirmLabel: 'Save', fields: [{ name: 'title', label: 'Name', value: item.title, maxLength: 500, optional: true }], submit: (values) => window.privateBrowser.renameBookmark(item.id, values.title) }),
     remove: (item) => void act(() => window.privateBrowser.removeBookmark(item.id), 'Bookmark deleted'),
     renameFolder: (level: BookmarkLevelInput, name) => setPrompt({ title: 'Rename folder', confirmLabel: 'Save', fields: [{ name: 'name', label: 'Folder name', value: name, maxLength: 200 }], submit: (values) => window.privateBrowser.renameBookmarkFolder(level, name, values.name) }),
     removeFolder: (level, name, count) => {

@@ -80,9 +80,9 @@ export function reorderBookmarkEntry<T extends Bookmark>(bookmarks: T[], account
   });
 }
 
+/** An empty title is allowed: the bookmarks bar then shows the icon alone, as Chrome does. */
 export function renameBookmark<T extends Bookmark>(bookmarks: T[], id: string, title: string): T[] {
   const clean = title.trim().slice(0, 500);
-  if (!clean) throw new Error('A bookmark needs a name');
   if (!bookmarks.some((item) => item.id === id)) throw new Error('Bookmark was not found');
   return bookmarks.map((item) => item.id === id ? { ...item, title: clean } : item);
 }

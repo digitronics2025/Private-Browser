@@ -95,7 +95,8 @@ export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, 
       if (!node.url || !isAllowedRemoteUrl(node.url)) { skipped += 1; return; }
       bookmarks.push({
         id: randomUUID(),
-        title: (node.name || node.url).slice(0, 500),
+        // A nameless Chrome bookmark stays nameless, so it keeps showing as an icon alone.
+        title: (node.name ?? '').trim().slice(0, 500),
         url: node.url,
         workspaceId,
         accountSpaceId,

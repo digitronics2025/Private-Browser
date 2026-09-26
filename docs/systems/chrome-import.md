@@ -7,7 +7,7 @@ verified_at: dcd6823a
 
 # Chrome Import
 
-> Last verified: 2026-09-25
+> Last verified: 2026-09-26
 
 ## Agent Brief
 
@@ -40,6 +40,8 @@ cross the preload bridge.
 
 - **Bookmarks:** reads Chrome's `Bookmarks` JSON, preserving bookmark-bar versus
   other-bookmarks placement, nested folder names and per-level source order.
+  A nameless Chrome bookmark imports with an empty title (not its URL), so the
+  bar shows it as an icon alone, as Chrome does.
   Empty folders are not represented because the app persists URL entries rather
   than folder nodes. The hard safety caps are 25,000 URL bookmarks and 20 folder
   levels (deeper entries are counted as skipped).

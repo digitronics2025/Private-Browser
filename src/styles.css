@@ -282,6 +282,7 @@ kbd { font: inherit; }
 .bookmark-item.folder > svg { color: var(--accent); }
 .bookmark-item img { width: 16px; height: 16px; flex: 0 0 16px; object-fit: contain; }
 .bookmark-item.dragging { z-index: 3; transition: none; background: var(--surface-3); box-shadow: var(--shadow-md); }
+.bookmark-item.icon-only { width: 28px; padding: 0; justify-content: center; }
 .bookmark-overflow { padding: 0 6px; }
 .bookmark-other { margin-left: 4px; border-left: 1px solid var(--border); border-radius: 0 var(--radius-pill) var(--radius-pill) 0; padding-left: 10px; }
 /* Zero-width and clipped so the full-length measuring row never widens the page; items keep their natural width (flex: 0 0 auto). */
