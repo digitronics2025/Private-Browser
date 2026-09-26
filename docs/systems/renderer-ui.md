@@ -8,7 +8,7 @@ verified_at: dcd6823a
 
 # Renderer UI
 
-> Last verified: 2026-09-25
+> Last verified: 2026-09-26
 
 ## Agent Brief
 
@@ -100,13 +100,13 @@ hides the vault entry points; Banking renders only centrally permitted actions.
 | `shell/StatusMenus.tsx` | `ShieldStatusMenu`, `SiteInfoMenu`, `TabSearchMenu` | protection status lives here, not in permanent chrome |
 | `shell/ProfileMenu.tsx` | current Account Space card, workspace switcher, Account Space list, manage/add/lock | `role=menu` named "Account Spaces" |
 | `shell/BrowserMenu.tsx` | Chrome-style ⋮ menu with submenus and the zoom row | |
-| `shell/BookmarkBar.tsx` | bookmarks bar, folder/overflow/"Other bookmarks" menus, context menus | measures entries to compute overflow |
+| `shell/BookmarkBar.tsx` | bookmarks bar, folder/overflow/"Other bookmarks" menus, context menus | measures entries to compute overflow; a nameless bookmark renders icon-only (`.icon-only`) |
 | `shell/FindBar.tsx` | find-in-page row | only on real pages |
 | `shell/SidePanel.tsx` | panel frame: resize separator, tool tabs, close | tools listed in `SIDE_PANEL_TABS` |
 | `shell/NewTabPage.tsx` | brand, search, shortcut tiles, recent/bookmark cards, Customize | |
 | `shell/Menu.tsx` | `MenuSurface`, `MenuItem`, `SubmenuItem`, `MenuSeparator`, `MenuHeading` | portal, positioning, keyboard, focus restore |
 | `shell/overlay.tsx` | `OverlayContext`, `useOverlayLayer` | |
-| `shell/PromptDialog.tsx` | text-input dialog (rename, shortcuts) | Electron has no `window.prompt` |
+| `shell/PromptDialog.tsx` | text-input dialog (rename, shortcuts) | Electron has no `window.prompt`; a field marked `optional` may be submitted empty |
 | `shell/BrandMark.tsx` | the original teal shield | no third-party marks |
 | `panels/*.tsx` | Assistant, Developer, Vault, Automation, Downloads, Privacy, Settings (+ Updates page), AccountManager, Permission/Recovery overlays, Bookmarks, History | existing panels were moved verbatim; Settings gained Appearance and bookmarks-bar mode |
 | `lib/` | `format.ts` (domain, bytes, timeAgo, cached favicons by host), `accounts.tsx` (avatar, action-required rule), `quick-links.ts` (default New Tab tiles), `subscribe.ts` | |
