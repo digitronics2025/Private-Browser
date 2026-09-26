@@ -1,9 +1,22 @@
 name: Verify and package
 
+# Three levels:
+#   Draft PR        -> nothing runs.
+#   Ready PR        -> `verify` only (Ubuntu). No Windows runner, no installer, no artifacts.
+#                      For a Windows-specific change, run this workflow manually on the PR
+#                      branch (Actions -> Verify and package -> Run workflow) before merging.
+#   Push to main    -> `verify`, then — only when the application changed — the Windows
+#                      transport/Electron journeys + installer, then the R2/D1 publish.
+#                      Cloudflare download-service changes deploy from here too, once,
+#                      reusing this run's `verify` instead of running the gate a second time.
+#   workflow_dispatch -> verify + Windows journeys + installer for the chosen ref (never publishes).
+
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,11 +25,72 @@ permissions:
 # run could stop between the R2 upload and the D1 registration, and a job-level
 # group cannot shield a job from its whole run being cancelled (F-21, F-41).
 concurrency:
-  group: private-browser-${{ github.ref }}
+  group: private-browser-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Push to main only. Decides whether the application and/or the download service changed,
+  # comparing with what production actually runs, not with the previous push: if an app
+  # change's run never published (cancelled, failed), a later docs-only push must still
+  # release it. Fails SAFE (unknown -> changed).
+  changes:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      app: ${{ steps.app.outputs.app }}
+      cloudflare: ${{ steps.cloudflare.outputs.changed }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Detect whether this push changes the application
+        id: app
+        shell: bash
+        env:
+          PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
+        run: |
+          before=""
+          if [[ -n "$PRIVATE_BROWSER_DOWNLOAD_URL" ]]; then
+            active="$(curl -fsS --max-time 20 --proto '=https' "${PRIVATE_BROWSER_DOWNLOAD_URL%/}/api/v1/releases/public/latest" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s).commitSha;if(/^[0-9a-f]{40}$/.test(v))process.stdout.write(v)}catch{}})' || true)"
+            if [[ -n "$active" ]] && git cat-file -e "${active}^{commit}" 2>/dev/null && git merge-base --is-ancestor "$active" "${{ github.sha }}"; then
+              before="$active"
+              echo "Comparing with the active release commit $active"
+            fi
+          fi
+          if [[ -z "$before" ]]; then
+            before="${{ github.event.before }}"
+            if [[ -z "$before" || "$before" =~ ^0+$ ]] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
+              before="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
+            fi
+          fi
+          changed="$(git diff --name-only "$before" "${{ github.sha }}" || true)"
+          echo "Changed paths:"; echo "${changed:-<none>}"
+          if [[ -z "$changed" ]] || echo "$changed" | grep -qvE '^(docs/.*|[^/]*\.md)$'; then
+            echo "app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app=false" >> "$GITHUB_OUTPUT"
+            echo "Documentation-only push: no installer is built and no release is published."
+          fi
+      # Same inputs the standalone deploy workflow used to watch on push.
+      - name: Detect download-service changes
+        id: cloudflare
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]] || ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BEFORE_SHA" "$AFTER_SHA" -- cloudflare package.json package-lock.json .github/workflows/ci.yml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Cloudflare runtime and dependency inputs are unchanged; no service deploy."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   verify:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -26,10 +100,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npm audit --audit-level=high
       - name: Verify bridge protocol (Windows transport is skipped here)
         run: npm run bridge:test
-      - run: npm audit --audit-level=high
+      # Installed once (it used to be installed twice), right before the gate that needs it.
       - run: npx playwright install --with-deps chromium
       - run: npm run check
       # Browser test failures on the runner are not always reproducible locally;
@@ -42,11 +116,18 @@ jobs:
           path: |
             test-results/
             blob-report/
-          retention-days: 7
+          retention-days: 5
           if-no-files-found: ignore
 
+  # The real Windows named-pipe transport, Electron isolation and installer: main pushes that
+  # change the application, and manual runs. Never for an ordinary pull request.
   windows-installer:
-    needs: verify
+    needs: [verify, changes]
+    if: >-
+      !cancelled() && needs.verify.result == 'success' && (
+        (github.event_name == 'push' && needs.changes.outputs.app == 'true') ||
+        github.event_name == 'workflow_dispatch'
+      )
     runs-on: windows-latest
     timeout-minutes: 25
     # No job-level secrets: `npm ci` must not run with credentials in its
@@ -132,17 +213,93 @@ jobs:
             release/VERSION.txt
             release/SBOM.cdx.json
           if-no-files-found: error
-          retention-days: 30
+          # Hand-off to the publish job; the published copy lives in R2.
+          retention-days: 3
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: private-browser-bridge-vsix
           path: release/private-browser-bridge-*.vsix
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
+
+  # The download service (Worker + D1), when this push changed it. Formerly a separate
+  # workflow that re-ran the whole `npm run check` gate (Playwright included) in parallel with
+  # `verify` on the same commit; it now needs this run's `verify` and skips the duplicate.
+  # Manual redeploys: deploy-cloudflare.yml (workflow_dispatch, runs the full gate itself).
+  deploy-download-service:
+    needs: [changes, verify]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.cloudflare == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: private-browser-cloudflare-production
+      cancel-in-progress: false
+    # Secrets are attached per step, never to the job, so `npm ci` never runs with
+    # production credentials in its environment.
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Detect deployment configuration
+        id: configured
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+          DOWNLOAD_ACCESS_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
+          SIGNING_SECRET: ${{ secrets.PRIVATE_BROWSER_SIGNING_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
+        run: |
+          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$CLOUDFLARE_D1_DATABASE_ID" && ${#DOWNLOAD_ACCESS_TOKEN} -ge 32 && ${#SIGNING_SECRET} -ge 32 && ${#ADMIN_API_KEY} -ge 32 ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Cloudflare deployment is not configured. Add the documented repository secrets, then run deploy-cloudflare.yml."
+          fi
+      # `verify` (a `needs` of this job) already ran the full `npm run check` gate on this
+      # exact commit, so it is not repeated here before touching production.
+      - if: steps.configured.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+        run: node cloudflare/scripts/render-config.mjs
+      - name: Apply D1 migrations
+        if: steps.configured.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 migrations apply DB --remote --config cloudflare/wrangler.deploy.jsonc
+      - name: Deploy Worker
+        if: steps.configured.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy --config cloudflare/wrangler.deploy.jsonc --keep-vars
+      - name: Install Worker secrets
+        if: steps.configured.outputs.ready == 'true'
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DOWNLOAD_ACCESS_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
+          SIGNING_SECRET: ${{ secrets.PRIVATE_BROWSER_SIGNING_SECRET }}
+          ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
+        run: |
+          node -e "process.stdout.write(JSON.stringify({DOWNLOAD_ACCESS_TOKEN:process.env.DOWNLOAD_ACCESS_TOKEN,SIGNING_SECRET:process.env.SIGNING_SECRET,ADMIN_API_KEY:process.env.ADMIN_API_KEY}))" |
+            npx wrangler secret bulk --config cloudflare/wrangler.deploy.jsonc
 
   publish-cloudflare-release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: windows-installer
+    # After the installer, and after the download service when this push also deploys it, so a
+    # release is never registered against a Worker that is about to change underneath it.
+    needs: [changes, windows-installer, deploy-download-service]
+    if: >-
+      !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.changes.outputs.app == 'true'
+      && needs.windows-installer.result == 'success'
+      && (needs.deploy-download-service.result == 'success' || needs.deploy-download-service.result == 'skipped')
     # One publish at a time across runs, never cancelled. Main-branch runs are
     # not cancelled at the workflow level either (see the top of this file).
     concurrency:
@@ -154,9 +311,6 @@ jobs:
     # without them in scope.
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          # Needed to diff this push against its predecessor below.
-          fetch-depth: 0
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
@@ -181,37 +335,6 @@ jobs:
             exit 1
           fi
           npm version "$version" --no-git-tag-version --allow-same-version
-      - name: Detect whether this push changes the application
-        id: changes
-        shell: bash
-        env:
-          PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
-        run: |
-          # Compare with what production actually runs, not with the previous
-          # push: if an app change's run never published (cancelled, failed), a
-          # later docs-only push must still release it.
-          before=""
-          if [[ -n "$PRIVATE_BROWSER_DOWNLOAD_URL" ]]; then
-            active="$(curl -fsS --max-time 20 --proto '=https' "${PRIVATE_BROWSER_DOWNLOAD_URL%/}/api/v1/releases/public/latest" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s).commitSha;if(/^[0-9a-f]{40}$/.test(v))process.stdout.write(v)}catch{}})' || true)"
-            if [[ -n "$active" ]] && git cat-file -e "${active}^{commit}" 2>/dev/null && git merge-base --is-ancestor "$active" "${{ github.sha }}"; then
-              before="$active"
-              echo "Comparing with the active release commit $active"
-            fi
-          fi
-          if [[ -z "$before" ]]; then
-            before="${{ github.event.before }}"
-            if [[ -z "$before" || "$before" =~ ^0+$ ]] || ! git cat-file -e "${before}^{commit}" 2>/dev/null; then
-              before="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
-            fi
-          fi
-          changed="$(git diff --name-only "$before" "${{ github.sha }}" || true)"
-          echo "Changed paths:"; echo "${changed:-<none>}"
-          if [[ -z "$changed" ]] || echo "$changed" | grep -qvE '^(docs/.*|[^/]*\.md)$'; then
-            echo "app=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "app=false" >> "$GITHUB_OUTPUT"
-            echo "Documentation-only push: not publishing a release. The active release is unchanged."
-          fi
       - name: Detect publishing configuration
         id: configured
         shell: bash
@@ -230,9 +353,9 @@ jobs:
             echo "::warning::This installer embeds the shared download token (PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN=true); it is kept as a private artifact and not published."
             exit 0
           fi
-          if [[ "${{ steps.changes.outputs.app }}" == "true" && -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" && ${#PRIVATE_BROWSER_DOWNLOAD_TOKEN} -ge 32 ]]; then
+          if [[ "${{ needs.changes.outputs.app }}" == "true" && -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" && ${#PRIVATE_BROWSER_DOWNLOAD_TOKEN} -ge 32 ]]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ steps.changes.outputs.app }}" != "true" ]]; then
+          elif [[ "${{ needs.changes.outputs.app }}" != "true" ]]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"

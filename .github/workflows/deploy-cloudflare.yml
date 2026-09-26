@@ -1,14 +1,10 @@
 name: Deploy download service
 
+# Manual only. Pushes to main that change the service deploy from ci.yml's
+# `deploy-download-service` job, after that run's `verify`. A manual run has no such
+# verification behind it, so it keeps the full gate below.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "cloudflare/**"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/deploy-cloudflare.yml"
 
 permissions:
   contents: read

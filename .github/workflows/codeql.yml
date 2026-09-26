@@ -1,15 +1,24 @@
 name: CodeQL
 
+# Main and weekly, not every pull request: a finding on main is fixed in the next PR, and
+# the weekly run catches new queries against unchanged code.
 on:
   push:
     branches: [main]
-  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
   schedule:
     - cron: "17 5 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
   security-events: write
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analyze:
