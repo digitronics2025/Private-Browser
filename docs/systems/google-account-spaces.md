@@ -24,7 +24,7 @@ verified_at: dcd6823a
 
 # Google Account Spaces
 
-> Last verified: 2026-09-25
+> Last verified: 2026-09-26
 
 ## Agent Brief
 
@@ -199,7 +199,9 @@ action is required) opens a menu listing workspaces and only the accounts in the
 active workspace, with keyboard cycling. The manager provides local/Google add,
 rename, recolour, reorder, module reconnect, service launch, lock, clear,
 disconnect and delete. Tab, tab-move, mute and bookmark-editing IPC act only on
-the active Account Space; `ipc-contracts.ts` validates their shapes. The native
+the active Account Space; `ipc-contracts.ts` validates their shapes (it also
+validates the `side-app:*` channels, which belong to no Account Space — see
+[side-apps.md](side-apps.md)). The native
 page view is hidden below menus, account, permission and recovery overlays (a
 still image of the page is shown instead, never for Banking or protected pages);
 focus returns on close.
