@@ -6,12 +6,13 @@ sources:
   - electron/chrome-layout.ts
   - electron/shortcuts.ts
   - electron/bookmark-tree.ts
+  - electron/popup-windows.ts
 verified_at: dcd6823a
 ---
 
 # Browser Shell
 
-> Last verified: 2026-09-25
+> Last verified: 2026-09-26
 
 ## Agent Brief
 
@@ -533,26 +534,38 @@ What it configures, once per partition:
 
 Three guards keep a view on http and https:
 
-1. Per-view `setWindowOpenHandler(({ url }) => ...)` — outside Banking, an
-   allowed URL becomes a sanitized tab and the handler **always** returns
-   `{ action: 'deny' }`. `window.open` and `target="_blank"` become tabs in the
-   same workspace, never real windows and never a cross-workspace leak. Only the
-   visible active tab of a focused window may open a foreground tab
-   (`newTab`); any other opener gets `addBackgroundTab`, which changes no
-   active workspace, Account Space or tab. Each view may open at most 5 popups
-   per 10 s; more are refused with a "Popups blocked" privacy event. The
-   workspace id is captured in the closure when the view is built. Banking
-   denies the popup completely. Every guard is attached before anything in
-   `ensureView` that could throw; the passkey-provider check runs last and
-   cannot throw (`passkeyOriginFor`), so an `xn--` first address still gets
+1. Per-view `setWindowOpenHandler` (`openFromPage` in `ensureView`) — Banking
+   denies every popup. Outside Banking, a disallowed URL is denied and each view
+   may open at most 5 popups per 10 s; more are refused with a "Popups blocked"
+   privacy event. Only the visible active tab of a focused window (or a focused
+   popup window it opened) counts as foreground. A foreground request with
+   disposition `new-window` — `window.open` with popup features, as Google Pay
+   and "Sign in with" flows use — gets a **real popup window**
+   (`popupWindowResponse` in [popup-windows.ts](../../electron/popup-windows.ts)),
+   because those flows need `window.opener`; as a tab they fail (Google Pay:
+   OR_BIBED_15). Everything else becomes a sanitized tab and the handler returns
+   `{ action: 'deny' }`: foreground → `newTab`, otherwise `addBackgroundTab`,
+   which changes no active workspace, Account Space or tab. The workspace id is
+   captured in the closure when the view is built. Every guard is attached before
+   anything in `ensureView` that could throw; the passkey-provider check runs last
+   and cannot throw (`passkeyOriginFor`), so an `xn--` first address still gets
    every guard.
-2. Per-view `will-navigate` and `will-redirect` call `event.preventDefault()` on anything that fails
-   `isAllowedRemoteUrl`, so a page cannot walk its own view to `file:`, `data:` or
-   a custom scheme. They reload URLs after removing tracking parameters.
+   A popup window inherits the opener's session (same Account Space only),
+   is sandboxed with context isolation and no preload, has `parent` set to the
+   main window and `outlivesOpener: false`, so closing the tab or locking its
+   Account Space closes it. `adoptPopupWindow` (on `did-create-window`) removes
+   its menu, routes its own `window.open` through the same `openFromPage`, gives
+   it the navigation guards below, and titles it `host — page title` since it
+   has no address bar.
+2. `guardPageNavigation` (tabs and popups): `will-navigate` and `will-redirect`
+   call `event.preventDefault()` on anything that fails `isAllowedRemoteUrl`, so a
+   page cannot walk its own view to `file:`, `data:` or a custom scheme. They
+   reload URLs after removing tracking parameters, and cancel
+   `will-attach-webview`.
 3. `commitNavigation` re-checks before writing the URL into state.
 
-The chrome window's own `setWindowOpenHandler` denies unconditionally. Both
-chrome and page views explicitly cancel `will-attach-webview`.
+The chrome window's own `setWindowOpenHandler` denies unconditionally. Chrome,
+page views and popup windows all cancel `will-attach-webview`.
 
 The `newTab` call inside the popup handler is fire-and-forget (`void`); a failure
 there is not reported anywhere.

@@ -86,7 +86,10 @@ keyed by Account Space, exact origin and capability, with deny/once/session/alwa
 choices. Notifications are restricted to exact Gmail, Calendar and Meet origins;
 camera/microphone and display capture are Meet-only, and display capture requires
 the active visible tab plus a source picker every time. Banking denies before
-saved grants. Popups become tabs in the originating account.
+saved grants. Popups become tabs in the originating account, except a
+`window.open` popup from the page in front (payment and sign-in flows), which
+opens as a sandboxed, preload-free window in the same account session, titled
+with its host, confined to http(s), and closed with its tab.
 
 Google service access uses narrow main-process clients, bounded ten-second
 requests and scope checks. Gmail sends, calendar mutations, Drive permission

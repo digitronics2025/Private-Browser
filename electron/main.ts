@@ -19,8 +19,10 @@ import {
   shell,
   WebContentsView,
   type DownloadItem,
+  type HandlerDetails,
   type IpcMainInvokeEvent,
   type Session,
+  type WindowOpenHandlerResponse,
 } from 'electron';
 import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from './security.js';
 import { ClipboardGuard } from './clipboard-guard.js';
@@ -110,6 +112,7 @@ import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSour
 import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-status.js';
 import { listChromeProfiles, readChromeProfile } from './chrome-importer.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
+import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -2354,7 +2357,8 @@ class BrowserController {
     // that exists without them would run a hostile page with no popup,
     // navigation or tab-tracking control for its whole life (F-28).
     const popupTimes: number[] = [];
-    view.webContents.setWindowOpenHandler(({ url }) => {
+    // `popup` is set when the request comes from a popup window this tab opened.
+    const openFromPage = ({ url, disposition }: HandlerDetails, popup?: BrowserWindow): WindowOpenHandlerResponse => {
       if (tab.workspaceId === 'banking') {
         this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
         return { action: 'deny' };
@@ -2370,34 +2374,17 @@ class BrowserController {
       // Only the page the user is looking at may take the foreground; a hidden
       // or background tab's popup is added behind the current one (F-31).
       const opener = this.activeTab(this.store.get());
-      const inForeground = opener.id === tabId && view.getVisible() && !this.window.isDestroyed() && this.window.isFocused();
+      const inForeground = popup
+        ? !popup.isDestroyed() && popup.isFocused()
+        : opener.id === tabId && view.getVisible() && !this.window.isDestroyed() && this.window.isFocused();
+      if (inForeground && wantsPopupWindow(disposition)) return popupWindowResponse(this.window);
       if (inForeground) void this.newTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
       else this.addBackgroundTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
       return { action: 'deny' };
-    });
-    view.webContents.on('will-navigate', (event, url) => {
-      if (!isAllowedRemoteUrl(url)) {
-        event.preventDefault();
-        return;
-      }
-      const sanitized = stripTrackingParameters(url);
-      if (sanitized !== url) {
-        event.preventDefault();
-        void view.webContents.loadURL(sanitized);
-      }
-    });
-    view.webContents.on('will-redirect', (event, url) => {
-      if (!isAllowedRemoteUrl(url)) {
-        event.preventDefault();
-        return;
-      }
-      const sanitized = stripTrackingParameters(url);
-      if (sanitized !== url) {
-        event.preventDefault();
-        void view.webContents.loadURL(sanitized);
-      }
-    });
-    view.webContents.on('will-attach-webview', (event) => event.preventDefault());
+    };
+    view.webContents.setWindowOpenHandler((details) => openFromPage(details));
+    view.webContents.on('did-create-window', (child) => adoptPopupWindow(child, (window) => (details) => openFromPage(details, window)));
+    guardPageNavigation(view.webContents);
     view.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
       if (!isMainFrame) return;
       runtime.navigationGeneration += 1;
