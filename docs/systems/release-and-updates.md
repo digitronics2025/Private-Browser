@@ -402,10 +402,14 @@ checks in addition to unit and Worker tests.
 
 ### ci.yml
 
-[ci.yml](../../.github/workflows/ci.yml) — on every push to `main` and every pull
-request. `permissions: contents: read`; concurrency per ref, cancelling superseded
+[ci.yml](../../.github/workflows/ci.yml) — pushes to `main`, pull requests and
+manual dispatch. `permissions: contents: read`; concurrency per PR/ref, cancelling superseded
 runs **only for pull requests** — a `main` run is never cancelled. Node 22 with
-npm cache in all three jobs.
+npm cache in every job.
+
+**CI levels.** Draft PR: nothing. Ready PR: `verify` on Ubuntu only. `main`: `verify`,
+then Windows + publish only if the app changed. Windows-specific PR: dispatch the
+workflow on its branch (never publishes).
 
 **No job declares secrets.** Every credential is attached to the one step that
 uses it, so `npm ci` and the test suite never run with production values in their
@@ -418,12 +422,10 @@ artifact (`test-results/` and `blob-report/`, 7 days) is uploaded only on failur
 It holds screenshots and traces of the preview mock and throwaway Electron
 profiles, never real browsing data.
 
-**A documentation-only push publishes nothing.** The publish job checks out at
+**A documentation-only push builds and publishes nothing.** The `changes` job checks out at
 `fetch-depth: 0` and diffs against the commit production runs (the public
 manifest's `commitSha`, if an ancestor), else `github.event.before`, else
-`HEAD~1`; it skips when every changed path is under `docs/` or a top-level `.md`.
-An app change whose run never published still ships with the next push (F-41). Before this, every push to `main` minted a new
-active release — including docs commits (F-04).
+`HEAD~1`; if every changed path is docs, Windows and publish are skipped. An app change whose run never published still ships with the next push (F-04, F-41).
 
 **Application releases are versioned automatically.** On a `main` push,
 `prepare-release-version.mjs` reads the public manifest (no configured URL or no
@@ -436,15 +438,17 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 
 | Job | Runs on | Does |
 | --- | --- | --- |
+| `changes` | ubuntu, push only | `app` (vs active release) and `cloudflare` (vs `event.before`) |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
-| `windows-installer` | windows, 25 min, needs `verify` | Runs the Electron MyVault boundary and Windows named-pipe journeys, selects the stable version on `main`, writes the bundled update bootstrap, runs `npm run dist`, writes checksum, version and CycloneDX SBOM artifacts, smoke-installs the VSIX in an isolated profile, and uploads both private artifacts for 30 days |
-| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer`, push-to-`main` only | Restores the artifact's recorded version, skips docs-only pushes, installs with `npm ci --ignore-scripts` then `npm rebuild workerd esbuild`, records the active release id, uploads the exe to R2, registers metadata in D1, then re-downloads it through the live route ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)); if that fails it re-activates the recorded release ([activate-release.mjs](../../cloudflare/scripts/activate-release.mjs)) and fails (F-50) |
+| `windows-installer` | windows, 25 min, needs `verify`, `app=true` or dispatch | Runs the Electron MyVault boundary and Windows named-pipe journeys, selects the stable version on `main`, writes the bundled update bootstrap, runs `npm run dist`, writes checksum, version and CycloneDX SBOM artifacts, smoke-installs the VSIX in an isolated profile, and uploads the installer (3 days; R2 keeps the release) and VSIX (7 days) |
+| `deploy-download-service` | ubuntu, needs `verify`, `cloudflare=true` | Steps 3–6 below, reusing `verify` |
+| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer` (+ `deploy-download-service` if it ran), `app=true` only | Restores the artifact's recorded version, installs with `npm ci --ignore-scripts` then `npm rebuild workerd esbuild`, records the active release id, uploads the exe to R2, registers metadata in D1, then re-downloads it through the live route ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)); if that fails it re-activates the recorded release ([activate-release.mjs](../../cloudflare/scripts/activate-release.mjs)) and fails (F-50) |
 
 ### codeql.yml
 
 [codeql.yml](../../.github/workflows/codeql.yml) runs GitHub CodeQL's
-`security-extended` JavaScript/TypeScript queries on pushes to `main`, pull
-requests, and every Monday. It has read-only repository access plus the minimum
+`security-extended` JavaScript/TypeScript queries on non-docs pushes to `main`,
+every Monday, and on dispatch (not on PRs). It has read-only repository access plus the minimum
 `security-events: write` permission required to publish findings.
 
 The publish job applies the validated `VERSION.txt`, uploads the exe with
@@ -468,27 +472,21 @@ and a downloadable installer, not a wall of failures.
 ### deploy-cloudflare.yml
 
 [deploy-cloudflare.yml](../../.github/workflows/deploy-cloudflare.yml) —
-`workflow_dispatch`, plus pushes to `main` that touch `cloudflare/**`,
-`package.json`, `package-lock.json` or the workflow file itself. Concurrency
+`workflow_dispatch` only; pushes deploy via ci.yml's `deploy-download-service`. Concurrency
 group `private-browser-cloudflare-production` with **`cancel-in-progress:
 false`** — a production deploy is never cancelled mid-flight by a following push.
 
 **It runs the whole gate before touching production.** `npm run check` runs
-before the migration and deploy steps. It previously ran `worker:typecheck`
-alone, while the tests lived in a separate workflow with no dependency between
-them, so a push touching `cloudflare/**` could deploy with failing tests and
-`workflow_dispatch` was gated by nothing at all (F-10).
+before the migration and deploy steps (F-10); the push path gets the same gate
+from `verify`, a `needs` of `deploy-download-service`.
 
 Its gate is stricter than the publish job's: ready only when the API token,
 account id and D1 database id are all non-empty **and** all three Worker secrets
 are at least 32 characters — the same threshold `secretsReady` enforces at
 runtime, so a deploy that would fail closed never happens.
 
-Push runs fetch both sides of the push and compare the Cloudflare tree plus the
-root package manifests. A workflow-only repair therefore completes without
-redeploying an unchanged Worker; manual dispatches remain an explicit request to
-release. When the production target did change, CI installs Playwright Chromium
-before `npm run check`, because that full gate includes the renderer E2E suite.
+A manual dispatch is an explicit request to release, so it always runs the full
+gate — Playwright Chromium, then `npm run check` — before touching production.
 
 Steps, in order, all gated:
 
