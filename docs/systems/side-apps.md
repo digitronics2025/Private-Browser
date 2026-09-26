@@ -3,7 +3,7 @@ system: side-apps
 sources:
   - electron/side-apps.ts
   - electron/side-app-registry.ts
-verified_at: 028b9d2a
+verified_at: 028b9d2d
 ---
 
 # Side Apps (Claude in the side panel)

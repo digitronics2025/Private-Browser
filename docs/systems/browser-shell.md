@@ -7,7 +7,7 @@ sources:
   - electron/shortcuts.ts
   - electron/bookmark-tree.ts
   - electron/popup-windows.ts
-verified_at: 028b9d2a
+verified_at: 028b9d2d
 ---
 
 # Browser Shell
