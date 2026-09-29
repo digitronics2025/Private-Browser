@@ -88,6 +88,15 @@ Update the doc owning a behaviour in the same commit. Never commit a secret.
 Only this repo's tracked files and account-level skills reach a session off the
 operator's PC — never point at `~/.claude/...` or `C:\Users\...` unmarked.
 
+**Merge your own PR once it is green — without asking.** Operator's standing
+order (2026-09-29), every repo and session. Merge a PR you opened or were asked to
+drive as soon as the repo's own gate passes (lint, tests, any guard script), no
+real check is red or pending (Actions checks that can never run do not count), it
+merges cleanly, and no bot review is still running or blocking finding open.
+Otherwise fix it or report. Never merge a red, untested or conflicted PR, one that
+needs a manual step first (remote migration, secret, Worker deploy), or one you
+only watch. Where a merge deploys to production, say so in the reply.
+
 Conditional rules (branch model, approval, autopilot, machine-bound skills):
 [digitronics2025/claude-config](https://github.com/digitronics2025/claude-config)
-<!-- END operator-conventions sha256:a1a6250801da -->
+<!-- END operator-conventions sha256:e9e19068bab9 -->
