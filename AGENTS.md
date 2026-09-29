@@ -1,5 +1,18 @@
 # Private-Browser — agent contract
 
+## Deploys — READ FIRST
+- The download-service Worker (`private-browser-downloads`, code in `cloudflare/`) is deployed by
+  **Cloudflare Workers Builds** on every push to `main` (runs `npm test`, D1 migrations, then
+  `wrangler deploy --keep-vars`). Check the build passed in the Cloudflare dashboard and that the
+  download service answers.
+- GitHub Actions is still ON here, but ONLY for tests, the Windows installer and publishing releases
+  (R2 upload + D1 release metadata). Do not add Worker deploy steps back to Actions.
+- If a change adds a D1 migration that release publishing needs, push the `cloudflare/` change first
+  and wait for its Cloudflare build before pushing app changes.
+- Manual fallback deploy: `deploy-cloudflare.yml` (workflow_dispatch). Rollback: `npx wrangler rollback`.
+- Cloud sessions: never run `wrangler deploy`; push to `main` instead.
+- Never print or commit secret values. Secrets live in Cloudflare / GitHub secrets.
+
 Rules specific to this repo go above the managed block below.
 
 <!-- BEGIN operator-conventions: regenerated from digitronics2025/claude-config -->
