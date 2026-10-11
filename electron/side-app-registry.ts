@@ -2,7 +2,7 @@ import { MIN_CHROME_TOP, type ContentInsets } from './chrome-layout.js';
 import { isAllowedRemoteUrl } from './security.js';
 
 /**
- * Side apps: a trusted web app (today, claude.ai) shown in the side panel next
+ * Side apps: a remote web app shown in the side panel next
  * to the page, the way Chrome shows an extension's side panel.
  *
  * This file holds the pure rules — which apps exist, where each may navigate,
@@ -10,11 +10,11 @@ import { isAllowedRemoteUrl } from './security.js';
  * without loading Electron. The view itself is in `side-apps.ts`.
  */
 
-export type SideAppId = 'claude';
+export type SideAppId = 'claude' | 'easynote';
 export type SideAppStatus = 'idle' | 'loading' | 'ready' | 'failed' | 'crashed';
 export type SideAppCommand = 'back' | 'forward' | 'reload' | 'home' | 'open-in-tab';
 
-export const SIDE_APP_IDS: readonly SideAppId[] = ['claude'];
+export const SIDE_APP_IDS: readonly SideAppId[] = ['claude', 'easynote'];
 export const SIDE_APP_COMMANDS: readonly SideAppCommand[] = ['back', 'forward', 'reload', 'home', 'open-in-tab'];
 
 export interface SideAppDefinition {
@@ -42,6 +42,14 @@ export interface SideAppRect {
 }
 
 export const SIDE_APPS: Readonly<Record<SideAppId, SideAppDefinition>> = {
+  easynote: {
+    id: 'easynote',
+    name: 'Notes',
+    homeUrl: 'https://easy-copy-notes.digitronics-electro.workers.dev/?surface=browser',
+    // Personal mode uses same-origin APIs; no external authentication hosts.
+    hosts: ['easy-copy-notes.digitronics-electro.workers.dev'],
+    partition: 'persist:private-browser-side-app-easynote',
+  },
   claude: {
     id: 'claude',
     name: 'Claude',
@@ -98,7 +106,7 @@ export function clampSideAppBounds(requested: SideAppRect, insets: ContentInsets
  * Test runs point the app at a local server instead of the real site. Honoured
  * only in an unpackaged build, like `PRIVATE_BROWSER_E2E_USER_DATA`.
  */
-export function sideAppDefinition(id: SideAppId, packaged: boolean, override = process.env.PRIVATE_BROWSER_E2E_SIDE_APP_URL): SideAppDefinition {
+export function sideAppDefinition(id: SideAppId, packaged: boolean, override = id === 'easynote' ? process.env.PRIVATE_BROWSER_E2E_NOTES_URL : process.env.PRIVATE_BROWSER_E2E_SIDE_APP_URL): SideAppDefinition {
   const definition = SIDE_APPS[id];
   if (packaged || !override || !isAllowedRemoteUrl(override)) return definition;
   return { ...definition, homeUrl: override, hosts: [new URL(override).hostname] };

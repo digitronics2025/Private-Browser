@@ -6,6 +6,7 @@ import { clampSideAppBounds, isSideAppUrl, SIDE_APPS, sideAppDefinition } from '
 import { requireUiPreferencesPatch, sanitizeUiPreferences } from '../electron/ui-preferences';
 
 const claude = SIDE_APPS.claude;
+const notes = SIDE_APPS.easynote;
 
 describe('side app navigation', () => {
   it('keeps Claude on its own sites and its sign-in providers', () => {
@@ -21,6 +22,18 @@ describe('side app navigation', () => {
     ]) {
       expect(isSideAppUrl(claude, url), url).toBe(false);
     }
+  });
+
+  it('pins Notes to its exact HTTPS host with its own persistent partition', () => {
+    expect(isSideAppUrl(notes, notes.homeUrl)).toBe(true);
+    for (const url of [
+      'https://another.workers.dev/', 'https://sub.easy-copy-notes.digitronics-electro.workers.dev/',
+      'https://easy-copy-notes.digitronics-electro.workers.dev.evil.test/',
+      'http://easy-copy-notes.digitronics-electro.workers.dev/', 'https://accounts.google.com/',
+    ]) expect(isSideAppUrl(notes, url), url).toBe(false);
+    expect(notes.partition).toMatch(/^persist:private-browser-side-app-/);
+    expect(notes.partition).not.toBe(claude.partition);
+    expect(sideAppDefinition('easynote', true, 'http://127.0.0.1:4000/')).toBe(notes);
   });
 
   it('admits plain HTTP only for a loopback host a test listed', () => {
@@ -67,6 +80,11 @@ describe('side app channels', () => {
     expect(() => validateIpcArguments('side-app:set-bounds', ['claude', null])).not.toThrow();
     expect(() => validateIpcArguments('side-app:command', ['claude', 'open-in-tab'])).not.toThrow();
     expect(() => validateIpcArguments('side-app:clear-data', ['claude'])).not.toThrow();
+    for (const id of ['claude', 'easynote']) {
+      expect(() => validateIpcArguments('side-app:command', [id, 'reload'])).not.toThrow();
+      expect(() => validateIpcArguments('side-app:set-bounds', [id, null])).not.toThrow();
+      expect(() => validateIpcArguments('side-app:clear-data', [id])).not.toThrow();
+    }
     for (const [channel, args] of [
       ['side-app:set-bounds', ['chatgpt', null]],
       ['side-app:set-bounds', ['claude', { x: 1, y: 2, width: 3 }]],
@@ -100,9 +118,11 @@ describe('side app channels', () => {
   });
 });
 
-describe('Claude side panel preference', () => {
+describe('side app panel preferences', () => {
   it('is a valid side panel tool', () => {
-    expect(requireUiPreferencesPatch({ sidePanelTool: 'claude' })).toEqual({ sidePanelTool: 'claude' });
-    expect(sanitizeUiPreferences({ sidePanelTool: 'claude' }).sidePanelTool).toBe('claude');
+    for (const sidePanelTool of ['claude', 'easynote'] as const) {
+      expect(requireUiPreferencesPatch({ sidePanelTool })).toEqual({ sidePanelTool });
+      expect(sanitizeUiPreferences({ sidePanelTool }).sidePanelTool).toBe(sidePanelTool);
+    }
   });
 });

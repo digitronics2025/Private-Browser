@@ -303,7 +303,7 @@ if the painted URL changed during it. Nothing is written to disk and the image i
 closes.
 
 **The side app.** `applyLayout` first calls `layoutSideApps()`, which places or
-hides the Claude view in the side panel (hidden while `overlayOpen`, in full
+hides the selected Claude or Notes view in the side panel (hidden while `overlayOpen`, in full
 screen and in a protected workspace); `showActiveTab` and `setOverlayOpen` call
 it too. Links out of it go through `openFromSideApp`. Owned by
 [side-apps.md](side-apps.md).

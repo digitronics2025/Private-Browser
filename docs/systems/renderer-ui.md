@@ -183,8 +183,8 @@ and until dismissed (per-viewer `localStorage` flag).
 
 Closed by default; `ui.sidePanelOpen`, `sidePanelWidth` and `sidePanelTool` are
 persisted through `setUiPreferences`. The header holds compact tool tabs —
-Claude, AI, DevTools (title "Developer cockpit"), Vault, Flows, Files (active download badge),
-Privacy — and a close button; Bookmarks, History and Settings open from menus and
+Notes, Claude, AI, DevTools (title "Developer cockpit"), Vault, Flows, Files (active download badge),
+Privacy — and a close button; Ctrl+Shift+Y toggles Notes. Bookmarks, History and Settings open from menus and
 shortcuts. The left-edge separator resizes 320–520 px: pointer drags acquire the
 overlay (the page view would otherwise swallow the pointer), update a live width
 that only moves CSS, and commit once on release — so the IPC rate limit is never
@@ -192,10 +192,10 @@ hit. The drag is tracked with window-level `pointermove`/`pointerup` listeners
 (pointer capture is requested but not relied on), so losing capture cannot end
 the drag early. Arrow keys resize by 24 px, Home/End jump to max/min.
 
-**Claude** (`panels/SideAppPanel.tsx`, also the ✱ toolbar button and the ⋮ menu)
-draws a control row (back, forward, reload, new chat, open in tab, sign out with
+**Claude and Notes** (`panels/SideAppPanel.tsx`, also the ✱ toolbar button and the ⋮ menu)
+draws a control row (back, forward, reload, new chat, open in tab, app-specific local data clearing with
 a confirm) above `.side-app-slot`, and reports that slot's rectangle so the main
-process can lay the native claude.ai view over it. In Banking it shows a notice
+process can lay the selected native app view over it. In Banking it shows a notice
 and reports `null`. See [side-apps.md](side-apps.md).
 
 **The frame must never scroll sideways.** `html, body, #root` use `overflow: clip`,

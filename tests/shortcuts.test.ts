@@ -45,6 +45,9 @@ describe('keyboard shortcuts', () => {
     expect(needsChromeFocus('focus-address')).toBe(true);
     expect(needsChromeFocus('find')).toBe(true);
     expect(needsChromeFocus('reload')).toBe(false);
+    expect(needsChromeFocus('toggle-notes')).toBe(true);
+    expect(resolveShortcut(key('Y', { control: true, shift: true }))).toEqual({ command: 'toggle-notes' });
+    expect(resolveShortcut(key('y', { control: true }))).toBeUndefined();
   });
 
   it('is the only shortcut table: both processes call it', () => {

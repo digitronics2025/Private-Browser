@@ -1,10 +1,11 @@
 import { useContext, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { Asterisk, Code2, Download, KeyRound, ShieldCheck, Sparkles, X, Zap } from 'lucide-react';
+import { Asterisk, NotebookPen, Code2, Download, KeyRound, ShieldCheck, Sparkles, X, Zap } from 'lucide-react';
 import type { SidePanelTool } from '../../electron/types';
 import { clampSidePanelWidth, SIDE_PANEL } from '../../electron/chrome-layout';
 import { OverlayContext } from './overlay';
 
 export const SIDE_PANEL_TABS: Array<{ id: SidePanelTool; label: string; title: string; icon: typeof Sparkles }> = [
+  { id: 'easynote', label: 'Notes', title: 'Notes (Ctrl+Shift+Y)', icon: NotebookPen },
   { id: 'claude', label: 'Claude', title: 'Claude', icon: Asterisk },
   { id: 'assistant', label: 'AI', title: 'AI assistant', icon: Sparkles },
   { id: 'developer', label: 'DevTools', title: 'Developer cockpit', icon: Code2 },
@@ -24,6 +25,12 @@ export function SidePanel({ tool, width, activeDownloads, onSelectTool, onClose,
   onCommitWidth: (width: number) => void;
   children: ReactNode;
 }) {
+  useEffect(() => {
+    const tab = document.getElementById(`side-panel-tab-${tool}`);
+    tab?.focus();
+    tab?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [tool]);
+
   const overlay = useContext(OverlayContext);
   const release = useRef<(() => void) | null>(null);
   const start = useRef({ x: 0, width });

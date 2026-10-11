@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { ArrowLeft, ArrowRight, Asterisk, ExternalLink, LogOut, RotateCw, ShieldAlert, SquarePen } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Asterisk, BookOpen, ExternalLink, LogOut, NotebookPen, Trash2, RotateCw, ShieldAlert, SquarePen } from 'lucide-react';
 import type { SideAppCommand, SideAppId, SideAppSnapshot } from '../../electron/types';
 import { EmptyState } from './common';
 
@@ -27,10 +27,14 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
   const run = (command: SideAppCommand) => {
     void window.privateBrowser.sideAppCommand(app.id, command).catch((error: unknown) => onToast(error instanceof Error ? error.message : String(error), 'error'));
   };
-  const signOut = () => {
-    if (!window.confirm(`Sign out of ${app.name} in the side panel?\n\nIts sign-in, settings and cached data on this computer are deleted. Your ${app.name} account and conversations are not affected.`)) return;
+  const notes = app.id === 'easynote';
+  const clearData = () => {
+    const confirmation = notes
+      ? 'Clear local Notes data?\n\nOnly the Notes side-panel partition is cleared. Cloud records are not deleted. Unsynced local changes and drafts may be lost. You can export a backup from Library options in the notes app beforehand.'
+      : `Sign out of ${app.name} in the side panel?\n\nIts sign-in, settings and cached data on this computer are deleted. Your ${app.name} account and conversations are not affected.`;
+    if (!window.confirm(confirmation)) return;
     void window.privateBrowser.clearSideAppData(app.id)
-      .then(() => onToast(`Signed out of ${app.name}`))
+      .then(() => onToast(notes ? 'Local Notes data cleared' : `Signed out of ${app.name}`))
       .catch((error: unknown) => onToast(error instanceof Error ? error.message : String(error), 'error'));
   };
 
@@ -39,20 +43,24 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
   }
 
   const status = STATUS_TEXT[app.status];
+  const HomeIcon = notes ? BookOpen : SquarePen;
+  const ClearIcon = notes ? Trash2 : LogOut;
+  const AppIcon = notes ? NotebookPen : Asterisk;
   return (
     <div className="side-app">
       <div className="side-app-toolbar" role="toolbar" aria-label={`${app.name} controls`}>
         <button type="button" className="toolbar-button small" aria-label="Back" title="Back" disabled={!app.canGoBack} onClick={() => run('back')}><ArrowLeft size={16} /></button>
         <button type="button" className="toolbar-button small" aria-label="Forward" title="Forward" disabled={!app.canGoForward} onClick={() => run('forward')}><ArrowRight size={16} /></button>
         <button type="button" className="toolbar-button small" aria-label="Reload" title="Reload" onClick={() => run('reload')}><RotateCw size={16} /></button>
-        <button type="button" className="toolbar-button small" aria-label="New chat" title="New chat" onClick={() => run('home')}><SquarePen size={16} /></button>
-        <span className="side-app-status" role="status">{status}</span>
+        <button type="button" className="toolbar-button small" aria-label={notes ? 'Library home' : 'New chat'} title={notes ? 'Library home' : 'New chat'} onClick={() => run('home')}><HomeIcon size={16} /></button>
+        <span className="side-app-spacer" />
         <button type="button" className="toolbar-button small" aria-label="Open in new tab" title="Open in new tab" onClick={() => run('open-in-tab')}><ExternalLink size={16} /></button>
-        <button type="button" className="toolbar-button small" aria-label={`Sign out of ${app.name}`} title={`Sign out of ${app.name} and delete its data`} onClick={signOut}><LogOut size={16} /></button>
+        <button type="button" className="toolbar-button small" aria-label={notes ? 'Clear local Notes data' : `Sign out of ${app.name}`} title={notes ? 'Clear local Notes data' : `Sign out of ${app.name} and delete its data`} onClick={clearData}><ClearIcon size={16} /></button>
       </div>
+      {status && <div className="side-app-status" role="status">{status}</div>}
       <div ref={slot} className="side-app-slot" data-side-app={app.id}>
         {/* Seen only while the native view is hidden: loading, a menu open over the chrome, or a resize. */}
-        <div className="side-app-placeholder"><Asterisk size={28} /><span>{app.name}</span></div>
+        <div className="side-app-placeholder"><AppIcon size={28} /><span>{app.name}</span></div>
       </div>
     </div>
   );

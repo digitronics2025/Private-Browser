@@ -110,3 +110,14 @@ Google API access requires a privately configured Desktop OAuth client ID. See
 for Google Cloud setup, testing-mode expiry, recovery and deletion behavior.
 
 See [SECURITY.md](SECURITY.md) before expanding privileged features.
+
+### Notes beside a webpage
+
+Open **Notes** in the side panel or browser menu, or press **Ctrl+Shift+Y**.
+Find a note, choose a language, use **Copy** or **Fill & Copy**, then click the
+webpage and paste. Notes uses the existing Easy Copy Notes library and cloud
+sync; cached notes and its app shell work offline after loading. Its session is
+separate from ordinary tabs and Claude. **Clear local Notes data** removes only
+this panel's local data after confirmation; export a backup first. The shared
+personal cloud library remains accessible to anyone with its URL. See
+[side apps](docs/systems/side-apps.md) for boundaries and future enhancements.
