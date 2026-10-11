@@ -25,12 +25,6 @@ export function SidePanel({ tool, width, activeDownloads, onSelectTool, onClose,
   onCommitWidth: (width: number) => void;
   children: ReactNode;
 }) {
-  useEffect(() => {
-    const tab = document.getElementById(`side-panel-tab-${tool}`);
-    tab?.focus();
-    tab?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [tool]);
-
   const overlay = useContext(OverlayContext);
   const release = useRef<(() => void) | null>(null);
   const start = useRef({ x: 0, width });

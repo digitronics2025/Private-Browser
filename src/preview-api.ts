@@ -108,6 +108,7 @@ export function installPreviewApi(): void {
     clearSideAppData: async () => undefined,
     respondToPermissionPrompt: async (_id, decision) => { document.documentElement.dataset.previewPermission = String(decision); state.pendingPermission = undefined; publish(); },
     freezeContent: async () => null,
+    toggleFullscreen: async () => { state.windowState.fullscreen = !state.windowState.fullscreen; publish(); },
     // Same rules as the main process: validated patch, Home address normalized, Banking Home is the New Tab page.
     setBrowserSettings: async (value) => {
       const patch = requireBrowserSettingsPatch(value);
