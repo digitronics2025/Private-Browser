@@ -222,7 +222,15 @@ export default function App() {
     setPendingUi((current) => ({ ...current, ...patch }));
     void act(() => window.privateBrowser.setUiPreferences(patch));
   };
-  const openTool = (tool: SidePanelTool) => setUi({ sidePanelOpen: true, sidePanelTool: tool });
+  const openTool = (tool: SidePanelTool) => {
+    setUi({ sidePanelOpen: true, sidePanelTool: tool });
+    // Only an explicit user action transfers focus, never startup or fullscreen restoration.
+    requestAnimationFrame(() => {
+      const tab = document.getElementById(`side-panel-tab-${tool}`);
+      tab?.focus();
+      tab?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    });
+  };
   const toggleTool = (tool: SidePanelTool) => (ui.sidePanelOpen && ui.sidePanelTool === tool ? setUi({ sidePanelOpen: false }) : openTool(tool));
 
   const clearBrowsingData = () => {
@@ -279,6 +287,7 @@ export default function App() {
       case 'next-account-space': cycleAccountSpace(1); break;
       case 'previous-account-space': cycleAccountSpace(-1); break;
       case 'open-vault': openTool('vault'); break;
+      case 'toggle-notes': toggleTool('easynote'); break;
       default:
     }
   };
@@ -376,9 +385,10 @@ export default function App() {
 
   const sidePanelContent = (() => {
     switch (ui.sidePanelTool) {
-      case 'claude': {
-        const claude = state.sideApps.find((app) => app.id === 'claude');
-        return claude ? <SideAppPanel app={claude} protectedWorkspace={workspace.protected} onToast={showToast} /> : null;
+      case 'claude':
+      case 'easynote': {
+        const app = state.sideApps.find((app) => app.id === ui.sidePanelTool);
+        return app ? <SideAppPanel key={app.id} app={app} protectedWorkspace={workspace.protected} onToast={showToast} /> : null;
       }
       case 'assistant': return <AssistantPanel onToast={showToast} />;
       case 'developer': return <DeveloperPanel activeTab={activeTab} onToast={showToast} />;
@@ -446,7 +456,7 @@ export default function App() {
               onToggleBookmark={() => void act(() => window.privateBrowser.toggleBookmark())}
               onOpenVault={() => toggleTool('vault')}
               onZoomMenu={() => setMenu((current) => (current === 'zoom' ? null : 'zoom'))}
-              onToggleSidePanel={() => setUi({ sidePanelOpen: !ui.sidePanelOpen })}
+              onToggleSidePanel={() => ui.sidePanelOpen ? setUi({ sidePanelOpen: false }) : openTool(ui.sidePanelTool)}
               onAssistant={() => toggleTool('assistant')}
               onClaude={() => toggleTool('claude')}
               onProfile={() => setMenu((current) => (current === 'profile' ? null : 'profile'))}

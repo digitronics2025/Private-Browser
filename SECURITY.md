@@ -29,13 +29,20 @@ hidden view; those show a neutral backdrop instead. Page layout insets sent by t
 renderer are clamped so the address bar and its security warning can never be
 covered by page content.
 
-The Claude side panel is a remote page under the same rules: its own sandboxed
-view with no preload, its own session partition that no tab shares, no access to
-any tab's content, top-level navigation limited to Claude's own and its sign-in
-providers' hosts (everything else opens as an ordinary tab), only clipboard
+The Claude and Notes side panels are remote pages under the same rules: each has a sandboxed
+view with no preload and a session partition that no tab shares, no access to
+any tab's content, top-level navigation limited to each app's allowed
+hosts (Notes uses its exact workers.dev host only) (everything else opens as an ordinary tab), only clipboard
 write permission, dangerous downloads refused, and a renderer-supplied rectangle
-clamped to the side panel. It is hidden and cannot open tabs while Banking is
+clamped to the side panel. Each is hidden and cannot open tabs while Banking is
 active. Browser extensions are not supported.
+
+Notes uses its own persistent partition across unprotected workspaces, separate
+from Claude and all Account Spaces. Its cloud deployment intentionally retains
+personal shared access; loading it in the panel does not privatize it. IndexedDB
+is not Vault-encrypted. Local data clearing is deliberate and partition-local;
+cloud data is preserved. No page capture, insertion, clipboard read or AI sharing
+is added.
 
 ## Vault
 

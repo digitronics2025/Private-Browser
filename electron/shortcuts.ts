@@ -41,7 +41,8 @@ export type ShortcutCommand =
   | 'next-account-space'
   | 'previous-account-space'
   /** No key: sent by the login picker's "Manage logins…" row. */
-  | 'open-vault';
+  | 'open-vault'
+  | 'toggle-notes';
 
 export interface Shortcut {
   command: ShortcutCommand;
@@ -58,7 +59,7 @@ export interface ShortcutInput {
 }
 
 /** Commands whose result is a focused control in the chrome, so page focus must move there first. */
-const CHROME_FOCUS_COMMANDS = new Set<ShortcutCommand>(['focus-address', 'find', 'browser-menu', 'tab-search', 'bookmark-manager', 'history', 'downloads', 'clear-browsing-data']);
+const CHROME_FOCUS_COMMANDS = new Set<ShortcutCommand>(['toggle-notes', 'focus-address', 'find', 'browser-menu', 'tab-search', 'bookmark-manager', 'history', 'downloads', 'clear-browsing-data']);
 
 export function needsChromeFocus(command: ShortcutCommand): boolean {
   return CHROME_FOCUS_COMMANDS.has(command);
@@ -87,6 +88,7 @@ export function resolveShortcut(input: ShortcutInput): Shortcut | undefined {
 
   if (input.shift) {
     switch (key) {
+      case 'y': return { command: 'toggle-notes' };
       case 'i': return { command: 'developer-tools' };
       case 'b': return { command: 'toggle-bookmark-bar' };
       case 'o': return { command: 'bookmark-manager' };

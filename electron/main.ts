@@ -114,7 +114,7 @@ import { listChromeProfiles, readChromeProfile } from './chrome-importer.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
 import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 import { SideAppHost } from './side-apps.js';
-import type { SideAppCommand, SideAppId, SideAppRect } from './side-app-registry.js';
+import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -681,6 +681,7 @@ class BrowserController {
       insets: this.layout,
       contentWidth,
       contentHeight,
+      activeApp: state.ui.sidePanelOpen && isSideAppId(state.ui.sidePanelTool) ? state.ui.sidePanelTool : null,
       suppressed: this.overlayOpen || this.window.isFullScreen() || protectedWorkspace,
     });
   }
@@ -1172,6 +1173,8 @@ class BrowserController {
       nativeTheme.themeSource = next.ui.theme;
       this.applyFrameColors();
     }
+    // Hide the previous tool before the renderer can report the next slot.
+    this.layoutSideApps();
     this.broadcast();
   }
 

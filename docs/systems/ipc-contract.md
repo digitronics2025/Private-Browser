@@ -120,9 +120,9 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:activate-tab` | `activateTab(tabId)` | `tabId: string` | `void` |
 | `browser:switch-workspace` | `switchWorkspace(workspaceId)` | `workspaceId: WorkspaceId` | `void` |
 | `browser:set-layout` | `setLayout(layout)` | `{ top; left; right; bottom }` (`ContentInsets`) — finite 0–4000 | `void` |
-| `side-app:set-bounds` | `setSideAppBounds(id, rect)` | `'claude'`, `{ x; y; width; height }` finite 0–16000 (no other keys) or `null` | `void` |
-| `side-app:command` | `sideAppCommand(id, command)` | `'claude'`, `'back' \| 'forward' \| 'reload' \| 'home' \| 'open-in-tab'` | `void` |
-| `side-app:clear-data` | `clearSideAppData(id)` | `'claude'` | `void` |
+| `side-app:set-bounds` | `setSideAppBounds(id, rect)` | `'claude' \| 'easynote'`, `{ x; y; width; height }` finite 0–16000 (no other keys) or `null` | `void` |
+| `side-app:command` | `sideAppCommand(id, command)` | `'claude' \| 'easynote'`, `'back' \| 'forward' \| 'reload' \| 'home' \| 'open-in-tab'` | `void` |
+| `side-app:clear-data` | `clearSideAppData(id)` | `'claude' \| 'easynote'` | `void` |
 | `browser:freeze-content` | `freezeContent()` | — | JPEG `data:` URL, or `null` for home/protected pages |
 | `browser:move-tab` | `moveTab(tabId, toIndex)` | tab id, integer 0–25000 | `void` |
 | `browser:reopen-closed-tab` | `reopenClosedTab()` | — | `void` |

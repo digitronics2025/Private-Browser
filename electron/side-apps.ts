@@ -40,6 +40,8 @@ export interface SideAppLayoutInput {
   contentHeight: number;
   /** Full screen, a menu over the chrome, or a protected workspace. */
   suppressed: boolean;
+  /** Only the selected tool may own a visible native side view. */
+  activeApp: SideAppId | null;
 }
 
 export class SideAppHost {
@@ -73,7 +75,7 @@ export class SideAppHost {
   layout(input: SideAppLayoutInput): void {
     this.lastLayout = input;
     for (const runtime of this.apps.values()) {
-      const bounds = !input.suppressed && runtime.requested
+      const bounds = !input.suppressed && input.activeApp === runtime.definition.id && runtime.requested
         ? clampSideAppBounds(runtime.requested, input.insets, input.contentWidth, input.contentHeight)
         : null;
       if (!bounds) {
@@ -108,7 +110,7 @@ export class SideAppHost {
     }
   }
 
-  /** Sign out and forget everything the app stored: cookies, storage, cache. */
+  /** Deliberately forget this partition only: cookies, storage, cache and drafts. */
   async clearData(id: SideAppId): Promise<void> {
     const runtime = this.runtime(id);
     this.destroyView(runtime);
@@ -117,7 +119,7 @@ export class SideAppHost {
     await ses.clearCache();
     await ses.clearAuthCache();
     runtime.status = 'idle';
-    this.deps.privacyEvent('vault', `${runtime.definition.name} signed out`, `Cookies, storage and cache for the ${runtime.definition.name} side panel were deleted`);
+    this.deps.privacyEvent('vault', id === 'easynote' ? 'Local Notes data cleared' : `${runtime.definition.name} signed out`, `Cookies, storage and cache for the ${runtime.definition.name} side panel were deleted; cloud records were not deleted`);
     this.deps.changed();
     if (this.lastLayout) this.layout(this.lastLayout);
   }
@@ -264,8 +266,8 @@ export class SideAppHost {
   private configureSession(ses: Session, definition: SideAppDefinition): void {
     if (this.configuredSessions.has(definition.partition)) return;
     this.configuredSessions.add(definition.partition);
-    // The copy button is the one capability a chat needs. No camera, microphone,
-    // notifications, location or screen: the panel is a conversation, not a tab.
+    // Copy is the only web permission a side app needs. No clipboard read,
+    // camera, microphone, notifications, location or screen capture.
     const allowed = (permission: string, url: string | undefined, isMainFrame: boolean) =>
       permission === 'clipboard-sanitized-write' && isMainFrame && Boolean(url) && isSideAppUrl(definition, url!);
     ses.setPermissionRequestHandler((_contents, permission, callback, details) => callback(allowed(permission, details.requestingUrl, details.isMainFrame)));
