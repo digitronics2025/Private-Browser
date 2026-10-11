@@ -38,7 +38,7 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 
 ## Run locally
 
-Requirements: Node.js 20+ and Windows 10/11 for the final desktop installer.
+Requirements: Node.js 22.12+ and Windows 10/11 for the final desktop installer.
 
 ```bash
 npm install
