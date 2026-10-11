@@ -86,7 +86,7 @@
     "@types/node": "^22.10.2",
     "@types/pngjs": "^6.0.5",
     "@types/vscode": "^1.95.0",
-    "@vscode/vsce": "^3.6.0",
+    "@vscode/vsce": "^4.0.0",
     "axe-core": "^4.10.3",
     "esbuild": "^0.25.9",
     "pixelmatch": "^7.1.0",

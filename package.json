@@ -12,7 +12,8 @@
     "vscode-extension"
   ],
   "overrides": {
-    "sharp": "0.35.4"
+    "sharp": "0.35.5",
+    "brace-expansion@^5.0.0": "5.0.12"
   },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && npm run electron:compile && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js\"",
