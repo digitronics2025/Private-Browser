@@ -15,6 +15,10 @@
 
 Rules specific to this repo go above the managed block below.
 
+## Browser tests in cloud sessions
+
+After changing the Playwright version, run `npx playwright install chromium`. Cloud sessions keep the pinned Chromium on disk by themselves (environment setup script + `scripts/ensure-test-browser.sh` SessionStart hook).
+
 <!-- BEGIN operator-conventions: regenerated from digitronics2025/claude-config -->
 ## Efficient execution — local and cloud
 
