@@ -12,7 +12,7 @@ find . -maxdepth 5 -path '*/node_modules/.bin/playwright' \
 while read -r pw; do
   left=$((deadline - SECONDS))
   if [ "$left" -lt 5 ]; then echo "ensure-test-browser: out of time before $pw; retried next session start"; continue; fi
-  out=$(timeout "$left" "$pw" install chromium 2>&1) || { echo "ensure-test-browser: download failed or timed out for $pw"; continue; }
+  out=$(timeout "$left" "$pw" install chromium </dev/null 2>&1) || { echo "ensure-test-browser: download failed or timed out for $pw"; continue; }
   case "$out" in *downloaded*) echo "ensure-test-browser: installed the pinned Chromium for $pw";; esac
 done
 exit 0
