@@ -19,6 +19,16 @@ Rules specific to this repo go above the managed block below.
 
 After changing the Playwright version, run `npx playwright install chromium`. Cloud sessions keep the pinned Chromium on disk by themselves (environment setup script + `scripts/ensure-test-browser.sh` SessionStart hook).
 
+## Agent tool permissions
+
+`.claude/settings.json` pre-approves all four Cloudflare MCP tools (`search`,
+`docs`, `whoami` and `execute`) so Claude Code sessions stop asking for them.
+This was the owner's explicit choice on 2026-11-16. `execute` can change live
+Cloudflare resources (Workers, DNS, D1, R2 and more) **without a prompt**, so the
+chat approval rules for live changes still apply: the agent must ask in chat
+before any such change. To bring the prompt back, remove
+`mcp__cloudflare_mcp__execute` from the file.
+
 <!-- BEGIN operator-conventions: regenerated from digitronics2025/claude-config -->
 ## Efficient execution — local and cloud
 
