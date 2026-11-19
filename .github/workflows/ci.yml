@@ -32,7 +32,8 @@ jobs:
   # Push to main only. Decides whether the application and/or the download service changed,
   # comparing with what production actually runs, not with the previous push: if an app
   # change's run never published (cancelled, failed), a later docs-only push must still
-  # release it. Fails SAFE (unknown -> changed).
+  # release it. The explicit instruction-only guard below takes precedence.
+  # Fails SAFE (unknown -> changed).
   changes:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -48,8 +49,19 @@ jobs:
         id: app
         shell: bash
         env:
+          BEFORE_SHA: ${{ github.event.before }}
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
         run: |
+          # Guide and release-workflow updates must never publish an app.
+          # A push with any other file still uses the existing active-release comparison.
+          if [[ "${BEFORE_SHA:-}" =~ ^[0-9a-f]{40}$ && ! "$BEFORE_SHA" =~ ^0+$ ]] &&
+             push_files="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" --)" &&
+             [[ -n "$push_files" ]] && ! grep -qvE '^(AGENTS\.md|CLAUDE\.md|\.github/copilot-instructions\.md|\.continue/rules/shared-report\.md|\.github/workflows/ci\.yml)$' <<< "$push_files"; then
+            echo "app=false" >> "$GITHUB_OUTPUT"
+            echo "Instruction and release workflow changes only. App publication skipped."
+            exit 0
+          fi
+
           before=""
           if [[ -n "$PRIVATE_BROWSER_DOWNLOAD_URL" ]]; then
             active="$(curl -fsS --max-time 20 --proto '=https' "${PRIVATE_BROWSER_DOWNLOAD_URL%/}/api/v1/releases/public/latest" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s).commitSha;if(/^[0-9a-f]{40}$/.test(v))process.stdout.write(v)}catch{}})' || true)"
