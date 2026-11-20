@@ -94,7 +94,7 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
       <button type="button" className="toolbar-button optional" aria-label="Home" title="Home (Alt+Home)" onClick={props.onHome}><Home size={18} /></button>
 
       <form className={`omnibox ${warning ? 'has-warning' : ''}`} onSubmit={(event) => {
-        const match = expanded ? matches[selected] : undefined;
+        const match = matches[selected];
         if (match) {
           event.preventDefault();
           chooseMatch(match);
@@ -138,13 +138,13 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
           onFocus={(event) => event.currentTarget.select()}
           onBlur={closeMatches}
           onKeyDown={(event) => {
-            if (!expanded || event.nativeEvent.isComposing) return;
-            if (event.key === 'Escape') {
+            if (event.nativeEvent.isComposing) return;
+            if (event.key === 'Escape' && draftTabId === tab.id) {
               event.preventDefault();
               event.stopPropagation();
               closeMatches();
             }
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            if (matches.length > 0 && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
               event.preventDefault();
               setSelected((current) => event.key === 'ArrowDown'
                 ? (current + 1) % matches.length

@@ -389,6 +389,13 @@ export interface AddressMatch {
   url: string;
 }
 
+export interface RecentlyClosedTab {
+  id: string;
+  title: string;
+  url: string;
+  closedAt: string;
+}
+
 export interface DownloadEntry {
   id: string;
   accountSpaceId: AccountSpaceId;
@@ -438,6 +445,7 @@ export interface BrowserSnapshot {
   /** Remembered bookmark icons of the active Account Space only, host → `data:` URL. */
   bookmarkIcons: Record<string, string>;
   canReopenClosedTab: boolean;
+  recentlyClosedTabs?: RecentlyClosedTab[];
   /** Web apps docked in the side panel, such as Claude. */
   sideApps: SideAppSnapshot[];
 }

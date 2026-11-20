@@ -6,6 +6,7 @@ import { MenuItem, MenuSeparator, MenuSurface, SubmenuItem } from './Menu';
 export interface BrowserMenuActions {
   newTab: () => void;
   reopenClosedTab: () => void;
+  reopenRecentTab: (id: string) => void;
   switchAccount: (id: AccountSpaceId) => void;
   manageAccounts: () => void;
   openTool: (tool: SidePanelTool) => void;
@@ -35,6 +36,8 @@ const THEMES: Array<{ id: ThemePreference; label: string }> = [
   { id: 'dark', label: 'Dark' },
 ];
 
+const closedTime = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
 export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actions }: {
   anchor: HTMLElement | null;
   state: BrowserSnapshot;
@@ -47,10 +50,18 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
   const accounts = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId).sort((a, b) => a.order - b.order);
   const zoom = tab.zoomPercent ?? 100;
   const vaultAvailable = state.activeWorkspaceId !== 'development';
+  const recentlyClosed = state.recentlyClosedTabs ?? [];
   return (
     <MenuSurface anchor={anchor} placement="bottom-end" label="Browser menu" className="browser-menu" onClose={onClose}>
       <MenuItem icon={SquarePlus} label="New tab" shortcut="Ctrl+T" onSelect={actions.newTab} />
       <MenuItem icon={RotateCcw} label="Reopen closed tab" shortcut="Ctrl+Shift+T" disabled={!state.canReopenClosedTab} onSelect={actions.reopenClosedTab} />
+      {recentlyClosed.length > 0 && <SubmenuItem id="recently-closed" icon={History} label="Recently closed">
+        {recentlyClosed.map((entry) => (
+          <MenuItem key={entry.id} label={entry.title || entry.url}
+            hint={closedTime.format(new Date(entry.closedAt)) + ' · Reopen in background'}
+            onSelect={() => actions.reopenRecentTab(entry.id)} />
+        ))}
+      </SubmenuItem>}
       <MenuSeparator />
       <SubmenuItem id="account-spaces" icon={UsersRound} label="Account Spaces">
         {accounts.map((account) => (

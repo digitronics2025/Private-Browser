@@ -66,6 +66,7 @@ import type {
   DownloadEntry,
   AddressMatch,
   HistoryQuery,
+  RecentlyClosedTab,
   PrivacyEvent,
   RuntimeBrowserStateV2,
   PermissionCapability,
@@ -249,7 +250,7 @@ class BrowserController {
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { ...DEFAULT_CONTENT_INSETS };
-  private readonly closedTabs = new Map<AccountSpaceId, Array<{ title: string; url: string }>>();
+  private readonly closedTabs = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   private htmlFullscreenOwner?: string;
   private settleLayoutTimer?: NodeJS.Timeout;
   private settleBroadcast = false;
@@ -440,6 +441,7 @@ class BrowserController {
       shortcutsByAccountSpace: persisted.shortcutsByAccountSpace,
       bookmarkIcons: persisted.bookmarkIconsByAccountSpace[activeAccountSpaceId] ?? {},
       canReopenClosedTab: (this.closedTabs.get(activeAccountSpaceId)?.length ?? 0) > 0,
+      recentlyClosedTabs: (this.closedTabs.get(activeAccountSpaceId) ?? []).slice().reverse(),
       sideApps: this.sideApps.snapshot(),
     };
   }
@@ -582,7 +584,7 @@ class BrowserController {
    * Adds a tab behind the current one without changing what the user sees: no
    * workspace, Account Space or tab switch. Its page loads when it is first shown.
    */
-  private addBackgroundTab(workspaceId: WorkspaceId, url: string, accountSpaceId: AccountSpaceId): void {
+  private addBackgroundTab(workspaceId: WorkspaceId, url: string, accountSpaceId: AccountSpaceId, title?: string): string | undefined {
     const state = this.store.get();
     if (!isAllowedRemoteUrl(url) || !state.accountSpaces.some((account) => account.id === accountSpaceId && account.workspaceId === workspaceId)) return;
     const id = randomUUID();
@@ -591,7 +593,7 @@ class BrowserController {
         id,
         accountSpaceId,
         workspaceId,
-        title: new URL(url).hostname,
+        title: title ?? new URL(url).hostname,
         url,
         isHome: false,
         loading: false,
@@ -603,6 +605,7 @@ class BrowserController {
     });
     this.runtimeTabs.set(id, this.newRuntimeTab());
     this.broadcast();
+    return id;
   }
 
   async newTab(workspaceId?: WorkspaceId, url = 'private://home', accountSpaceId?: AccountSpaceId): Promise<void> {
@@ -650,7 +653,7 @@ class BrowserController {
     const wasActive = state.activeTabByAccountSpace[tab.accountSpaceId] === tabId;
     if (!tab.isHome && tab.workspaceId !== 'banking' && isAllowedRemoteUrl(tab.url)) {
       const closed = this.closedTabs.get(tab.accountSpaceId) ?? [];
-      closed.push({ title: tab.title, url: tab.url });
+      closed.push({ id: tab.id, title: tab.title, url: tab.url, closedAt: new Date().toISOString() });
       this.closedTabs.set(tab.accountSpaceId, closed.slice(-MAX_CLOSED_TABS));
     }
     const runtime = this.runtimeTabs.get(tabId);
@@ -1275,13 +1278,20 @@ class BrowserController {
     this.broadcast();
   }
 
-  async reopenClosedTab(): Promise<void> {
+  async reopenClosedTab(closedId?: string): Promise<void> {
     const state = this.store.get();
     const accountSpaceId = this.activeAccountSpaceId(state);
     const closed = this.closedTabs.get(accountSpaceId);
-    const entry = closed?.pop();
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!closed?.length || !account || !isAvailableRegularAccount(state, account)) return;
+    const index = closedId === undefined ? closed.length - 1 : closed.findIndex((entry) => entry.id === closedId);
+    const entry = closed[index];
     if (!entry) return;
-    await this.newTab(state.activeWorkspaceId, entry.url, accountSpaceId);
+    const restored = this.addBackgroundTab(account.workspaceId, entry.url, accountSpaceId, entry.title);
+    if (!restored) return;
+    closed.splice(index, 1);
+    if (closedId === undefined) await this.activateTab(restored);
+    else this.broadcast();
   }
 
   zoom(direction: 'in' | 'out' | 'reset'): void {
@@ -3170,6 +3180,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:freeze-content', () => controller!.freezeContent());
   handle('browser:move-tab', (_event, tabId: string, toIndex: number) => controller!.moveTab(tabId, toIndex));
   handle('browser:reopen-closed-tab', () => controller!.reopenClosedTab());
+  handle('browser:reopen-recent-tab', (_event, id: string) => controller!.reopenClosedTab(id));
   handle('browser:zoom', (_event, direction: 'in' | 'out' | 'reset') => controller!.zoom(direction));
   handle('browser:print', () => controller!.print());
   handle('browser:find', (_event, text: string, forward: boolean, findNext: boolean) => controller!.findInPage(text, forward, findNext));

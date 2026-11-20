@@ -543,6 +543,7 @@ export default function App() {
             actions={{
               newTab: () => void act(() => window.privateBrowser.newTab()),
               reopenClosedTab: () => void act(() => window.privateBrowser.reopenClosedTab()),
+              reopenRecentTab: (id) => void act(() => window.privateBrowser.reopenRecentTab(id)),
               switchAccount: (id) => void act(() => window.privateBrowser.switchAccountSpace(id)),
               manageAccounts: () => setAccountManagerOpen(true),
               openTool,

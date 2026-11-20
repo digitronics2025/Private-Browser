@@ -187,6 +187,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     }
     // Channels that take one identifier chosen from state the renderer was given.
     case 'browser:activate-tab':
+    case 'browser:reopen-recent-tab':
     case 'browser:close-tab':
     case 'browser:open-download':
     case 'browser:show-download':

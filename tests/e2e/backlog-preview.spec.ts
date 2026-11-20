@@ -15,6 +15,35 @@ for (const width of [1280, 390]) {
   });
 }
 
+test('keeps keyboard selection when the native page overlay is still preparing', async ({ page }) => {
+  await page.goto('/');
+  const input = page.getByRole('combobox', { name: 'Address and search bar' });
+  await expect(input).toBeVisible();
+  await page.evaluate(() => {
+    const api = window.privateBrowser;
+    Object.defineProperty(window, 'privateBrowser', {
+      configurable: true,
+      value: new Proxy(api, {
+        get(target, property) {
+          if (property !== 'freezeContent') return Reflect.get(target, property);
+          return () => new Promise<null>((resolve) => {
+            window.addEventListener('preview-release-freeze', () => resolve(null), { once: true });
+            document.documentElement.dataset.previewFreezePending = 'true';
+          });
+        },
+      }),
+    });
+  });
+  await input.fill('quarterly operations');
+  await expect(page.locator('html')).toHaveAttribute('data-preview-freeze-pending', 'true');
+  await expect(input).toHaveAttribute('aria-expanded', 'false');
+  await input.press('ArrowDown');
+  await page.evaluate(() => window.dispatchEvent(new Event('preview-release-freeze')));
+  await expect(page.getByRole('option', { selected: true })).toBeVisible();
+  await input.press('Enter');
+  await expect(input).toHaveValue('https://docs.google.com/document/d/preview');
+});
+
 test('labels the preview and exercises Chrome import and protected browsing', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -85,4 +114,16 @@ test('filters and groups the full retained history with date and site controls',
   await panel.getByLabel('From', { exact: true }).fill('2026-10-02');
   await expect(panel.getByRole('button', { name: /Older sample visit/ })).toBeVisible();
   await expect(panel.getByText(/2 visits/)).toHaveCount(0);
+});
+
+test('reopens a chosen recently closed tab without stealing focus', async ({ page }) => {
+  await page.goto('/');
+  const input = page.getByRole('combobox', { name: 'Address and search bar' });
+  await expect(input).toBeVisible();
+  await page.evaluate(() => window.privateBrowser.closeTab('preview-docs'));
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Recently closed' }).click();
+  await page.getByRole('menuitem', { name: /Quarterly operations review.*Reopen in background/i }).click();
+  await expect(input).toHaveValue('');
+  await expect(page.getByRole('tab', { name: /Quarterly operations review/i })).toBeVisible();
 });

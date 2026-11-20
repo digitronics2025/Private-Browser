@@ -203,6 +203,11 @@ views; their webContents stay alive and keep running timers, media and network.
 
 ## Navigation and History
 
+The Recently closed submenu lists up to 25 pages from the active Account Space
+with their close times. Choosing a page adds a background tab. Reopen closed tab
+and Ctrl+Shift+T still restore the most recent page to the foreground. The list
+is session-only and excludes Banking.
+
 **External links.** Launch arguments and links from a running desktop session
 share the same routing. The main process opens HTTP(S) links in the active
 eligible Account Space or the last eligible regular space. If the destination is

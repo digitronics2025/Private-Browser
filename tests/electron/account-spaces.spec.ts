@@ -128,6 +128,29 @@ test('switches to an existing tab through the real address bar bridge', async ()
     .toBe(initial.activeTabId);
 });
 
+test('keeps recently closed entries local to their Account Space', async () => {
+  const page = await application!.firstWindow();
+  const owner = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Closed tab owner', 'sky'));
+  await page.evaluate((url) => window.privateBrowser.navigate(url), origin);
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  const original = (await getState()).activeTabId;
+  await page.evaluate((id) => window.privateBrowser.closeTab(id), original);
+  const [closed] = (await getState()).recentlyClosedTabs!;
+  expect(closed).toMatchObject({ id: original, url: origin + '/' });
+  expect(Date.parse(closed.closedAt)).toBeGreaterThan(0);
+  await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Other account', 'indigo'));
+  await page.evaluate((id) => window.privateBrowser.reopenRecentTab(id), closed.id);
+  expect((await getState()).recentlyClosedTabs).toEqual([]);
+  expect((await getState()).tabs.filter((tab) => tab.url === closed.url)).toHaveLength(0);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), owner);
+  const foreground = (await getState()).activeTabId;
+  await page.evaluate((id) => window.privateBrowser.reopenRecentTab(id), closed.id);
+  const restored = await getState();
+  expect(restored.recentlyClosedTabs).toEqual([]);
+  expect(restored.activeTabId).toBe(foreground);
+  expect(restored.tabs.filter((tab) => tab.url === closed.url && tab.accountSpaceId === owner)).toHaveLength(1);
+});
+
 test('keeps the default embedded-browser identity stable across the session', async () => {
   const page = await application!.firstWindow();
   const state = await page.evaluate(() => window.privateBrowser.getState());

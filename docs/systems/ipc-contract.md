@@ -110,6 +110,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | --- | --- | --- | --- |
 | `browser:get-state` | `getState()` | — | `BrowserSnapshot` |
 | `browser:address-matches` | `addressMatches(accountSpaceId, text)` | Expected active space and query up to 256 characters | Up to eight `AddressMatch` entries |
+| `browser:reopen-recent-tab` | `reopenRecentTab(id)` | Closed tab ID from the current space | `void` |
 | `browser:query-history` | `queryHistory(accountSpaceId, input)` | Expected active space, text, hostname, UTC range boundaries and page | `HistoryPage` |
 | `browser:open-address-match` | `openAddressMatch(accountSpaceId, source, id)` | Expected active space, result type and record ID | `void` |
 | `browser:navigate` | `navigate(value)` | `value: string` | `void` |

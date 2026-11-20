@@ -1,5 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
-import type { AccountSpaceId, Bookmark, BrowserSnapshot, BrowserTab, ShortcutTile, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AccountSpaceId, Bookmark, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, searchTemplateFor } from '../electron/browser-settings';
 import { parseWebAddress } from '../electron/security';
@@ -107,9 +107,26 @@ export function installPreviewApi(): void {
   const syncDarkMode = () => { state.windowState.darkMode = state.ui.theme === 'system' ? media.matches : state.ui.theme === 'dark'; };
   syncDarkMode();
   const listeners = new Set<(snapshot: BrowserSnapshot) => void>();
-  const publish = () => { state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden'; listeners.forEach((listener) => listener(structuredClone(state))); };
+  const closedByAccount = new Map<AccountSpaceId, RecentlyClosedTab[]>();
+  const publish = () => {
+    state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
+    state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
+    state.canReopenClosedTab = state.recentlyClosedTabs.length > 0;
+    listeners.forEach((listener) => listener(structuredClone(state)));
+  };
   media.addEventListener('change', () => { syncDarkMode(); publish(); });
   const activeTab = () => state.tabs.find((tab) => tab.id === state.activeTabId)!;
+  const reopenPreviewTab = (id?: string) => {
+    const closed = closedByAccount.get(state.activeAccountSpaceId);
+    if (!closed?.length) return;
+    const index = id ? closed.findIndex((entry) => entry.id === id) : 0;
+    if (index < 0) return;
+    const [entry] = closed.splice(index, 1);
+    const tab = pageTab(crypto.randomUUID(), state.activeAccountSpaceId, entry.title, entry.url, { workspaceId: state.activeWorkspaceId });
+    state.tabs.push(tab);
+    if (!id) state.activeTabId = tab.id;
+    publish();
+  };
   const handlers: Record<string, (...args: unknown[]) => unknown> = {
     getState: async () => structuredClone(state),
     queryHistory: (async (id: unknown, input: unknown) => {
@@ -154,6 +171,10 @@ export function installPreviewApi(): void {
     closeTab: async (value) => {
       const tab = state.tabs.find((item) => item.id === value);
       if (!tab) return;
+      if (!tab.isHome && tab.workspaceId !== 'banking') {
+        const closed = { id: tab.id, title: tab.title, url: tab.url, closedAt: new Date().toISOString() };
+        closedByAccount.set(tab.accountSpaceId, [closed, ...(closedByAccount.get(tab.accountSpaceId) ?? [])].slice(0, 25));
+      }
       const siblings = state.tabs.filter((item) => item.accountSpaceId === tab.accountSpaceId);
       if (siblings.length === 1) { Object.assign(tab, homeTab(tab.id, tab.workspaceId, tab.accountSpaceId)); publish(); return; }
       const index = siblings.indexOf(tab);
@@ -161,6 +182,8 @@ export function installPreviewApi(): void {
       if (state.activeTabId === tab.id) state.activeTabId = siblings[index + 1]?.id ?? siblings[index - 1].id;
       publish();
     },
+    reopenClosedTab: async () => reopenPreviewTab(),
+    reopenRecentTab: async (id) => reopenPreviewTab(String(id)),
     moveTab: async (idValue, indexValue) => { state.tabs = moveTabWithinAccountSpace(state.tabs, String(idValue), Number(indexValue)); publish(); },
     navigate: async (value) => {
       const text = String(value);

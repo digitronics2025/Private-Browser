@@ -57,6 +57,7 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
         <button type="button" className="toolbar-button small" aria-label="Open in new tab" title="Open in new tab" onClick={() => run('open-in-tab')}><ExternalLink size={16} /></button>
         <button type="button" className="toolbar-button small" aria-label={notes ? 'Clear local Notes data' : `Sign out of ${app.name}`} title={notes ? 'Clear local Notes data' : `Sign out of ${app.name} and delete its data`} onClick={clearData}><ClearIcon size={16} /></button>
       </div>
+      {notes && <div className="side-app-status" role="note">Shared Notes library</div>}
       {status && <div className="side-app-status" role="status">{status}</div>}
       <div ref={slot} className="side-app-slot" data-side-app={app.id}>
         {/* Seen only while the native view is hidden: loading, a menu open over the chrome, or a resize. */}
