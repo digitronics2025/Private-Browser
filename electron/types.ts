@@ -278,6 +278,7 @@ export interface AccountBrowsingStateV2 {
   activeTabId: string;
   bookmarks: AccountSpaceBookmark[];
   history: AccountSpaceHistoryEntry[];
+  historyTrimmed?: boolean;
   /** Absent until the user customises the New Tab shortcuts for this Account Space. */
   shortcuts?: ShortcutTile[];
   /** Remembered icons of bookmarked hosts, host → `data:` URL. See `bookmark-icons.ts`. */
@@ -313,6 +314,7 @@ export type BookmarkEntryKeyInput = { kind: 'bookmark'; id: string } | { kind: '
 export interface BrowserStateManifestV2 {
   version: 2;
   activeWorkspaceId: WorkspaceId;
+  lastExternalLinkAccountSpaceId?: AccountSpaceId;
   accountSpaceIds: AccountSpaceId[];
   activeAccountSpaceByWorkspace: Partial<Record<WorkspaceId, AccountSpaceId>>;
   trackerBlocking: boolean;
@@ -364,6 +366,29 @@ export interface HistoryEntry {
   visitedAt: string;
 }
 
+export interface HistoryQuery {
+  text: string;
+  site: string;
+  from: number | null;
+  until: number | null;
+  page: number;
+}
+
+export interface HistoryPage {
+  entries: Array<Pick<HistoryEntry, 'id' | 'title' | 'url' | 'visitedAt'> & { visits: number }>;
+  page: number;
+  pages: number;
+  total: number;
+  trimmed: boolean;
+}
+
+export interface AddressMatch {
+  source: 'tab' | 'bookmark' | 'history';
+  id: string;
+  title: string;
+  url: string;
+}
+
 export interface DownloadEntry {
   id: string;
   accountSpaceId: AccountSpaceId;
@@ -371,7 +396,6 @@ export interface DownloadEntry {
   receivedBytes: number;
   totalBytes: number;
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
-  savePath?: string;
   /** Set once a completed download has been compared against the release manifest. */
   checksum?: 'verified' | 'mismatch' | 'unchecked';
   risk: 'ordinary' | 'dangerous' | 'deceptive';
@@ -455,11 +479,13 @@ export interface ChromeImportResult {
 export interface RuntimeBrowserStateV2 {
   version: 2;
   activeWorkspaceId: WorkspaceId;
+  lastExternalLinkAccountSpaceId?: AccountSpaceId;
   activeAccountSpaceByWorkspace: Partial<Record<WorkspaceId, AccountSpaceId>>;
   tabs: AccountSpaceBrowserTab[];
   activeTabByAccountSpace: Record<string, string>;
   bookmarks: AccountSpaceBookmark[];
   history: AccountSpaceHistoryEntry[];
+  historyTrimmedByAccountSpace?: Record<string, true>;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
   bookmarkBarVisible: boolean;

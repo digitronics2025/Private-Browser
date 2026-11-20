@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { AccountStore, type SafeStorageAdapter } from '../electron/account-store';
 import { AccountSpaceStateStore } from '../electron/account-space-state';
 import { DEFAULT_BROWSER_SETTINGS } from '../electron/browser-settings';
+import { RuntimeStateStore } from '../electron/runtime-state-store';
+import { externalLinkAccounts, preferredExternalLinkAccount } from '../electron/external-link-routing';
 
 class TestEncryption implements SafeStorageAdapter {
   isEncryptionAvailable(): boolean { return true; }
@@ -54,6 +56,67 @@ function fixture() {
 }
 
 describe('v1 to Account Spaces v2 migration', () => {
+  it('remembers a regular external-link destination through a restart in Banking', () => {
+    const { options } = fixture();
+    const disk = new AccountSpaceStateStore(options);
+    const store = new RuntimeStateStore(disk, options.accountStore, disk.initialize());
+    const state = store.get();
+    const personal = state.activeAccountSpaceByWorkspace.personal!;
+    store.update((next) => { next.activeWorkspaceId = 'banking'; });
+    const restarted = new RuntimeStateStore(disk, options.accountStore, disk.initialize()).get();
+    expect(preferredExternalLinkAccount(restarted)).toBe(personal);
+    const blocked = restarted.accountSpaces.find((item) => item.id === personal)!;
+    blocked.locked = true;
+    expect(externalLinkAccounts(restarted).map((item) => item.id)).not.toContain(personal);
+    expect(externalLinkAccounts(restarted).map((item) => item.workspaceId)).not.toContain('banking');
+    expect(preferredExternalLinkAccount(restarted)).toBeUndefined();
+  });
+
+  it('searches older retained history only within the expected active space and excludes Banking history', () => {
+    const { options } = fixture();
+    const disk = new AccountSpaceStateStore(options);
+    const store = new RuntimeStateStore(disk, options.accountStore, disk.initialize());
+    const { activeAccountSpaceByWorkspace } = store.get();
+    const personal = activeAccountSpaceByWorkspace.personal!;
+    const banking = activeAccountSpaceByWorkspace.banking!;
+    const history = Array.from({ length: 101 }, (_, index) => ({
+      id: 'visit-' + index, workspaceId: 'personal' as const, accountSpaceId: personal,
+      title: 'Newer page', url: 'https://example.test/' + index, visitedAt: NOW.toISOString(),
+    }));
+    const old = { ...history[0], id: 'older', title: 'Older ledger', url: 'https://example.test/ledger' };
+    store.update((state) => {
+      state.history = [...history, old, { ...old, id: 'banking', accountSpaceId: banking, workspaceId: 'banking' }];
+    });
+    expect(store.addressMatches(personal, 'older ledger')).toEqual([{ id: old.id, source: 'history', title: old.title, url: old.url }]);
+    const lookup = { text: 'older ledger', site: 'example.test', from: null, until: null, page: 0 };
+    expect(store.retainedHistory(personal, lookup).entries).toEqual([{ id: old.id, title: old.title, url: old.url, visitedAt: old.visitedAt, visits: 1 }]);
+    expect(store.retainedHistory(banking, lookup).entries).toEqual([]);
+    expect(store.addressMatchTarget(personal, 'history', 'banking')).toBeUndefined();
+    expect(store.addressMatches(banking, 'older ledger')).toEqual([]);
+    store.update((state) => { state.activeWorkspaceId = 'banking'; });
+    expect(store.addressMatchTarget(banking, 'history', 'banking')).toBeUndefined();
+    expect(store.addressMatches(banking, 'older ledger')).toEqual([]);
+    expect(store.retainedHistory(banking, lookup).entries).toEqual([]);
+    expect(store.addressMatches(personal, 'older ledger')).toEqual([]);
+  });
+
+  it('records history trimming for the affected account across a restart', () => {
+    const { options } = fixture();
+    const disk = new AccountSpaceStateStore(options);
+    const store = new RuntimeStateStore(disk, options.accountStore, disk.initialize());
+    const personal = store.get().activeAccountSpaceByWorkspace.personal!;
+    const history = Array.from({ length: 10_001 }, (_, index) => ({
+      id: 'retained-' + index, workspaceId: 'personal' as const, accountSpaceId: personal,
+      title: 'Sample', url: 'https://example.test/' + index, visitedAt: NOW.toISOString(),
+    }));
+    store.update((state) => { state.history = history; });
+    const restarted = new RuntimeStateStore(disk, options.accountStore, disk.initialize());
+    const result = restarted.retainedHistory(personal, { text: '', site: 'example.test', from: null, until: null, page: 250 });
+    expect(result).toMatchObject({ trimmed: true, total: 10_000, page: 249, pages: 250 });
+    expect(result.entries).toHaveLength(40);
+    expect(result.entries.some((entry) => entry.id === 'retained-10000')).toBe(false);
+  });
+
   it('preserves data, active selections and the exact legacy partitions', () => {
     const { original, options } = fixture();
     const result = new AccountSpaceStateStore(options).initialize();

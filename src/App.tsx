@@ -400,7 +400,9 @@ export default function App() {
       case 'privacy': return <PrivacyPanel state={state} />;
       case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} onUiChange={setUi} onToast={showToast} />;
       case 'bookmarks': return <BookmarksPanel bookmarks={accountBookmarks} favicons={favicons} onOpen={bookmarkActions.open} onRename={bookmarkActions.rename} onRemove={bookmarkActions.remove} onImport={bookmarkActions.importBookmarks} onExport={bookmarkActions.exportBookmarks} />;
-      case 'history': return <HistoryPanel history={recentHistory} protectedWorkspace={workspace.protected} onOpen={(url) => void act(() => window.privateBrowser.navigate(url))} onClearData={clearBrowsingData} />;
+      case 'history': return <HistoryPanel key={activeAccount.id} accountSpaceId={activeAccount.id}
+        revision={(recentHistory[0]?.id ?? '') + ':' + recentHistory.length} protectedWorkspace={workspace.protected}
+        onOpen={(id) => void act(() => window.privateBrowser.openAddressMatch(activeAccount.id, 'history', id))} onClearData={clearBrowsingData} />;
       default: return null;
     }
   })();
@@ -448,6 +450,12 @@ export default function App() {
               menuOpen={menu === 'browser'}
               onAddressChange={editAddress}
               onSubmit={submitAddress}
+              onOpenAddressMatch={(match) => {
+                addressEdited.current = false;
+                setAddress(activeTab.isHome ? '' : activeTab.url);
+                addressRef.current?.blur();
+                void act(() => window.privateBrowser.openAddressMatch(activeAccount.id, match.source, match.id));
+              }}
               onBack={() => void act(() => window.privateBrowser.back())}
               onForward={() => void act(() => window.privateBrowser.forward())}
               onReloadOrStop={() => void act(() => (activeTab.loading ? window.privateBrowser.stop() : window.privateBrowser.reload()))}
@@ -467,6 +475,7 @@ export default function App() {
           </>
         )}
 
+        {document.documentElement.dataset.browserPreview === 'synthetic' && <span className="browser-preview-marker">Preview · Synthetic data</span>}
         {activeTab.isHome ? (
           <NewTabPage
             searchPrompt={searchPrompt}

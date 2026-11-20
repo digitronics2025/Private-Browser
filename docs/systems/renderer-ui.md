@@ -3,12 +3,12 @@ system: renderer-ui
 sources:
   - src/**
   - index.html
-verified_at: 028b9d2d
+verified_at: 9916c243
 ---
 
 # Renderer UI
 
-> Last verified: 2026-09-26
+> Last verified: 2026-11-20
 
 ## Agent Brief
 
@@ -131,6 +131,10 @@ Windows reports through `env(titlebar-area-*)` (fallback 138 px).
 
 ## Toolbar and Address Bar
 
+Typing in the address bar can open a local listbox. The input keeps focus.
+Arrow keys highlight a match, Enter selects it, and Escape closes the list.
+Enter without a selection keeps the normal address or search behavior.
+
 The address bar (`role=search`) shows a site-information button on the left —
 search icon on the New Tab page, warning triangle for `securityWarning`, site
 controls otherwise — then the always-visible security chip, the input, a zoom
@@ -216,6 +220,10 @@ the first edit saves an explicit list with fresh ids through `setShortcutTiles`.
 Protection detail is in the shield menu, not on the page.
 
 ## Panels and Their IPC
+
+The bookmark manager prepares one searchable index per bookmark snapshot. It
+renders 75 results per page and preserves the text and folder filters when a
+bookmark is renamed or removed.
 
 | Tool | `window.privateBrowser` methods |
 | --- | --- |
@@ -305,6 +313,9 @@ Existing panel class names were kept and restyled on the tokens.
   permission prompt; `setLayout` records the insets on
   `<html data-preview-layout>` for tests. [preview-bridge.ts](../../src/preview-bridge.ts)
   is the same kind of dev-only mock for the VS Code bridge (`?preview=bridge`).
+  The normal chrome preview shows a Synthetic data marker, models Chrome
+  import and page inspection with fixtures, and reports desktop-only actions
+  such as password file import and VS Code pairing as unavailable.
   Production always uses the preload.
 
 ## Related Systems

@@ -3,6 +3,9 @@ import type { AccountSpaceId, Bookmark, BrowserSnapshot, BrowserTab, ShortcutTil
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, searchTemplateFor } from '../electron/browser-settings';
 import { parseWebAddress } from '../electron/security';
+import { findAddressMatches } from '../electron/address-matches';
+import { queryHistory } from '../electron/history-query';
+import { canUseDeveloperTools } from '../electron/developer-tools';
 import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
 
 const WORKSPACES: Workspace[] = [
@@ -68,8 +71,24 @@ export function installPreviewApi(): void {
       bookmark('preview-marketing', 'Campaign planner', 'https://planner.example.com/', ['Marketing'], [3, 0]),
       ...Array.from({ length: 14 }, (_, index) => bookmark(`preview-extra-${index}`, `Supplier portal ${index + 1}`, `https://supplier${index + 1}.example.com/`, [], [4 + index])),
       bookmark('preview-other', 'Reading list article', 'https://news.example.com/article', [], [0], 'other'),
+      ...(params.get('bookmarks') === 'large' ? Array.from({ length: 24_900 }, (_, index) => bookmark(
+        'preview-large-' + index, 'Sample bookmark ' + index, 'https://bookmarks.example.test/' + index,
+        ['Import folder ' + Math.floor(index / 100)], [100 + Math.floor(index / 100), index % 100], 'other',
+      )) : []),
     ],
-    history: [{ id: 'preview-history', workspaceId: 'personal', accountSpaceId: google, title: 'Calendar', url: 'https://calendar.google.com/', visitedAt: new Date().toISOString() }],
+    history: [
+      { id: 'preview-history', workspaceId: 'personal', accountSpaceId: google, title: 'Calendar', url: 'https://calendar.google.com/', visitedAt: new Date().toISOString() },
+      ...(params.get('history') === 'large' ? [
+        ...Array.from({ length: 105 }, (_, index) => ({
+          id: 'sample-visit-' + index, workspaceId: 'personal' as const, accountSpaceId: google,
+          title: 'Sample visit ' + index, url: 'https://log.example.test/' + index, visitedAt: '2026-10-09T12:00:00.000Z',
+        })),
+        ...['01', '02'].map((day) => ({
+          id: 'sample-older-' + day, workspaceId: 'personal' as const, accountSpaceId: google,
+          title: 'Older sample visit', url: 'https://archive.example.test/older', visitedAt: '2026-10-' + day + 'T12:00:00.000Z',
+        })),
+      ] : []),
+    ],
     downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true,
     accountSpaces: accounts.map((item) => ({ ...item, enabledModules: [...item.enabledModules], grantedScopes: [...item.grantedScopes] })),
     accountHealth: accounts.map((item) => ({ accountSpaceId: item.id, status: item.googleConnection, checkedAt: '2026-09-12T12:00:00Z' })),
@@ -93,6 +112,10 @@ export function installPreviewApi(): void {
   const activeTab = () => state.tabs.find((tab) => tab.id === state.activeTabId)!;
   const handlers: Record<string, (...args: unknown[]) => unknown> = {
     getState: async () => structuredClone(state),
+    queryHistory: (async (id: unknown, input: unknown) => {
+      const scope = state.activeWorkspaceId === 'banking' || state.activeAccountSpaceId !== id ? [] : state.history;
+      return queryHistory(scope, state.activeAccountSpaceId, input as Parameters<PrivateBrowserApi['queryHistory']>[1]);
+    }) satisfies PrivateBrowserApi['queryHistory'],
     onState: (callback) => { listeners.add(callback as (snapshot: BrowserSnapshot) => void); return () => listeners.delete(callback as (snapshot: BrowserSnapshot) => void); },
     onCommand: () => () => undefined,
     onFindResult: () => () => undefined,
@@ -142,12 +165,23 @@ export function installPreviewApi(): void {
     navigate: async (value) => {
       const text = String(value);
       const tab = activeTab();
-      if (text === 'private://home') Object.assign(tab, { url: text, title: 'New tab', isHome: true });
+      if (text === 'private://home') Object.assign(tab, { url: text, title: 'New tab', isHome: true, developerToolsAllowed: false });
       else {
         const url = /^https?:\/\//.test(text) ? text : searchTemplateFor(state.settings).replace('%s', () => encodeURIComponent(text));
-        Object.assign(tab, { url, title: new URL(url).hostname, isHome: false, zoomPercent: 100, securityWarning: url.startsWith('http:') ? 'insecure' : undefined });
+        Object.assign(tab, { url, title: new URL(url).hostname, isHome: false, zoomPercent: 100, securityWarning: url.startsWith('http:') ? 'insecure' : undefined, developerToolsAllowed: canUseDeveloperTools(tab.workspaceId, false, url) });
       }
       publish();
+    },
+    addressMatches: async (id, text) => {
+      if (id !== state.activeAccountSpaceId || state.accountSpaces.some((item) => item.id === id && item.locked)) return [];
+      return findAddressMatches(String(text), state.activeAccountSpaceId, state.tabs, state.bookmarks, state.activeWorkspaceId === 'banking' ? [] : state.history);
+    },
+    openAddressMatch: async (accountId, source, id) => {
+      if (accountId !== state.activeAccountSpaceId || state.accountSpaces.some((item) => item.id === accountId && item.locked)) throw new Error('This address result is no longer available');
+      const entries = source === 'tab' ? state.tabs : source === 'bookmark' ? state.bookmarks : source === 'history' && state.activeWorkspaceId !== 'banking' ? state.history : [];
+      const entry = entries.find((item) => item.id === id && item.accountSpaceId === accountId);
+      if (!entry) throw new Error('This address result is no longer available');
+      await (source === 'tab' ? handlers.activateTab(entry.id) : handlers.navigate(entry.url));
     },
     openBookmark: async (value) => { const item = state.bookmarks.find((entry) => entry.id === value); if (item) { const id = `preview-${crypto.randomUUID()}`; state.tabs.push(pageTab(id, state.activeAccountSpaceId, item.title, item.url)); state.activeTabId = id; publish(); } },
     toggleBookmark: async () => {
@@ -176,7 +210,54 @@ export function installPreviewApi(): void {
     verifyAndEnableBackup: async (idValue, _code, includeOpenTabsValue, includeHistoryValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.backupEnabled = true; selected.backupIncludesOpenTabs = Boolean(includeOpenTabsValue); selected.backupIncludesHistory = Boolean(includeHistoryValue); publish(); } },
     uploadBackup: async () => ({ status: 'uploaded', etag: 'preview-etag' }),
     getAiProvider: async () => ({ configured: false }),
+    listChromeProfiles: (async () => {
+      if (params.get('chrome') === 'error') throw new Error('The sample Chrome profiles could not be read');
+      if (params.get('chrome') === 'empty') return [];
+      return [{ id: 'Default', name: 'Sample Chrome profile', isDefault: true, hasBookmarks: true, hasHistory: true }];
+    }) satisfies PrivateBrowserApi['listChromeProfiles'],
+    importChrome: (async (value: unknown) => {
+      const { profileId, accountSpaceId, workspaceId, bookmarks, history } = value as Parameters<PrivateBrowserApi['importChrome']>[0];
+      const destination = state.accountSpaces.find((item) => item.id === accountSpaceId && item.workspaceId === workspaceId);
+      if (!destination || destination.locked || workspaceId === 'banking') throw new Error('Choose an available regular Account Space');
+      if (profileId !== 'Default') throw new Error('The sample Chrome profile is unavailable');
+      const url = 'https://example.test/chrome-import';
+      const title = 'Sample imported page';
+      const timestamp = '2026-09-12T10:00:00.000Z';
+      const id = 'preview-import-' + accountSpaceId;
+      const addBookmark = bookmarks && !state.bookmarks.some((item) => item.id === id);
+      const addHistory = history && !state.history.some((item) => item.id === id);
+      if (addBookmark) state.bookmarks.push({ id, accountSpaceId, workspaceId, title, url, createdAt: timestamp, location: 'bar', folderPath: ['Sample folder'], order: 500, orderPath: [500, 0] });
+      if (addHistory) state.history.push({ id, accountSpaceId, workspaceId, title, url, visitedAt: timestamp });
+      publish();
+      return {
+        imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 },
+        skipped: { bookmarks: Number(bookmarks && !addBookmark), history: Number(history && !addHistory), passwords: 0 },
+        warnings: [],
+      };
+    }) satisfies PrivateBrowserApi['importChrome'],
+    importChromePasswords: (async () => {
+      throw new Error('Password files are unavailable in the synthetic preview');
+    }) satisfies PrivateBrowserApi['importChromePasswords'],
+    getBridgeStatus: (async () => ({ state: 'disconnected', browserVersion: 'Preview' })) satisfies PrivateBrowserApi['getBridgeStatus'],
+    listBridgeProjects: (async () => []) satisfies PrivateBrowserApi['listBridgeProjects'],
+    beginBridgePairing: (async () => {
+      throw new Error('VS Code pairing requires the desktop app');
+    }) satisfies PrivateBrowserApi['beginBridgePairing'],
+    installBridgeExtension: (async () => {
+      throw new Error('Extension installation requires the desktop app');
+    }) satisfies PrivateBrowserApi['installBridgeExtension'],
+    toggleDeveloperTools: (async () => {
+      throw new Error('Native DevTools require the desktop app');
+    }) satisfies PrivateBrowserApi['toggleDeveloperTools'],
+    inspectDeveloperPage: (async () => {
+      const tab = activeTab();
+      if (!tab.developerToolsAllowed) throw new Error('Page inspection is unavailable for this tab');
+      return { route: new URL(tab.url).pathname, framework: 'Synthetic preview', viewport: window.innerWidth + ' x ' + window.innerHeight };
+    }) satisfies PrivateBrowserApi['inspectDeveloperPage'],
     getDefaultBrowserStatus: async () => false,
+    setDefaultBrowser: (async () => {
+      throw new Error('Changing the default browser requires the desktop app');
+    }) satisfies PrivateBrowserApi['setDefaultBrowser'],
     getUpdateService: async () => ({ configured: false, currentVersion: '0.5.7', source: 'public' as const, endpoint: 'https://private-browser-downloads.digitronics-electro.workers.dev' }),
     checkForUpdates: async () => {
       const updateMode = new URLSearchParams(location.search).get('update');
@@ -217,4 +298,5 @@ export function installPreviewApi(): void {
   };
   const api = new Proxy(handlers, { get(target, property) { return target[String(property)] ?? (async () => undefined); } });
   Object.defineProperty(window, 'privateBrowser', { value: api as unknown as PrivateBrowserApi, configurable: true });
+  document.documentElement.dataset.browserPreview = 'synthetic';
 }

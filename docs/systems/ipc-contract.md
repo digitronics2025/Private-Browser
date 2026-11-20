@@ -9,7 +9,7 @@ verified_at: 028b9d2d
 
 # IPC Contract
 
-> Last verified: 2026-09-26
+> Last verified: 2026-11-20
 
 ## Agent Brief
 
@@ -109,6 +109,9 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
 | `browser:get-state` | `getState()` | — | `BrowserSnapshot` |
+| `browser:address-matches` | `addressMatches(accountSpaceId, text)` | Expected active space and query up to 256 characters | Up to eight `AddressMatch` entries |
+| `browser:query-history` | `queryHistory(accountSpaceId, input)` | Expected active space, text, hostname, UTC range boundaries and page | `HistoryPage` |
+| `browser:open-address-match` | `openAddressMatch(accountSpaceId, source, id)` | Expected active space, result type and record ID | `void` |
 | `browser:navigate` | `navigate(value)` | `value: string` | `void` |
 | `browser:home` | `goHome()` | none (exactly zero arguments) | `void` |
 | `browser:back` | `back()` | — | `void` |
@@ -338,8 +341,8 @@ preload and the renderer.
 - `DownloadEntry` — now also carries `checksum?: 'verified' | 'mismatch' | 'unchecked'`,
   set once a completed download has been compared with the release manifest
   ([browser-shell.md](browser-shell.md#downloads--checksum-verification)).
-- `DownloadEntry` — `id`, `filename`, `receivedBytes`, `totalBytes`, `risk`,
-  `state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'`, `savePath?`.
+- `DownloadEntry` — `id`, `accountSpaceId`, `filename`, `receivedBytes`, `totalBytes`, `risk`,
+  `state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'`. Local paths stay in main.
   The union is hand-written to mirror Electron's download states, and the main
   process assigns Electron's own state string straight into it.
 - `PrivacyEvent` — `id`, `at`, `kind: 'local-read' | 'cloud-approved' | 'blocked' | 'vault'`,
@@ -361,6 +364,8 @@ declared: `loading`, `canGoBack`, `canGoForward`, `favicon`,
 `developerToolsAllowed` and `developerToolsOpen` are runtime-only.
 The snapshot also truncates `history` to 100 and `privacyLog` to 50, and adds
 `downloads`, which is never persisted.
+The History panel requests pages from the separate history query. Only the
+active regular Account Space may query its retained history.
 
 ### AI
 

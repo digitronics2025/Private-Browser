@@ -378,6 +378,8 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
     activeWorkspaceId,
     accountSpaceIds,
     activeAccountSpaceByWorkspace,
+    lastExternalLinkAccountSpaceId: accountSpaceIds.includes(input.lastExternalLinkAccountSpaceId!)
+      ? input.lastExternalLinkAccountSpaceId : undefined,
     trackerBlocking: input.trackerBlocking !== false,
     bookmarkBarVisible: ui.bookmarkBarMode !== 'hidden',
     privacyLog: sanitizePrivacyLog(input.privacyLog),
@@ -415,9 +417,10 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
     orderPath: Array.isArray(item.orderPath) ? item.orderPath.slice(0, 20).filter((part) => Number.isSafeInteger(part) && part >= 0) : [index],
   }));
   const history = sanitizeAccountItems<AccountSpaceHistoryEntry>(input.history, input.accountSpaceId, workspaceId, 10_000);
+  const historyTrimmed = input.historyTrimmed === true || (Array.isArray(input.history) && input.history.length > 10_000);
   const shortcuts = sanitizeShortcutTiles(input.shortcuts);
   const bookmarkIcons = pruneBookmarkIcons(sanitizeBookmarkIcons(input.bookmarkIcons), bookmarks);
-  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs, activeTabId, bookmarks, history, ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}) };
+  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs, activeTabId, bookmarks, history, ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}) };
 }
 
 export const MAX_SHORTCUT_TILES = 12;

@@ -45,7 +45,7 @@ test('address bar keeps security warnings visible and Ctrl+L focuses it', async 
   await page.keyboard.press('Escape');
   await expect(info).toHaveCount(0);
   await page.keyboard.press('Control+L');
-  await expect(page.getByRole('textbox', { name: 'Address and search bar' })).toBeFocused();
+  await expect(page.getByRole('combobox', { name: 'Address and search bar' })).toBeFocused();
 
   // A local plain-HTTP page has no chip, but must never be described as encrypted.
   await page.getByRole('tab', { name: /Local dev server/ }).click();
@@ -61,7 +61,7 @@ test('address bar keeps security warnings visible and Ctrl+L focuses it', async 
 test('a page URL change does not replace an address the user is typing', async ({ page }) => {
   const noErrors = watchErrors(page);
   await page.goto('/');
-  const address = page.getByRole('textbox', { name: 'Address and search bar' });
+  const address = page.getByRole('combobox', { name: 'Address and search bar' });
   await page.getByRole('tab', { name: /Legacy intranet dashboard/ }).click();
   await address.click();
   await address.fill('mybank.example');
@@ -289,7 +289,7 @@ test('search engine setting changes what the address bar and New Tab page search
   await openSettingsPanel(page);
   await sidePanel(page).getByLabel('Search engine').selectOption('bing');
   await expect(ntp.getByRole('textbox', { name: 'Search Bing or enter address' })).toBeVisible();
-  const address = page.getByRole('textbox', { name: 'Address and search bar' });
+  const address = page.getByRole('combobox', { name: 'Address and search bar' });
   await expect(address).toHaveAttribute('placeholder', 'Search Bing or enter address');
   await address.fill('weather');
   await address.press('Enter');
@@ -314,7 +314,7 @@ test('search engine setting changes what the address bar and New Tab page search
 test('home page setting decides where Home goes and refuses text that is not an address', async ({ page }) => {
   const noErrors = watchErrors(page);
   await page.goto('/');
-  const address = page.getByRole('textbox', { name: 'Address and search bar' });
+  const address = page.getByRole('combobox', { name: 'Address and search bar' });
   await openSettingsPanel(page);
   const home = sidePanel(page).getByRole('radiogroup', { name: 'Home page' });
   await expect(home.getByRole('radio', { name: 'New Tab page' })).toHaveAttribute('aria-checked', 'true');
