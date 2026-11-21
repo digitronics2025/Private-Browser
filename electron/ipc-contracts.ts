@@ -172,8 +172,11 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'backup:upload':
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation');
       if (args[2] !== undefined && args[2] !== 'merge' && args[2] !== 'overwrite') throw new Error('Invalid backup conflict decision'); return;
-    case 'backup:restore':
+    case 'backup:preview-restore':
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); if (args[2] !== undefined) requireBoundedText(args[2], 'recovery code', 64); return;
+    case 'backup:apply-restore':
+    case 'backup:cancel-restore':
+      exact(args, 1); requireUuid(args[0], 'backup review'); return;
     case 'operations:cancel':
       exact(args, 1); requireUuid(args[0], 'operation'); return;
     case 'browser:set-overlay-open':
@@ -410,6 +413,9 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       }
       return;
     }
+    case 'side-app:cancel-claude-excerpt':
+    case 'side-app:copy-claude-excerpt':
+      exact(args, 1); requireUuid(args[0], 'page excerpt'); return;
     case 'ai:send-reviewed':
     case 'ai:cancel-reviewed':
       exact(args, 1); requireUuid(args[0], 'review'); return;
@@ -485,10 +491,11 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
 const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'browser:undo-tab-batch',
   'ai:check-provider', 'ai:clear-provider', 'ai:local-models', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
+  'side-app:prepare-claude-excerpt',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
   'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
   'browser:reopen-closed-tab', 'browser:stop', 'browser:stop-find', 'browser:toggle-bookmark', 'browser:toggle-bookmark-bar',
-  'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-pair', 'developer:bridge-projects',
+  'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-cancel-pairing', 'developer:bridge-pair', 'developer:bridge-projects',
   'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',
   'google:clear-configuration', 'system:is-default-browser', 'system:open-default-browser-settings', 'system:test-default-browser', 'updates:check', 'updates:clear',
   'updates:open-history', 'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review',

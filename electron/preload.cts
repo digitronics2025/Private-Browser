@@ -2,12 +2,13 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { BrowserRoutine, LocalAiModels, ReferenceSearchInput, RoutineRunResult, TabSetInput } from './types.js';
 import type { AddressMatch, BrowsingDataInput, BrowsingDataReview, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
 import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
-import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth } from './types.js';
+import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth, PageExcerptReview } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, DownloadFolderMode, FindResult, PinnablePanelTool, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
+import type { BackupRestorePreview } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentSpaceSettings, ClientLimits } from '@private-browser/bridge-protocol/agent-permissions';
 
@@ -103,7 +104,9 @@ const api = {
   createBackupRecoveryCode: (accountSpaceId: AccountSpaceId): Promise<string> => ipcRenderer.invoke('backup:create-recovery', accountSpaceId),
   verifyAndEnableBackup: (accountSpaceId: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean): Promise<void> => ipcRenderer.invoke('backup:verify-enable', accountSpaceId, recoveryCode, includeOpenTabs, includeHistory),
   uploadBackup: (accountSpaceId: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite'): Promise<BackupWriteResult> => ipcRenderer.invoke('backup:upload', accountSpaceId, operationId, conflictResolution),
-  restoreBackup: (accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<void> => ipcRenderer.invoke('backup:restore', accountSpaceId, operationId, recoveryCode),
+  previewBackupRestore: (accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<BackupRestorePreview> => ipcRenderer.invoke('backup:preview-restore', accountSpaceId, operationId, recoveryCode),
+  applyBackupRestore: (id: string): Promise<void> => ipcRenderer.invoke('backup:apply-restore', id),
+  cancelBackupRestore: (id: string): Promise<void> => ipcRenderer.invoke('backup:cancel-restore', id),
   disableBackup: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('backup:disable', accountSpaceId),
   cancelOperation: (operationId: string): Promise<boolean> => ipcRenderer.invoke('operations:cancel', operationId),
   performRecoveryAction: (action: StateRecoveryAction, confirmation?: string): Promise<void> => ipcRenderer.invoke('recovery:act', action, confirmation),
@@ -169,6 +172,7 @@ const api = {
   clearDeveloperDiagnostics: (): Promise<void> => ipcRenderer.invoke('developer:clear-diagnostics'),
   getBridgeStatus: (): Promise<BridgeStatus> => ipcRenderer.invoke('developer:bridge-status'),
   beginBridgePairing: (): Promise<BridgeStatus> => ipcRenderer.invoke('developer:bridge-pair'),
+  cancelBridgePairing: (): Promise<BridgeStatus> => ipcRenderer.invoke('developer:bridge-cancel-pairing'),
   disconnectBridge: (revoke = false): Promise<BridgeStatus> => ipcRenderer.invoke('developer:bridge-disconnect', revoke),
   listBridgeProjects: (): Promise<ProjectSummary[]> => ipcRenderer.invoke('developer:bridge-projects'),
   selectBridgeProject: (projectId: string): Promise<ProjectInfo> => ipcRenderer.invoke('developer:bridge-select-project', projectId),
@@ -197,6 +201,9 @@ const api = {
   clearAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:clear-provider'),
   askAi: (token: string, question: string): Promise<string> => ipcRenderer.invoke('ai:ask', token, question),
   revokeAiContext: (): Promise<void> => ipcRenderer.invoke('ai:revoke'),
+  prepareClaudeExcerpt: (): Promise<PageExcerptReview> => ipcRenderer.invoke('side-app:prepare-claude-excerpt'),
+  cancelClaudeExcerpt: (id: string): Promise<void> => ipcRenderer.invoke('side-app:cancel-claude-excerpt', id),
+  copyClaudeExcerpt: (id: string): Promise<void> => ipcRenderer.invoke('side-app:copy-claude-excerpt', id),
   listVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:list'),
   requestVaultUnlock: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-unlock'),
   unlockVaultWithHello: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:hello-unlock'),

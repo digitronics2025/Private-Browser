@@ -192,8 +192,12 @@ and unrestricted terminal access are unsupported in v1.
 
 1. Open Private Browser and switch to the **Development** workspace.
 2. Open **Dev → Project** and choose **Install VS Code extension** once.
-3. In Private Browser press **Pair** and note the eight-digit code.
+3. In Private Browser open **Developer Bridge**, then **Project**. Choose
+   **Generate pairing code** and note the eight digits and expiry time.
 4. In VS Code run **Private Browser: Pair with Browser** and enter that code.
+   **Cancel pairing** invalidates the current code. **Check connection status**
+   shows the connected extension, protocol compatibility, local window,
+   workspace trust and the project that has been approved.
 5. Back in Private Browser choose the open workspace folder; approve the named
    folder in the VS Code modal.
 6. Press **Start server**; read the exact command in VS Code and approve it.

@@ -16,10 +16,10 @@ function snapshot(workspaceId: 'development' | 'banking') {
 
 async function installMock(page: import('@playwright/test').Page, workspaceId: 'development' | 'banking', connected = false) {
   await page.addInitScript(({ state, connected }) => {
-    const project = { project: { id: 'a'.repeat(32), name: 'Fixture workspace' }, framework: 'Vite', packageManager: 'npm', types: ['vite-react'] };
+    const project = { project: { id: 'a'.repeat(32), name: 'Fixture workspace', trusted: true }, framework: 'Vite', packageManager: 'npm', types: ['vite-react'] };
     const commit = 'a'.repeat(40);
-    let bridge: { state: string; browserVersion: string; extensionVersion?: string; project?: typeof project; pairingCode?: string; pairingExpiresAt?: number } = connected
-      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: '0.4.1', project }
+    let bridge: { state: string; browserVersion: string; extensionVersion?: string; project?: typeof project; pairingCode?: string; pairingExpiresAt?: number; activity?: string; vscodeVersion?: string; instanceId?: string } = connected
+      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: '0.4.1', vscodeVersion: '1.95.3', instanceId: 'abad0000-0000-4000-8000-000000000010', project }
       : { state: 'disconnected', browserVersion: '0.4.0' };
     let ui: Record<string, unknown> = {};
     let notify: ((value: ReturnType<typeof getState>) => void) | undefined;
@@ -32,6 +32,7 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
       getBridgeStatus: async () => bridge,
       getAiProvider: async () => ({ configured: false }),
       beginBridgePairing: async () => (bridge = { state: 'pairing', browserVersion: '0.4.0', pairingCode: '12345678', pairingExpiresAt: Date.now() + 300000 }),
+      cancelBridgePairing: async () => (bridge = { state: 'disconnected', browserVersion: '0.4.0', activity: 'Pairing cancelled' }),
       listBridgeProjects: async () => [],
       setUiPreferences: async (patch: Record<string, unknown>) => { ui = { ...ui, ...patch }; notify?.(getState()); },
       runBridgeAction: async (action: string) => action === 'project.revision'
@@ -55,8 +56,18 @@ test('shows focused pairing and all four bridge tabs in Development', async ({ p
   await expect(page.getByRole('tab', { name: 'Inspect' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Test' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'AI Fix' })).toBeVisible();
-  await page.getByRole('button', { name: 'Pair', exact: true }).click();
-  await expect(page.getByText('Pair with 12345678')).toBeVisible();
+  await page.clock.install();
+  const guide = page.getByRole('region', { name: 'Set up the VS Code companion' });
+  await expect(guide).toContainText('Private Browser: Pair with Browser');
+  await guide.getByRole('button', { name: 'Generate pairing code', exact: true }).click();
+  await expect(guide.getByLabel('Pairing code')).toHaveText('12345678');
+  await expect(guide.locator('time')).toBeVisible();
+  await guide.getByRole('button', { name: 'Cancel pairing' }).click();
+  await expect(guide.getByLabel('Pairing code')).toHaveCount(0);
+  await guide.getByRole('button', { name: 'Generate pairing code', exact: true }).click();
+  await page.clock.fastForward(301_000);
+  await expect(guide.getByLabel('Pairing code')).toHaveCount(0);
+  await expect(guide.getByRole('button', { name: 'Generate new pairing code' })).toBeVisible();
 });
 
 test('keeps bridge actions hidden in Banking', async ({ page }) => {
@@ -66,7 +77,7 @@ test('keeps bridge actions hidden in Banking', async ({ page }) => {
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   await page.getByRole('tab', { name: 'Developer Bridge' }).click();
   await expect(page.getByText('Protected by workspace policy')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Pair', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Generate pairing code', exact: true })).toHaveCount(0);
 });
 
 test('opens the exact GitHub revision on request from a narrow Developer Bridge panel', async ({ page }) => {
@@ -76,6 +87,11 @@ test('opens the exact GitHub revision on request from a narrow Developer Bridge 
   const panelToggle = page.getByRole('button', { name: 'Side panel', exact: true });
   await panelToggle.click();
   await page.locator('#side-panel-tab-developer').click();
+  const status = page.getByRole('region', { name: 'Connection details' });
+  await expect(status).toContainText('0.4.1 · Protocol matched');
+  await expect(status).toContainText('1.95.3 abad0000');
+  await expect(status).toContainText('Fixture workspace · Approved');
+  await status.getByRole('button', { name: 'Check connection status' }).click();
   const revision = page.getByRole('region', { name: 'Git revision' });
   await expect(revision.getByText('topic/review')).toBeVisible();
   await expect(revision.getByText('1 staged · 2 unstaged · 0 untracked · 0 conflicts')).toBeVisible();

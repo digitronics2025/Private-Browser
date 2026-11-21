@@ -156,7 +156,7 @@ export class BridgeClient implements vscode.Disposable {
       const rendezvous = JSON.parse(await readFile(this.rendezvousPath(), 'utf8')) as Rendezvous;
       const validEndpoint = process.platform === 'win32' ? rendezvous.pipePath.startsWith('\\\\.\\pipe\\') : rendezvous.pipePath.endsWith('.sock');
       if (rendezvous.schemaVersion !== 1 || !validEndpoint || !Number.isInteger(rendezvous.minProtocolVersion) || !Number.isInteger(rendezvous.maxProtocolVersion) || rendezvous.expiresAt < Date.now()) throw new Error('Private Browser pairing endpoint is unavailable or expired');
-      if (rendezvous.minProtocolVersion > PROTOCOL_VERSION || rendezvous.maxProtocolVersion < MIN_PROTOCOL_VERSION) throw new Error('Protocol incompatible. Install Private Browser 0.4.0 and Private Browser Bridge 0.4.0 from the same release.');
+      if (rendezvous.minProtocolVersion > PROTOCOL_VERSION || rendezvous.maxProtocolVersion < MIN_PROTOCOL_VERSION) throw new Error('Protocol incompatible. Reinstall the Private Browser Bridge bundled with this browser release.');
       const trustedBrowserKey = await this.context.secrets.get('privateBrowser.browserPublicKey');
       if (!code && !trustedBrowserKey) throw new Error('Pair with Private Browser once before reconnecting');
       if (trustedBrowserKey && trustedBrowserKey !== rendezvous.browserIdentityPublicKey) throw new Error('Private Browser identity changed; revoke and pair again');

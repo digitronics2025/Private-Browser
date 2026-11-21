@@ -2,8 +2,8 @@ import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { ChromeImportOptions, ChromePasswordImportReview } from '../electron/types';
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
-import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
-import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource, PageExcerptReview } from '../electron/types';
+import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
@@ -152,6 +152,10 @@ export function installPreviewApi(): void {
   const syncDarkMode = () => { state.windowState.darkMode = state.ui.theme === 'system' ? media.matches : state.ui.theme === 'dark'; };
   syncDarkMode();
   const listeners = new Set<(snapshot: BrowserSnapshot) => void>();
+  let backupRestoreReview: BackupRestorePreview | undefined;
+  if (params.get('backupRestore') === 'sample') {
+    state.accountSpaces.find(({ id }) => id === google)?.enabledModules.push('encrypted-backup');
+  }
   const closedByAccount = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   let routines = defaultBrowserRoutines(Object.fromEntries(accounts.filter((account) => account.id !== google).map((account) => [account.workspaceId, account.id])));
   state.routines = routines;
@@ -198,6 +202,7 @@ export function installPreviewApi(): void {
   ] : [];
   let previewProvider: AiProviderStatus = { configured: false };
   let assistantPage: AiPagePreview | undefined;
+  let claudeExcerpt: PageExcerptReview | undefined;
   let assistantReview: { data: AiRequestReview; context: string[]; withEvidence: boolean } | undefined;
   const assistantExtraSources = new Map<string, AssistantSelectionSource>();
   let timeoutFixtureUsed = false;
@@ -375,13 +380,31 @@ export function installPreviewApi(): void {
     prepareCalendarWrite: desktopOnly,
     writeCalendarEvent: desktopOnly,
     listContacts: desktopOnly,
-    restoreBackup: desktopOnly,
+    previewBackupRestore: async (id, _operation, code) => {
+      if (params.get('backupRestore') !== 'sample' || id !== google || code !== 'fixture-recovery-code') {
+        throw new Error('Encrypted backup failed authentication or is corrupt.');
+      }
+      backupRestoreReview = {
+        id: crypto.randomUUID(), accountSpaceId: id, accountLabel: 'Operations', workspaceId: 'personal',
+        createdAt: '2026-11-21T12:00:00.000Z',
+        counts: { bookmarks: { added: 2, duplicates: 1, capacityExceeded: 0 },
+          history: { added: 0, duplicates: 1, capacityExceeded: 0 }, tabs: { added: 1, duplicates: 0, capacityExceeded: 2 } },
+      };
+      return backupRestoreReview;
+    },
+    applyBackupRestore: async (id) => {
+      if (backupRestoreReview?.id !== id) throw new Error('Review the backup again before restoring.');
+      document.documentElement.dataset.previewBackupApplied = backupRestoreReview.accountSpaceId;
+      backupRestoreReview = undefined;
+    },
+    cancelBackupRestore: async (id) => { if (backupRestoreReview?.id === id) backupRestoreReview = undefined; },
     disableBackup: desktopOnly,
     cancelOperation: async () => false,
     performRecoveryAction: desktopOnly,
     captureDeveloperDiagnostics: desktopOnly,
     clearDeveloperDiagnostics: async () => undefined,
     disconnectBridge: desktopOnly,
+    cancelBridgePairing: desktopOnly,
     selectBridgeProject: desktopOnly,
     runBridgeAction: desktopOnly,
     prepareDeveloperAiPreview: desktopOnly,
@@ -992,7 +1015,23 @@ export function installPreviewApi(): void {
       }
       publish();
     },
+    prepareClaudeExcerpt: async () => {
+      const tab = state.tabs.find(({ id }) => id === state.activeTabId);
+      if (!tab || tab.isHome || state.activeWorkspaceId === 'banking' || params.get('claudeExcerpt') !== 'sample') {
+        throw new Error('Select visible page text, then try again.');
+      }
+      claudeExcerpt = { id: crypto.randomUUID(), url: new URL(tab.url).origin,
+        ...redactSensitiveText('Selected catalogue paragraph. token=demo-value') };
+      return claudeExcerpt;
+    },
+    cancelClaudeExcerpt: async (id) => { if (claudeExcerpt?.id === id) claudeExcerpt = undefined; },
+    copyClaudeExcerpt: async (id) => {
+      if (claudeExcerpt?.id !== id) throw new Error('Review the selection again before copying.');
+      document.documentElement.dataset.previewClaudeCopy = claudeExcerpt.text;
+      claudeExcerpt = undefined;
+    },
     revokeAiContext: async () => {
+      claudeExcerpt = undefined;
       assistantReview = undefined;
       assistantPage = undefined;
       assistantExtraSources.clear();

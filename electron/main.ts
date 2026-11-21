@@ -68,6 +68,7 @@ import type {
   GoogleModule,
   AiApproval,
   AiPagePreview,
+  PageExcerptReview,
   AiPreviewScope,
   AiRequestReview,
   AssistantAnswer,
@@ -81,6 +82,7 @@ import type {
   BookmarkEntryKeyInput,
   BookmarkLevelInput,
   BrowserSnapshot,
+  BackupRestorePreview,
   BrowserTab,
   BrowserRoutine,
   RoutineRunResult,
@@ -149,7 +151,7 @@ import { GoogleTokenBroker } from './google-token-broker.js';
 import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailSendInput } from './google-services.js';
 import { healthFromGoogleConnection, observeGoogleHealth } from './google-connection-health.js';
 import type { GoogleConnectionHealth } from './types.js';
-import { AccountBackupManager, restorableItems, type BackupWriteResult } from './account-backup.js';
+import { AccountBackupManager, backupRestoreRevision, planBackupRestore, type BackupWriteResult } from './account-backup.js';
 import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
 import { ControlCenterLink, developerEvidence } from './control-center-link.js';
@@ -267,6 +269,8 @@ type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: Ex
 
 class BrowserController {
   private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
+  private pendingBackupRequest?: { accountSpaceId: AccountSpaceId; operationId: string };
+  private backupRestoreReview?: { preview: BackupRestorePreview; items: ReturnType<typeof planBackupRestore>['items']; subject: string; revision: string; expiresAt: number };
   private pendingChromePasswords?: { id: string; accountId: AccountSpaceId; path: string; digest: string; revision: string; expiresAt: number };
   private selectingChromePasswords = false;
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
@@ -283,6 +287,7 @@ class BrowserController {
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
+  private claudeExcerpt?: AssistantCapture & { expiresAt: number };
   private assistantReview?: AssistantCapture & { review: AiRequestReview; question: string; withEvidence: boolean; expiresAt: number; additional: AssistantCapture[]; excerpts: string[] };
   private activeAssistant?: { id: string; mode: 'local' | 'cloud'; controller: AbortController };
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
@@ -1528,21 +1533,64 @@ class BrowserController {
     return this.runGoogleOperation(accountSpaceId, operationId, 'backup', (signal) => this.backups.upload(accountSpaceId, payload, conflictResolution, signal));
   }
 
-  restoreBackup(accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<void> {
-    const account = this.requireAccountMembership(accountSpaceId);
-    return this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
-      const restored = restorableItems(await this.backups.restore(accountSpaceId, recoveryCode, signal), { accountSpaceId, workspaceId: account.workspaceId });
-      this.closeAccountViews(accountSpaceId);
-      this.store.update((state) => {
-        state.bookmarks = [...state.bookmarks.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.bookmarks];
-        if (restored.history) state.history = [...state.history.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.history];
-        if (restored.openTabs?.length) {
-          state.tabs = [...state.tabs.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.openTabs.map((tab) => ({ ...tab, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false }))];
-          state.activeTabByAccountSpace[accountSpaceId] = restored.openTabs[0]!.id;
+  async previewBackupRestore(accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<BackupRestorePreview> {
+    const account = this.requireBackupRestoreTarget(accountSpaceId);
+    const previous = this.pendingBackupRequest;
+    if (previous) this.cancelOperation(previous.operationId);
+    const request = { accountSpaceId, operationId };
+    this.pendingBackupRequest = request;
+    this.backupRestoreReview = undefined;
+    try {
+      return await this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
+        const payload = await this.backups.restore(accountSpaceId, recoveryCode, signal);
+        if (signal.aborted || this.pendingBackupRequest !== request || this.requireBackupRestoreTarget(accountSpaceId).subject !== account.subject) {
+          throw new Error('The backup request changed. Start a new preview.');
         }
+        const state = this.store.get();
+        const { counts, items } = planBackupRestore(payload, { accountSpaceId, workspaceId: account.workspaceId }, state);
+        const preview: BackupRestorePreview = { id: randomUUID(), accountSpaceId, accountLabel: account.label,
+          workspaceId: account.workspaceId, createdAt: payload.createdAt, counts };
+        this.backupRestoreReview = { preview, items, subject: account.subject,
+          revision: backupRestoreRevision(accountSpaceId, state), expiresAt: Date.now() + 2 * 60_000 };
+        return preview;
       });
-      this.broadcast();
+    } finally {
+      if (this.pendingBackupRequest === request) this.pendingBackupRequest = undefined;
+    }
+  }
+
+  applyBackupRestore(id: string): void {
+    const pending = this.backupRestoreReview;
+    if (!pending || pending.preview.id !== id) throw new Error('Review the backup again before restoring.');
+    this.backupRestoreReview = undefined;
+    const { accountSpaceId } = pending.preview;
+    const account = this.requireBackupRestoreTarget(accountSpaceId);
+    if (pending.expiresAt <= Date.now() || pending.subject !== account.subject
+      || pending.revision !== backupRestoreRevision(accountSpaceId, this.store.get())) {
+      throw new Error('Backup review expired or its Account Space changed. Review it again.');
+    }
+    this.store.update((state) => {
+      state.bookmarks.push(...pending.items.bookmarks);
+      state.history.push(...pending.items.history);
+      state.tabs.push(...pending.items.tabs.map((tab) => ({
+        ...tab, restorePaused: true, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false,
+      })));
     });
+    this.broadcast();
+  }
+
+  cancelBackupRestore(id: string): void {
+    if (this.backupRestoreReview?.preview.id === id) this.backupRestoreReview = undefined;
+  }
+
+  private requireBackupRestoreTarget(accountSpaceId: AccountSpaceId) {
+    const account = this.requireAccountMembership(accountSpaceId);
+    const record = this.accounts.require(accountSpaceId);
+    if (account.locked || account.workspaceId === 'banking' || account.googleConnection !== 'connected'
+      || !record.googleIdentity || !record.enabledModules.includes('encrypted-backup')) {
+      throw new Error('Connect the same Google account and enable Encrypted backup in a compatible Account Space.');
+    }
+    return { label: record.label, workspaceId: record.workspaceId, subject: record.googleIdentity.sub };
   }
 
   cancelOperation(operationId: string): boolean {
@@ -1623,6 +1671,7 @@ class BrowserController {
     this.googleServices.clearAccount(accountSpaceId);
     this.googleChecks.delete(accountSpaceId);
     this.backups.clearAccount(accountSpaceId);
+    if (this.backupRestoreReview?.preview.accountSpaceId === accountSpaceId) this.backupRestoreReview = undefined;
     for (const [operationId, operation] of this.operations) {
       if (operation.accountSpaceId !== accountSpaceId) continue;
       operation.controller.abort();
@@ -1795,7 +1844,6 @@ class BrowserController {
     const state = this.store.get();
     if (state.recovery || this.startupTabRecovery || state.activeWorkspaceId === 'banking') return;
     const accountId = this.activeAccountSpaceId(state);
-    // Settings edited while the first window is loading apply on the next launch.
     if (state.activeWorkspaceId !== atLaunch.activeWorkspaceId || accountId !== this.activeAccountSpaceId(atLaunch)) return;
     const settings = settingsForWorkspace(atLaunch, atLaunch.activeWorkspaceId);
     if (settings.startup === 'pages' && settings.startupPages?.length) {
@@ -2447,6 +2495,8 @@ class BrowserController {
 
   beginBridgePairing() { this.requireDeveloperWorkspace(); return this.vscodeBridge.beginPairing(); }
 
+  cancelBridgePairing() { this.requireDeveloperWorkspace(); return this.vscodeBridge.cancelPairing(); }
+
   async disconnectBridge(revoke: boolean) {
     await this.vscodeBridge.disconnect(Boolean(revoke));
     return this.vscodeBridge.status();
@@ -2666,6 +2716,37 @@ class BrowserController {
     const child = spawn(code, ['--install-extension', vsix, '--force'], { shell: false, windowsHide: true, stdio: 'ignore' });
     await new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('exit', (value) => value === 0 ? resolve() : reject(new Error('VS Code extension installation failed'))); });
     return 'Private Browser Bridge installed. Reload VS Code if it was already open.';
+  }
+
+  async prepareClaudeExcerpt(): Promise<PageExcerptReview> {
+    this.claudeExcerpt = undefined;
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    if (!workspaceVaultPolicy(tab.workspaceId).aiExtraction || classifyAiSource(tab.url) !== 'browser') {
+      throw new Error('Page excerpts are unavailable here.');
+    }
+    const capture = await this.captureAssistantSelection(tab, 'selection', MAX_ASSISTANT_SOURCE_TEXT);
+    if (this.sessionIsLocked) throw new Error('The session locked before the selection was reviewed.');
+    this.validateAssistantSource(capture.preview, capture.navigationGeneration);
+    this.claudeExcerpt = { ...capture, expiresAt: Date.now() + 2 * 60_000 };
+    const { id, url, text, redactions } = capture.preview;
+    return { id, url, text, redactions: redactions - redactSensitiveText(tab.title).redactions };
+  }
+
+  cancelClaudeExcerpt(id: string): void {
+    if (this.claudeExcerpt?.preview.id === id) this.claudeExcerpt = undefined;
+  }
+
+  async copyClaudeExcerpt(id: string): Promise<void> {
+    const pending = this.claudeExcerpt;
+    if (!pending || pending.preview.id !== id) throw new Error('Review the selection again before copying.');
+    this.claudeExcerpt = undefined;
+    await this.clipboardGuard.copy(pending.preview.text, () => {
+      if (this.sessionIsLocked || clipboardQuit !== 'not-started' || pending.expiresAt <= Date.now()) {
+        throw new Error('Review the selection again before copying.');
+      }
+      this.validateAssistantSource(pending.preview, pending.navigationGeneration);
+    });
   }
 
   async prepareAiPreview(scope: AiPreviewScope = 'page'): Promise<AiPagePreview> {
@@ -2986,6 +3067,7 @@ class BrowserController {
    * had just offered.
    */
   revokeAiContext(): void {
+    this.claudeExcerpt = undefined;
     const had = this.pendingAiPreviews.size + this.aiApprovals.size + Number(Boolean(this.assistantReview));
     this.pendingAiPreviews.clear();
     this.aiApprovals.clear();
@@ -4756,7 +4838,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('backup:create-recovery', (_event, id: AccountSpaceId) => controller!.createBackupRecoveryCode(id));
   handle('backup:verify-enable', (_event, id: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean) => controller!.verifyAndEnableBackup(id, recoveryCode, includeOpenTabs, includeHistory));
   handle('backup:upload', (_event, id: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite') => controller!.uploadBackup(id, operationId, conflictResolution));
-  handle('backup:restore', (_event, id: AccountSpaceId, operationId: string, recoveryCode?: string) => controller!.restoreBackup(id, operationId, recoveryCode));
+  handle('backup:preview-restore', (_event, id: AccountSpaceId, operationId: string, recoveryCode?: string) => controller!.previewBackupRestore(id, operationId, recoveryCode));
+  handle('backup:apply-restore', (_event, id: string) => controller!.applyBackupRestore(id));
+  handle('backup:cancel-restore', (_event, id: string) => controller!.cancelBackupRestore(id));
   handle('backup:disable', (_event, id: AccountSpaceId) => controller!.disableBackup(id));
   handle('operations:cancel', (_event, operationId: string) => controller!.cancelOperation(operationId));
   handle('recovery:act', (_event, action: StateRecoveryAction, confirmation?: string) => controller!.recoveryAction(action, confirmation));
@@ -4823,6 +4907,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('developer:clear-diagnostics', () => controller!.clearDeveloperDiagnostics());
   handle('developer:bridge-status', () => controller!.getBridgeStatus());
   handle('developer:bridge-pair', () => controller!.beginBridgePairing());
+  handle('developer:bridge-cancel-pairing', () => controller!.cancelBridgePairing());
   handle('developer:bridge-disconnect', (_event, revoke: boolean) => controller!.disconnectBridge(revoke));
   handle('developer:bridge-projects', () => controller!.listBridgeProjects());
   handle('developer:bridge-select-project', (_event, projectId: string) => controller!.selectBridgeProject(projectId));
@@ -4851,6 +4936,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:clear-provider', () => controller!.clearAiProvider());
   handle('ai:ask', (_event, token: string, question: string) => controller!.askAi(token, question));
   handle('ai:revoke', () => controller!.revokeAiContext());
+  handle('side-app:prepare-claude-excerpt', () => controller!.prepareClaudeExcerpt());
+  handle('side-app:cancel-claude-excerpt', (_event, id: string) => controller!.cancelClaudeExcerpt(id));
+  handle('side-app:copy-claude-excerpt', (_event, id: string) => controller!.copyClaudeExcerpt(id));
   handle('vault:list', () => controller!.listVault());
   handle('vault:request-unlock', () => controller!.requestVaultUnlock());
   handle('vault:hello-unlock', () => controller!.unlockVaultWithHello());
@@ -4894,8 +4982,10 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:install-verified', () => controller!.installManagedUpdate());
   handle('updates:open-history', () => controller!.openReleaseHistory());
 
-  const atLaunch = store.get();
   controller.startSessionLockMonitoring();
+  // The first window can accept input while its page and local bridge finish
+  // starting. Startup settings edited in that window apply on the next launch.
+  const atLaunch = store.get();
   await controller.createWindow();
   if (controller.sessionIsLocked) agentHost.stop();
   else await agentHost.start();
