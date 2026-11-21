@@ -350,14 +350,16 @@ export class VaultBroker {
     throw new Error('Requested secret is not available');
   }
 
-  generateCredential(kind: GeneratedCredentialKind): string {
+  generateCredential(kind: GeneratedCredentialKind, options: { length?: 8 | 16 | 24 | 36; symbols?: boolean } = {}): string {
     this.requireUnlocked();
     if (kind === 'pin') return Array.from({ length: 8 }, () => randomInt(10)).join('');
-    if (kind === 'passphrase') return Array.from({ length: 6 }, () => PASSPHRASE_WORDS[randomInt(PASSPHRASE_WORDS.length)]).join('-');
+    if (kind === 'passphrase') return Array.from({ length: options.length === 16 ? 16 : 6 }, () => PASSPHRASE_WORDS[randomInt(PASSPHRASE_WORDS.length)]).join('-');
     const groups = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '!@#$%^&*_-+='];
+    if (options.symbols === false) groups.pop();
     const required = groups.map((group) => group[randomInt(group.length)]);
     const alphabet = groups.join('');
-    const value = [...required, ...Array.from({ length: 20 }, () => alphabet[randomInt(alphabet.length)])];
+    const length = options.length === 36 ? 36 : 24;
+    const value = [...required, ...Array.from({ length: length - required.length }, () => alphabet[randomInt(alphabet.length)])];
     for (let index = value.length - 1; index > 0; index -= 1) {
       const swap = randomInt(index + 1);
       [value[index], value[swap]] = [value[swap], value[index]];

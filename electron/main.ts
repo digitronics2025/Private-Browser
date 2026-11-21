@@ -94,7 +94,7 @@ import { generateTotp } from './vault.js';
 import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
 import { MyVaultDiskStore } from './myvault/vault-store.js';
 import { SecureVaultDialogs } from './myvault/secure-dialog.js';
-import type { ConfirmDeleteDialogValue, EditLoginDialogValue, UnlockDialogValue } from './myvault/secure-dialog-contract.js';
+import { SECURE_CREDENTIAL_PRESETS, type ConfirmDeleteDialogValue, type EditLoginDialogValue, type SecureCredentialPreset, type UnlockDialogValue } from './myvault/secure-dialog-contract.js';
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
 import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape, probeFocusedLoginField } from './myvault/isolated-fill.js';
 import { FillPicker } from './myvault/fill-picker.js';
@@ -2321,7 +2321,22 @@ class BrowserController {
   async openVaultEditor(origin?: string) {
     const policy = this.activeVaultPolicy();
     if (!policy.vaultSurface || !policy.saveCapture) throw new Error('Saving passwords is disabled in this workspace');
-    const value = await this.secureDialogs.open('edit-login', origin) as EditLoginDialogValue | undefined;
+    const tab = this.activeTab(this.store.get());
+    const runtime = this.runtimeTabs.get(tab.id);
+    const generation = runtime?.navigationGeneration;
+    const pageOrigin = isAllowedRemoteUrl(tab.url) ? normalizedWebOrigin(tab.url) : undefined;
+    const generate = this.vault.status().configured && policy.passwordClipboard && pageOrigin?.startsWith('https://')
+      && !isProtectedPage(tab.url) && runtime && !runtime.certificateError
+      ? (preset: SecureCredentialPreset) => {
+        const active = this.activeTab(this.store.get());
+        const latest = this.runtimeTabs.get(active.id);
+        if (active.id !== tab.id || !latest || latest.navigationGeneration !== generation
+          || !isAllowedRemoteUrl(active.url) || isProtectedPage(active.url) || normalizedWebOrigin(active.url) !== pageOrigin
+          || latest.certificateError || !this.activeVaultPolicy().passwordClipboard) throw new Error('The current page is no longer eligible to generate a login');
+        const options = SECURE_CREDENTIAL_PRESETS[preset];
+        return this.vault.generateCredential(options.kind, options);
+      } : undefined;
+    const value = await this.secureDialogs.open('edit-login', origin, generate) as EditLoginDialogValue | undefined;
     if (!value) return undefined;
     const result = await this.vault.saveLogin({
       title: value.title,
