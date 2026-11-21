@@ -360,6 +360,10 @@ kbd { font: inherit; }
 .setup-guide > p, .setup-guide li p { color: var(--text-muted); font-size: var(--fs-sm); margin: 5px 0; }
 .setup-guide > ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .setup-guide li { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.vault-setup-guide summary { cursor: pointer; font-weight: 650; }
+.vault-setup-guide dl { display: grid; gap: 9px; margin: 8px 0 0; }
+.vault-setup-guide dt { font-weight: 650; }
+.vault-setup-guide dd { margin: 3px 0 0; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.45; }
 .ntp-space-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--workspace-color); }
 .ntp-shortcuts { width: min(584px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 4px; }
 .ntp-tile { position: relative; }

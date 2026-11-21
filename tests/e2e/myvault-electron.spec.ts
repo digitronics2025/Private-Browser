@@ -23,6 +23,10 @@ test('MyVault renderer stays metadata-only and secrets use an isolated window', 
     await page.getByRole('button', { name: 'Open MyVault' }).click();
     await expect(page.getByText('Connection required')).toBeVisible();
     await expect(page.locator('input[type="password"]')).toHaveCount(0);
+    await page.getByText('Setup and recovery', { exact: true }).click();
+    await expect(page.getByText('Enrollment code expired')).toBeVisible();
+    await expect(page.getByText('Device access revoked')).toBeVisible();
+    await expect(page.locator('input[type="password"]')).toHaveCount(0);
 
     const secureWindowPromise = electronApp.waitForEvent('window');
     await page.getByRole('button', { name: 'Connect with one-time code' }).click();

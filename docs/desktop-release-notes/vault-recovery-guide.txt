@@ -1,0 +1,1 @@
+MyVault includes a setup and recovery guide with separate steps for expired enrollment codes, Windows Hello, forgotten master passwords, offline access and device authorization.
