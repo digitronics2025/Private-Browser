@@ -441,7 +441,7 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 | `changes` | ubuntu, push only | Summarizes installer inputs against the live release and Worker inputs against the previous push. |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
 | `windows-installer` | windows, 25 min, needs `verify`, `app=true` or dispatch | Reuses the local test build for Electron and Chromium, runs Windows named-pipe tests, then builds the versioned installer with its update bootstrap. Records checksum, SBOM and VSIX smoke evidence. |
-| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer` with `app=true` | Restores the artifact's recorded version, records the previous active release, uploads the installer to R2 and registers it in D1. Re-downloads it through the live route and restores the previous release if verification fails (F-50). |
+| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer` with `app=true` | Verifies the Windows artifact and its private R2 readback before D1 activation. Records a receipt for the live check and restores the previous release on failure. |
 
 ### codeql.yml
 

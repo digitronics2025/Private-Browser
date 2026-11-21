@@ -50,6 +50,18 @@ describe('release workflow', () => {
     expect(verify.trim().endsWith('exit 1')).toBe(true);
   });
 
+  it('reads and verifies private candidate bytes before stable activation', () => {
+    const stage = step('Verify candidate bytes from private R2');
+    expect(stage).toContain('id: staged');
+    expect(stage).toContain('wrangler r2 object get "private-browser-releases/$OBJECT_KEY" --file "$candidate_file" --remote');
+    expect(stage).toContain('verify-release-candidate.mjs "$INSTALLER_PATH" "$candidate_file"');
+    expect(stage).toContain('verified=true');
+    expect(stage).toContain('$GITHUB_STEP_SUMMARY');
+    expect(workflow.indexOf(stage)).toBeLessThan(workflow.indexOf(step('Publish D1 release metadata')));
+    expect(step('Publish D1 release metadata')).toContain("steps.staged.outputs.verified == 'true'");
+    expect(step('Verify authenticated download end to end')).toContain('Stable installer verified');
+  });
+
   // F-42: distribution is public, so an installer carrying the shared token is never published.
   it('refuses to publish an installer built with the bundled download token', () => {
     const configured = step('Detect publishing configuration');
