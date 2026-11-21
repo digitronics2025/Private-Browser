@@ -14,6 +14,7 @@ import type {
   AccountSpaceId,
   AccountSpaceKind,
   AccountSpaceSummary,
+  AssistantReceipt,
   GoogleConnectionStatus,
   GoogleModule,
   PermissionCapability,
@@ -33,6 +34,7 @@ const ACCOUNT_RECORD_VERSION = 1;
 const MAX_AVATAR_BYTES = 512 * 1024;
 const MAX_SCOPES = 64;
 const MAX_SCOPE_LENGTH = 300;
+export const MAX_ASSISTANT_RECEIPTS = 12;
 
 export interface SafeStorageAdapter {
   isEncryptionAvailable(): boolean;
@@ -90,6 +92,8 @@ export interface AccountSpaceRecord {
   grantedScopes: string[];
   permissionGrants: PersistedPermissionGrant[];
   backup: AccountBackupConfiguration;
+  assistantCloudAllowed?: boolean;
+  assistantReceipts?: AssistantReceipt[];
 }
 
 export type AccountRecordLoadResult =
@@ -349,9 +353,25 @@ function validateRecord(value: unknown, expectedId: AccountSpaceId): AccountSpac
     grantedScopes: validateScopes(input.grantedScopes ?? []),
     permissionGrants,
     backup,
+    assistantCloudAllowed: input.assistantCloudAllowed === undefined ? undefined : input.assistantCloudAllowed === true,
+    assistantReceipts: validateAssistantReceipts(input.assistantReceipts),
   };
   if (record.kind === 'google' && !record.googleIdentity) throw new Error('Google Account Space is missing identity data');
   return record;
+}
+
+function validateAssistantReceipts(value: unknown): AssistantReceipt[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const result: AssistantReceipt[] = [];
+  for (const entry of value.slice(0, MAX_ASSISTANT_RECEIPTS)) {
+    if (!entry || (entry.mode !== 'cloud' && entry.mode !== 'local')
+      || !['page-request', 'connection-test', 'developer-request'].includes(entry.purpose)) continue;
+    try {
+      result.push({ at: requireIsoDate(entry.at, 'assistant receipt'), mode: entry.mode,
+        destination: requireExactWebOrigin(entry.destination), purpose: entry.purpose });
+    } catch { /* Ignore an invalid receipt without losing the encrypted account. */ }
+  }
+  return result.length ? result : undefined;
 }
 
 function validateGoogleIdentity(value: GoogleIdentityRecord): GoogleIdentityRecord {

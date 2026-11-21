@@ -1,7 +1,7 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { ChromeImportOptions } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
-import type { AiPagePreview, AiRequestReview, AssistantAnswer } from '../electron/types';
+import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
@@ -62,6 +62,7 @@ export function installPreviewApi(): void {
   const state: BrowserSnapshot = {
     settings: { ...DEFAULT_BROWSER_SETTINGS },
     availableSpellcheckLanguages: ['en', 'fr'],
+    assistantPolicy: { cloud: 'allowed', receipts: [] },
     workspaces: WORKSPACES,
     activeWorkspaceId: 'personal',
     activeAccountSpaceId: google,
@@ -160,9 +161,16 @@ export function installPreviewApi(): void {
   let assistantReview: { data: AiRequestReview; context: string; withEvidence: boolean } | undefined;
   let timeoutFixtureUsed = false;
   let previewRequest: { id: string; finish: (answer: AssistantAnswer) => void } | undefined;
+  const disabledCloudAccounts = new Set<AccountSpaceId>();
+  const assistantReceipts = new Map<AccountSpaceId, AssistantReceipt[]>();
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
     state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
+    const assistantUnavailable = state.activeWorkspaceId === 'banking' || state.accountSpaces.some((account) => account.id === state.activeAccountSpaceId && account.locked);
+    state.assistantPolicy = assistantUnavailable ? { cloud: 'unavailable', receipts: [] } : {
+      cloud: disabledCloudAccounts.has(state.activeAccountSpaceId) ? 'disabled' : 'allowed',
+      receipts: assistantReceipts.get(state.activeAccountSpaceId) ?? [],
+    };
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
@@ -176,6 +184,16 @@ export function installPreviewApi(): void {
     const batch = batchesByAccount.get(state.activeAccountSpaceId);
     state.closedTabBatch = batch ? { count: batch.entries.length, groupName: batch.groupName } : undefined;
     listeners.forEach((listener) => listener(structuredClone(state)));
+  };
+  const requireAssistantPolicy = (mode: 'cloud' | 'local') => {
+    if (state.assistantPolicy.cloud === 'unavailable') throw new Error('Assistant requests are unavailable in this Account Space.');
+    if (mode === 'cloud' && state.assistantPolicy.cloud === 'disabled') throw new Error('Cloud AI is disabled in this Account Space.');
+  };
+  const recordAssistantReceipt = (mode: AssistantReceipt['mode'], target: string, purpose: AssistantReceipt['purpose']) => {
+    const id = state.activeAccountSpaceId;
+    const receipt: AssistantReceipt = { at: new Date().toISOString(), mode, purpose, destination: new URL(target).origin };
+    assistantReceipts.set(id, [receipt, ...assistantReceipts.get(id) ?? []].slice(0, 12));
+    publish();
   };
   media.addEventListener('change', () => { syncDarkMode(); publish(); });
   const activeTab = () => state.tabs.find((tab) => tab.id === state.activeTabId)!;
@@ -528,8 +546,9 @@ export function installPreviewApi(): void {
     uploadBackup: async () => ({ status: 'uploaded', etag: 'preview-etag' }),
     getAiProvider: async () => previewProvider,
     checkAiProvider: async () => {
-      if (state.activeWorkspaceId === 'banking') throw new Error('Assistant connection tests are unavailable in this Account Space.');
+      requireAssistantPolicy(previewProvider.mode ?? 'local');
       if (!previewProvider.configured) return { state: 'not-configured' };
+      if (previewProvider.mode) recordAssistantReceipt(previewProvider.mode, previewProvider.mode === 'local' ? 'http://127.0.0.1:11434' : previewProvider.endpoint!, 'connection-test');
       return { state: params.get('aiCheck') === 'model' ? 'model' : 'ready' };
     },
     prepareAiPreview: (async (scope: unknown) => {
@@ -549,6 +568,7 @@ export function installPreviewApi(): void {
         throw new Error('Read the page again before reviewing the request.');
       }
       if (!previewProvider.configured || !previewProvider.mode || !previewProvider.model) throw new Error('Configure an AI provider first.');
+      requireAssistantPolicy(previewProvider.mode);
       const text = redactSensitiveText(String(context));
       const question = redactSensitiveText(String(questionValue).trim());
       const data: AiRequestReview = {
@@ -565,6 +585,8 @@ export function installPreviewApi(): void {
         || !assistantReview || assistantReview.data.id !== id) throw new Error('Review the request before sending it.');
       const { data, context, withEvidence } = assistantReview;
       assistantReview = undefined;
+      requireAssistantPolicy(data.mode);
+      recordAssistantReceipt(data.mode, data.destination, 'page-request');
       if (params.get('aiRequest') === 'timeout-once' && !timeoutFixtureUsed) {
         timeoutFixtureUsed = true;
         return { kind: 'timeout' };
@@ -584,6 +606,16 @@ export function installPreviewApi(): void {
         previewRequest.finish({ kind: 'cancelled' });
         previewRequest = undefined;
       }
+    },
+    setAssistantCloudAllowed: async (id, allowed) => {
+      if (id !== state.activeAccountSpaceId) throw new Error('The Account Space changed.');
+      requireAssistantPolicy('local');
+      if (allowed) disabledCloudAccounts.delete(state.activeAccountSpaceId);
+      else {
+        disabledCloudAccounts.add(state.activeAccountSpaceId);
+        if (assistantReview?.data.mode === 'cloud') assistantReview = undefined;
+      }
+      publish();
     },
     revokeAiContext: async () => {
       assistantReview = undefined;

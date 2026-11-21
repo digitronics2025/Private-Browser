@@ -166,6 +166,11 @@ request against the retained excerpt while its five-minute read is valid.
 The cloud cost estimate uses user-entered prices and expected output length.
 It runs locally and the prices stay in the review panel's memory.
 
+Each Account Space can disable cloud AI, including the connection sample.
+A local model remains available in eligible spaces. The encrypted account
+keeps its last twelve request attempts with purpose, provider origin and
+time. Receipt data excludes prompts, page details and answers.
+
 ### Developer approval — `approveAiPreview(previewId, mode)`
 
 1. The pending entry is fetched and **deleted immediately**, before any check. A

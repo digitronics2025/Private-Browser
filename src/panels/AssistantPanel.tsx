@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Bot, Cloud, Eye, LoaderCircle, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
-import type { AiPagePreview, AiPreviewScope, AiProviderCheckState, AiRequestReview, AssistantAnswer, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
+import type { AccountSpaceId, AiPagePreview, AiPreviewScope, AiProviderCheckState, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSpacePolicy, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
 import { ASSISTANT_PRESETS, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION, type AssistantPresetId, type AssistantPresetOverrides } from '../../electron/ai-prompt';
 import { PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
@@ -15,6 +15,11 @@ const checkMessages: Record<AiProviderCheckState, string> = {
   'invalid-response': 'The provider returned an empty or unreadable response.',
   unavailable: 'Could not reach the AI provider. Check the connection and endpoint.',
   'local-setup': 'Start Ollama with cloud features disabled and check that the selected model is installed.',
+};
+const receiptPurpose: Record<AssistantReceipt['purpose'], string> = {
+  'page-request': 'Page request',
+  'connection-test': 'Connection test',
+  'developer-request': 'Developer request',
 };
 
 function searchWords(text: string): string[] {
@@ -32,8 +37,10 @@ function findPagePassages(text: string, query: string): string[] {
     .slice(0, 3).map((passage) => passage.text);
 }
 
-export function AssistantPanel({ workspace, presets, onToast }: {
+export function AssistantPanel({ accountId, workspace, policy, presets, onToast }: {
+  accountId: AccountSpaceId;
   workspace: WorkspaceId;
+  policy: AssistantSpacePolicy;
   presets?: AssistantPresetOverrides;
   onToast: (message: string, kind?: 'ok' | 'error') => void;
 }) {
@@ -50,6 +57,7 @@ export function AssistantPanel({ workspace, presets, onToast }: {
   const [local, setLocal] = useState<LocalAiModels>();
   const [localModel, setLocalModel] = useState('');
   const isLocal = provider.mode === 'local';
+  const cloudBlocked = provider.mode === 'cloud' && policy.cloud !== 'allowed';
   const [question, setQuestion] = useState('Summarize the important points on this page.');
   const [preset, setPreset] = useState<AssistantPresetId | ''>('');
   const [withEvidence, setWithEvidence] = useState(false);
@@ -127,6 +135,18 @@ export function AssistantPanel({ workspace, presets, onToast }: {
     catch { setProviderCheck('unavailable'); }
     finally { setLoading(false); }
   };
+  const changeCloudPolicy = async (allowed: boolean) => {
+    setLoading(true);
+    try {
+      await window.privateBrowser.setAssistantCloudAllowed(accountId, allowed);
+      if (!allowed && review?.mode === 'cloud') setReview(null);
+      setProviderCheck(undefined);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Could not change cloud AI settings.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
   const ask = async () => {
     if (!review) return;
     setLoading(true);
@@ -161,6 +181,18 @@ export function AssistantPanel({ workspace, presets, onToast }: {
     <div className="side-panel">
       <PanelHeader icon={Bot} eyebrow="Private assistant" title="Page intelligence" />
       <div className="local-banner"><LockKeyhole size={15} /><div><strong>Private by default</strong><span>Nothing leaves this device without approval.</span></div></div>
+      <div className="assistant-space-policy settings-card">
+        <label><input type="checkbox" checked={policy.cloud === 'allowed'} disabled={loading || policy.cloud === 'unavailable'} onChange={(event) => void changeCloudPolicy(event.target.checked)} /> Allow cloud AI in this Account Space</label>
+        {policy.cloud === 'disabled' && <small>Cloud requests are blocked here. A local model can still be used.</small>}
+        <details>
+          <summary>Recent Assistant requests</summary>
+          {policy.receipts.length ? <ul>{policy.receipts.map((receipt, index) => <li key={`${receipt.at}-${index}`}>
+            <strong>{receiptPurpose[receipt.purpose]}</strong>
+            <span>{receipt.destination}</span>
+            <time dateTime={receipt.at}>{new Date(receipt.at).toLocaleString()}</time>
+          </li>)}</ul> : <p>No requests recorded in this Account Space.</p>}
+        </details>
+      </div>
       <div className="provider-strip">
         <span className={provider.configured ? 'connected' : ''} />
         <div><strong>{provider.configured ? provider.model : provider.error === 'provider-corrupt' ? 'Provider recovery required' : 'AI provider not connected'}</strong><small>{provider.configured ? isLocal ? 'Local · Ollama' : domainFromUrl(provider.endpoint ?? '') : provider.error === 'provider-corrupt' ? 'Reset the unreadable configuration' : 'Choose an installed local model or a cloud provider'}</small></div>
@@ -171,7 +203,7 @@ export function AssistantPanel({ workspace, presets, onToast }: {
         }}>{provider.configured ? 'Change' : 'Connect'}</button>
       </div>
       {provider.configured && <div className="provider-check">
-        <button className="text-button" type="button" disabled={loading} onClick={() => void checkConnection()}>Test connection</button>
+        <button className="text-button" type="button" disabled={loading || cloudBlocked} onClick={() => void checkConnection()}>Test connection</button>
         <small>Uses a built-in sample.</small>
         {providerCheck && <p role="status">{checkMessages[providerCheck]}</p>}
       </div>}
@@ -259,7 +291,7 @@ export function AssistantPanel({ workspace, presets, onToast }: {
               setWithEvidence(event.target.checked);
               setReview(null);
             }} /> Include source passages</label>
-            <button className="primary-button full" type="submit" disabled={loading || !provider.configured || !question.trim()}><ShieldCheck size={16} /> {provider.configured ? answer?.kind === 'timeout' ? 'Review retry' : 'Review request' : 'Connect provider first'}</button>
+            <button className="primary-button full" type="submit" disabled={loading || !provider.configured || cloudBlocked || !question.trim()}><ShieldCheck size={16} /> {cloudBlocked ? 'Cloud AI is disabled here' : provider.configured ? answer?.kind === 'timeout' ? 'Review retry' : 'Review request' : 'Connect provider first'}</button>
           </form>
           {review && <section className="permission-card request-review" aria-label="Request review">
             <div>{review.mode === 'local' ? <LockKeyhole size={17} /> : <Cloud size={17} />}<strong>{review.mode === 'local' ? 'Send to local model' : 'Send to cloud provider'}</strong></div>

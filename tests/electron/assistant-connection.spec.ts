@@ -12,7 +12,8 @@ test('checks the provider with a built-in sample and sends only the separately a
   const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
   env.PRIVATE_BROWSER_E2E_USER_DATA = profile;
   delete env.ELECTRON_RUN_AS_NODE;
-  const app = await electron.launch({ args: [resolve('dist-electron/main.js')], env });
+  const launch = () => electron.launch({ args: [resolve('dist-electron/main.js')], env });
+  let app = await launch();
   const server = createServer((_req, response) => {
     response.writeHead(200, { 'content-type': 'text/html' });
     response.end('<!doctype html><title>Reading sample</title><p id="selection">A brass kettle sits on the shelf.</p><p>Other catalogue items.</p>');
@@ -103,11 +104,41 @@ test('checks the provider with a built-in sample and sends only the separately a
     await expect.poll(async () => (await readBodies()).length).toBe(7);
     await page.evaluate((id) => window.privateBrowser.cancelReviewedAssistant(id), retry.id);
     await expect(pending).resolves.toEqual({ kind: 'cancelled' });
+
+    const initial = await page.evaluate(() => window.privateBrowser.getState());
+    const receipts = initial.assistantPolicy.receipts;
+    expect(receipts.map((item) => item.purpose)).toEqual([
+      'page-request', 'page-request', 'page-request', 'page-request', 'connection-test', 'connection-test', 'connection-test',
+    ]);
+    expect(receipts.every((item) => item.destination === 'https://ai-fixture.example.com' && Number.isFinite(Date.parse(item.at)))).toBe(true);
+    expect(receipts.every((item) => Object.keys(item).sort().join(',') === 'at,destination,mode,purpose')).toBe(true);
+    await page.evaluate((id) => window.privateBrowser.setAssistantCloudAllowed(id, false), initial.activeAccountSpaceId);
+    await expect(check()).rejects.toThrow(/cloud AI is disabled/i);
+    await expect(makeReview()).rejects.toThrow(/cloud AI is disabled/i);
+    expect(await readBodies()).toHaveLength(7);
+    const anotherSpace = initial.activeWorkspaceId === 'tenten' ? 'personal' : 'tenten';
+    await page.evaluate((id) => window.privateBrowser.switchWorkspace(id), anotherSpace);
+    await expect(page.evaluate(() => window.privateBrowser.getState().then((state) => state.assistantPolicy))).resolves.toEqual({ cloud: 'allowed', receipts: [] });
+    await expect(page.evaluate((id) => window.privateBrowser.setAssistantCloudAllowed(id, true), initial.activeAccountSpaceId)).rejects.toThrow(/unavailable in this Account Space/i);
     await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
     await expect(check()).rejects.toThrow(/unavailable in this Account Space/i);
+    await expect(page.evaluate(() => window.privateBrowser.getState().then((state) => state.assistantPolicy))).resolves.toEqual({ cloud: 'unavailable', receipts: [] });
+
+    await test.step('restore the encrypted Account Space settings after restart', async () => {
+      await page.evaluate((id) => window.privateBrowser.switchWorkspace(id), initial.activeWorkspaceId);
+      await page.evaluate(() => window.privateBrowser.newTab());
+      await app.close();
+      app = await launch();
+      const restoredPage = await app.firstWindow();
+      await expect.poll(() => restoredPage.evaluate(() => window.privateBrowser.getState().then((state) => state.assistantPolicy)))
+        .toEqual({ cloud: 'disabled', receipts });
+    });
   } finally {
     await app.close();
-    await new Promise<void>((closed) => server.close(() => closed()));
+    await new Promise<void>((closed) => {
+      server.close(() => closed());
+      server.closeAllConnections();
+    });
     await rm(profile, { recursive: true, force: true, maxRetries: 4 });
   }
 });

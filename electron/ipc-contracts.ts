@@ -321,6 +321,10 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'ai:send-reviewed':
     case 'ai:cancel-reviewed':
       exact(args, 1); requireUuid(args[0], 'review'); return;
+    case 'ai:set-space-cloud':
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (typeof args[1] !== 'boolean') throw new Error('Choose whether to allow cloud AI');
+      return;
     case 'ai:approve-preview':
       between(args, 1, 2); requireUuid(args[0], 'preview');
       if (args[1] !== undefined && args[1] !== 'cloud' && args[1] !== 'local') throw new Error('Invalid AI approval destination');

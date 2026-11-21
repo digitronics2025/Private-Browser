@@ -153,3 +153,26 @@ test('estimates cloud price locally and cancels a pending request on demand', as
   await expect(panel.getByText('Request cancelled.')).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Approve and ask once' })).toHaveCount(0);
 });
+
+test('shows cloud settings and receipts for only the current Account Space', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 820 });
+  await page.goto('/?localAi=sample');
+  await page.evaluate(() => window.privateBrowser.configureAiProvider({ endpoint: 'https://ai-fixture.example.com/v1', model: 'fixture', apiKey: '' }));
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  const allowCloud = panel.getByRole('checkbox', { name: 'Allow cloud AI in this Account Space' });
+  await expect(allowCloud).toBeChecked();
+  await panel.getByRole('button', { name: 'Test connection' }).click();
+  await panel.getByText('Recent Assistant requests', { exact: true }).click();
+  const receipts = panel.locator('details').filter({ hasText: 'Recent Assistant requests' });
+  await expect(receipts).toContainText('https://ai-fixture.example.com');
+  await expect(receipts).not.toContainText('/v1');
+  await allowCloud.uncheck();
+  await expect(panel.getByRole('button', { name: 'Test connection' })).toBeDisabled();
+  await panel.getByRole('button', { name: 'Read selection locally' }).click();
+  await expect(panel.getByRole('button', { name: 'Cloud AI is disabled here' })).toBeDisabled();
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
+  await expect(allowCloud).toBeChecked();
+  await panel.getByText('Recent Assistant requests', { exact: true }).click();
+  await expect(receipts).toContainText('No requests recorded in this Account Space.');
+});

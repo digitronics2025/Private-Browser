@@ -32,7 +32,7 @@ import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, readAssistantAnswer } from './ai-prompt.js';
 import { WORKSPACES } from './state-store.js';
-import { AccountStore } from './account-store.js';
+import { AccountStore, MAX_ASSISTANT_RECEIPTS } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
 import { RuntimeStateStore } from './runtime-state-store.js';
 import { problemForFailedLoad, StartupRestoreJournal } from './startup-restore.js';
@@ -57,6 +57,8 @@ import type {
   AiPreviewScope,
   AiRequestReview,
   AssistantAnswer,
+  AssistantReceipt,
+  AssistantSpacePolicy,
   ControlCenterRecheckInput,
   ControlCenterSendInput,
   AiProviderInput,
@@ -269,7 +271,7 @@ class BrowserController {
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number }>();
   private assistantReview?: { review: AiRequestReview; preview: AiPagePreview; question: string; withEvidence: boolean; expiresAt: number; navigationGeneration: number };
-  private activeAssistant?: { id: string; controller: AbortController };
+  private activeAssistant?: { id: string; mode: 'local' | 'cloud'; controller: AbortController };
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
   private readonly developerPreviewIds = new Set<string>();
@@ -530,6 +532,7 @@ class BrowserController {
       ui: persisted.ui,
       settings: settingsForWorkspace(persisted, persisted.activeWorkspaceId),
       availableSpellcheckLanguages: this.availableSpellcheckLanguages(),
+      assistantPolicy: this.assistantPolicy(persisted),
       windowState: {
         maximized: windowReady && this.window.isMaximized(),
         fullscreen: windowReady && this.window.isFullScreen(),
@@ -2371,6 +2374,7 @@ class BrowserController {
     if (!maySendAiPreviewToCloud(pending.preview)) throw new Error('Mailbox contents never enter an AI model.');
     const provider = this.aiProvider.status();
     if (!provider.configured || !provider.mode || !provider.model) throw new Error('Configure an AI provider first.');
+    this.requireAssistantPolicy(pending.preview.accountSpaceId, provider.mode);
     const question = redactSensitiveText(questionValue.trim());
     if (!question.text) throw new Error('Enter a question before reviewing the request.');
     const redacted = redactSensitiveText(text);
@@ -2397,6 +2401,7 @@ class BrowserController {
     if (pending.expiresAt < Date.now()) throw new Error('The review expired. Read the page again.');
     const validate = () => {
       this.validateAssistantSource(pending.preview, pending.navigationGeneration);
+      this.requireAssistantPolicy(pending.preview.accountSpaceId, pending.review.mode);
       const current = this.aiProvider.status();
       const destination = current.mode === 'local' ? 'http://127.0.0.1:11434/api/chat' : `${current.endpoint}/chat/completions`;
       if (!current.configured || current.mode !== pending.review.mode || current.model !== pending.review.model || destination !== pending.review.destination) {
@@ -2405,14 +2410,15 @@ class BrowserController {
     };
     validate();
     const kind = pending.review.mode === 'local' ? 'local-read' : 'cloud-approved';
+    this.recordAssistantReceipt(pending.preview.accountSpaceId, pending.review.mode, pending.review.destination, 'page-request');
     this.addPrivacyEvent(kind, 'Assistant request approved', `${pending.review.redactions} redaction(s)`);
     const controller = new AbortController();
-    this.activeAssistant = { id, controller };
+    this.activeAssistant = { id, mode: pending.review.mode, controller };
     try {
       const answer = await this.aiProvider.ask(pending.preview, pending.question, validate, controller.signal);
       controller.signal.throwIfAborted();
       this.pendingAiPreviews.delete(pending.preview.id);
-      this.addPrivacyEvent(kind, 'Assistant request completed', pending.preview.title);
+      this.addPrivacyEvent(kind, 'Assistant request completed', 'Provider returned a response');
       return readAssistantAnswer(answer, pending.withEvidence, pending.preview.text);
     } catch (error) {
       if (controller.signal.aborted) return { kind: 'cancelled' };
@@ -2457,15 +2463,53 @@ class BrowserController {
     return this.aiProvider.status();
   }
 
+  private assistantPolicy(state = this.store.get()): AssistantSpacePolicy {
+    const accountId = this.activeAccountSpaceId(state);
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountId);
+    if (this.store.isReadOnly() || !account || !isAvailableRegularAccount(state, account) || !workspaceVaultPolicy(state.activeWorkspaceId).aiExtraction) {
+      return { cloud: 'unavailable', receipts: [] };
+    }
+    const preferences = this.store.assistantPreferences(accountId);
+    return preferences ? { cloud: preferences.cloudAllowed ? 'allowed' : 'disabled', receipts: preferences.receipts }
+      : { cloud: 'unavailable', receipts: [] };
+  }
+
+  private requireAssistantPolicy(accountId: AccountSpaceId, mode: 'local' | 'cloud'): void {
+    const state = this.store.get();
+    const policy = this.assistantPolicy(state);
+    if (accountId !== this.activeAccountSpaceId(state) || policy.cloud === 'unavailable') {
+      throw new Error('Assistant requests are unavailable in this Account Space.');
+    }
+    if (mode === 'cloud' && policy.cloud === 'disabled') throw new Error('Cloud AI is disabled in this Account Space.');
+  }
+
+  setAssistantCloudAllowed(accountId: AccountSpaceId, allowed: boolean): void {
+    this.requireAssistantPolicy(accountId, 'local');
+    this.store.refreshAccount(this.accounts.update(accountId, (record) => { record.assistantCloudAllowed = allowed; }));
+    if (!allowed) {
+      if (this.assistantReview?.review.mode === 'cloud') this.assistantReview = undefined;
+      if (this.activeAssistant?.mode === 'cloud') this.activeAssistant.controller.abort();
+    }
+    this.broadcast();
+  }
+
+  private recordAssistantReceipt(accountId: AccountSpaceId, mode: AssistantReceipt['mode'], destination: string, purpose: AssistantReceipt['purpose']): void {
+    const receipt: AssistantReceipt = { at: new Date().toISOString(), mode, destination: new URL(destination).origin, purpose };
+    this.store.refreshAccount(this.accounts.update(accountId, (record) => {
+      record.assistantReceipts = [receipt, ...record.assistantReceipts ?? []].slice(0, MAX_ASSISTANT_RECEIPTS);
+    }));
+    this.broadcast();
+  }
+
   checkAiProvider() {
     const account = this.activeAccountSpaceId(this.store.get());
-    const validateWorkspace = () => {
-      const state = this.store.get();
-      if (account !== this.activeAccountSpaceId(state) || !workspaceVaultPolicy(state.activeWorkspaceId).aiExtraction) {
-        throw new Error('Assistant connection tests are unavailable in this Account Space.');
-      }
-    };
+    const provider = this.aiProvider.status();
+    const validateWorkspace = () => this.requireAssistantPolicy(account, provider.mode ?? 'local');
     validateWorkspace();
+    if (provider.configured && provider.mode) {
+      const target = provider.mode === 'local' ? 'http://127.0.0.1:11434' : provider.endpoint!;
+      this.recordAssistantReceipt(account, provider.mode, target, 'connection-test');
+    }
     return this.aiProvider.checkConnection(validateWorkspace);
   }
 
@@ -2499,11 +2543,18 @@ class BrowserController {
   async askAi(token: string, questionValue: string): Promise<string> {
     const question = questionValue.trim();
     if (!question || question.length > 2000) throw new Error('Enter a question under 2,000 characters');
-    const mode = this.aiProvider.status().mode ?? 'cloud';
+    const provider = this.aiProvider.status();
+    const mode = provider.mode ?? 'cloud';
     const preview = this.consumeAiApproval(token, mode);
     if (!this.developerPreviewIds.has(preview.id)) throw new Error('Review the Assistant request before sending it.');
-    const answer = await this.aiProvider.ask(preview, question, () => this.validateAiSource(preview));
-    this.addPrivacyEvent(mode === 'local' ? 'local-read' : 'cloud-approved', mode === 'local' ? 'Local AI request completed' : 'Cloud AI request completed', preview.title);
+    const validate = () => {
+      this.validateAiSource(preview);
+      this.requireAssistantPolicy(preview.accountSpaceId, mode);
+    };
+    validate();
+    if (provider.configured) this.recordAssistantReceipt(preview.accountSpaceId, mode, mode === 'local' ? 'http://127.0.0.1:11434' : provider.endpoint!, 'developer-request');
+    const answer = await this.aiProvider.ask(preview, question, validate);
+    this.addPrivacyEvent(mode === 'local' ? 'local-read' : 'cloud-approved', mode === 'local' ? 'Local AI request completed' : 'Cloud AI request completed', 'Provider returned a response');
     return answer;
   }
 
@@ -4072,6 +4123,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:review-request', (_event, id: string, text: string, question: string, withEvidence?: boolean) => controller!.reviewAssistantRequest(id, text, question, withEvidence));
   handle('ai:send-reviewed', (_event, id: string) => controller!.askReviewedAssistant(id));
   handle('ai:cancel-reviewed', (_event, id: string) => controller!.cancelReviewedAssistant(id));
+  handle('ai:set-space-cloud', (_event, accountId: AccountSpaceId, allowed: boolean) => controller!.setAssistantCloudAllowed(accountId, allowed));
   handle('ai:approve-preview', (_event, previewId: string, mode?: 'local' | 'cloud') => controller!.approveAiPreview(previewId, mode));
   handle('ai:provider-status', () => controller!.getAiProvider());
   handle('ai:check-provider', () => controller!.checkAiProvider());

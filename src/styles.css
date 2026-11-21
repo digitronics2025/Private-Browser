@@ -715,6 +715,12 @@ kbd { font: inherit; }
 .request-review summary { margin-top: 8px; cursor: pointer; font-size: var(--fs-sm); }
 .request-cost label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(75px, 100px); align-items: center; gap: 8px; margin-top: 6px; font-size: var(--fs-sm); }
 .request-cost input { min-width: 0; width: 100%; }
+.assistant-space-policy { display: grid; gap: 6px; }
+.assistant-space-policy label { display: flex; align-items: center; gap: 6px; }
+.assistant-space-policy small, .assistant-space-policy p, .assistant-space-policy li span, .assistant-space-policy time { color: var(--text-muted); font-size: var(--fs-sm); }
+.assistant-space-policy summary { cursor: pointer; font-size: var(--fs-sm); }
+.assistant-space-policy ul { padding: 0; margin: 6px 0 0; list-style: none; display: grid; gap: 5px; }
+.assistant-space-policy li { padding: 5px 0; border-top: 1px solid var(--border); display: grid; overflow-wrap: anywhere; }
 .context-size { display: block; color: var(--text-muted); font-size: var(--fs-xs); }
 .permission-card > div:first-child { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; color: var(--accent); font-size: var(--fs-md); }
 .permission-card .primary-button { width: 100%; margin-top: 12px; }
