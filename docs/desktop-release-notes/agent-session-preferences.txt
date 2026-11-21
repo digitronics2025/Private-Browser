@@ -1,0 +1,1 @@
+Choose how long Claude Code or Codex can reconnect in Agent settings and see when its session expires. For an inspected page, Always allow on this site remembers the approved origin. Sensitive actions still ask for approval.

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { agentDataRoot } from '@private-browser/bridge-protocol/agent-location';
 import { AgentHost } from './agent-host.js';
@@ -35,6 +35,7 @@ import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { DownloadHistoryStore } from './download-history.js';
+import { availableDownloadFolder, discardDownloadStage, DownloadFolderStore, finishStagedDownload, safeDownloadFilename, stageDownload } from './download-folder.js';
 import { ManagedUpdate } from './managed-update.js';
 import { canPauseTrackersAt, TRACKER_COMPATIBILITY_MS, TrackerProtection, trackerCategory } from './tracker-protection.js';
 import { getDomain } from 'tldts';
@@ -53,7 +54,7 @@ import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace
 import { readBookmarkHtml } from './bookmark-html.js';
 import { mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
-import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
+import { isPinnablePanelTool, mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
   AccountSpaceColor,
@@ -90,6 +91,8 @@ import type {
   DeveloperNetworkIssue,
   DevToolsMode,
   DownloadAction,
+  DownloadBatchStatus,
+  DownloadFolderMode,
   DownloadEntry,
   AddressMatch,
   HistoryQuery,
@@ -271,6 +274,9 @@ class BrowserController {
   private readonly trackerProtection = new TrackerProtection();
   private readonly trackerExpiry = new Map<AccountSpaceId, Map<string, ReturnType<typeof setTimeout>>>();
   private trackerBroadcast?: ReturnType<typeof setTimeout>;
+  private readonly downloadFolder = new DownloadFolderStore(join(app.getPath('userData'), 'download-folders'), safeStorage);
+  private downloadFolderPickerOpen = false;
+  private readonly temporaryPanelTools = new Map<AccountSpaceId, SidePanelTool>();
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
@@ -430,6 +436,21 @@ class BrowserController {
     // The chrome's geometry is expressed in DIPs; a zoomed chrome would drift from the page view.
     this.window.webContents.on('did-finish-load', () => this.window.webContents.setZoomFactor(1));
     this.window.webContents.setVisualZoomLevelLimits(1, 1).catch(() => undefined);
+    this.window.on('close', (event) => {
+      try {
+        this.store.flushPendingWrites();
+      } catch {
+        const closeAnyway = dialog.showMessageBoxSync(this.window, {
+          type: 'warning',
+          message: 'Recent browsing changes could not be saved.',
+          detail: 'Keep Private Browser open to retry, or close it and lose the pending changes.',
+          buttons: ['Keep open', 'Close anyway'],
+          defaultId: 0,
+          cancelId: 0,
+        }) === 1;
+        if (!closeAnyway) event.preventDefault();
+      }
+    });
     this.window.on('closed', () => {
       screen.removeListener('display-metrics-changed', onDisplayChange);
       nativeTheme.removeListener('updated', onThemeChange);
@@ -538,9 +559,10 @@ class BrowserController {
       bookmarks: persisted.bookmarks,
       bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
       history: persisted.history.slice(0, 100),
-      downloads: downloadAccount ? this.downloadEntries(downloadAccount) : [],
+      ...(downloadAccount ? this.downloadSnapshot(downloadAccount) : { downloads: [] }),
       downloadHistory: !downloadAccount ? undefined : this.downloadHistoryFailures.has(downloadAccount)
         ? 'unavailable' : this.downloadHistory.status(downloadAccount),
+      downloadFolder: downloadAccount ? this.downloadFolder.status(downloadAccount) : undefined,
       managedUpdate: downloadAccount && process.platform === 'win32' && !this.store.isReadOnly() ? this.managedUpdate.snapshot() : undefined,
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: strictTracking || persisted.trackerBlocking,
@@ -558,7 +580,8 @@ class BrowserController {
       googleConfiguration: this.googleConfiguration.status(),
       externalBrowsers: this.externalBrowsers.discover().map(({ id, name }) => ({ id, name })),
       bookmarkBarVisible: persisted.bookmarkBarVisible,
-      ui: persisted.ui,
+      ui: { ...persisted.ui, sidePanelTool: this.sidePanelTool(persisted, downloadAccount) },
+      sidePanelPins: downloadAccount ? persisted.sidePanelsByAccountSpace?.[downloadAccount]?.pins ?? [] : undefined,
       settings: settingsForWorkspace(persisted, persisted.activeWorkspaceId),
       availableSpellcheckLanguages: this.availableSpellcheckLanguages(),
       assistantPolicy: this.assistantPolicy(persisted),
@@ -1023,14 +1046,15 @@ class BrowserController {
   private layoutSideApps(): void {
     if (!this.window || this.window.isDestroyed()) return;
     const state = this.store.get();
-    const protectedWorkspace = WORKSPACES.find((item) => item.id === state.activeWorkspaceId)?.protected ?? true;
+    const accountId = this.activeDownloadAccount(state);
+    const tool = this.sidePanelTool(state, accountId);
     const [contentWidth, contentHeight] = this.window.getContentSize();
     this.sideApps.layout({
       insets: this.layout,
       contentWidth,
       contentHeight,
-      activeApp: state.ui.sidePanelOpen && isSideAppId(state.ui.sidePanelTool) ? state.ui.sidePanelTool : null,
-      suppressed: this.overlayOpen || this.window.isFullScreen() || protectedWorkspace,
+      activeApp: state.ui.sidePanelOpen && isSideAppId(tool) ? tool : null,
+      suppressed: this.overlayOpen || this.window.isFullScreen() || !accountId,
     });
   }
 
@@ -1343,6 +1367,8 @@ class BrowserController {
     this.configuredSessions.delete(partition);
     this.downloadHistory.forgetAccount(accountSpaceId);
     this.downloadHistoryFailures.delete(accountSpaceId);
+    this.downloadFolder.forgetAccount(accountSpaceId);
+    this.temporaryPanelTools.delete(accountSpaceId);
     this.store.removeAccount(accountSpaceId);
     for (const [id, entry] of this.downloads) {
       if (entry.accountSpaceId === accountSpaceId) this.downloads.delete(id);
@@ -1767,15 +1793,53 @@ class BrowserController {
     ses.setSpellCheckerLanguages([...new Set(matching)]);
   }
 
-  setUiPreferences(patch: UiPreferencesPatch): void {
-    const before = this.store.get().ui;
-    const next = this.store.update((state) => { state.ui = mergeUiPreferences(state.ui, patch); });
-    if (next.ui.theme !== before.theme) {
+  private sidePanelTool(state: RuntimeBrowserStateV2, regularAccount: AccountSpaceId | undefined): SidePanelTool {
+    if (!isPinnablePanelTool(state.ui.sidePanelTool)) return state.ui.sidePanelTool;
+    return regularAccount ? state.sidePanelsByAccountSpace?.[regularAccount]?.tool ?? state.ui.sidePanelTool
+      : this.temporaryPanelTools.get(this.activeAccountSpaceId(state)) ?? 'privacy';
+  }
+
+  setUiPreferences(patch: UiPreferencesPatch, expectedAccount?: AccountSpaceId): void {
+    const before = this.store.get();
+    const activeId = this.activeAccountSpaceId(before);
+    if (expectedAccount !== undefined && activeId !== expectedAccount) throw new Error('The Account Space changed. Open the tool again.');
+    const regularAccount = this.activeDownloadAccount(before);
+    const { sidePanelTool, ...globalPreferences } = patch;
+    const scopedTool = isPinnablePanelTool(sidePanelTool) ? sidePanelTool : undefined;
+    const next = this.store.update((state) => {
+      state.ui = mergeUiPreferences(state.ui, globalPreferences);
+      // Keep settings and library views open when switching the account they show.
+      if (sidePanelTool && !scopedTool) state.ui.sidePanelTool = sidePanelTool;
+      if (scopedTool && !isPinnablePanelTool(state.ui.sidePanelTool)) state.ui.sidePanelTool = 'assistant';
+      if (scopedTool && regularAccount) {
+        const panels = state.sidePanelsByAccountSpace ??= {};
+        panels[regularAccount] = { ...panels[regularAccount], tool: scopedTool };
+      }
+    });
+    if (scopedTool && !regularAccount) this.temporaryPanelTools.set(activeId, scopedTool);
+    if (next.ui.theme !== before.ui.theme) {
       nativeTheme.themeSource = next.ui.theme;
       this.applyFrameColors();
     }
     // Hide the previous tool before the renderer can report the next slot.
     this.layoutSideApps();
+    this.broadcast();
+  }
+
+  setSidePanelPin(id: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean): void {
+    if (id !== this.activeDownloadAccount() || this.store.isReadOnly()) {
+      throw new Error('Tool pins are unavailable in this Account Space.');
+    }
+    this.store.update((state) => {
+      const panels = state.sidePanelsByAccountSpace ??= {};
+      const current = panels[id];
+      const pins = new Set(current?.pins);
+      if (enabled) pins.add(tool);
+      else pins.delete(tool);
+      const updated = sanitizeAccountPanel({ ...current, pins: [...pins] });
+      if (updated) panels[id] = updated;
+      else delete panels[id];
+    });
     this.broadcast();
   }
 
@@ -3430,13 +3494,77 @@ class BrowserController {
     throw new Error('Download is unavailable in this Account Space');
   }
 
-  private downloadEntries(accountId: AccountSpaceId): DownloadEntry[] {
+  private downloadSnapshot(accountId: AccountSpaceId): { downloads: DownloadEntry[]; downloadBatch: DownloadBatchStatus } {
     const live = [...this.downloads.values()].filter((entry) => entry.accountSpaceId === accountId);
     const retained = this.downloadHistory.entries(accountId).filter(({ entry }) => !this.downloads.has(entry.id));
-    return [
-      ...live.map(({ savePath: _path, expectedInstaller: _expected, verifiedStamp: _stamp, retainedFileStamp: _retained, ...entry }) => entry),
-      ...retained.map(({ entry }) => entry),
-    ];
+    const downloadBatch = { active: 0, completed: 0, stopped: 0 };
+    const downloads: DownloadEntry[] = live.map(({ savePath: _path, expectedInstaller: _expected, verifiedStamp: _stamp, retainedFileStamp: _retained, ...entry }) => {
+      if (entry.state === 'progressing' || entry.canCancel) downloadBatch.active++;
+      else if (entry.state === 'completed') downloadBatch.completed++;
+      else downloadBatch.stopped++;
+      return entry;
+    });
+    downloads.push(...retained.map(({ entry }) => entry));
+    return { downloads, downloadBatch };
+  }
+
+  private assertOwnDownloadFolder(accountId: AccountSpaceId): void {
+    if (accountId !== this.activeDownloadAccount() || this.store.isReadOnly()) {
+      throw new Error('Download folders are unavailable in this Account Space.');
+    }
+  }
+
+  async chooseDownloadFolder(accountId: AccountSpaceId): Promise<void> {
+    this.assertOwnDownloadFolder(accountId);
+    if (this.downloadFolderPickerOpen) throw new Error('The download folder picker is already open.');
+    if (!this.downloadFolder.status(accountId).available) throw new Error('Windows protected storage is unavailable for download folders.');
+    this.downloadFolderPickerOpen = true;
+    try {
+      const choice = await dialog.showOpenDialog(this.window, {
+        title: 'Choose a download folder for this Account Space',
+        defaultPath: this.downloadFolder.get(accountId)?.path ?? app.getPath('downloads'),
+        properties: ['openDirectory', 'dontAddToRecent'],
+      });
+      if (choice.canceled || !choice.filePaths[0]) return;
+      this.assertOwnDownloadFolder(accountId);
+      this.downloadFolder.choose(accountId, choice.filePaths[0]);
+      this.broadcast();
+    } finally {
+      this.downloadFolderPickerOpen = false;
+    }
+  }
+
+  setDownloadFolderMode(accountId: AccountSpaceId, mode: DownloadFolderMode): void {
+    this.assertOwnDownloadFolder(accountId);
+    if (mode === 'default') this.downloadFolder.forgetAccount(accountId);
+    else this.downloadFolder.setAsk(accountId, mode === 'ask');
+    this.broadcast();
+  }
+
+  private setDownloadDestination(entry: LocalDownload, item: DownloadItem): string | undefined {
+    const state = this.store.get();
+    const account = state.accountSpaces.find(({ id }) => id === entry.accountSpaceId);
+    if (!account || !isAvailableRegularAccount(state, account) || this.store.isReadOnly()) return;
+    try {
+      const preference = this.downloadFolder.get(entry.accountSpaceId);
+      if (!preference) return;
+      const folder = availableDownloadFolder(preference.path);
+      const filename = safeDownloadFilename(entry.filename);
+      if (preference.ask || entry.risk !== 'ordinary' || downloadRisk(filename) !== 'ordinary' || entry.expectedInstaller) {
+        item.setSaveDialogOptions({ defaultPath: join(folder, filename), properties: ['dontAddToRecent'] });
+        return;
+      }
+      const staged = stageDownload(folder, filename);
+      try {
+        item.setSavePath(staged);
+        return staged;
+      } catch (error) {
+        void discardDownloadStage(staged);
+        throw error;
+      }
+    } catch {
+      entry.destinationNote = 'folder-unavailable';
+    }
   }
 
   setDownloadHistory(accountId: AccountSpaceId, enabled: boolean): void {
@@ -3449,7 +3577,7 @@ class BrowserController {
   removeDownloadEntry(accountId: AccountSpaceId, id: string): void {
     if (accountId !== this.activeDownloadAccount() || this.store.isReadOnly()) throw new Error('Download history is unavailable in this Account Space');
     const entry = this.requireOwnedDownload(id);
-    if (this.downloadItems.has(id) || entry.checksum === 'checking') throw new Error('Wait until this download finishes.');
+    if (entry.state === 'progressing' || this.downloadItems.has(id) || entry.checksum === 'checking') throw new Error('Wait until this download finishes.');
     if (this.downloadHistory.entries(accountId).some(({ entry }) => entry.id === id)) this.downloadHistory.remove(accountId, id);
     this.downloads.delete(id);
     this.broadcast();
@@ -3824,7 +3952,7 @@ class BrowserController {
       this.store.update((state) => {
         const target = state.tabs.find((candidate) => candidate.id === tabId);
         if (target) target.title = title || 'Untitled';
-      });
+      }, 'routine');
       this.broadcast();
     });
     view.webContents.on('page-favicon-updated', (_event, favicons) => void this.updateFavicon(tabId, ses, favicons[0]));
@@ -4037,6 +4165,7 @@ class BrowserController {
         extension: downloadExtension(filename),
         expectedInstaller: this.expectedInstaller?.filename === filename ? this.expectedInstaller : undefined,
       };
+      const staged = this.setDownloadDestination(entry, item);
       this.downloads.set(id, entry);
       this.downloadItems.set(id, item);
       this.updateDownloadProgress(entry, item, 'progressing');
@@ -4044,13 +4173,27 @@ class BrowserController {
         this.updateDownloadProgress(entry, item, state);
         this.broadcast();
       });
-      item.once('done', (_downloadEvent, state) => {
+      item.once('done', async (_downloadEvent, state) => {
         this.downloadItems.delete(id);
+        const receivedBytes = item.getReceivedBytes();
+        const totalBytes = item.getTotalBytes();
+        let savePath = item.getSavePath();
+        if (staged && state !== 'completed') await discardDownloadStage(staged);
+        if (staged && state === 'completed' && this.downloads.get(id) === entry) {
+          Object.assign(entry, { state: 'progressing', receivedBytes, totalBytes, paused: false, canPause: false, canResume: false, canCancel: false });
+          try {
+            if (savePath !== staged || !downloadFileStamp(staged)) throw new Error('The staged download is unavailable.');
+            savePath = await finishStagedDownload(staged, dirname(dirname(staged)), basename(staged));
+          } catch {
+            entry.destinationNote = 'saved-in-temporary-folder';
+          }
+        }
         if (this.downloads.get(id) !== entry) return;
-        Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath(),
+        Object.assign(entry, { receivedBytes, totalBytes, state, savePath,
           finishedAt: new Date().toISOString(), paused: false, canPause: false, canResume: false, canCancel: false });
         if (entry.savePath) {
           const savedFilename = basename(entry.savePath);
+          entry.filename = savedFilename;
           entry.risk = downloadRisk(savedFilename);
           entry.extension = downloadExtension(savedFilename);
         }
@@ -4203,7 +4346,7 @@ class BrowserController {
     const icons = rememberBookmarkIcon(state.bookmarkIconsByAccountSpace[tab.accountSpaceId], bookmarks, tab.url, dataUrl);
     if (!icons) return;
     try {
-      this.store.update((next) => { next.bookmarkIconsByAccountSpace[tab.accountSpaceId] = icons; });
+      this.store.update((next) => { next.bookmarkIconsByAccountSpace[tab.accountSpaceId] = icons; }, 'routine');
     } catch {
       // A missed icon is cosmetic; the live tab still shows it.
     }
@@ -4246,7 +4389,7 @@ class BrowserController {
           (state.historyTrimmedByAccountSpace ??= {})[removed.accountSpaceId] = true;
         }
       }
-    });
+    }, 'routine');
     this.updateRuntime(tabId, {});
   }
 
@@ -4545,7 +4688,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
   handle('browser:open-bookmarks-in-background', (_event, account: AccountSpaceId, ids: string[]) => controller!.openBookmarksInBackground(account, ids));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
-  handle('ui:set-preferences', (_event, patch: UiPreferencesPatch) => controller!.setUiPreferences(patch));
+  handle('ui:set-preferences', (_event, patch: UiPreferencesPatch, id?: AccountSpaceId) => controller!.setUiPreferences(patch, id));
+  handle('ui:set-panel-pin', (_event, id: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean) => controller!.setSidePanelPin(id, tool, enabled));
   handle('settings:set', (_event, patch: BrowserSettingsPatch, workspace?: WorkspaceId) => controller!.setBrowserSettings(patch, workspace));
   handle('browser:freeze-content', () => controller!.freezeContent());
   handle('browser:move-tab', (_event, tabId: string, toIndex: number) => controller!.moveTab(tabId, toIndex));
@@ -4590,6 +4734,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:control-download', (_event, id: string, action: DownloadAction) => controller!.controlDownload(id, action));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
   handle('browser:set-download-history', (_event, accountId: AccountSpaceId, enabled: boolean) => controller!.setDownloadHistory(accountId, enabled));
+  handle('browser:choose-download-folder', (_event, accountId: AccountSpaceId) => controller!.chooseDownloadFolder(accountId));
+  handle('browser:set-download-folder-mode', (_event, accountId: AccountSpaceId, mode: DownloadFolderMode) => controller!.setDownloadFolderMode(accountId, mode));
   handle('browser:remove-download-entry', (_event, accountId: AccountSpaceId, id: string) => controller!.removeDownloadEntry(accountId, id));
   handle('developer:toggle-tools', (_event, mode: DevToolsMode) => controller!.toggleDeveloperTools(mode));
   handle('developer:capture-diagnostics', () => controller!.captureDeveloperDiagnostics());

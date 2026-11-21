@@ -78,8 +78,9 @@ last regular Account Space for external-link routing, tracker
 preference, the privacy log and `ui` interface preferences: `theme`
 (`system`/`dark`/`light`), `bookmarkBarMode` (`always`/`new-tab`/`hidden`),
 `sidePanelOpen` (default `false`), `sidePanelWidth` (320–520, default 400),
-`sidePanelTool` (default `assistant`; `claude` opens the
-[side app](side-apps.md)), `newTabBackground` and `showRecentOnNewTab` (default `true`).
+the legacy `sidePanelTool` default, `newTabBackground` and
+`showRecentOnNewTab` (default `true`). Regular Account Spaces store
+their last tool and pins in their own browsing file.
 `sanitizeUiPreferences` falls back to
 defaults for any unknown value rather than opening recovery, and migrates a
 manifest without `ui` from the legacy `bookmarkBarVisible` flag, which is still
@@ -130,6 +131,11 @@ input. Banking does not write ordinary browsing history.
 - Tab IDs are globally unique; malformed duplicates are discarded before
   `BrowserController` can map a tab ID to a live `WebContentsView`.
 - A manifest is written last during migration and atomically replaced on updates.
+- The runtime writes only changed account files and manifest fields. Site
+  navigation, tab titles and bookmark icons share a short write window.
+  Deliberate edits and normal window close flush pending writes. A transient
+  write failure retries with backoff. Closing after a failed retry lets the
+  user keep the window open or discard the pending writes.
 - Migration IDs are stable for a source fingerprint, so a retry cannot create a
   second set of legacy partitions.
 - The plaintext manifest holds only opaque IDs (the privacy log names no account

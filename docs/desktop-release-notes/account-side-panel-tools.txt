@@ -1,0 +1,1 @@
+Pin tools such as Notes, Downloads and Developer Bridge to the start of the side panel. Each regular Account Space remembers its pins and the tool you last opened.

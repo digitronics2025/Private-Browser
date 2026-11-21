@@ -130,7 +130,9 @@ Compatibility does not apply to protected pages, Agent Mode restrictions or
 requests without a verified top-level frame.
 
 Only the active, eligible Account Space can list, open or reveal its downloads.
-Downloaded file paths stay in the main process. Operating-system links are
+Download folder selection uses a native directory picker and encrypted
+per-account preferences. The full paths stay in main. Automatic placement
+never overwrites a file at the destination. Operating-system links are
 restricted to eligible regular Account Spaces, even with Banking in front.
 
 Private Browser opens only documents, images, media and archives. Every other

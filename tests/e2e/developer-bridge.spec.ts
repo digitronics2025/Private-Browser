@@ -21,15 +21,19 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
     let bridge: { state: string; browserVersion: string; extensionVersion?: string; project?: typeof project; pairingCode?: string; pairingExpiresAt?: number } = connected
       ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: '0.4.1', project }
       : { state: 'disconnected', browserVersion: '0.4.0' };
+    let ui: Record<string, unknown> = {};
+    let notify: ((value: ReturnType<typeof getState>) => void) | undefined;
+    const getState = () => ({ ...state, ui });
     const api = new Proxy({
-      getState: async () => state,
-      onState: () => () => undefined,
+      getState: async () => getState(),
+      onState: (listener: typeof notify) => { notify = listener; return () => { notify = undefined; }; },
       onCommand: () => () => undefined,
       onUpdateAvailable: () => () => undefined,
       getBridgeStatus: async () => bridge,
       getAiProvider: async () => ({ configured: false }),
       beginBridgePairing: async () => (bridge = { state: 'pairing', browserVersion: '0.4.0', pairingCode: '12345678', pairingExpiresAt: Date.now() + 300000 }),
       listBridgeProjects: async () => [],
+      setUiPreferences: async (patch: Record<string, unknown>) => { ui = { ...ui, ...patch }; notify?.(getState()); },
       runBridgeAction: async (action: string) => action === 'project.revision'
         ? { branch: 'topic/review', commit, staged: 1, unstaged: 2, untracked: 0, conflicts: 0, githubRepository: 'example/app' }
         : undefined,
@@ -45,7 +49,7 @@ test('shows focused pairing and all four bridge tabs in Development', async ({ p
   await installMock(page, 'development'); await page.goto('/', { waitUntil: 'networkidle' }); await page.waitForTimeout(200);
   expect(errors).toEqual([]); await expect(page.locator('.app-shell')).toBeVisible();
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
-  await page.getByTitle('Developer cockpit').evaluate((element: HTMLButtonElement) => element.click());
+  await page.getByRole('tab', { name: 'Developer Bridge' }).click();
   await expect(page.getByRole('heading', { name: 'Developer Bridge' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Project' })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Inspect' })).toBeVisible();
@@ -60,7 +64,7 @@ test('keeps bridge actions hidden in Banking', async ({ page }) => {
   await installMock(page, 'banking'); await page.goto('/', { waitUntil: 'networkidle' }); await page.waitForTimeout(200);
   expect(errors).toEqual([]); await expect(page.locator('.app-shell')).toBeVisible();
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
-  await page.getByTitle('Developer cockpit').evaluate((element: HTMLButtonElement) => element.click());
+  await page.getByRole('tab', { name: 'Developer Bridge' }).click();
   await expect(page.getByText('Protected by workspace policy')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Pair', exact: true })).toHaveCount(0);
 });

@@ -259,9 +259,9 @@ test('side panel opens from the toolbar, switches tools, resizes and keeps its c
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   const panel = sidePanel(page);
   await expect(panel).toBeVisible();
-  await expect(panel.getByRole('tab', { name: 'AI' })).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByRole('tab', { name: 'AI assistant' })).toHaveAttribute('aria-selected', 'true');
   await expect(panel.getByText('Private by default')).toBeVisible();
-  await panel.getByRole('tab', { name: 'Privacy' }).click();
+  await panel.getByRole('tab', { name: 'Privacy log' }).click();
   await expect(panel.getByRole('heading', { name: 'Privacy log' })).toBeVisible();
   await expect.poll(async () => Math.round((await panel.boundingBox())!.width)).toBe(400);
   // Regression: the bookmark measuring row once overflowed the page, so a click could scroll the frame sideways.
@@ -294,7 +294,7 @@ test('side panel opens from the toolbar, switches tools, resizes and keeps its c
   await panel.getByRole('button', { name: 'Close side panel' }).click();
   await expect(panel).toHaveCount(0);
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
-  await expect(panel.getByRole('tab', { name: 'Privacy' })).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByRole('tab', { name: 'Privacy log' })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(async () => Math.round((await panel.boundingBox())!.width)).toBe(320);
   noErrors();
 });

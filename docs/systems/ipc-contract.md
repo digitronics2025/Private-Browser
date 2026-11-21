@@ -160,6 +160,8 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:set-tracker-compatibility` | `setTrackerCompatibility(tabId, origin, paused)` | active regular tab, exact site origin and flag | `void` |
 | `browser:set-download-history` | `setDownloadHistory(accountId, enabled)` | current regular Account Space and whether to retain new finished downloads | `void` |
 | `browser:remove-download-entry` | `removeDownloadEntry(accountId, id)` | current regular Account Space and finished download ID | `void` |
+| `browser:choose-download-folder` | `chooseDownloadFolder(accountId)` | current regular Account Space, native picker | `void` |
+| `browser:set-download-folder-mode` | `setDownloadFolderMode(accountId, mode)` | current regular Account Space, ask/automatic/default | `void` |
 | `permissions:site` | `getSitePermissions(tabId, origin)` | active tab and exact origin | current policy and grant duration |
 | `permissions:revoke-site` | `revokeSitePermission(tabId, origin, capability)` | active tab, exact origin and supported capability | updated site status |
 | `permissions:list-account` | `listAccountPermissionGrants(id)` | selected Account Space in the active workspace | reusable grants |
@@ -181,7 +183,8 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
-| `ui:set-preferences` | `setUiPreferences(patch)` | non-empty `UiPreferencesPatch`, validated by `requireUiPreferencesPatch` | `void` |
+| `ui:set-preferences` | `setUiPreferences(patch, accountId?)` | validated UI patch, optional expected Account Space | `void` |
+| `ui:set-panel-pin` | `setSidePanelPin(accountId, tool, enabled)` | current regular Account Space, pinnable tool and flag | `void` |
 | `settings:set` | `setBrowserSettings(patch, workspace?)` | validated behavior settings, optional expected active workspace | `void` |
 | `bookmarks:move` | `moveBookmark(level, key, toIndex)` | `BookmarkLevelInput`, `BookmarkEntryKeyInput`, integer | `void` |
 | `bookmarks:rename` | `renameBookmark(id, title)` | id, non-blank title ≤ 500 | `void` |
@@ -250,7 +253,10 @@ The main chrome uses `agents:status`, `agents:enable`, `agents:pair`,
 `agents:export-audit`. The regular chrome also owns `agents:lend-tab` and
 `agents:return-tab` for the owner's active browser tab. The pinned Agent Workspace chrome may call only the
 status, stop, select, manual, close-tab and decide channels. Only its main
-frame can invoke `agents:decide`. The `agents:changed` event signals the
+frame can invoke `agents:decide`, and main accepts `always` only for an eligible
+pending confirmation. Client status includes the current lease expiry when
+one exists. The `agents:set-policy` payload includes a session length of
+`1h`, `8h` or `open`. The `agents:changed` event signals the
 app to fetch fresh status. Agent tab views have no preload.
 
 ### ai: — 7 channels
@@ -432,8 +438,9 @@ preload and the renderer.
 These two are deliberately different, and the `Pick` is where the split is
 declared: `loading`, `canGoBack`, `canGoForward`, `favicon`,
 `developerToolsAllowed` and `developerToolsOpen` are runtime-only.
-The snapshot also truncates `history` to 100 and `privacyLog` to 50, and adds
-`downloads`, which is never persisted.
+The snapshot truncates history to 100 and the privacy log to 50. Downloads
+exposes current-account entries, session counts and the chosen folder name.
+Optional retained entries and the folder path stay encrypted on disk.
 The History panel requests pages from the separate history query. Only the
 active regular Account Space may query its retained history.
 

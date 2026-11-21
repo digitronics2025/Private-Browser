@@ -14,12 +14,13 @@ import { isAllowedRemoteUrl } from './security.js';
 import { MAX_ADDRESS_QUERY_LENGTH } from './address-matches.js';
 import { MAX_REFERENCE_LENGTH, requireBrowserSettingsPatch } from './browser-settings.js';
 import { requireBrowsingDataInput } from './browsing-data.js';
-import { requireUiPreferencesPatch } from './ui-preferences.js';
+import { isPinnablePanelTool, requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
 import { MAX_BOOKMARK_EDIT_BATCH } from './bookmark-maintenance.js';
 import { MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION, MAX_ASSISTANT_EXTRA_SOURCES, MAX_ASSISTANT_SOURCE_TEXT } from './ai-prompt.js';
+import { isAgentSessionLength, MAX_AGENT_ORIGINS } from './agent-policy.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
@@ -56,14 +57,15 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 2); requireUuid(args[0], 'Browser tab'); requireUuid(args[1], 'Agent client'); return;
     case 'agents:decide':
       exact(args, 2); requireUuid(args[0], 'Agent confirmation');
-      if (args[1] !== 'allow' && args[1] !== 'session' && args[1] !== 'deny') throw new Error('Choose an Agent decision');
+      if (args[1] !== 'allow' && args[1] !== 'session' && args[1] !== 'always' && args[1] !== 'deny') throw new Error('Choose an Agent decision');
       return;
     case 'agents:set-policy': {
       exact(args, 2); requireUuid(args[0], 'Agent client');
-      const policy = requireExactKeys(args[1], ['profile', 'origins', 'outside']);
+      const policy = requireExactKeys(args[1], ['profile', 'origins', 'outside', 'session']);
       if (policy.profile !== 'observe' && policy.profile !== 'develop' && policy.profile !== 'operate') throw new Error('Choose an Agent profile');
       if (policy.outside !== 'observe' && policy.outside !== 'deny') throw new Error('Choose a rule for other origins');
-      if (!Array.isArray(policy.origins) || policy.origins.length > 30) throw new Error('Enter up to 30 origins');
+      if (!isAgentSessionLength(policy.session)) throw new Error('Choose an Agent session length');
+      if (!Array.isArray(policy.origins) || policy.origins.length > MAX_AGENT_ORIGINS) throw new Error(`Enter up to ${MAX_AGENT_ORIGINS} origins`);
       for (const origin of policy.origins) requireNonEmptyText(origin, 'Agent origin', 300);
       return;
     }
@@ -198,7 +200,11 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'side-app:clear-data':
       exact(args, 1); requireSideAppId(args[0]); return;
     case 'ui:set-preferences':
-      exact(args, 1); requireUiPreferencesPatch(args[0]); return;
+      between(args, 1, 2); requireUiPreferencesPatch(args[0]); if (args[1] !== undefined) requireAccountSpaceId(args[1]); return;
+    case 'ui:set-panel-pin':
+      exact(args, 3); requireAccountSpaceId(args[0]);
+      if (!isPinnablePanelTool(args[1]) || typeof args[2] !== 'boolean') throw new Error('Invalid tool pin');
+      return;
     case 'settings:set':
       between(args, 1, 2); requireBrowserSettingsPatch(args[0]); if (args[1] !== undefined) requireWorkspaceId(args[1]); return;
     case 'browser:home':
@@ -349,6 +355,12 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'browser:set-download-history':
       exact(args, 2); requireAccountSpaceId(args[0]);
       if (typeof args[1] !== 'boolean') throw new Error('Choose whether to keep download history');
+      return;
+    case 'browser:choose-download-folder':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'browser:set-download-folder-mode':
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (args[1] !== 'ask' && args[1] !== 'automatic' && args[1] !== 'default') throw new Error('Invalid download folder option');
       return;
     case 'browser:remove-download-entry':
       exact(args, 2); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'download identifier', 128); return;
