@@ -66,13 +66,13 @@ function secretsReady(env: Env): boolean {
 }
 
 async function latestRelease(env: Env, channel = 'stable'): Promise<ReleaseRecord | null> {
-  return env.DB.prepare(`SELECT id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, is_active
+  return env.DB.prepare(`SELECT id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, last_restored_at, is_active
     FROM releases WHERE app_id = ?1 AND channel = ?2 AND is_active = 1
     ORDER BY build_number DESC, published_at DESC LIMIT 1`).bind(APP_ID, channel).first<ReleaseRecord>();
 }
 
 async function releaseHistory(env: Env, activeReleaseId: string, channel = 'stable'): Promise<ReleaseRecord[]> {
-  const result = await env.DB.prepare(`SELECT id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, is_active
+  const result = await env.DB.prepare(`SELECT id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, last_restored_at, is_active
     FROM releases WHERE app_id = ?1 AND channel = ?2 AND id <> ?3
     ORDER BY published_at DESC, build_number DESC LIMIT 5`).bind(APP_ID, channel, activeReleaseId).all<ReleaseRecord>();
   return result.results;
@@ -303,7 +303,9 @@ async function handleActivate(request: Request, env: Env): Promise<Response> {
   // lower build while a higher one is still active.
   await env.DB.batch([
     env.DB.prepare('UPDATE releases SET is_active = 0 WHERE app_id = ?1 AND channel = ?2 AND id <> ?3').bind(APP_ID, channel, id),
-    env.DB.prepare('UPDATE releases SET is_active = 1 WHERE id = ?1 AND app_id = ?2 AND channel = ?3').bind(id, APP_ID, channel),
+    env.DB.prepare(`UPDATE releases SET is_active = 1,
+      last_restored_at = CASE WHEN is_active = 0 THEN ?4 ELSE last_restored_at END
+      WHERE id = ?1 AND app_id = ?2 AND channel = ?3`).bind(id, APP_ID, channel, new Date().toISOString()),
   ]);
   return json({ ok: true, id, version: row.version, buildNumber: row.build_number }, 200, { 'cache-control': PRIVATE_CACHE });
 }

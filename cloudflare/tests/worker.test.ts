@@ -70,9 +70,13 @@ class Statement {
       for (const row of this.database.rows) if (row.app_id === appId && row.channel === channel && row.id !== keep) row.is_active = 0;
       return;
     }
-    if (this.sql.startsWith('UPDATE releases SET is_active = 1 WHERE')) {
-      const [id, appId, channel] = this.values as [string, string, string];
-      for (const row of this.database.rows) if (row.id === id && row.app_id === appId && row.channel === channel) row.is_active = 1;
+    if (this.sql.startsWith('UPDATE releases SET is_active = 1,')) {
+      const [id, appId, channel, restoredAt] = this.values as [string, string, string, string];
+      for (const row of this.database.rows) {
+        if (row.id !== id || row.app_id !== appId || row.channel !== channel) continue;
+        if (row.is_active === 0) row.last_restored_at = restoredAt;
+        row.is_active = 1;
+      }
       return;
     }
     if (this.sql.includes('UPDATE releases SET is_active')) {
@@ -108,12 +112,13 @@ class FakeDatabase {
 
 class FakeBucket {
   object = bytes;
+  keys = new Set([release.object_key]);
   async head(key: string) {
-    if (key !== release.object_key) return null;
+    if (!this.keys.has(key)) return null;
     return { size: this.object.byteLength, httpEtag: '"test-etag"' };
   }
   async get(key: string, options?: { range?: { offset: number; length: number } }) {
-    if (key !== release.object_key) return null;
+    if (!this.keys.has(key)) return null;
     const range = options?.range;
     const body = range ? this.object.slice(range.offset, range.offset + range.length) : this.object;
     return { size: this.object.byteLength, httpEtag: '"test-etag"', body: new Blob([body]).stream() };
@@ -515,23 +520,36 @@ ${expires}`));
   // F-50: the pipeline's rollback when a new release fails its live check.
   it('re-activates an earlier release on an admin request, and only then', async () => {
     const newer = {
-      version: '0.3.1', buildNumber: 4, channel: 'stable', objectKey: release.object_key,
+      version: '0.3.1', buildNumber: 4, channel: 'stable', objectKey: 'releases/0.3.1/setup.exe',
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
-    database.rows[0]!.object_key = 'releases/older.exe';
+    bucket.keys.add(newer.objectKey);
     const published = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(newer) });
     expect(published.status).toBe(201);
     expect(database.active('private-browser', 'stable')).toMatchObject({ version: '0.3.1' });
 
     const anonymous = await request('/api/v1/admin/releases/activate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: release.id, channel: 'stable' }) });
     expect(anonymous.status).toBe(404);
-    // The earlier installer is no longer in R2: activation refuses rather than pointing at nothing.
+    bucket.keys.delete(release.object_key);
     const missing = await request('/api/v1/admin/releases/activate', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify({ id: release.id, channel: 'stable' }) });
     expect(missing.status).toBe(409);
-    database.rows[0]!.object_key = release.object_key;
+    bucket.keys.add(release.object_key);
     const rolledBack = await request('/api/v1/admin/releases/activate', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify({ id: release.id, channel: 'stable' }) });
     expect(rolledBack.status).toBe(200);
     expect(database.rows.filter((row) => row.is_active === 1).map((row) => row.id)).toEqual([release.id]);
+    const restored = database.active('private-browser', 'stable')!;
+    expect(restored.last_restored_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(restored.published_at).toBe(release.published_at);
+    const originalRestore = '2026-09-15T13:00:00.000Z';
+    restored.last_restored_at = originalRestore;
+    const retry = await request('/api/v1/admin/releases/activate', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify({ id: release.id, channel: 'stable' }) });
+    expect(retry.status).toBe(200);
+    expect(restored.last_restored_at).toBe(originalRestore);
+    const page = await (await request('/')).text();
+    expect(page).toContain('Current stable build · Restored');
+    expect(page).toContain('Build 4 · Promoted');
+    expect(page).toContain('Release recovery guide');
+    expect(page).not.toContain('releases/0.3.1/setup.exe');
     const unknown = await request('/api/v1/admin/releases/activate', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify({ id: 'stable-9.9.9-99', channel: 'stable' }) });
     expect(unknown.status).toBe(404);
   });

@@ -30,6 +30,7 @@ export function renderDownloadPage(model: DownloadPageModel): string {
   const sourceUrl = sourceCommitUrl(release.commit_sha);
   const historyUrl = 'https://github.com/digitronics2025/Private-Browser/actions/workflows/ci.yml';
   const changelogUrl = 'https://github.com/digitronics2025/Private-Browser/blob/main/CHANGELOG.md';
+  const recoveryUrl = 'https://github.com/digitronics2025/Private-Browser/blob/main/docs/release-recovery.md';
   const historyMarkup = history.length > 0
     ? history.map((item) => renderHistoryItem(item, model.renderedAt)).join('')
     : '<p class="history-empty">This is the first published stable release.</p>';
@@ -197,7 +198,7 @@ export function renderDownloadPage(model: DownloadPageModel): string {
           <a class="download" href="${escapeHtml(model.downloadUrl)}" download="${escapeHtml(release.filename)}" aria-label="Download Private Browser ${escapeHtml(release.version)} for Windows"><span aria-hidden="true">↓</span> Download for Windows</a>
           <div class="requirements">Windows 10/11<br>x64 · ${escapeHtml(formatBytes(release.size_bytes))}</div>
         </div>
-        <p class="freshness">Version ${escapeHtml(release.version)} · Updated <time datetime="${escapeHtml(release.published_at)}" title="${escapeHtml(published.utc)}">${escapeHtml(published.relative)}</time></p>
+        <p class="freshness">Current stable build · ${renderActivation(release, model.renderedAt)} · Published <time datetime="${escapeHtml(release.published_at)}" title="${escapeHtml(published.utc)}">${escapeHtml(published.relative)}</time></p>
       </div>
 
       <aside class="release-card" aria-label="Current release details">
@@ -222,10 +223,11 @@ export function renderDownloadPage(model: DownloadPageModel): string {
     </div>
 
     <section class="shell content" id="release-history" aria-labelledby="history-title">
-      <div class="section-head"><h2 id="history-title">Release history</h2><p>The five stable releases before the current version, ordered by publication time.</p></div>
+      <div class="section-head"><h2 id="history-title">Release history</h2><p>Up to five other stable releases, ordered by publication time. A restored build may be older than the releases shown here.</p></div>
       <div class="timeline">${historyMarkup}</div>
       <a class="history-link" href="${historyUrl}" rel="noopener noreferrer">View verified build history ↗</a>
       <a class="history-link" href="${changelogUrl}" rel="noopener noreferrer">Full changelog ↗</a>
+      <a class="history-link" href="${recoveryUrl}" rel="noopener noreferrer">Release recovery guide ↗</a>
     </section>
 
     <section class="shell content install-grid" aria-label="Installation and verification">
@@ -249,7 +251,13 @@ export function renderDownloadPage(model: DownloadPageModel): string {
 function renderHistoryItem(release: ReleaseRecord, renderedAt: string): string {
   const published = formatPublished(release.published_at, renderedAt);
   const notes = release.release_notes || `Private Browser ${release.version} stable release.`;
-  return `<article class="history-item"><div class="history-version">Version ${escapeHtml(release.version)}<small>Build ${release.build_number}</small></div><div class="history-notes">${escapeHtml(notes)}</div><time class="history-time" datetime="${escapeHtml(release.published_at)}" title="${escapeHtml(published.utc)}">${escapeHtml(published.readable)}</time></article>`;
+  return `<article class="history-item"><div class="history-version">Version ${escapeHtml(release.version)}<small>Build ${release.build_number} · ${renderActivation(release, renderedAt)}</small></div><div class="history-notes">${escapeHtml(notes)}</div><time class="history-time" datetime="${escapeHtml(release.published_at)}" title="${escapeHtml(published.utc)}">${escapeHtml(published.readable)}</time></article>`;
+}
+
+function renderActivation(release: ReleaseRecord, renderedAt: string): string {
+  if (!release.last_restored_at) return 'Promoted';
+  const restored = formatPublished(release.last_restored_at, renderedAt);
+  return `Restored <time datetime="${escapeHtml(release.last_restored_at)}" title="${escapeHtml(restored.utc)}">${escapeHtml(restored.readable)}</time>`;
 }
 
 function formatPublished(value: string, renderedAt: string): { readable: string; relative: string; utc: string } {
