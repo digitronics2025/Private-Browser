@@ -358,6 +358,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); if (!['right', 'bottom', 'detach'].includes(String(args[0]))) throw new Error('Invalid DevTools position'); return;
     case 'system:copy':
       exact(args, 1); requireBoundedText(args[0], 'copied text', 2 * 1024 * 1024); return;
+    case 'vault:reset-picks':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'vault:copy-generated':
       exact(args, 1); if (!['password', 'passphrase', 'pin'].includes(String(args[0]))) throw new Error('Invalid generated credential kind'); return;
     case 'vault:resolve-conflict':

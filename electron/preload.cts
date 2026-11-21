@@ -168,6 +168,7 @@ const api = {
   cleanupLegacyVault: (): Promise<boolean> => ipcRenderer.invoke('vault:cleanup-legacy'),
   openVaultEditor: (origin?: string): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:open-editor', origin),
   inspectVaultFormShape: (): Promise<{ hasUsername: boolean; hasPassword: boolean }> => ipcRenderer.invoke('vault:form-shape'),
+  resetVaultPicks: (accountId: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('vault:reset-picks', accountId),
   requestSaveFromPage: (): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:save-from-page'),
   requestVaultDelete: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:request-delete', id),
   acknowledgeVaultRecovery: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:acknowledge-recovery'),

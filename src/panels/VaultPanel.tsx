@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Clock3, Cloud, Copy, Eye, FileDown, Fingerprint, KeyRound, LockKeyhole, Plus, RefreshCw, Search, ShieldCheck, Trash2, Zap } from 'lucide-react';
-import type { VaultItemMeta, VaultStatus, WorkspaceId } from '../../electron/types';
+import type { AccountSpaceId, VaultItemMeta, VaultStatus, WorkspaceId } from '../../electron/types';
 import { EmptyState, PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
 
-export function VaultPanel({ workspaceId, activeOrigin, onOpenFull, onToast }: { workspaceId: WorkspaceId; activeOrigin?: string; onOpenFull?: () => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, onToast }: { accountId: AccountSpaceId; workspaceId: WorkspaceId; activeOrigin?: string; onOpenFull?: () => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [items, setItems] = useState<VaultItemMeta[]>([]);
   const [status, setStatus] = useState<VaultStatus>({ available: true, items: [] });
   const [query, setQuery] = useState('');
@@ -79,6 +79,11 @@ export function VaultPanel({ workspaceId, activeOrigin, onOpenFull, onToast }: {
         </div>)}
         {!items.length && status.lifecycle === 'unlocked' && <EmptyState icon={KeyRound} text="No logins in MyVault yet." />}
       </div>
+      {status.lifecycle === 'unlocked' && workspaceId !== 'banking' && <button className="text-button" type="button" onClick={() => {
+        void window.privateBrowser.resetVaultPicks(accountId)
+          .then((cleared) => onToast(cleared ? 'Remembered picks cleared for this Account Space' : 'This Account Space has no remembered picks'))
+          .catch((error) => onToast(error instanceof Error ? error.message : 'Could not clear the remembered picks.', 'error'));
+      }}>Reset remembered picks</button>}
     </div>
   );
 }

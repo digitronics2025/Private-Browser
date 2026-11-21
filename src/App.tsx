@@ -413,7 +413,7 @@ export default function App() {
       case 'developer': return <DeveloperPanel activeTab={activeTab} onToast={showToast} />;
       case 'vault': return state.activeWorkspaceId === 'development'
         ? <EmptyState icon={KeyRound} text="MyVault is isolated from the Development workspace." />
-        : <VaultPanel workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onOpenFull={() => setVaultFullOpen(true)} onToast={showToast} />;
+        : <VaultPanel accountId={state.activeAccountSpaceId} workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onOpenFull={() => setVaultFullOpen(true)} onToast={showToast} />;
       case 'automations': return <AutomationPanel state={state} onToast={showToast} />;
       case 'downloads': return <DownloadsPanel state={state} onToast={showToast} />;
       case 'privacy': return <PrivacyPanel state={state} />;
@@ -626,7 +626,7 @@ export default function App() {
         {state.pendingPermission && <PermissionOverlay key={state.pendingPermission.id} state={state} onRespond={(decision, sourceId) => void act(() => window.privateBrowser.respondToPermissionPrompt(state.pendingPermission!.id, decision, sourceId))} />}
         {state.recovery && <RecoveryOverlay state={state} />}
         {accountManagerOpen && <AccountManager state={state} onClose={() => { setAccountManagerOpen(false); profileButtonRef.current?.focus(); }} onToast={showToast} />}
-        {vaultFullOpen && <VaultFullView onClose={() => setVaultFullOpen(false)}><VaultPanel workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></VaultFullView>}
+        {vaultFullOpen && <VaultFullView onClose={() => setVaultFullOpen(false)}><VaultPanel accountId={state.activeAccountSpaceId} workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></VaultFullView>}
         {prompt && <PromptDialog request={prompt} onDone={() => setPrompt(null)} />}
         {bookmarkBatch?.accountId === activeAccount.id && <BookmarkBatchDialog
           items={bookmarkBatch.items} tabs={workspaceTabs} accountName={activeAccount.label}

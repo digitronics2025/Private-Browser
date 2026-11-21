@@ -2858,7 +2858,7 @@ class BrowserController {
     const contents = this.activeContents();
     if (!contents || contents.id !== initial.webContentsId) throw new Error('Vault fill expired because the page context changed');
     await fillLoginInIsolatedWorld(contents, username, password);
-    this.fillPreferences.remember(initial.origin, id);
+    if (workspaceVaultPolicy(initial.workspaceId).fillPicker) this.fillPreferences.remember(initial.accountSpaceId, initial.origin, id);
     const runtime = this.runtimeTabs.get(initial.tabId);
     if (runtime) runtime.automaticFillGeneration = initial.navigationGeneration;
   }
@@ -2924,7 +2924,7 @@ class BrowserController {
       // Chrome's rule: this exact origin first, then other addresses of the same site.
       const candidates = orderFillCandidates(
         this.vault.searchMetadata('').filter((entry) => Boolean(entry.url) && isSameSiteFillCandidate(entry.url!, context.origin)),
-        this.fillPreferences.get(context.origin),
+        this.fillPreferences.get(context.accountSpaceId, context.origin),
         context.origin,
       ).slice(0, FILL_PICKER_MAX_ROWS);
       if (!candidates.length) return;
@@ -2993,7 +2993,7 @@ class BrowserController {
       if (initial.tabId !== tabId || initial.navigationGeneration !== generation || !initial.origin.startsWith('https://')) return;
       const match = selectAutomaticFillEntry(
         this.vault.searchMetadata('', initial.origin),
-        this.fillPreferences.get(initial.origin),
+        this.fillPreferences.get(initial.accountSpaceId, initial.origin),
       );
       if (!match?.url || !isAutofillTarget(match.url, initial.origin)) return;
       const capability = this.fillCapabilities.issue(initial, match.id, 'fill-login');
@@ -3022,6 +3022,13 @@ class BrowserController {
     const contents = this.activeContents();
     if (!contents) return { hasUsername: false, hasPassword: false };
     return inspectLoginFormShape(contents);
+  }
+
+  resetVaultPicks(accountId: AccountSpaceId): boolean {
+    if (accountId !== this.activeAccountSpaceId(this.store.get()) || !this.activeVaultPolicy().fillPicker) {
+      throw new Error('Remembered picks are unavailable in this Account Space.');
+    }
+    return this.fillPreferences.reset(accountId);
   }
 
   async requestSaveFromPage() {
@@ -3961,7 +3968,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     await orphan.clearCache().catch(() => undefined);
   }
   const vault = new VaultBroker(new MyVaultDiskStore(userDataPath, safeStorage));
-  const fillPreferences = new FillPreferenceStore(join(userDataPath, 'myvault', 'fill-preferences.enc'), safeStorage);
+  const fillPreferences = new FillPreferenceStore(join(userDataPath, 'myvault', 'fill-preferences-v2.enc'), safeStorage);
   vault.initialize();
   const aiProvider = new AiProviderStore(join(userDataPath, 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(userDataPath, 'update-service.enc'));
@@ -4148,6 +4155,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:cleanup-legacy', () => controller!.cleanupLegacyVault());
   handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
   handle('vault:form-shape', () => controller!.inspectVaultFormShape());
+  handle('vault:reset-picks', (_event, accountId: AccountSpaceId) => controller!.resetVaultPicks(accountId));
   handle('vault:save-from-page', () => controller!.requestSaveFromPage());
   handle('vault:request-delete', (_event, id: string) => controller!.requestVaultDelete(id));
   handle('vault:acknowledge-recovery', () => controller!.acknowledgeVaultRecovery());

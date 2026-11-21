@@ -286,6 +286,8 @@ describe('login picker markup for a long list', () => {
 });
 
 describe('remembered login per site', () => {
+  const account = '0c29cc4b-accc-448f-a7f3-8e985a83a38e' as FillContext['accountSpaceId'];
+  const otherAccount = '585a2fad-4ebd-4f8b-9fb7-6bc92591c338' as FillContext['accountSpaceId'];
   const directory = mkdtempSync(join(tmpdir(), 'fill-preferences-'));
   const storage = {
     isEncryptionAvailable: () => true,
@@ -299,45 +301,52 @@ describe('remembered login per site', () => {
   let counter = 0;
   const file = () => join(directory, `prefs-${counter += 1}.enc`);
 
-  it('is shared by every address of a site and survives a restart', () => {
+  it('keeps site picks within each Account Space and persists a scoped reset', () => {
     const path = file();
-    new FillPreferenceStore(path, storage).remember('https://admin.digitronics.ma', 'entry-b');
+    const initial = new FillPreferenceStore(path, storage);
+    initial.remember(account, 'https://admin.digitronics.ma', 'entry-b');
+    initial.remember(otherAccount, 'https://www.digitronics.ma', 'entry-a');
     const reloaded = new FillPreferenceStore(path, storage);
-    expect(reloaded.get('https://digitronics.ma')).toBe('entry-b');
-    expect(reloaded.get('https://www.digitronics.ma')).toBe('entry-b');
-    expect(reloaded.get('https://evil.co.ma')).toBeUndefined();
+    expect(reloaded.get(account, 'https://digitronics.ma')).toBe('entry-b');
+    expect(reloaded.get(account, 'https://www.digitronics.ma')).toBe('entry-b');
+    expect(reloaded.get(account, 'https://evil.co.ma')).toBeUndefined();
+    expect(reloaded.get(otherAccount, 'https://digitronics.ma')).toBe('entry-a');
+    expect(reloaded.reset(account)).toBe(true);
+    const afterReset = new FillPreferenceStore(path, storage);
+    expect(afterReset.get(account, 'https://digitronics.ma')).toBeUndefined();
+    expect(afterReset.get(otherAccount, 'https://digitronics.ma')).toBe('entry-a');
   });
 
   it('keeps IP addresses to their exact origin', () => {
     const store = new FillPreferenceStore(file(), storage);
-    store.remember('https://127.0.0.1:8443', 'entry-ip');
-    expect(store.get('https://127.0.0.1:8443')).toBe('entry-ip');
-    expect(store.get('https://127.0.0.1:9443')).toBeUndefined();
+    store.remember(account, 'https://127.0.0.1:8443', 'entry-ip');
+    expect(store.get(account, 'https://127.0.0.1:8443')).toBe('entry-ip');
+    expect(store.get(account, 'https://127.0.0.1:9443')).toBeUndefined();
   });
 
   it('writes only ciphertext, and nothing at all without OS encryption', () => {
     const path = file();
-    new FillPreferenceStore(path, storage).remember('https://digitronics.ma', 'entry-a');
+    new FillPreferenceStore(path, storage).remember(account, 'https://digitronics.ma', 'entry-a');
     expect(Buffer.from(readFileSync(path, 'utf8'), 'base64').toString('utf8').startsWith('enc:')).toBe(true);
     const plainPath = file();
     const memoryOnly = new FillPreferenceStore(plainPath, { ...storage, isEncryptionAvailable: () => false });
-    memoryOnly.remember('https://digitronics.ma', 'entry-a');
-    expect(memoryOnly.get('https://digitronics.ma')).toBe('entry-a');
+    memoryOnly.remember(account, 'https://digitronics.ma', 'entry-a');
+    expect(memoryOnly.get(account, 'https://digitronics.ma')).toBe('entry-a');
     expect(existsSync(plainPath)).toBe(false);
   });
 
   it('starts empty from an unreadable file', () => {
     const path = file();
     writeFileSync(path, 'not ciphertext', 'utf8');
-    expect(new FillPreferenceStore(path, storage).get('https://digitronics.ma')).toBeUndefined();
+    expect(new FillPreferenceStore(path, storage).get(account, 'https://digitronics.ma')).toBeUndefined();
   });
 
   it('forgets the oldest site beyond the cap', () => {
     let now = 0;
     const store = new FillPreferenceStore(file(), { ...storage, isEncryptionAvailable: () => false }, () => (now += 1));
-    for (let index = 0; index <= FILL_PREFERENCE_MAX_SITES; index += 1) store.remember(`https://site${index}.com`, `entry-${index}`);
-    expect(store.get('https://site0.com')).toBeUndefined();
-    expect(store.get('https://site1.com')).toBe('entry-1');
-    expect(store.get(`https://site${FILL_PREFERENCE_MAX_SITES}.com`)).toBe(`entry-${FILL_PREFERENCE_MAX_SITES}`);
+    for (let index = 0; index <= FILL_PREFERENCE_MAX_SITES; index += 1) store.remember(account, `https://site${index}.com`, `entry-${index}`);
+    expect(store.get(account, 'https://site0.com')).toBeUndefined();
+    expect(store.get(account, 'https://site1.com')).toBe('entry-1');
+    expect(store.get(account, `https://site${FILL_PREFERENCE_MAX_SITES}.com`)).toBe(`entry-${FILL_PREFERENCE_MAX_SITES}`);
   });
 });

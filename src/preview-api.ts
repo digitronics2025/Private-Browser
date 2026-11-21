@@ -781,6 +781,12 @@ export function installPreviewApi(): void {
     sendToControlCenter: async () => ({ id: 'TASK-0043', title: 'Preview task', repositoryName: 'shop', status: 'QUEUED', currentStageName: 'Investigate', blocker: null, finalStatus: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0043' }),
     recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md' }),
     inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),
+    resetVaultPicks: async (id) => {
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development') {
+        throw new Error('Remembered picks are unavailable in this Account Space.');
+      }
+      return true;
+    },
   };
   const api = new Proxy(handlers, { get(target, property) { return target[String(property)] ?? (async () => undefined); } });
   Object.defineProperty(window, 'privateBrowser', { value: api as unknown as PrivateBrowserApi, configurable: true });
