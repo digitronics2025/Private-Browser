@@ -60,12 +60,12 @@ jobs:
             fi
           fi
 
-          # Guide and release-workflow updates must never publish an app.
+          # Guide and release-operation updates must never publish an app.
           # A push with any other file still uses the existing active-release comparison.
           BEFORE_SHA="${{ github.event.before }}"
           if [[ "${BEFORE_SHA:-}" =~ ^[0-9a-f]{40}$ && ! "$BEFORE_SHA" =~ ^0+$ ]] &&
              push_files="$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" --)" &&
-             [[ -n "$push_files" ]] && ! grep -qvE '^(AGENTS\.md|CLAUDE\.md|\.github/copilot-instructions\.md|\.continue/rules/shared-report\.md|\.github/workflows/ci\.yml)$' <<< "$push_files"; then
+             [[ -n "$push_files" ]] && ! grep -qvE '^(AGENTS\.md|CLAUDE\.md|\.github/copilot-instructions\.md|\.continue/rules/shared-report\.md|\.github/workflows/(ci|release-status)\.yml|\.github/scripts/release-status(\.test)?\.mjs|docs/reference/release-status\.md)$' <<< "$push_files"; then
             echo "app=false" >> "$GITHUB_OUTPUT"
             echo "Instruction and release workflow changes only. App publication skipped."
             exit 0
