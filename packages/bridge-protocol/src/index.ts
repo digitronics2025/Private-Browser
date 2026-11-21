@@ -26,7 +26,7 @@ export const PAIRING_TTL_MS = 5 * 60_000;
 export const bridgeMethodSchema = z.enum([
   'connection.status', 'connection.heartbeat', 'connection.disconnect', 'connection.revoke',
   'project.list', 'project.authorize', 'project.inspect', 'project.open', 'project.revision', 'source.open',
-  'server.discover', 'server.start', 'server.stop', 'server.restart',
+  'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart',
   'inspect.page', 'inspect.open-source',
   'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact',
   'ai.handoff', 'ai.apply-edits',
@@ -56,6 +56,31 @@ export const projectInfoSchema = z.object({
   activeFile: z.string().max(2_000).optional(), guidance: z.array(z.string().max(500)).max(20),
 }).strict();
 export type ProjectInfo = z.infer<typeof projectInfoSchema>;
+
+export function localDevelopmentAddress(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+      || url.username || url.password || url.search || url.hash || url.port === '0' || url.href.length > 512) return undefined;
+    return url;
+  } catch {
+    return undefined;
+  }
+}
+
+const localDevelopmentAddressSchema = z.string().max(512).refine((value) => Boolean(localDevelopmentAddress(value)));
+export const devServerStatusSchema = z.object({
+  phase: z.enum(['stopped', 'waiting', 'ready', 'stopping', 'failed', 'missing-command']),
+  expectedUrl: localDevelopmentAddressSchema.optional(),
+  address: localDevelopmentAddressSchema.optional(),
+  port: z.number().int().min(1).max(65_535).optional(),
+  reason: z.enum(['port-in-use', 'command-ended', 'missing-executable', 'address-not-reported', 'not-listening']).optional(),
+}).strict().refine(({ phase, address, port }) => {
+  if (phase !== 'ready') return address === undefined && port === undefined;
+  const url = address && localDevelopmentAddress(address);
+  return Boolean(url && port === Number(url.port || (url.protocol === 'https:' ? 443 : 80)));
+}, 'A ready development server needs its verified local address and port');
+export type DevServerStatus = z.infer<typeof devServerStatusSchema>;
 
 export const gitRevisionSchema = z.object({
   branch: z.string().min(1).max(256).optional(),

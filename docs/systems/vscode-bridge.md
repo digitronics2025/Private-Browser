@@ -201,6 +201,10 @@ and unrestricted terminal access are unsupported in v1.
 5. Back in Private Browser choose the open workspace folder; approve the named
    folder in the VS Code modal.
 6. Press **Start server**; read the exact command in VS Code and approve it.
+   Bridge 0.4.2 shows the selected project, the expected framework URL, and its
+   reported listening port. It checks only the exact local address printed by
+   the approved task. **Retry** and **Stop server** operate on that project's
+   managed process. **Check server status** refreshes missing-command guidance.
 7. Open the reported local app in Development, then use **Inspect** to select a
    page element or open Chromium DevTools.
 8. Use **Test** for Quick Test or a page-specific isolated check. Approve the
