@@ -129,6 +129,7 @@ test('keeps Home, site keywords and startup pages in the chosen workspace after 
       await api.navigate(url + '/one');
       return api.getState();
     }, origin);
+    expect(restored.tabs.some((tab) => tab.url === origin + '/two')).toBe(false);
     await app.close();
     app = await electron.launch({ args: launchArguments(), env: environment(userData) });
     page = await app.firstWindow();

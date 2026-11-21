@@ -1788,15 +1788,18 @@ class BrowserController {
   }
 
   /**
-   * Runs once per launch when "On startup" is "Also open Home page". It only adds
-   * a tab: restored tabs are never closed. A failure is logged, never fatal.
+   * Applies the launch-time Home or startup page settings after restoring tabs.
+   * Restored tabs stay open and a failed Home load does not stop startup.
    */
-  async openStartupHome(): Promise<void> {
+  async openStartupHome(atLaunch: RuntimeBrowserStateV2): Promise<void> {
     const state = this.store.get();
     if (state.recovery || this.startupTabRecovery || state.activeWorkspaceId === 'banking') return;
-    const settings = settingsForWorkspace(state, state.activeWorkspaceId);
+    const accountId = this.activeAccountSpaceId(state);
+    // Settings edited while the first window is loading apply on the next launch.
+    if (state.activeWorkspaceId !== atLaunch.activeWorkspaceId || accountId !== this.activeAccountSpaceId(atLaunch)) return;
+    const settings = settingsForWorkspace(atLaunch, atLaunch.activeWorkspaceId);
     if (settings.startup === 'pages' && settings.startupPages?.length) {
-      const account = state.accountSpaces.find((candidate) => candidate.id === this.activeAccountSpaceId(state));
+      const account = state.accountSpaces.find((candidate) => candidate.id === accountId);
       if (!account || !isAvailableRegularAccount(state, account)) return;
       const seen = new Set(state.tabs.filter((tab) => tab.accountSpaceId === account.id && !tab.isHome && isAllowedRemoteUrl(tab.url))
         .map((tab) => canonicalRoutineUrl(tab.url)));
@@ -1815,8 +1818,7 @@ class BrowserController {
     }
     if (settings.startup !== 'home') return;
     try {
-      await this.newTab(state.activeWorkspaceId);
-      await this.goHome();
+      await this.newTab(state.activeWorkspaceId, resolveHomeUrl(settings, false), accountId);
     } catch {
       this.addPrivacyEvent('blocked', 'Home page could not open at startup', 'The browser started with the restored tabs');
     }
@@ -4892,13 +4894,14 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:install-verified', () => controller!.installManagedUpdate());
   handle('updates:open-history', () => controller!.openReleaseHistory());
 
+  const atLaunch = store.get();
   controller.startSessionLockMonitoring();
   await controller.createWindow();
   if (controller.sessionIsLocked) agentHost.stop();
   else await agentHost.start();
   setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();
   setInterval(() => void controller?.checkForUpdatesInBackground(), 24 * 60 * 60_000).unref();
-  if (!controller.sessionIsLocked && !pendingLaunchUrls.length) await controller.openStartupHome();
+  if (!controller.sessionIsLocked && !pendingLaunchUrls.length) await controller.openStartupHome(atLaunch);
   launchWindowReady = true;
   await openPendingSystemLinks();
   app.on('activate', async () => {

@@ -239,11 +239,13 @@ Home address when one is set, otherwise `private://home`, and **always**
 `private://home` in a protected workspace (Banking), whatever the setting says.
 Ctrl+T, empty address input and closing the last tab still mean the New Tab page.
 
-**Startup.** After `createWindow`, `whenReady` opens a link the app was launched
-with; only when there is none does it call `openStartupHome()`. That runs when
-`settings.startup === 'home'` and no recovery is pending: it adds one tab in the
-active Account Space and sends it Home. Restored tabs are never closed. A failure
-is recorded as a `blocked` privacy event without the URL and startup carries on.
+**Startup.** The browser captures its startup settings before showing the first
+window. Changes made while it loads take effect at the next launch. A launch
+link takes priority. Otherwise, the saved settings can open Home or add saved
+startup URLs as background tabs in the original active Account Space. Recovery
+and a switch to another Account Space skip this action. Restored tabs stay
+open. If opening Home fails, the browser records a `blocked` privacy event
+without the URL and continues startup.
 
 Crashes and main-frame load failures hide the native view and show Reload and
 Back. Cancelled loads are ignored. An opaque tab ID and attempt count are
