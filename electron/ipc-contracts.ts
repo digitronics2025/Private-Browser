@@ -412,7 +412,7 @@ const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',
   'google:clear-configuration', 'system:is-default-browser', 'system:open-default-browser-settings', 'system:test-default-browser', 'updates:check', 'updates:clear',
   'updates:open-history', 'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review',
-  'vault:fill-readiness', 'vault:form-shape', 'vault:hello-disable', 'vault:hello-enable', 'vault:hello-unlock', 'vault:list', 'vault:lock',
+  'vault:clipboard-clear', 'vault:clipboard-deadline', 'vault:fill-readiness', 'vault:form-shape', 'vault:hello-disable', 'vault:hello-enable', 'vault:hello-unlock', 'vault:list', 'vault:lock',
   'vault:migrate-legacy', 'vault:migration-status', 'vault:reconnect', 'vault:request-pairing', 'vault:request-unlock',
   'vault:save-from-page', 'vault:sync',
 ]);

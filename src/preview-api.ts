@@ -164,6 +164,7 @@ export function installPreviewApi(): void {
   let previewRequest: { id: string; finish: (answer: AssistantAnswer) => void } | undefined;
   const disabledCloudAccounts = new Set<AccountSpaceId>();
   const assistantReceipts = new Map<AccountSpaceId, AssistantReceipt[]>();
+  let vaultClipboardUntil: number | undefined;
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
     state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
@@ -819,6 +820,17 @@ export function installPreviewApi(): void {
     sendToControlCenter: async () => ({ id: 'TASK-0043', title: 'Preview task', repositoryName: 'shop', status: 'QUEUED', currentStageName: 'Investigate', blocker: null, finalStatus: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0043' }),
     recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md' }),
     inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),
+    copyGeneratedCredential: async () => {
+      if (state.activeWorkspaceId === 'banking') throw new Error('Vault clipboard is disabled in this workspace');
+      vaultClipboardUntil = Date.now() + 30_000;
+    },
+    vaultClipboardDeadline: async () => state.activeWorkspaceId === 'banking' ? undefined : vaultClipboardUntil,
+    clearVaultClipboard: async () => {
+      if (state.activeWorkspaceId === 'banking') throw new Error('Vault clipboard is disabled in this workspace');
+      const hadCopy = Boolean(vaultClipboardUntil && vaultClipboardUntil > Date.now());
+      vaultClipboardUntil = undefined;
+      return hadCopy;
+    },
     resetVaultPicks: async (id) => {
       if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development') {
         throw new Error('Remembered picks are unavailable in this Account Space.');
