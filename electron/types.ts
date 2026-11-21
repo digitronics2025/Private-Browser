@@ -540,6 +540,7 @@ export interface BrowserSnapshot {
   managedUpdate?: ManagedUpdateStatus;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
+  trackerSite?: TrackerSiteStatus;
   /** Present after Account Spaces initialization; contains renderer-safe data only. */
   activeAccountSpaceId: AccountSpaceId;
   accountSpaces: AccountSpaceSummary[];
@@ -568,6 +569,15 @@ export interface BrowserSnapshot {
   closedTabBatch?: ClosedTabBatchSummary;
   /** Web apps docked in the side panel, such as Claude. */
   sideApps: SideAppSnapshot[];
+}
+
+export type TrackerCategory = 'advertising' | 'analytics' | 'social' | 'telemetry';
+export interface TrackerSiteStatus {
+  origin: string;
+  counts: Partial<Record<TrackerCategory, number>>;
+  blocking: boolean;
+  canPause: boolean;
+  pausedUntil?: number;
 }
 
 export interface PersistedState {

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Code2, Globe2, Landmark, Minus, Plus, Layers, LockKeyhole, ScrollText, Search, Settings, Shield, ShieldAlert, ShieldCheck, TriangleAlert } from 'lucide-react';
-import type { AccountSpaceSummary, BrowserSnapshot, BrowserTab, Workspace } from '../../electron/types';
+import type { AccountSpaceSummary, BrowserSnapshot, BrowserTab, TrackerCategory, Workspace } from '../../electron/types';
 import { inspectWebAddress, MAX_ADDRESS_CHECK_LENGTH, type AddressCheck, type AddressClue } from '../../electron/security';
 import { domainFromUrl } from '../lib/format';
 import { BrandMark } from './BrandMark';
@@ -16,15 +16,24 @@ function StatusRow({ ok, icon: Icon, title, detail }: { ok: boolean; icon: typeo
   );
 }
 
-export function ShieldStatusMenu({ anchor, state, workspace, onClose, onToggleTrackers, onOpenPrivacy, onOpenSettings }: {
+const trackerLabels: ReadonlyArray<[TrackerCategory, string]> = [
+  ['advertising', 'Advertising'], ['analytics', 'Analytics'], ['social', 'Social'], ['telemetry', 'Telemetry'],
+];
+
+export function ShieldStatusMenu({ anchor, state, workspace, onClose, onToggleTrackers, onCompatibility, onOpenPrivacy, onOpenSettings }: {
   anchor: HTMLElement | null;
   state: BrowserSnapshot;
   workspace: Workspace;
   onClose: () => void;
   onToggleTrackers: () => void;
+  onCompatibility: (origin: string, paused: boolean) => void;
   onOpenPrivacy: () => void;
   onOpenSettings: () => void;
 }) {
+  const site = state.trackerSite;
+  const blocking = site?.blocking ?? state.trackerBlocking;
+  const counts = trackerLabels.flatMap(([id, label]) => site?.counts[id] ? [[label, site.counts[id]] as const] : []);
+  const total = counts.reduce((sum, [, count]) => sum + count, 0);
   return (
     <MenuSurface anchor={anchor} label="Protection status" role="dialog" className="shield-menu" onClose={onClose}>
       <div className="shield-menu-header">
@@ -33,12 +42,26 @@ export function ShieldStatusMenu({ anchor, state, workspace, onClose, onToggleTr
       </div>
       <div className="status-list">
         <StatusRow ok icon={Layers} title="Isolated Account Spaces" detail={`${state.accountSpaces.length} separate containers for cookies, storage and sign-ins`} />
-        <StatusRow ok={state.trackerBlocking} icon={state.trackerBlocking ? ShieldCheck : ShieldAlert} title={state.trackerBlocking ? 'Tracker blocking is on' : 'Tracker blocking is paused'} detail={state.trackerBlocking ? 'Known trackers are blocked in every space' : 'Known trackers can load until you turn this back on'} />
+        <StatusRow ok={blocking} icon={blocking ? ShieldCheck : ShieldAlert} title={blocking ? 'Tracker blocking is on' : 'Tracker blocking is paused'}
+          detail={workspace.protected ? 'Tracker blocking stays on in Banking' : site?.pausedUntil
+            ? 'Compatibility is on for this site' : state.trackerBlocking ? 'Known tracker domains are blocked' : 'Regular Account Spaces can load known trackers'} />
         <StatusRow ok icon={LockKeyhole} title="Websites are sandboxed" detail="Pages never reach the browser's own controls or your files" />
         {workspace.protected && <StatusRow ok icon={Landmark} title="Banking protections" detail="No AI page reading, downloads or pop-ups in this workspace" />}
       </div>
+      {site && <section className="tracker-site" aria-label="Current site tracking">
+        <strong><bdi>{site.origin}</bdi></strong>
+        <p>{total} known tracker {total === 1 ? 'request' : 'requests'} blocked this session</p>
+        {counts.length > 0 && <ul>{counts.map(([label, count]) => <li key={label}>{label} {count}</li>)}</ul>}
+        {site.pausedUntil && <p>Protection resumes at <time dateTime={new Date(site.pausedUntil).toISOString()}>
+          {new Intl.DateTimeFormat(undefined, { timeStyle: 'short' }).format(site.pausedUntil)}
+        </time>.</p>}
+        {(site.canPause || site.pausedUntil) && <button type="button" className="secondary-button"
+          onClick={() => onCompatibility(site.origin, !site.pausedUntil)}>
+          {site.pausedUntil ? 'Turn protection back on' : 'Pause for this site for 10 minutes'}
+        </button>}
+      </section>}
       <MenuSeparator />
-      <MenuItem role="menuitemcheckbox" checked={state.trackerBlocking} label="Block trackers" keepOpen onSelect={onToggleTrackers} />
+      {!workspace.protected && <MenuItem role="menuitemcheckbox" checked={state.trackerBlocking} label="Block trackers" keepOpen onSelect={onToggleTrackers} />}
       <MenuItem icon={ScrollText} label="Privacy log" hint={`${state.privacyLog.length} recorded events`} onSelect={onOpenPrivacy} />
       <MenuItem icon={Settings} label="Security settings" onSelect={onOpenSettings} />
     </MenuSurface>

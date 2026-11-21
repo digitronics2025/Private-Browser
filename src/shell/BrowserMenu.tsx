@@ -108,7 +108,7 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
         <MenuItem icon={Zap} label="Automations" onSelect={() => actions.openTool('automations')} />
         <MenuItem icon={ScrollText} label="Privacy log" onSelect={() => actions.openTool('privacy')} />
         <MenuSeparator />
-        <MenuItem role="menuitemcheckbox" checked={state.trackerBlocking} icon={Shield} label="Block trackers" keepOpen onSelect={actions.toggleTrackers} />
+        {state.activeWorkspaceId !== 'banking' && <MenuItem role="menuitemcheckbox" checked={state.trackerBlocking} icon={Shield} label="Block trackers" keepOpen onSelect={actions.toggleTrackers} />}
       </SubmenuItem>
       <MenuSeparator />
       <MenuItem icon={NotebookPen} label="Notes" shortcut="Ctrl+Shift+Y" onSelect={() => actions.openTool('easynote')} />

@@ -10,6 +10,7 @@ let userDataPath: string;
 let origin: string;
 let server: Server;
 let documentHeaders: IncomingHttpHeaders | undefined;
+let trackerConnections = 0;
 const installerBytes = 'local installer fixture';
 
 function launchProfile() {
@@ -32,6 +33,7 @@ function startAccountDownload(target: string, savePath: string) {
 
 test.beforeEach(async () => {
   documentHeaders = undefined;
+  trackerConnections = 0;
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
@@ -84,6 +86,11 @@ test.beforeEach(async () => {
     response.setHeader('Content-Type', 'text/html');
     response.end('<!doctype html><title>Account isolation fixture</title>');
   });
+  server.on('connect', (request, socket) => {
+    if (request.url === 'scorecardresearch.com:443') trackerConnections++;
+    // The test proxy terminates every connection locally.
+    socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+  });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Test server did not bind to TCP');
@@ -111,6 +118,44 @@ test('offers first-launch setup once and keeps a skip after restart', async () =
   await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open setup guide' })).toHaveCount(0);
   expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.ui.offerSetupGuide))).toBe(false);
+});
+
+test('counts blocked requests for the current page and keeps Banking strict', async () => {
+  const page = await application!.firstWindow();
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  const ordinary = origin + '/tracker-page-ordinary';
+  const banking = origin + '/tracker-page-banking';
+  const probe = (url: string, number: number) => application!.evaluate(async ({ webContents }, input) => {
+    const contents = webContents.getAllWebContents().find((view) => view.getURL() === input.url);
+    if (!contents) throw new Error('Tracker fixture view is missing');
+    await contents.session.setProxy({ mode: 'fixed_servers', proxyRules: input.proxy, proxyBypassRules: '127.0.0.1' });
+    await contents.session.closeAllConnections();
+    await contents.executeJavaScript(`new Image().src = "https://scorecardresearch.com/tracker-${input.number}.gif"; true`);
+  }, { url, number, proxy: origin });
+
+  await page.evaluate((url) => window.privateBrowser.navigate(url), ordinary);
+  await probe(ordinary, 1);
+  await expect.poll(async () => (await getState()).trackerSite?.counts.analytics).toBe(1);
+  expect(trackerConnections).toBe(0);
+  const tab = (await getState()).activeTabId;
+  const pause = (value: boolean) => page.evaluate(({ tab, site, value }) =>
+    window.privateBrowser.setTrackerCompatibility(tab, site, value), { tab, site: origin, value });
+  await pause(true);
+  await probe(ordinary, 2);
+  await expect.poll(() => trackerConnections).toBeGreaterThan(0);
+  expect((await getState()).trackerSite?.counts.analytics).toBe(1);
+  await pause(false);
+  await probe(ordinary, 3);
+  await expect.poll(async () => (await getState()).trackerSite?.counts.analytics).toBe(2);
+  await page.evaluate(() => window.privateBrowser.toggleTrackerBlocking());
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await page.evaluate((url) => window.privateBrowser.navigate(url), banking);
+  await probe(banking, 4);
+  await expect.poll(async () => (await getState()).trackerSite?.counts.analytics).toBe(1);
+  expect((await getState()).trackerSite).toMatchObject({ blocking: true, canPause: false });
+  await expect(page.evaluate(({ id, site }) => window.privateBrowser.setTrackerCompatibility(id, site, true),
+    { id: (await getState()).activeTabId, site: origin })).rejects.toThrow(/unavailable/);
 });
 
 test('checks the managed update in its own directory and opens it only on an eligible explicit action', async () => {

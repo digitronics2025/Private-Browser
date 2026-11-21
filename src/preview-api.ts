@@ -8,6 +8,7 @@ import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-prefe
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings, ManagedUpdateStatus } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
+import { canPauseTrackersAt, TrackerProtection } from '../electron/tracker-protection';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
@@ -157,6 +158,13 @@ export function installPreviewApi(): void {
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
   const savedDownloadHistory = new Set<AccountSpaceId>();
+  let trackerBlocking = state.trackerBlocking;
+  const trackers = new TrackerProtection();
+  if (params.get('trackers') === 'sample') {
+    const fixture = { origin: 'https://reference.example.test', enabled: true, strict: false };
+    trackers.shouldBlock(state.activeAccountSpaceId, 'advertising', fixture);
+    trackers.shouldBlock(state.activeAccountSpaceId, 'analytics', fixture);
+  }
   if (params.get('downloadHistory') === 'sample') {
     savedDownloadHistory.add(google);
     sampleDownloads.push({ id: 'preview-download-history', accountSpaceId: google, filename: 'Statement.pdf',
@@ -197,6 +205,12 @@ export function installPreviewApi(): void {
       receipts: assistantReceipts.get(state.activeAccountSpaceId) ?? [],
     };
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
+    const privateWorkspace = state.activeWorkspaceId === 'banking';
+    state.trackerBlocking = privateWorkspace || trackerBlocking;
+    const activeTrackingTab = state.tabs.find(({ id }) => id === state.activeTabId);
+    state.trackerSite = activeTrackingTab && !activeTrackingTab.isHome ? trackers.status(state.activeAccountSpaceId,
+      new URL(activeTrackingTab.url).origin, { enabled: trackerBlocking, strict: privateWorkspace,
+        canPause: !privateWorkspace && trackerBlocking && canPauseTrackersAt(activeTrackingTab.url) }) : undefined;
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     state.downloadHistory = state.activeWorkspaceId === 'banking' ? undefined : savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
     state.managedUpdate = state.activeWorkspaceId === 'banking' ? undefined : managedUpdate;
@@ -750,7 +764,19 @@ export function installPreviewApi(): void {
       return result.restored;
     },
     setShortcutTiles: async (idValue, tilesValue) => { if (tilesValue === null) delete state.shortcutsByAccountSpace[String(idValue)]; else state.shortcutsByAccountSpace[String(idValue)] = tilesValue as ShortcutTile[]; publish(); },
-    toggleTrackerBlocking: async () => { state.trackerBlocking = !state.trackerBlocking; publish(); },
+    toggleTrackerBlocking: async () => {
+      if (state.activeWorkspaceId === 'banking') throw new Error('Tracker blocking stays on in Banking.');
+      trackerBlocking = !trackerBlocking;
+      publish();
+    },
+    setTrackerCompatibility: async (tabId, origin, paused) => {
+      if (state.activeWorkspaceId === 'banking' || !state.trackerSite || state.trackerSite.origin !== origin
+        || tabId !== state.activeTabId || (paused && !state.trackerSite.canPause)) {
+        throw new Error('Tracker compatibility is unavailable on this page.');
+      }
+      trackers.pause(state.activeAccountSpaceId, origin, paused);
+      publish();
+    },
     switchAccountSpace: async (value) => { const id = value as AccountSpaceId; const selected = state.accountSpaces.find((item) => item.id === id); if (!selected || selected.locked) throw new Error('Account Space is unavailable'); state.activeAccountSpaceId = id; state.activeWorkspaceId = selected.workspaceId; state.activeTabId = state.tabs.find((tab) => tab.accountSpaceId === id)!.id; publish(); },
     switchWorkspace: async (value) => { const workspaceId = value as WorkspaceId; state.activeWorkspaceId = workspaceId; state.activeAccountSpaceId = state.accountSpaces.find((item) => item.workspaceId === workspaceId)!.id; state.activeTabId = state.tabs.find((tab) => tab.accountSpaceId === state.activeAccountSpaceId)!.id; publish(); },
     addLocalAccountSpace: async (workspaceValue, labelValue, colorValue) => { const id = crypto.randomUUID() as AccountSpaceId; const created = account(id, workspaceValue as WorkspaceId, String(labelValue), colorValue as 'indigo'); state.accountSpaces.push(created); state.tabs.push(homeTab(`preview-${id}`, created.workspaceId, id)); state.activeAccountSpaceId = id; state.activeTabId = `preview-${id}`; publish(); return id; },

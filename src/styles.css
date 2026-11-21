@@ -336,6 +336,9 @@ kbd { font: inherit; }
 .recovery-card p { color: var(--text-muted); }
 .recovery-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .recovery-actions .toolbar-button { width: auto; padding-inline: 12px; }
+.tracker-site { padding: 8px 12px; overflow-wrap: anywhere; }
+.tracker-site p, .tracker-site ul { margin: 4px 0; font-size: var(--fs-sm); color: var(--text-muted); }
+.tracker-site ul { padding-inline-start: 20px; }
 .safe-diagnostics { min-width: 0; margin-block: 6px; }
 .safe-diagnostics pre { white-space: pre-wrap; overflow-wrap: anywhere; margin-block: 6px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); text-align: start; }
 .side-app > .safe-diagnostics { padding-inline: 8px; }

@@ -124,6 +124,11 @@ identifiers are removed from navigations, DNT and Global Privacy Control headers
 are sent, common tracker hosts are blocked, and cleartext or punycode domains are
 visibly marked in the address bar.
 
+Tracker counters and ten-minute compatibility settings are memory-only, scoped
+to Account Space and exact top-level origin. Banking always blocks known trackers.
+Compatibility does not apply to protected pages, Agent Mode restrictions or
+requests without a verified top-level frame.
+
 Only the active, eligible Account Space can list, open or reveal its downloads.
 Downloaded file paths stay in the main process. Operating-system links are
 restricted to eligible regular Account Spaces, even with Banking in front.

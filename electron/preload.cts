@@ -153,6 +153,7 @@ const api = {
   importReviewedChromePasswords: (id: string): Promise<ChromePasswordImportResult> => ipcRenderer.invoke('vault:import-reviewed-chrome-passwords', id),
   discardChromePasswordReview: (id: string): Promise<void> => ipcRenderer.invoke('vault:discard-chrome-password-review', id),
   toggleTrackerBlocking: (): Promise<void> => ipcRenderer.invoke('browser:toggle-tracker-blocking'),
+  setTrackerCompatibility: (tabId: string, origin: string, paused: boolean): Promise<void> => ipcRenderer.invoke('browser:set-tracker-compatibility', tabId, origin, paused),
   openDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-download', id),
   controlDownload: (id: string, action: DownloadAction): Promise<void> => ipcRenderer.invoke('browser:control-download', id, action),
   showDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:show-download', id),

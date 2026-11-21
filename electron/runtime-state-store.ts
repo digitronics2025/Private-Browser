@@ -59,6 +59,10 @@ export class RuntimeStateStore {
     return this.readOnly;
   }
 
+  trackerBlockingEnabled(): boolean {
+    return this.state.trackerBlocking;
+  }
+
   addressMatches(accountSpaceId: AccountSpaceId, text: string): AddressMatch[] {
     const account = this.activeReadableAccount(accountSpaceId);
     if (!account) return [];

@@ -36,6 +36,7 @@ import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type Expec
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { DownloadHistoryStore } from './download-history.js';
 import { ManagedUpdate } from './managed-update.js';
+import { canPauseTrackersAt, TRACKER_COMPATIBILITY_MS, TrackerProtection, trackerCategory } from './tracker-protection.js';
 import { getDomain } from 'tldts';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
@@ -256,35 +257,6 @@ function permissionCapability(
   return undefined;
 }
 
-const TRACKER_HOSTS = [
-  '2mdn.net',
-  'adnxs.com',
-  'adsrvr.org',
-  'amazon-adsystem.com',
-  'app-measurement.com',
-  'clarity.ms',
-  'criteo.com',
-  'criteo.net',
-  'doubleclick.net',
-  'googlesyndication.com',
-  'google-analytics.com',
-  'googleadservices.com',
-  'googletagmanager.com',
-  'connect.facebook.net',
-  'fullstory.com',
-  'analytics.twitter.com',
-  'hotjar.com',
-  'mixpanel.com',
-  'newrelic.com',
-  'optimizely.com',
-  'segment.io',
-  'scorecardresearch.com',
-  'sentry.io',
-  'taboola.com',
-  'quantserve.com',
-  'mc.yandex.ru',
-];
-
 type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string; retainedFileStamp?: string };
 
 class BrowserController {
@@ -296,6 +268,9 @@ class BrowserController {
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly downloadHistory = new DownloadHistoryStore(join(app.getPath('userData'), 'download-history'), safeStorage);
   private readonly downloadHistoryFailures = new Set<AccountSpaceId>();
+  private readonly trackerProtection = new TrackerProtection();
+  private readonly trackerExpiry = new Map<AccountSpaceId, Map<string, ReturnType<typeof setTimeout>>>();
+  private trackerBroadcast?: ReturnType<typeof setTimeout>;
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
@@ -546,10 +521,19 @@ class BrowserController {
     const closedBatch = this.closedTabBatches.get(activeAccountSpaceId);
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
     const downloadAccount = this.activeDownloadAccount(persisted);
+    const activeTab = this.activeTab(persisted);
+    const strictTracking = activeTab.workspaceId === 'banking';
+    const trackerSite = !activeTab.isHome && isAllowedRemoteUrl(activeTab.url) && (downloadAccount || strictTracking)
+      ? this.trackerProtection.status(activeTab.accountSpaceId, safeOrigin(activeTab.url), {
+        enabled: persisted.trackerBlocking,
+        strict: strictTracking || isProtectedPage(activeTab.url) && persisted.trackerBlocking,
+        canPause: Boolean(downloadAccount) && persisted.trackerBlocking && canPauseTrackersAt(activeTab.url)
+          && this.runtimeTabs.get(activeTab.id)?.problem !== 'certificate',
+      }) : undefined;
     return {
       workspaces: WORKSPACES,
       activeWorkspaceId: persisted.activeWorkspaceId,
-      activeTabId: this.activeTab(persisted).id,
+      activeTabId: activeTab.id,
       tabs,
       bookmarks: persisted.bookmarks,
       bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
@@ -559,7 +543,8 @@ class BrowserController {
         ? 'unavailable' : this.downloadHistory.status(downloadAccount),
       managedUpdate: downloadAccount && process.platform === 'win32' && !this.store.isReadOnly() ? this.managedUpdate.snapshot() : undefined,
       privacyLog: persisted.privacyLog.slice(0, 50),
-      trackerBlocking: persisted.trackerBlocking,
+      trackerBlocking: strictTracking || persisted.trackerBlocking,
+      trackerSite,
       activeAccountSpaceId,
       accountSpaces: persisted.accountSpaces,
       accountHealth: persisted.accountHealth,
@@ -1569,6 +1554,9 @@ class BrowserController {
   }
 
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
+    this.trackerProtection.clearAccount(accountSpaceId);
+    this.trackerExpiry.get(accountSpaceId)?.forEach((timer) => clearTimeout(timer));
+    this.trackerExpiry.delete(accountSpaceId);
     if (this.pendingChromePasswords?.accountId === accountSpaceId) this.pendingChromePasswords = undefined;
     if (this.pendingChromeImport?.accountSpaceId === accountSpaceId || this.pendingChromeImport?.initiatingAccount === accountSpaceId) {
       this.pendingChromeImport = undefined;
@@ -2204,8 +2192,38 @@ class BrowserController {
   }
 
   toggleTrackerBlocking(): void {
+    if (this.store.get().activeWorkspaceId === 'banking') throw new Error('Tracker blocking stays on in Banking.');
     this.store.update((state) => { state.trackerBlocking = !state.trackerBlocking; });
     this.broadcast();
+  }
+
+  setTrackerCompatibility(tabId: string, expectedOrigin: string, paused: boolean): void {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const account = this.activeDownloadAccount(state);
+    if (!account || this.store.isReadOnly() || tab.id !== tabId || tab.isHome
+      || this.runtimeTabs.get(tab.id)?.problem === 'certificate' || !canPauseTrackersAt(tab.url) || safeOrigin(tab.url) !== expectedOrigin) {
+      throw new Error('Tracker compatibility is unavailable on this page.');
+    }
+    if (paused && !state.trackerBlocking) throw new Error('Turn on tracker blocking before pausing it for one site.');
+    this.trackerProtection.pause(account, expectedOrigin, paused);
+    let timers = this.trackerExpiry.get(account);
+    if (!timers) this.trackerExpiry.set(account, timers = new Map());
+    clearTimeout(timers.get(expectedOrigin));
+    timers.delete(expectedOrigin);
+    if (paused) timers.set(expectedOrigin, setTimeout(() => {
+      timers.delete(expectedOrigin);
+      this.scheduleTrackerBroadcast();
+    }, TRACKER_COMPATIBILITY_MS + 50).unref());
+    this.broadcast();
+  }
+
+  private scheduleTrackerBroadcast(): void {
+    if (this.trackerBroadcast) return;
+    this.trackerBroadcast = setTimeout(() => {
+      this.trackerBroadcast = undefined;
+      this.broadcast();
+    }, 300).unref();
   }
 
   toggleDeveloperTools(mode: DevToolsMode): void {
@@ -3957,9 +3975,21 @@ class BrowserController {
         deny();
       }
     }, { useSystemPicker: false });
-    ses.webRequest.onBeforeRequest((details, callback) => callback({
-      cancel: this.isBlockedTrackerRequest(details.url) || agentHost?.allowLentRequest(details) === false,
-    }));
+    ses.webRequest.onBeforeRequest((details, callback) => {
+      if (agentHost?.allowLentRequest(details) === false) { callback({ cancel: true }); return; }
+      const category = trackerCategory(details.url);
+      const enabled = this.store.trackerBlockingEnabled();
+      if (!category || (!enabled && !protectedWorkspace)) { callback({ cancel: false }); return; }
+      let top: string | undefined;
+      if (details.resourceType !== 'mainFrame') {
+        try { top = details.frame?.top?.url; } catch { /* The requesting frame may have closed. */ }
+      }
+      const origin = top && isAllowedRemoteUrl(top) ? safeOrigin(top) : undefined;
+      const strict = protectedWorkspace || Boolean(top && isProtectedPage(top));
+      const blocked = this.trackerProtection.shouldBlock(accountSpaceId, category, { origin, strict, enabled });
+      if (blocked && origin) this.scheduleTrackerBroadcast();
+      callback({ cancel: blocked });
+    });
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
     });
@@ -4067,13 +4097,7 @@ class BrowserController {
   }
 
   private isBlockedTrackerRequest(url: string): boolean {
-    if (!this.store.get().trackerBlocking) return false;
-    try {
-      const hostname = new URL(url).hostname;
-      return TRACKER_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
-    } catch {
-      return false;
-    }
+    return this.store.trackerBlockingEnabled() && Boolean(trackerCategory(url));
   }
 
   private hideAllViews(): void {
@@ -4561,6 +4585,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:import-reviewed-chrome-passwords', (_event, id: string) => controller!.importReviewedChromePasswords(id));
   handle('vault:discard-chrome-password-review', (_event, id: string) => controller!.discardChromePasswordReview(id));
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
+  handle('browser:set-tracker-compatibility', (_event, tabId: string, origin: string, paused: boolean) => controller!.setTrackerCompatibility(tabId, origin, paused));
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:control-download', (_event, id: string, action: DownloadAction) => controller!.controlDownload(id, action));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
