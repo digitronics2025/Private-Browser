@@ -9,6 +9,7 @@ import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './goo
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
 import type { BackupReminderDays, BackupRestorePreview, BackupUploadPreview, GoogleOverviewPage, GoogleOverviewService } from './types.js';
+import type { GmailReplyDraft } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
 import type { DownloadByteProgress } from './types.js';
@@ -90,6 +91,8 @@ const api = {
   connectGoogleAccount: (accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId): Promise<GoogleOperationResult> => ipcRenderer.invoke('google:connect', accountSpaceId, modules, browserId),
   cancelGoogleConnection: (accountSpaceId: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('google:cancel', accountSpaceId),
   gmailOverview: (accountSpaceId: AccountSpaceId, operationId: string): Promise<GoogleOperationResult<GmailOverview>> => ipcRenderer.invoke('google:gmail-overview-run', accountSpaceId, operationId),
+  readGmailReplyDraft: (accountSpaceId: AccountSpaceId, operationId: string, messageId: string): Promise<GoogleOperationResult<GmailReplyDraft>> =>
+    ipcRenderer.invoke('google:gmail-reply-draft', accountSpaceId, operationId, messageId),
   googleOverviewPage: (accountSpaceId: AccountSpaceId, operationId: string, service: GoogleOverviewService, cursor?: string): Promise<GoogleOperationResult<GoogleOverviewPage>> => ipcRenderer.invoke('google:overview-page', accountSpaceId, operationId, service, cursor),
   searchGmail: (accountSpaceId: AccountSpaceId, operationId: string, query = ''): Promise<GoogleOperationResult<GmailMessageHeader[]>> => ipcRenderer.invoke('google:gmail-search-run', accountSpaceId, operationId, query),
   prepareGmailSend: (accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string): Promise<GoogleMutationConfirmation> => ipcRenderer.invoke('google:gmail-prepare-send', accountSpaceId, input, sourceRevision),

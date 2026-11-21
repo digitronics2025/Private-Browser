@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { memorySaverExclusions } from './memory-saver.js';
+import { readGoogleActionReceipts, type StoredGoogleActionReceipt } from './google-action-receipts.js';
 import type {
   AccountSpaceColor,
   AccountSpaceId,
@@ -101,6 +102,7 @@ export interface AccountSpaceRecord {
   backup: AccountBackupConfiguration;
   assistantCloudAllowed?: boolean;
   assistantReceipts?: AssistantReceipt[];
+  googleActionReceipts?: StoredGoogleActionReceipt[];
 }
 
 export type AccountRecordLoadResult =
@@ -375,6 +377,7 @@ function validateRecord(value: unknown, expectedId: AccountSpaceId): AccountSpac
     backup,
     assistantCloudAllowed: input.assistantCloudAllowed === undefined ? undefined : input.assistantCloudAllowed === true,
     assistantReceipts: validateAssistantReceipts(input.assistantReceipts),
+    googleActionReceipts: workspaceId !== 'banking' ? readGoogleActionReceipts(input.googleActionReceipts) : undefined,
   };
   if (record.kind === 'google' && !record.googleIdentity) throw new Error('Google Account Space is missing identity data');
   return record;
