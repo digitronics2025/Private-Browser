@@ -92,7 +92,13 @@ export function installPreviewApi(): void {
         })),
       ] : []),
     ],
-    downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true,
+    downloads: params.get('downloads') === 'sample' ? [
+      { id: 'preview-progress', accountSpaceId: google, filename: 'sample.pdf', receivedBytes: 12, totalBytes: 200, state: 'progressing', risk: 'ordinary', extension: 'PDF' },
+      { id: 'preview-installer', accountSpaceId: google, filename: 'installer-sample.exe', receivedBytes: 200, totalBytes: 200, state: 'completed', risk: 'dangerous', extension: 'EXE',
+        checksum: 'verified', publisher: { state: 'unsigned' } },
+      { id: 'preview-mismatch', accountSpaceId: google, filename: 'invalid-installer.exe', receivedBytes: 200, totalBytes: 200, state: 'completed', risk: 'dangerous',
+        extension: 'EXE', checksum: 'mismatch' },
+    ] : [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true,
     accountSpaces: accounts.map((item) => ({ ...item, enabledModules: [...item.enabledModules], grantedScopes: [...item.grantedScopes] })),
     accountHealth: accounts.map((item) => ({ accountSpaceId: item.id, status: item.googleConnection, checkedAt: '2026-09-12T12:00:00Z' })),
     googleConfiguration: { configured: true, source: 'encrypted-settings' },
@@ -122,8 +128,10 @@ export function installPreviewApi(): void {
   state.routines = routines;
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
+  const sampleDownloads = state.downloads;
   const publish = () => {
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
+    state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
     state.canReopenClosedTab = state.recentlyClosedTabs.length > 0;
     state.routines = state.activeWorkspaceId === 'banking' ? [] : routines;
@@ -226,6 +234,8 @@ export function installPreviewApi(): void {
     // A normal browser has no native view to place; record the slot for browser tests instead.
     setSideAppBounds: async (_id, rect) => { document.documentElement.dataset.previewSideApp = JSON.stringify(rect); },
     sideAppCommand: async () => undefined,
+    openDownload: async () => { throw new Error('This preview cannot open files. Use the desktop Downloads panel.'); },
+    showDownload: async () => { throw new Error('This preview cannot open folders. Use the desktop Downloads panel.'); },
     clearSideAppData: async () => undefined,
     respondToPermissionPrompt: async (_id, decision) => { document.documentElement.dataset.previewPermission = String(decision); state.pendingPermission = undefined; publish(); },
     freezeContent: async () => null,

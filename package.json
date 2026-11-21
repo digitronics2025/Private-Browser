@@ -30,7 +30,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run && npm run bridge:test && npm run extension:test && vitest run --config cloudflare/vitest.config.ts",
     "test:watch": "vitest",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "npm run build && npm run test:e2e:only",
+    "test:e2e:only": "playwright test",
     "test:e2e:headed": "npm run build && playwright test --headed",
     "test:electron": "npm run build && npm run test:electron:only",
     "test:electron:only": "node scripts/run-electron-tests.mjs",
@@ -43,7 +44,7 @@
     "secrets:check": "node scripts/secret-guard.mjs",
     "docs:find": "node scripts/docs-find.mjs",
     "docs:stale": "node scripts/docs-guard.mjs stale",
-    "check": "npm run secrets:check && npm run docs:check && npm run bridge:build && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run extension:package && npm run extension:validate && npm run build && npm run test:e2e && npm run test:electron:ci && npm run worker:build",
+    "check": "npm run secrets:check && npm run docs:check && npm run bridge:build && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run extension:package && npm run extension:validate && npm run build && npm run test:e2e:only && npm run test:electron:ci && npm run worker:build",
     "dist": "npm run extension:package && npm run build && electron-builder --win nsis --x64 --publish never && npm run extension:stage && node scripts/verify-windows-registration.mjs",
     "start": "electron dist-electron/main.js"
   },

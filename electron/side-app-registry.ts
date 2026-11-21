@@ -11,7 +11,7 @@ import { isAllowedRemoteUrl } from './security.js';
  */
 
 export type SideAppId = 'claude' | 'easynote';
-export type SideAppStatus = 'idle' | 'loading' | 'ready' | 'failed' | 'crashed';
+export type SideAppStatus = 'idle' | 'loading' | 'ready' | 'failed' | 'offline' | 'certificate-error' | 'redirect-blocked' | 'crashed';
 export type SideAppCommand = 'back' | 'forward' | 'reload' | 'home' | 'open-in-tab';
 
 export const SIDE_APP_IDS: readonly SideAppId[] = ['claude', 'easynote'];
@@ -30,6 +30,7 @@ export interface SideAppSnapshot {
   id: SideAppId;
   name: string;
   status: SideAppStatus;
+  attention?: 'sign-in' | 'human-check';
   canGoBack: boolean;
   canGoForward: boolean;
 }

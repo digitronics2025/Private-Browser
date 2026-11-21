@@ -27,7 +27,8 @@ import {
 import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from './security.js';
 import { externalLinkAccounts, isAvailableRegularAccount, preferredExternalLinkAccount } from './external-link-routing.js';
 import { ClipboardGuard } from './clipboard-guard.js';
-import { verifyDownload, type ExpectedInstaller } from './download-verify.js';
+import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
+import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { AiProviderStore } from './ai-provider.js';
 import { WORKSPACES } from './state-store.js';
 import { AccountStore } from './account-store.js';
@@ -245,9 +246,11 @@ const TRACKER_HOSTS = [
   'mc.yandex.ru',
 ];
 
+type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string };
+
 class BrowserController {
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
-  private readonly downloads = new Map<string, DownloadEntry & { savePath?: string }>();
+  private readonly downloads = new Map<string, LocalDownload>();
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly configuredSessions = new Set<string>();
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
@@ -483,7 +486,7 @@ class BrowserController {
       downloads: this.activeDownloadAccount(persisted)
         ? [...this.downloads.values()]
           .filter((entry) => entry.accountSpaceId === activeAccountSpaceId)
-          .map(({ savePath: _path, ...entry }) => entry)
+          .map(({ savePath: _path, expectedInstaller: _expected, verifiedStamp: _stamp, ...entry }) => entry)
         : [],
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
@@ -871,6 +874,7 @@ class BrowserController {
   }
 
   sideAppCommand(id: SideAppId, command: SideAppCommand): Promise<void> {
+    if (this.store.get().activeWorkspaceId === 'banking') return Promise.reject(new Error('Side apps are unavailable in Banking'));
     return this.sideApps.command(id, command);
   }
 
@@ -2565,21 +2569,49 @@ class BrowserController {
       throw new Error('Download is unavailable in this Account Space');
     }
     if (item.state !== 'completed' || !item.savePath) throw new Error('This download is incomplete');
-    if (!existsSync(item.savePath)) throw new Error('The downloaded file is missing');
+    if (!downloadFileStamp(item.savePath)) throw new Error('The downloaded file is missing or unavailable. Download it again.');
     return { ...item, savePath: item.savePath };
   }
 
   async openDownload(id: string): Promise<void> {
     const item = this.requireActiveDownload(id);
-    // A file whose checksum did not match the manifest is the one case where the
-    // app knows something is wrong; opening it anyway would waste the check.
-    if (item.checksum === 'mismatch') throw new Error('This download does not match the published checksum and will not be opened. Delete it and download again.');
     // Judge the file that will be opened, not the name the site suggested.
-    if (downloadRisk(basename(item.savePath)) !== 'ordinary' && item.checksum !== 'verified') {
-      throw new Error('Private Browser only opens documents, images, media and archives. Other file types can run code: review this one in its folder and scan it first.');
+    const blocked = downloadOpenBlock({ ...item, risk: downloadRisk(basename(item.savePath)) });
+    if (blocked) throw new Error(blocked);
+    if (item.expectedInstaller) {
+      const entry = this.downloads.get(id)!;
+      await this.verifyInstallerDownload(entry, item.savePath);
+      const checked = this.requireActiveDownload(id);
+      if (checked.checksum !== 'verified' || checked.verifiedStamp !== downloadFileStamp(checked.savePath)) {
+        throw new Error('The installer changed or could not be verified. Download a fresh copy.');
+      }
     }
     const error = await shell.openPath(item.savePath);
-    if (error) throw new Error('Windows could not open the downloaded file. Use Show folder to check it.');
+    if (error) throw new Error('Windows could not open the file. Use Show folder to check it or choose another app.');
+  }
+
+  private async verifyInstallerDownload(entry: LocalDownload, filePath: string): Promise<void> {
+    const previous = entry.checksum;
+    entry.checksum = 'checking';
+    this.broadcast();
+    const stamp = downloadFileStamp(filePath);
+    const checksum = stamp ? await verifyDownload(filePath, entry.filename, entry.expectedInstaller) : 'unchecked';
+    entry.publisher = checksum === 'verified'
+      ? stamp === entry.verifiedStamp && entry.publisher ? entry.publisher : await inspectDownloadPublisher(filePath)
+      : undefined;
+    const unchanged = stamp && stamp === downloadFileStamp(filePath);
+    entry.checksum = unchanged ? checksum : 'unchecked';
+    entry.verifiedStamp = unchanged && entry.checksum === 'verified' ? stamp : undefined;
+    if (!entry.verifiedStamp) entry.publisher = undefined;
+    if (this.downloads.get(entry.id) !== entry) return;
+    if ((entry.checksum === 'verified' || entry.checksum === 'mismatch') && entry.checksum !== previous) {
+      this.addPrivacyEvent(
+        entry.checksum === 'verified' ? 'vault' : 'blocked',
+        entry.checksum === 'verified' ? 'Installer checksum verified' : 'Installer checksum mismatch',
+        entry.checksum === 'verified' ? 'The file matches the published release' : 'Download a fresh copy from the release service',
+      );
+    }
+    this.broadcast();
   }
 
   showDownload(id: string): void {
@@ -3037,14 +3069,17 @@ class BrowserController {
         return;
       }
       const id = randomUUID();
-      const entry: DownloadEntry & { savePath?: string } = {
+      const filename = item.getFilename();
+      const entry: LocalDownload = {
         id,
         accountSpaceId,
-        filename: item.getFilename(),
+        filename,
         receivedBytes: 0,
         totalBytes: item.getTotalBytes(),
         state: 'progressing',
-        risk: downloadRisk(item.getFilename()),
+        risk: downloadRisk(filename),
+        extension: downloadExtension(filename),
+        expectedInstaller: this.expectedInstaller?.filename === filename ? this.expectedInstaller : undefined,
       };
       this.downloads.set(id, entry);
       this.downloadItems.set(id, item);
@@ -3055,21 +3090,13 @@ class BrowserController {
       item.once('done', (_downloadEvent, state) => {
         this.downloadItems.delete(id);
         Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath() });
-        if (entry.savePath) entry.risk = downloadRisk(basename(entry.savePath));
-        this.broadcast();
-        if (state !== 'completed') return;
-        void verifyDownload(entry.savePath ?? '', entry.filename, this.expectedInstaller).then((checksum) => {
-          if (checksum === 'unchecked' || this.downloads.get(id) !== entry) return;
-          entry.checksum = checksum;
-          this.addPrivacyEvent(
-            checksum === 'verified' ? 'vault' : 'blocked',
-            checksum === 'verified' ? 'Installer checksum verified' : 'Installer checksum did NOT match',
-            checksum === 'verified'
-              ? 'The file matches the signed release manifest'
-              : 'The file does not match the published checksum',
-          );
-          this.broadcast();
-        });
+        if (entry.savePath) {
+          const savedFilename = basename(entry.savePath);
+          entry.risk = downloadRisk(savedFilename);
+          entry.extension = downloadExtension(savedFilename);
+        }
+        if (state === 'completed' && entry.savePath && entry.expectedInstaller) void this.verifyInstallerDownload(entry, entry.savePath);
+        else this.broadcast();
       });
       this.broadcast();
     });

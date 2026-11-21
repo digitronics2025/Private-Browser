@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, statSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { createReadStream, lstatSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import type { DownloadEntry } from './types.js';
 
 export type ChecksumResult = 'verified' | 'mismatch' | 'unchecked';
 
@@ -7,6 +11,44 @@ export interface ExpectedInstaller {
   filename: string;
   sha256: string;
   sizeBytes: number;
+}
+
+export function downloadFileStamp(filePath: string): string | undefined {
+  try {
+    const file = lstatSync(filePath, { bigint: true });
+    if (file.isFile()) return [file.dev, file.ino, file.size, file.mtimeNs, file.ctimeNs].join(':');
+  } catch {
+    // File was removed or is unreadable.
+  }
+  return undefined;
+}
+
+const readSignature = [
+  '$ErrorActionPreference = "Stop"',
+  '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
+  '$item = Get-AuthenticodeSignature -LiteralPath $env:PRIVATE_BROWSER_SIGNATURE_FILE',
+  '$publisher = if ($item.SignerCertificate) { $item.SignerCertificate.GetNameInfo("SimpleName", $false) }',
+  '[pscustomobject]@{status=$item.Status.ToString();publisher=$publisher} | ConvertTo-Json -Compress',
+].join('\n');
+
+export async function inspectDownloadPublisher(filePath: string): Promise<NonNullable<DownloadEntry['publisher']>> {
+  if (process.platform !== 'win32') return { state: 'unavailable' };
+  try {
+    const executable = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const command = Buffer.from(readSignature, 'utf16le').toString('base64');
+    const { stdout } = await promisify(execFile)(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', command], {
+      env: { ...process.env, PRIVATE_BROWSER_SIGNATURE_FILE: filePath }, windowsHide: true, timeout: 10_000, maxBuffer: 8192,
+    });
+    const result = JSON.parse(stdout) as { status?: string; publisher?: unknown };
+    if (result.status === 'NotSigned') return { state: 'unsigned' };
+    if (result.status === 'Valid') {
+      const name = typeof result.publisher === 'string' ? result.publisher.replace(/[\p{C}]/gu, '').trim().slice(0, 150) : undefined;
+      return { state: 'valid', name };
+    }
+    return { state: result.status === 'UnknownError' ? 'unavailable' : 'untrusted' };
+  } catch {
+    return { state: 'unavailable' };
+  }
 }
 
 export async function sha256File(filePath: string): Promise<string> {
@@ -17,11 +59,6 @@ export async function sha256File(filePath: string): Promise<string> {
 
 /**
  * Compare a finished download against the checksum the release manifest carried.
- *
- * The service publishes a SHA-256 and the download page prints it, but until now
- * nothing on this side ever compared it to the bytes that arrived — the checksum
- * was presentation, not verification. The installer is also unsigned, so this is
- * the only tamper check the user gets between the service and the file they run.
  *
  * Returns `unchecked` rather than throwing when there is nothing to compare
  * against or the file cannot be read: an unrelated download must not be reported

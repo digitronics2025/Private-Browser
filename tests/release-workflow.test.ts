@@ -60,4 +60,15 @@ describe('release workflow', () => {
     expect(guard).toBeLessThan(configured.indexOf('ready=true'));
     expect(step('Upload installer to private R2 bucket')).toContain("if: steps.configured.outputs.ready == 'true'");
   });
+
+  it('reuses test builds while keeping the security suites and final versioned build', () => {
+    const { scripts } = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
+    expect(scripts['test:e2e']).toBe('npm run build && npm run test:e2e:only');
+    expect(scripts.check).toContain('npm run build && npm run test:e2e:only && npm run test:electron:ci');
+    expect(step('Exercise real Electron Account Space isolation')).toContain('npm run test:electron');
+    expect(step('Verify Electron MyVault boundary')).toContain('npm run test:e2e:only');
+    expect(step('Build hardened Windows installer')).toContain('npm run dist');
+    expect(scripts.dist).toContain('npm run build');
+    expect(step('Summarize affected release paths')).toContain('$GITHUB_STEP_SUMMARY');
+  });
 });

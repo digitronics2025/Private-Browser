@@ -27,8 +27,19 @@ const PAGES: Record<string, string> = {
 
 test.beforeAll(async () => {
   server = createServer((request, response) => {
+    const route = new URL(request.url ?? '/', 'http://localhost').pathname;
+    if (route === '/app/redirect') {
+      response.writeHead(302, { location: otherOrigin + '/elsewhere' });
+      response.end();
+      return;
+    }
+    if (route === '/app/challenge') {
+      response.writeHead(403, { 'content-type': 'text/html', 'cf-mitigated': 'challenge' });
+      response.end('<!doctype html><title>Manual check fixture</title><p>Action required</p>');
+      return;
+    }
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
-    response.end(PAGES[new URL(request.url ?? '/', 'http://localhost').pathname] ?? '<!doctype html><title>Other</title>');
+    response.end(PAGES[route] ?? '<!doctype html><title>Other</title>');
   });
   await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
   const { port } = server.address() as AddressInfo;
@@ -79,6 +90,37 @@ async function openSideApp(page: Page, id: 'claude' | 'easynote' = 'claude') {
   await expect(page.locator('.side-app-slot')).toBeVisible();
   await expect.poll(async () => (await sideView(application!, appOrigin, id))?.visible).toBe(true);
 }
+
+test('side-app recovery keeps blocked redirects contained and opens the app in the active Account Space', async () => {
+  const page = await application!.firstWindow();
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  await openSideApp(page);
+  const state = () => page.evaluate(() => window.privateBrowser.getState());
+  const accountSpaceId = (await state()).activeAccountSpaceId;
+  const navigate = (path: string) => runInSideApp(application!, `void (location.href = ${JSON.stringify(appOrigin + path)})`);
+
+  await navigate('/app/login');
+  await expect(page.getByText('Finish signing in here to use this app in the side panel.')).toBeVisible();
+  await navigate('/app/challenge');
+  await expect(page.getByText('Complete the human check in this panel.')).toBeVisible();
+  await navigate('/app/second');
+  await expect(page.getByText('Complete the human check in this panel.')).toHaveCount(0);
+  await expect.poll(async () => (await sideView(application!, appOrigin))?.url).toBe(appOrigin + '/app/second');
+
+  await navigate('/app/redirect');
+  await expect(page.getByText('The app tried to redirect to a site outside the side panel.')).toBeVisible();
+  expect((await state()).tabs.some((tab) => tab.url === otherOrigin + '/elsewhere')).toBe(false);
+  await expect(page.getByRole('button', { name: 'Return to previous page' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open app in a regular tab' }).click();
+  await expect.poll(async () => {
+    const browser = await state();
+    return browser.tabs.find((tab) => tab.id === browser.activeTabId);
+  }).toMatchObject({ accountSpaceId, url: appOrigin + '/app' });
+
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await expect(page.evaluate(() => window.privateBrowser.sideAppCommand('claude', 'open-in-tab')))
+    .rejects.toThrow(/Side apps are unavailable in Banking/);
+});
 
 for (const id of ['claude', 'easynote'] as const) {
 const name = id === 'claude' ? 'Claude' : 'Notes';

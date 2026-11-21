@@ -2,6 +2,7 @@ import { Menu, session, WebContentsView, type BrowserWindow, type HandlerDetails
 import type { ContentInsets } from './chrome-layout.js';
 import { adoptPopupWindow, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 import { downloadRisk, isAllowedRemoteUrl, stripTrackingParameters } from './security.js';
+import { problemForFailedLoad } from './startup-restore.js';
 import { clampSideAppBounds, isSideAppUrl, SIDE_APP_IDS, sideAppDefinition, type SideAppCommand, type SideAppDefinition, type SideAppId, type SideAppRect, type SideAppSnapshot, type SideAppStatus } from './side-app-registry.js';
 import type { PrivacyEvent } from './types.js';
 
@@ -31,6 +32,8 @@ interface SideAppRuntime {
   definition: SideAppDefinition;
   view?: WebContentsView;
   status: SideAppStatus;
+  retryUrl?: string;
+  humanCheck?: boolean;
   requested: SideAppRect | null;
 }
 
@@ -54,12 +57,21 @@ export class SideAppHost {
   }
 
   snapshot(): SideAppSnapshot[] {
-    return [...this.apps.values()].map(({ definition, view, status }) => {
-      const history = view && !view.webContents.isDestroyed() ? view.webContents.navigationHistory : undefined;
+    return [...this.apps.values()].map(({ definition, view, status, humanCheck }) => {
+      const contents = view && !view.webContents.isDestroyed() ? view.webContents : undefined;
+      const history = contents?.navigationHistory;
+      const url = contents?.getURL();
+      let attention: SideAppSnapshot['attention'];
+      if (humanCheck) attention = 'human-check';
+      else if (definition.id === 'claude' && url && isSideAppUrl(definition, url)) {
+        const { hostname, pathname } = new URL(url);
+        if (hostname === 'accounts.google.com' || hostname === 'appleid.apple.com' || /\/(?:login|signin|auth)(?:\/|$)/i.test(pathname)) attention = 'sign-in';
+      }
       return {
         id: definition.id,
         name: definition.name,
         status,
+        attention,
         canGoBack: history?.canGoBack() ?? false,
         canGoForward: history?.canGoForward() ?? false,
       };
@@ -97,14 +109,15 @@ export class SideAppHost {
       case 'forward': if (contents?.navigationHistory.canGoForward()) contents.navigationHistory.goForward(); return;
       case 'reload':
         if (!contents) return;
-        // A crashed or never-loaded page has nothing to reload.
-        if (runtime.status === 'crashed' || !contents.getURL()) await this.load(runtime, runtime.definition.homeUrl);
+        // A retry from a failed state is an explicit GET of the attempted app page.
+        if (runtime.status !== 'ready' || !contents.getURL()) await this.load(runtime, runtime.retryUrl ?? runtime.definition.homeUrl);
         else contents.reload();
         return;
       case 'home': if (contents) await this.load(runtime, runtime.definition.homeUrl); return;
       case 'open-in-tab': {
         const url = contents?.getURL();
-        this.deps.openInTab(url && isSideAppUrl(runtime.definition, url) ? url : runtime.definition.homeUrl);
+        this.deps.openInTab(runtime.status === 'ready' && !runtime.humanCheck && url && isSideAppUrl(runtime.definition, url)
+          ? url : runtime.definition.homeUrl);
         return;
       }
     }
@@ -119,6 +132,8 @@ export class SideAppHost {
     await ses.clearCache();
     await ses.clearAuthCache();
     runtime.status = 'idle';
+    runtime.retryUrl = undefined;
+    runtime.humanCheck = false;
     this.deps.privacyEvent('vault', id === 'easynote' ? 'Local Notes data cleared' : `${runtime.definition.name} signed out`, `Cookies, storage and cache for the ${runtime.definition.name} side panel were deleted; cloud records were not deleted`);
     this.deps.changed();
     if (this.lastLayout) this.layout(this.lastLayout);
@@ -236,19 +251,26 @@ export class SideAppHost {
     contents.on('will-redirect', (event, url, _isInPlace, isMainFrame) => {
       if (!isMainFrame || (isAllowedRemoteUrl(url) && isSideAppUrl(definition, url))) return;
       event.preventDefault();
+      this.setStatus(runtime, 'redirect-blocked');
       this.deps.privacyEvent('blocked', `${definition.name} redirect blocked`, `The side panel may only visit ${definition.name}'s own sites`);
     });
     contents.on('will-attach-webview', (event) => event.preventDefault());
 
-    contents.on('did-start-loading', () => this.setStatus(runtime, 'loading'));
+    contents.on('did-start-navigation', (_event, url, isInPlace, isMainFrame) => {
+      if (isInPlace || !isMainFrame || !isSideAppUrl(definition, url)) return;
+      runtime.retryUrl = url;
+      runtime.humanCheck = false;
+      this.setStatus(runtime, 'loading');
+    });
     contents.on('did-stop-loading', () => { if (runtime.status === 'loading') this.setStatus(runtime, 'ready'); });
     contents.on('did-fail-load', (_event, errorCode, _description, _url, isMainFrame) => {
-      // -3 is an aborted load, which a newer navigation replaced.
-      if (isMainFrame && errorCode !== -3) this.setStatus(runtime, 'failed');
+      if (!isMainFrame || runtime.status === 'redirect-blocked') return;
+      const problem = problemForFailedLoad(errorCode, false);
+      if (problem) this.setStatus(runtime, problem === 'network' ? 'failed' : problem === 'certificate' ? 'certificate-error' : problem);
     });
     contents.on('did-navigate', () => this.deps.changed());
     contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => { if (isMainFrame) this.deps.changed(); });
-    contents.on('render-process-gone', () => this.setStatus(runtime, 'crashed'));
+    contents.on('render-process-gone', () => { runtime.humanCheck = false; this.setStatus(runtime, 'crashed'); });
     contents.on('page-title-updated', (event) => event.preventDefault());
     contents.on('before-input-event', (event, input) => this.deps.handleShortcut(event, input));
     contents.on('context-menu', (_event, params) => {
@@ -276,6 +298,19 @@ export class SideAppHost {
     ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: this.deps.isBlockedRequest(details.url) }));
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
+    });
+    ses.webRequest.onHeadersReceived((details, callback) => {
+      callback({});
+      const runtime = this.apps.get(definition.id);
+      const contents = runtime?.view?.webContents;
+      if (!runtime || !contents || contents.isDestroyed() || details.resourceType !== 'mainFrame'
+        || details.webContentsId !== contents.id || !isSideAppUrl(definition, details.url)) return;
+      const challenged = Object.entries(details.responseHeaders ?? {})
+        .some(([name, values]) => name.toLowerCase() === 'cf-mitigated' && values.some((value) => value.toLowerCase() === 'challenge'));
+      if (challenged !== Boolean(runtime.humanCheck)) {
+        runtime.humanCheck = challenged;
+        this.deps.changed();
+      }
     });
     // Files the app produces (documents, images, code) save through the native
     // dialog. Programs and disguised files never reach the disk.

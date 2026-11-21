@@ -450,7 +450,9 @@ export interface DownloadEntry {
   totalBytes: number;
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
   /** Set once a completed download has been compared against the release manifest. */
-  checksum?: 'verified' | 'mismatch' | 'unchecked';
+  checksum?: 'checking' | 'verified' | 'mismatch' | 'unchecked';
+  extension?: string;
+  publisher?: { state: 'unsigned' | 'valid' | 'untrusted' | 'unavailable'; name?: string };
   risk: 'ordinary' | 'dangerous' | 'deceptive';
 }
 

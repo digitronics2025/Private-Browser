@@ -394,7 +394,7 @@ documentation merely to make a raw shell-variable check pass.
 ## The Build and Publish Pipeline
 
 Account Spaces adds two CI gates before publication. Ubuntu installs Playwright
-Chromium and runs credential-free renderer E2E as part of `npm run check`;
+Chromium and runs credential-free renderer E2E using the build in `npm run check`;
 `scripts/run-electron-tests.mjs` wraps the Electron suite in `xvfb-run` on Linux.
 The Windows installer job also runs the real Electron suite before packaging, so
 the published artifact is gated by actual partition-isolation and workspace-policy
@@ -438,11 +438,10 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 
 | Job | Runs on | Does |
 | --- | --- | --- |
-| `changes` | ubuntu, push only | `app` (vs active release) and `cloudflare` (vs `event.before`) |
+| `changes` | ubuntu, push only | Summarizes installer inputs against the live release and Worker inputs against the previous push. |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
-| `windows-installer` | windows, 25 min, needs `verify`, `app=true` or dispatch | Runs the Electron MyVault boundary and Windows named-pipe journeys, selects the stable version on `main`, writes the bundled update bootstrap, runs `npm run dist`, writes checksum, version and CycloneDX SBOM artifacts, smoke-installs the VSIX in an isolated profile, and uploads the installer (3 days; R2 keeps the release) and VSIX (7 days) |
-| `deploy-download-service` | ubuntu, needs `verify`, `cloudflare=true` | Steps 3–6 below, reusing `verify` |
-| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer` (+ `deploy-download-service` if it ran), `app=true` only | Restores the artifact's recorded version, installs with `npm ci --ignore-scripts` then `npm rebuild workerd esbuild`, records the active release id, uploads the exe to R2, registers metadata in D1, then re-downloads it through the live route ([verify-live-release.mjs](../../cloudflare/scripts/verify-live-release.mjs)); if that fails it re-activates the recorded release ([activate-release.mjs](../../cloudflare/scripts/activate-release.mjs)) and fails (F-50) |
+| `windows-installer` | windows, 25 min, needs `verify`, `app=true` or dispatch | Reuses the local test build for Electron and Chromium, runs Windows named-pipe tests, then builds the versioned installer with its update bootstrap. Records checksum, SBOM and VSIX smoke evidence. |
+| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer` with `app=true` | Restores the artifact's recorded version, records the previous active release, uploads the installer to R2 and registers it in D1. Re-downloads it through the live route and restores the previous release if verification fails (F-50). |
 
 ### codeql.yml
 
@@ -743,7 +742,7 @@ signed link inside an older result may already have expired.
   release routes return 404 and `/health` return 503.
 - **The page is string-built.** Escape every new D1 value in `page.ts` and add a
   Worker XSS test.
-- **Installer verification uses the latest in-memory manifest.** Matching `.exe`
-  downloads are hashed and mismatches cannot open; restart clears the expectation.
+- **Installer verification binds the manifest when the download starts.** The
+  installer is hashed again before opening. Windows publisher evidence is separate.
 - **Weak secrets fail silently on release routes.** Check `/health` first when
   every route unexpectedly returns 404.
