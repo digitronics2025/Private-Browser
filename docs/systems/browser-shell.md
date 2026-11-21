@@ -326,13 +326,15 @@ records the owning tab in `htmlFullscreenOwner`; `leave-html-full-screen` from
 that tab restores it. Esc inside a page leaves window full screen only when no
 page owns it. The renderer hides all chrome while `windowState.fullscreen`.
 
+**Split view.** See [Split view](../split-view.md).
+
 **Menus over the page.** A `WebContentsView` paints above React chrome. An
 overlapping menu, dialog or resize drag prepares a backdrop and hides the live
 views via `setOverlayOpen(true)`. Docked DevTools stay attached. A JPEG still
 may replace the backdrop during preparation. The menu can open while capture
 is pending. The still stays in renderer memory only until the overlay closes.
 `freezeContent()` checks both stored and painted URLs. It returns `null` for
-Home, hidden views, Banking, protected URLs, main-frame loads and expired or
+Home, hidden views, split panes, Banking, protected URLs, main-frame loads and expired or
 stale captures. See [Browser performance checks](../browser-performance.md).
 
 **The side app.** `applyLayout` first calls `layoutSideApps()`, which places or

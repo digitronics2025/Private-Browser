@@ -605,6 +605,7 @@ export interface BrowserSnapshot {
   workspaces: Workspace[];
   activeWorkspaceId: WorkspaceId;
   activeTabId: string;
+  splitView?: { leftTabId: string; rightTabId: string; suspended: boolean };
   tabs: BrowserTab[];
   bookmarks: Bookmark[];
   bookmarkFolders?: BookmarkFolder[];

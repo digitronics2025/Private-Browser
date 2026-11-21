@@ -1,0 +1,1 @@
+Show two regular tabs side by side from a tab's menu. Split view keeps both pages in the same Account Space and pauses when the window becomes too narrow.

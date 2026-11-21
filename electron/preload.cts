@@ -62,6 +62,7 @@ const api = {
   newTab: (workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:new-tab', workspaceId, url, accountSpaceId),
   closeTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:close-tab', tabId),
   activateTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:activate-tab', tabId),
+  setSplitView: (tabId?: string): Promise<void> => ipcRenderer.invoke('browser:set-split-view', tabId),
   switchWorkspace: (workspaceId: WorkspaceId): Promise<void> => ipcRenderer.invoke('browser:switch-workspace', workspaceId),
   switchAccountSpace: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:switch-account-space', accountSpaceId),
   addressMatches: (accountSpaceId: AccountSpaceId, text: string): Promise<AddressMatch[]> => ipcRenderer.invoke('browser:address-matches', accountSpaceId, text),

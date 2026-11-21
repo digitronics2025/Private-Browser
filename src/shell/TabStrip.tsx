@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
-import { Bot, ChevronDown, ChevronRight, Globe2, LoaderCircle, Moon, Pin, Plus, Volume2, VolumeX, X } from 'lucide-react';
-import type { BrowserTab, TabBatchScope, TabGroup, TabOrganizationAction } from '../../electron/types';
+import { Bot, ChevronDown, ChevronRight, Columns2, Globe2, LoaderCircle, Moon, Pin, Plus, Volume2, VolumeX, X } from 'lucide-react';
+import type { BrowserSnapshot, BrowserTab, TabBatchScope, TabGroup, TabOrganizationAction } from '../../electron/types';
 import { tabBatchTargets } from '../../electron/tab-organization';
+import { splitPageAllowed } from '../../electron/split-view';
 import { BrandMark } from './BrandMark';
 import { MenuItem, MenuSurface, SubmenuItem } from './Menu';
 
@@ -37,6 +38,8 @@ export interface WindowTabStripProps {
   onDuplicate: (id: string) => void;
   onCopyAddress: (url: string) => void;
   onCloseBatch: (id: string, scope: TabBatchScope, confirmedIds: string[]) => void;
+  splitView?: BrowserSnapshot['splitView'];
+  onSplit?: (tabId?: string) => void;
   agentClients?: { id: string; name: string }[];
   agentLent?: { tabId: string; client: string };
   onLend?: (tabId: string, clientId: string) => void;
@@ -48,12 +51,15 @@ export interface WindowTabStripProps {
  * the empty draggable area. The native Windows caption buttons are drawn by the
  * title-bar overlay into the space this strip leaves free on the right.
  */
-export function WindowTabStrip({ tabs, groups, activeTabId, shieldButtonRef, tabSearchButtonRef, shieldOpen, tabSearchOpen, onShield, onTabSearch, onActivate, onClose, onNewTab, onMove, onMute, onOrganize, onCreateGroup, onDuplicate, onCopyAddress, onCloseBatch, agentClients, agentLent, onLend, onReturn }: WindowTabStripProps) {
+export function WindowTabStrip({ tabs, groups, activeTabId, shieldButtonRef, tabSearchButtonRef, shieldOpen, tabSearchOpen, onShield, onTabSearch, onActivate, onClose, onNewTab, onMove, onMute, onOrganize, onCreateGroup, onDuplicate, onCopyAddress, onCloseBatch, splitView, onSplit, agentClients, agentLent, onLend, onReturn }: WindowTabStripProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef(new Map<string, HTMLDivElement>());
   const [drag, setDrag] = useState<DragState | null>(null);
   const [menu, setMenu] = useState<{ tabId: string; point?: { x: number; y: number } }>();
   const tabMenu = tabs.find((tab) => tab.id === menu?.tabId);
+  const activeTab = tabs.find((tab) => tab.id === activeTabId);
+  const otherSplitId = splitView && (splitView.leftTabId === activeTabId ? splitView.rightTabId : splitView.leftTabId);
+  const otherSplit = tabs.find((tab) => tab.id === otherSplitId);
   const batchActions: Array<{ scope: TabBatchScope; label: string }> = [
     { scope: 'other', label: 'Close other tabs' },
     { scope: 'right', label: 'Close tabs to the right' },
@@ -219,9 +225,17 @@ export function WindowTabStrip({ tabs, groups, activeTabId, shieldButtonRef, tab
         <Bot size={15} /><span>{agentLent.client} is controlling this tab</span>
         <button onClick={onReturn} aria-label="Stop agent control">Stop</button>
       </div>}
+      {splitView && otherSplit && <div className="split-controls" role="group" aria-label="Split view">
+        <button type="button" aria-label={'Focus other pane: ' + otherSplit.title} title={splitView.suspended ? 'Split view paused until the window is wider' : 'Focus other pane'}
+          disabled={splitView.suspended} onClick={() => onActivate(otherSplit.id)}><Columns2 size={15} /></button>
+        <button type="button" aria-label="End split view" title="End split view" onClick={() => onSplit?.()}><X size={14} /></button>
+      </div>}
       <div className="caption-buttons-space" aria-hidden="true" />
       {tabMenu && menu && <MenuSurface label="Tab actions" anchor={tabRefs.current.get(tabMenu.id)} point={menu.point} onClose={() => setMenu(undefined)}>
         <MenuItem label="Duplicate tab" onSelect={() => onDuplicate(tabMenu.id)} />
+        {onSplit && activeTab && activeTab.id !== tabMenu.id && activeTab.accountSpaceId === tabMenu.accountSpaceId
+          && splitPageAllowed(activeTab) && splitPageAllowed(tabMenu) && !agentLent && !activeTab.developerToolsOpen && !tabMenu.developerToolsOpen
+          && <MenuItem icon={Columns2} label="Show beside active tab" onSelect={() => onSplit(tabMenu.id)} />}
         {tabMenu.id === activeTabId && !tabMenu.isHome && tabMenu.workspaceId !== 'banking'
           && !agentLent && Boolean(agentClients?.length) && <SubmenuItem id="lend-agent-tab" label="Let agent use this tab for 15 minutes">
             {agentClients?.map(({ id, name }) => <MenuItem key={id} label={name} onSelect={() => onLend?.(tabMenu.id, id)} />)}
