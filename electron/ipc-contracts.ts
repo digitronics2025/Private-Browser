@@ -14,7 +14,7 @@ import { isAllowedRemoteUrl } from './security.js';
 import { MAX_ADDRESS_QUERY_LENGTH } from './address-matches.js';
 import { MAX_REFERENCE_LENGTH, requireBrowserSettingsPatch } from './browser-settings.js';
 import { requireBrowsingDataInput } from './browsing-data.js';
-import { requireUiPreferencesPatch } from './ui-preferences.js';
+import { isPinnablePanelTool, requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
@@ -194,7 +194,11 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'side-app:clear-data':
       exact(args, 1); requireSideAppId(args[0]); return;
     case 'ui:set-preferences':
-      exact(args, 1); requireUiPreferencesPatch(args[0]); return;
+      between(args, 1, 2); requireUiPreferencesPatch(args[0]); if (args[1] !== undefined) requireAccountSpaceId(args[1]); return;
+    case 'ui:set-panel-pin':
+      exact(args, 3); requireAccountSpaceId(args[0]);
+      if (!isPinnablePanelTool(args[1]) || typeof args[2] !== 'boolean') throw new Error('Invalid tool pin');
+      return;
     case 'settings:set':
       between(args, 1, 2); requireBrowserSettingsPatch(args[0]); if (args[1] !== undefined) requireWorkspaceId(args[1]); return;
     case 'browser:home':

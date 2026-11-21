@@ -244,12 +244,10 @@ export default function App() {
   };
   const openTool = (tool: SidePanelTool, entry: 'overview' | 'setup' = 'overview') => {
     if (tool === 'settings') setSettingsEntry(entry);
-    setUi({ sidePanelOpen: true, sidePanelTool: tool });
-    // Only an explicit user action transfers focus, never startup or fullscreen restoration.
-    requestAnimationFrame(() => {
-      const tab = document.getElementById(`side-panel-tab-${tool}`);
-      tab?.focus();
-      tab?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    void act(async () => {
+      await window.privateBrowser.setUiPreferences({ sidePanelOpen: true, sidePanelTool: tool }, state?.activeAccountSpaceId);
+      // Only an explicit user action transfers focus.
+      requestAnimationFrame(() => document.getElementById(`side-panel-tab-${tool}`)?.focus());
     });
   };
   const toggleTool = (tool: SidePanelTool) => (ui.sidePanelOpen && ui.sidePanelTool === tool ? setUi({ sidePanelOpen: false }) : openTool(tool));
@@ -583,11 +581,13 @@ export default function App() {
         {ui.sidePanelOpen && !fullscreen && (
           <SidePanel
             tool={ui.sidePanelTool}
+            pins={state.sidePanelPins}
             width={liveLayout.sidePanel || ui.sidePanelWidth}
             compact={Boolean(ui.sidePanelCompact)}
             onToggleCompact={() => setUi({ sidePanelCompact: !ui.sidePanelCompact })}
             activeDownloads={state.downloads.filter((item) => item.state === 'progressing').length}
             onSelectTool={openTool}
+            onPinTool={(tool, enabled) => void act(() => window.privateBrowser.setSidePanelPin(state.activeAccountSpaceId, tool, enabled))}
             onClose={() => setUi({ sidePanelOpen: false })}
             onLiveWidth={setLiveWidth}
             onCommitWidth={(width) => setUi({ sidePanelWidth: width })}

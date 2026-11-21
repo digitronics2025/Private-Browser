@@ -99,6 +99,31 @@ test.afterEach(async () => {
   rmSync(userDataPath, { recursive: true, force: true });
 });
 
+test('restores selected side-panel tools and pins only for their owning Account Space', async () => {
+  let page = await application!.firstWindow();
+  const state = () => page.evaluate(() => window.privateBrowser.getState());
+  const first = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Owner of panel pins', 'sky'));
+  await page.evaluate(async (id) => {
+    await window.privateBrowser.setUiPreferences({ sidePanelOpen: true, sidePanelTool: 'downloads' }, id);
+    await window.privateBrowser.setSidePanelPin(id, 'downloads', true);
+  }, first);
+  const second = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Other panel preferences', 'indigo'));
+  expect((await state()).sidePanelPins).toEqual([]);
+  await expect(page.evaluate((id) => window.privateBrowser.setSidePanelPin(id, 'downloads', false), first)).rejects.toThrow(/unavailable/i);
+  await expect(page.evaluate((id) => window.privateBrowser.setUiPreferences({ sidePanelTool: 'downloads' }, id), first)).rejects.toThrow(/space changed/i);
+  await page.evaluate((id) => window.privateBrowser.setUiPreferences({ sidePanelTool: 'privacy' }, id), second);
+  await application!.close();
+  application = await launchProfile();
+  page = await application.firstWindow();
+  expect((await state()).ui.sidePanelTool).toBe('privacy');
+  expect((await state()).sidePanelPins).toEqual([]);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), first);
+  expect((await state()).ui.sidePanelTool).toBe('downloads');
+  expect((await state()).sidePanelPins).toEqual(['downloads']);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  expect((await state()).sidePanelPins).toBeUndefined();
+});
+
 test('offers first-launch setup once and keeps a skip after restart', async () => {
   let page = await application!.firstWindow();
   await expect(page.getByRole('button', { name: 'Open setup guide' })).toBeVisible();

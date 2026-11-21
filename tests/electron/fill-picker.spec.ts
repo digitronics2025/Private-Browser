@@ -113,7 +113,7 @@ async function unlock(page: Page): Promise<void> {
   const unlockButton = page.getByRole('button', { name: 'Unlock in secure window' });
   const openVault = page.getByRole('button', { name: 'Open MyVault' });
   await expect(openVault).toBeVisible();
-  const vaultTab = page.getByRole('tab', { name: 'Vault', exact: true });
+  const vaultTab = page.getByRole('tab', { name: 'MyVault', exact: true });
   if ((await vaultTab.count()) === 0 || (await vaultTab.getAttribute('aria-selected')) !== 'true') await openVault.click();
   await expect(unlockButton).toBeVisible();
   const secureWindowPromise = application!.waitForEvent('window', {

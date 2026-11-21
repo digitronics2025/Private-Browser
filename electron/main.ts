@@ -52,7 +52,7 @@ import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace
 import { readBookmarkHtml } from './bookmark-html.js';
 import { mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
-import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
+import { mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
   AccountSpaceColor,
@@ -300,6 +300,7 @@ class BrowserController {
   private readonly downloadHistoryFailures = new Set<AccountSpaceId>();
   private readonly downloadFolder = new DownloadFolderStore(join(app.getPath('userData'), 'download-folders'), safeStorage);
   private downloadFolderPickerOpen = false;
+  private readonly temporaryPanelTools = new Map<AccountSpaceId, SidePanelTool>();
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
@@ -584,7 +585,8 @@ class BrowserController {
       googleConfiguration: this.googleConfiguration.status(),
       externalBrowsers: this.externalBrowsers.discover().map(({ id, name }) => ({ id, name })),
       bookmarkBarVisible: persisted.bookmarkBarVisible,
-      ui: persisted.ui,
+      ui: { ...persisted.ui, sidePanelTool: this.sidePanelTool(persisted, downloadAccount) },
+      sidePanelPins: downloadAccount ? persisted.sidePanelsByAccountSpace?.[downloadAccount]?.pins ?? [] : undefined,
       settings: settingsForWorkspace(persisted, persisted.activeWorkspaceId),
       availableSpellcheckLanguages: this.availableSpellcheckLanguages(),
       assistantPolicy: this.assistantPolicy(persisted),
@@ -1049,14 +1051,15 @@ class BrowserController {
   private layoutSideApps(): void {
     if (!this.window || this.window.isDestroyed()) return;
     const state = this.store.get();
-    const protectedWorkspace = WORKSPACES.find((item) => item.id === state.activeWorkspaceId)?.protected ?? true;
+    const accountId = this.activeDownloadAccount(state);
+    const tool = this.sidePanelTool(state, accountId);
     const [contentWidth, contentHeight] = this.window.getContentSize();
     this.sideApps.layout({
       insets: this.layout,
       contentWidth,
       contentHeight,
-      activeApp: state.ui.sidePanelOpen && isSideAppId(state.ui.sidePanelTool) ? state.ui.sidePanelTool : null,
-      suppressed: this.overlayOpen || this.window.isFullScreen() || protectedWorkspace,
+      activeApp: state.ui.sidePanelOpen && isSideAppId(tool) ? tool : null,
+      suppressed: this.overlayOpen || this.window.isFullScreen() || !accountId,
     });
   }
 
@@ -1370,6 +1373,7 @@ class BrowserController {
     this.downloadHistory.forgetAccount(accountSpaceId);
     this.downloadHistoryFailures.delete(accountSpaceId);
     this.downloadFolder.forgetAccount(accountSpaceId);
+    this.temporaryPanelTools.delete(accountSpaceId);
     this.store.removeAccount(accountSpaceId);
     for (const [id, entry] of this.downloads) {
       if (entry.accountSpaceId === accountSpaceId) this.downloads.delete(id);
@@ -1791,15 +1795,48 @@ class BrowserController {
     ses.setSpellCheckerLanguages([...new Set(matching)]);
   }
 
-  setUiPreferences(patch: UiPreferencesPatch): void {
-    const before = this.store.get().ui;
-    const next = this.store.update((state) => { state.ui = mergeUiPreferences(state.ui, patch); });
-    if (next.ui.theme !== before.theme) {
+  private sidePanelTool(state: RuntimeBrowserStateV2, regularAccount: AccountSpaceId | undefined): SidePanelTool {
+    return regularAccount ? state.sidePanelsByAccountSpace?.[regularAccount]?.tool ?? state.ui.sidePanelTool
+      : this.temporaryPanelTools.get(this.activeAccountSpaceId(state)) ?? 'privacy';
+  }
+
+  setUiPreferences(patch: UiPreferencesPatch, expectedAccount?: AccountSpaceId): void {
+    const before = this.store.get();
+    const activeId = this.activeAccountSpaceId(before);
+    if (expectedAccount !== undefined && activeId !== expectedAccount) throw new Error('The Account Space changed. Open the tool again.');
+    const regularAccount = this.activeDownloadAccount(before);
+    const { sidePanelTool, ...globalPreferences } = patch;
+    const next = this.store.update((state) => {
+      state.ui = mergeUiPreferences(state.ui, globalPreferences);
+      if (sidePanelTool && regularAccount) {
+        const panels = state.sidePanelsByAccountSpace ??= {};
+        panels[regularAccount] = { ...panels[regularAccount], tool: sidePanelTool };
+      }
+    });
+    if (sidePanelTool && !regularAccount) this.temporaryPanelTools.set(activeId, sidePanelTool);
+    if (next.ui.theme !== before.ui.theme) {
       nativeTheme.themeSource = next.ui.theme;
       this.applyFrameColors();
     }
     // Hide the previous tool before the renderer can report the next slot.
     this.layoutSideApps();
+    this.broadcast();
+  }
+
+  setSidePanelPin(id: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean): void {
+    if (id !== this.activeDownloadAccount() || this.store.isReadOnly()) {
+      throw new Error('Tool pins are unavailable in this Account Space.');
+    }
+    this.store.update((state) => {
+      const panels = state.sidePanelsByAccountSpace ??= {};
+      const current = panels[id];
+      const pins = new Set(current?.pins);
+      if (enabled) pins.add(tool);
+      else pins.delete(tool);
+      const updated = sanitizeAccountPanel({ ...current, pins: [...pins] });
+      if (updated) panels[id] = updated;
+      else delete panels[id];
+    });
     this.broadcast();
   }
 
@@ -4594,7 +4631,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
   handle('browser:open-bookmarks-in-background', (_event, account: AccountSpaceId, ids: string[]) => controller!.openBookmarksInBackground(account, ids));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
-  handle('ui:set-preferences', (_event, patch: UiPreferencesPatch) => controller!.setUiPreferences(patch));
+  handle('ui:set-preferences', (_event, patch: UiPreferencesPatch, id?: AccountSpaceId) => controller!.setUiPreferences(patch, id));
+  handle('ui:set-panel-pin', (_event, id: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean) => controller!.setSidePanelPin(id, tool, enabled));
   handle('settings:set', (_event, patch: BrowserSettingsPatch, workspace?: WorkspaceId) => controller!.setBrowserSettings(patch, workspace));
   handle('browser:freeze-content', () => controller!.freezeContent());
   handle('browser:move-tab', (_event, tabId: string, toIndex: number) => controller!.moveTab(tabId, toIndex));

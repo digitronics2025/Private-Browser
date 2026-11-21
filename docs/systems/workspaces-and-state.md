@@ -78,8 +78,9 @@ last regular Account Space for external-link routing, tracker
 preference, the privacy log and `ui` interface preferences: `theme`
 (`system`/`dark`/`light`), `bookmarkBarMode` (`always`/`new-tab`/`hidden`),
 `sidePanelOpen` (default `false`), `sidePanelWidth` (320–520, default 400),
-`sidePanelTool` (default `assistant`; `claude` opens the
-[side app](side-apps.md)), `newTabBackground` and `showRecentOnNewTab` (default `true`).
+the legacy `sidePanelTool` default, `newTabBackground` and
+`showRecentOnNewTab` (default `true`). Regular Account Spaces store
+their last tool and pins in their own browsing file.
 `sanitizeUiPreferences` falls back to
 defaults for any unknown value rather than opening recovery, and migrates a
 manifest without `ui` from the legacy `bookmarkBarVisible` flag, which is still

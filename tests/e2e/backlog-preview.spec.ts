@@ -1,5 +1,34 @@
 import { expect, test } from '@playwright/test';
 
+test('pins tools and remembers the selected tool only in its Account Space', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Downloads' }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  const tools = panel.getByRole('tablist', { name: 'Side panel tools' });
+  await expect(tools.getByRole('tab', { name: 'Downloads' })).toHaveAttribute('aria-selected', 'true');
+  await panel.getByRole('button', { name: 'Pin Downloads' }).click();
+  await expect(tools.getByRole('tab').first()).toHaveAccessibleName('Downloads');
+  await tools.getByRole('tab', { name: 'Downloads' }).press('ArrowRight');
+  await expect(tools.getByRole('tab', { name: 'Notes' })).toHaveAttribute('aria-selected', 'true');
+  const first = await page.evaluate(() => window.privateBrowser.getState().then((state) => ({
+    id: state.activeAccountSpaceId, workspace: state.activeWorkspaceId,
+  })));
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
+  await expect(tools.getByRole('tab').first()).toHaveAccessibleName('Notes');
+  await expect(tools.getByRole('tab', { name: 'AI assistant' })).toHaveAttribute('aria-selected', 'true');
+  await page.evaluate(async ({ id, workspace }) => {
+    await window.privateBrowser.switchWorkspace(workspace);
+    await window.privateBrowser.switchAccountSpace(id);
+  }, first);
+  await expect(tools.getByRole('tab').first()).toHaveAccessibleName('Downloads');
+  await expect(tools.getByRole('tab', { name: 'Notes' })).toHaveAttribute('aria-selected', 'true');
+  await tools.getByRole('tab', { name: 'Downloads' }).click();
+  await panel.getByRole('button', { name: 'Unpin Downloads' }).click();
+  await expect(tools.getByRole('tab').first()).toHaveAccessibleName('Notes');
+});
+
 test('filters retained downloads and removes only the selected list entry', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 810 });
   await page.goto('/?downloadHistory=sample');
@@ -191,6 +220,9 @@ test('labels the preview and exercises Chrome import and protected browsing', as
   await expect(page.getByText('Password files are unavailable in the synthetic preview')).toBeVisible();
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   await expect(page.getByRole('button', { name: 'Account Space: Banking' })).toBeVisible();
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await page.getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.getByLabel('Import into Account Space')).toBeDisabled();
   expect(errors).toEqual([]);
 });

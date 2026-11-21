@@ -6,7 +6,7 @@ import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt,
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
-import type { BrowserSettings } from '../electron/types';
+import type { BrowserSettings, PinnablePanelTool, SidePanelTool } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
@@ -155,6 +155,12 @@ export function installPreviewApi(): void {
   const sampleDownloads = state.downloads;
   const savedDownloadHistory = new Set<AccountSpaceId>();
   const previewDownloadFolders = new Map<AccountSpaceId, { name: string; ask: boolean }>();
+  const previewPanelTools = new Map<AccountSpaceId, SidePanelTool>();
+  const previewPanelPins = new Map<AccountSpaceId, Set<PinnablePanelTool>>();
+  const regularPanelAccount = () => state.activeWorkspaceId !== 'banking'
+    && state.accountSpaces.some(({ id, locked }) => id === state.activeAccountSpaceId && !locked);
+  const defaultPanelTool = state.ui.sidePanelTool;
+  state.sidePanelPins = regularPanelAccount() ? [] : undefined;
   if (params.get('downloadHistory') === 'sample') {
     savedDownloadHistory.add(google);
     sampleDownloads.push({ id: 'preview-download-history', accountSpaceId: google, filename: 'Statement.pdf',
@@ -204,6 +210,9 @@ export function installPreviewApi(): void {
         else status.stopped++;
         return status;
       }, { active: 0, completed: 0, stopped: 0 });
+    const regularPanel = regularPanelAccount();
+    state.ui.sidePanelTool = previewPanelTools.get(state.activeAccountSpaceId) ?? (regularPanel ? defaultPanelTool : 'privacy');
+    state.sidePanelPins = regularPanel ? [...(previewPanelPins.get(state.activeAccountSpaceId) ?? [])] : undefined;
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
     state.bookmarkUndo = undo ? { kind: undo.kind, count: undo.before.length } : undefined;
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
@@ -602,7 +611,22 @@ export function installPreviewApi(): void {
       }
       publish();
     },
-    setUiPreferences: async (patch) => { state.ui = mergeUiPreferences(state.ui, patch as UiPreferencesPatch); syncDarkMode(); publish(); },
+    setUiPreferences: async (patch, expectedAccount) => {
+      if (expectedAccount !== undefined && expectedAccount !== state.activeAccountSpaceId) throw new Error('The Account Space changed. Open the tool again.');
+      const { sidePanelTool, ...globalPreferences } = patch as UiPreferencesPatch;
+      state.ui = mergeUiPreferences(state.ui, globalPreferences);
+      if (sidePanelTool) previewPanelTools.set(state.activeAccountSpaceId, sidePanelTool);
+      syncDarkMode();
+      publish();
+    },
+    setSidePanelPin: async (id, tool, enabled) => {
+      if (id !== state.activeAccountSpaceId || !regularPanelAccount()) throw new Error('Tool pins are unavailable in this Account Space.');
+      const pins = previewPanelPins.get(id) ?? new Set<PinnablePanelTool>();
+      if (enabled) pins.add(tool);
+      else pins.delete(tool);
+      previewPanelPins.set(id, pins);
+      publish();
+    },
     toggleBookmarkBar: async () => { state.ui = mergeUiPreferences(state.ui, { bookmarkBarMode: state.ui.bookmarkBarMode === 'hidden' ? 'always' : 'hidden' }); publish(); },
     activateTab: async (value) => { const tab = state.tabs.find((item) => item.id === value); if (tab) { state.activeTabId = tab.id; publish(); } },
     newTab: async () => { const id = `preview-${crypto.randomUUID()}`; state.tabs.push(homeTab(id, state.activeWorkspaceId, state.activeAccountSpaceId)); state.activeTabId = id; publish(); },

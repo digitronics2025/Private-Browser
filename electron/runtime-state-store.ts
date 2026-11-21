@@ -224,6 +224,7 @@ export class RuntimeStateStore {
       delete state.activeTabByAccountSpace[id];
       delete state.shortcutsByAccountSpace[id];
       delete state.bookmarkIconsByAccountSpace[id];
+      if (state.sidePanelsByAccountSpace) delete state.sidePanelsByAccountSpace[id];
       if (state.activeAccountSpaceByWorkspace[account.workspaceId] === id) state.activeAccountSpaceByWorkspace[account.workspaceId] = replacement.id;
     });
     this.records.delete(id);
@@ -282,6 +283,7 @@ export class RuntimeStateStore {
         ...(next.tabGroupsByAccountSpace?.[account.id]?.length ? { tabGroups: next.tabGroupsByAccountSpace[account.id] } : {}),
         ...(next.shortcutsByAccountSpace[account.id] ? { shortcuts: next.shortcutsByAccountSpace[account.id] } : {}),
         ...(next.bookmarkIconsByAccountSpace[account.id] ? { bookmarkIcons: next.bookmarkIconsByAccountSpace[account.id] } : {}),
+        ...(next.sidePanelsByAccountSpace?.[account.id] ? { sidePanel: next.sidePanelsByAccountSpace[account.id] } : {}),
       };
       if (!isDeepStrictEqual(this.savedAccounts.get(account.id), state)) {
         this.persistedStore.saveAccountState(state);
@@ -362,6 +364,7 @@ function combine(
     routines: manifest.routines ?? defaultBrowserRoutines(manifest.activeAccountSpaceByWorkspace),
     shortcutsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.shortcuts).map((state) => [state.accountSpaceId, state.shortcuts!])),
     bookmarkIconsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.bookmarkIcons).map((state) => [state.accountSpaceId, state.bookmarkIcons!])),
+    sidePanelsByAccountSpace: Object.fromEntries(accountStates.flatMap((state) => state.sidePanel ? [[state.accountSpaceId, state.sidePanel]] : [])),
     accountSpaces,
     accountHealth,
     recovery: firstRecovery,

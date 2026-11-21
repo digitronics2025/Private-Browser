@@ -194,10 +194,10 @@ and until dismissed (per-viewer `localStorage` flag).
 
 ## Side Panel
 
-Closed by default. `ui.sidePanelOpen`, `sidePanelWidth`, `sidePanelCompact` and `sidePanelTool` are
-persisted through `setUiPreferences`. The header holds compact tool tabs —
-Notes, Claude, AI, DevTools (title "Developer cockpit"), Vault, Flows, Files (active download badge),
-Privacy — and a close button; Ctrl+Shift+Y toggles Notes. Bookmarks, History and Settings open from menus and
+Closed by default. The browser saves open state, width and compact mode
+globally. Regular Account Spaces keep their selected tool and pins separately.
+Pinning moves the tool to the start of the tab row. Menus and tabs share
+tool names. Ctrl+Shift+Y toggles Notes. Bookmarks, History and Settings open from menus and
 shortcuts. Compact mode leaves the page beside a panel up to 272 px wide. It
 restores the saved resize width when turned off. The left-edge separator
 resizes 320–520 px in the standard mode. Pointer drags acquire the

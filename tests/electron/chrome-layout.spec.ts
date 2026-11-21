@@ -171,7 +171,7 @@ test('the page view follows the chrome through every layout change', async () =>
     page = await app.firstWindow();
     const panel = page.getByRole('complementary', { name: 'Side panel' });
     await expect(panel).toBeVisible();
-    await expect(panel.getByRole('tab', { name: 'Privacy' })).toHaveAttribute('aria-selected', 'true');
+    await expect(panel.getByRole('tab', { name: 'Privacy log' })).toHaveAttribute('aria-selected', 'true');
     await expect.poll(async () => Math.round((await panel.boundingBox())?.width ?? 0)).toBe(480);
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
     await expect(page.getByRole('navigation', { name: 'Bookmarks bar' })).toHaveCount(0);
