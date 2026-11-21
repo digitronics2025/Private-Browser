@@ -543,6 +543,40 @@ test('splits only regular tabs in the same Account Space and keeps native panes 
   expect(restored.tabs.filter((tab) => tab.id === left || tab.id === right)).toHaveLength(2);
 });
 
+test('sends only the active Account Space browsing records to trusted chrome', async () => {
+  const page = await application!.firstWindow();
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  const address = origin + '/private-chrome-collection';
+  await page.evaluate((url) => window.privateBrowser.navigate(url), address);
+  const snapshot = () => page.evaluate(() => window.privateBrowser.getState());
+  await expect.poll(async () => (await snapshot()).history.some((entry) => entry.url === address)).toBe(true);
+  await page.evaluate(() => window.privateBrowser.toggleBookmark());
+  const personal = await snapshot();
+  expect(personal.bookmarks).toContainEqual(expect.objectContaining({ url: address }));
+
+  const next = await page.evaluate(async () => {
+    const api = window.privateBrowser;
+    const event = new Promise<Awaited<ReturnType<typeof api.getState>>>((resolve) => {
+      const unsubscribe = api.onState((snapshot) => {
+        if (snapshot.activeWorkspaceId !== 'tenten') return;
+        unsubscribe();
+        resolve(snapshot);
+      });
+    });
+    await api.switchWorkspace('tenten');
+    return { event: await event, queried: await api.getState() };
+  });
+  for (const candidate of [next.event, next.queried]) {
+    expect(candidate.tabs).not.toEqual([]);
+    expect(candidate.tabs.every((item) => item.accountSpaceId === candidate.activeAccountSpaceId)).toBe(true);
+    expect(candidate.bookmarks.every((item) => item.accountSpaceId === candidate.activeAccountSpaceId)).toBe(true);
+    expect(candidate.history.every((item) => item.accountSpaceId === candidate.activeAccountSpaceId)).toBe(true);
+    expect(JSON.stringify([candidate.tabs, candidate.bookmarks, candidate.history])).not.toContain(address);
+  }
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  expect((await snapshot()).bookmarks).toContainEqual(expect.objectContaining({ url: address }));
+});
+
 test('persists empty and moved bookmark folders in their native Account Space', async () => {
   let page = await application!.firstWindow();
   const id = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Bookmark folder fixture', 'sky'));
@@ -677,7 +711,10 @@ test('routes an operating-system link back to the last regular account from Bank
   await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) =>
     state.tabs.find((tab) => tab.id === state.activeTabId)?.title))).toBe('Account isolation fixture');
   const after = await page.evaluate(() => window.privateBrowser.getState());
-  expect(after.tabs.filter((tab) => tab.workspaceId === 'banking')).toEqual(before.tabs.filter((tab) => tab.workspaceId === 'banking'));
+  expect(after.tabs.some((tab) => tab.workspaceId === 'banking')).toBe(false);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  const restored = await page.evaluate(() => window.privateBrowser.getState());
+  expect(restored.tabs.map(({ id, url }) => ({ id, url }))).toEqual(before.tabs.map(({ id, url }) => ({ id, url })));
 });
 
 test('saves reviewed tabs locally and refuses stale or cross-Account Space selections', async () => {
@@ -722,7 +759,11 @@ test('runs an ordered routine across isolated accounts and reuses its tabs after
   expect(await launchRoutine()).toEqual({ opened: 2, reused: 0, skipped: [], focusUnavailable: false });
   const current = await page.evaluate(() => window.privateBrowser.getState());
   expect(current.activeAccountSpaceId).toBe(first);
-  expect(current.tabs.filter((tab) => tab.url === origin + '/').map((tab) => tab.accountSpaceId)).toEqual([first, second]);
+  expect(current.tabs.filter((tab) => tab.url === origin + '/').map((tab) => tab.accountSpaceId)).toEqual([first]);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), second);
+  const secondView = await page.evaluate(() => window.privateBrowser.getState());
+  expect(secondView.tabs.filter((tab) => tab.url === origin + '/').map((tab) => tab.accountSpaceId)).toEqual([second]);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), first);
   await page.evaluate((id) => window.privateBrowser.markRoutineChecklist(id, 0, true), routine.id);
   await application!.close();
   const env = { ...process.env, NODE_ENV: 'test' } as Record<string, string>;

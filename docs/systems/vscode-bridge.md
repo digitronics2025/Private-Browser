@@ -137,6 +137,20 @@ workspace file for a direct HTML route or explicit asset reference. The companio
 rechecks the short-lived file reference and project grant on open. Other elements
 show the available source confidence and keep opening disabled.
 
+With companion 0.4.5, **Local test scenario** runs an exact relative route with
+the chosen desktop, tablet and mobile viewports. An optional synthetic fixture
+is a file in `private-browser-fixtures/` inside the approved project. A fixture
+uses `{"version":1,"responses":[{"path":"/api/items","status":200,"json":[]}]}`.
+Use up to 20 same-origin GET data responses in a file under 64 KiB. The runner
+rechecks the fixture digest before using it and blocks service workers for the
+isolated scenario. Keep fixture data free of credentials.
+
+**Save local baseline** captures screenshots in the normal local report store.
+**Compare with baseline** requires the same project, route, fixture digest and
+viewport set. The comparison keeps the exact source report for reruns. A
+document that loads while background requests keep running produces a separate
+attention finding. A redirect or document load failure remains a failed check.
+
 Quick Test and Test Everything execute approved project checks. Current Page,
 Responsive, Accessibility, Performance, Record Flow, Live Website, and
 Local-vs-Live invoke the bundled Playwright runner from VS Code. Each run creates

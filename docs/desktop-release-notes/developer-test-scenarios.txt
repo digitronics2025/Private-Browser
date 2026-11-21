@@ -1,0 +1,1 @@
+Choose a local test route, fixture and viewport set, then save or compare a screenshot baseline.

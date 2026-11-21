@@ -701,6 +701,9 @@ kbd { font: inherit; }
 .inspection-failures { list-style: none; margin: 0; padding: 0; }
 .inspection-failures li { display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--border); }
 .inspection-failures li small { color: var(--text-muted); text-transform: none; letter-spacing: normal; }
+.developer-scenario { min-width: 0; display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px; }
+.developer-scenario legend { font-size: var(--fs-sm); font-weight: 650; }
+.developer-scenario p { margin: 0; color: var(--text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .test-result.passed { border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
 .test-result.failed { border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 .report-row { width: 100%; display: grid; grid-template-columns: 9px 1fr auto 28px; align-items: center; gap: 8px; text-align: left; }
