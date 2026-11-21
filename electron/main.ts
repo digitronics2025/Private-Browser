@@ -1790,10 +1790,12 @@ class BrowserController {
    * Runs once per launch when "On startup" is "Also open Home page". It only adds
    * a tab: restored tabs are never closed. A failure is logged, never fatal.
    */
-  async openStartupHome(): Promise<void> {
+  async openStartupHome(initial: RuntimeBrowserStateV2): Promise<void> {
     const state = this.store.get();
-    if (state.recovery || this.startupTabRecovery || state.activeWorkspaceId === 'banking') return;
-    const settings = settingsForWorkspace(state, state.activeWorkspaceId);
+    if (state.recovery || this.startupTabRecovery || state.activeWorkspaceId === 'banking'
+      || state.activeWorkspaceId !== initial.activeWorkspaceId
+      || this.activeAccountSpaceId(state) !== this.activeAccountSpaceId(initial)) return;
+    const settings = settingsForWorkspace(initial, initial.activeWorkspaceId);
     if (settings.startup === 'pages' && settings.startupPages?.length) {
       const account = state.accountSpaces.find((candidate) => candidate.id === this.activeAccountSpaceId(state));
       if (!account || !isAvailableRegularAccount(state, account)) return;
@@ -4896,12 +4898,15 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:open-history', () => controller!.openReleaseHistory());
 
   controller.startSessionLockMonitoring();
+  // The first window can accept input while its page and local bridge finish
+  // starting. Startup settings edited in that window apply on the next launch.
+  const launchState = store.get();
   await controller.createWindow();
   if (controller.sessionIsLocked) agentHost.stop();
   else await agentHost.start();
   setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();
   setInterval(() => void controller?.checkForUpdatesInBackground(), 24 * 60 * 60_000).unref();
-  if (!controller.sessionIsLocked && !pendingLaunchUrls.length) await controller.openStartupHome();
+  if (!controller.sessionIsLocked && !pendingLaunchUrls.length) await controller.openStartupHome(launchState);
   launchWindowReady = true;
   await openPendingSystemLinks();
   app.on('activate', async () => {
