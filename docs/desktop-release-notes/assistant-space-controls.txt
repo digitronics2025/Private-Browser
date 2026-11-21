@@ -1,0 +1,1 @@
+Turn cloud AI off for an Account Space while keeping local models available. Recent requests show the provider, purpose and time in that space.

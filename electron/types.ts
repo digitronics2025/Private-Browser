@@ -520,6 +520,7 @@ export interface BrowserSnapshot {
   ui: UiPreferences;
   settings: BrowserSettings;
   availableSpellcheckLanguages: SpellcheckLanguage[];
+  assistantPolicy: AssistantSpacePolicy;
   windowState: WindowState;
   /** Customised New Tab shortcuts keyed by Account Space; a missing key means the defaults. */
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
@@ -634,6 +635,26 @@ export interface AiApproval {
 }
 
 export type AiPreviewScope = 'page' | 'selection';
+
+export interface AssistantSelectionEdit { id: string; text: string }
+export interface AssistantSelectionSource extends AssistantSelectionEdit {
+  tabId: string;
+  title: string;
+  url: string;
+  redactions: number;
+}
+
+export interface AssistantReceipt {
+  at: string;
+  mode: 'local' | 'cloud';
+  destination: string;
+  purpose: 'page-request' | 'connection-test' | 'developer-request';
+}
+
+export interface AssistantSpacePolicy {
+  cloud: 'allowed' | 'disabled' | 'unavailable';
+  receipts: AssistantReceipt[];
+}
 
 export interface AiRequestReview {
   id: string;
@@ -763,6 +784,8 @@ export interface VaultStatus {
   platformUnlock?: 'unavailable' | 'available' | 'enrolled';
   generation?: number;
 }
+
+export type VaultFillReadiness = 'ready' | 'locked' | 'connect' | 'no-match' | 'unsupported' | 'manual' | 'choose-login' | 'unavailable';
 
 export interface UpdateServiceInput {
   endpoint: string;

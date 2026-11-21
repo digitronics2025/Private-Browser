@@ -2,10 +2,11 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { BrowserRoutine, LocalAiModels, RoutineRunResult, TabSetInput } from './types.js';
 import type { AddressMatch, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
 import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
-import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, ChromeImportReview, GoogleConnectionHealth } from './types.js';
+import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
+import type { VaultFillReadiness } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
@@ -169,9 +170,11 @@ const api = {
   sendToControlCenter: (input: ControlCenterSendInput): Promise<ControlCenterTask> => ipcRenderer.invoke('control-center:send', input),
   recheckControlCenterTask: (input: ControlCenterRecheckInput): Promise<{ name: string }> => ipcRenderer.invoke('control-center:recheck', input),
   prepareAiPreview: (scope?: AiPreviewScope): Promise<AiPagePreview> => ipcRenderer.invoke('ai:prepare-preview', scope),
-  reviewAssistantRequest: (id: string, text: string, question: string, withEvidence?: boolean): Promise<AiRequestReview> => ipcRenderer.invoke('ai:review-request', id, text, question, withEvidence),
+  prepareAssistantSource: (id: string, tabId: string): Promise<AssistantSelectionSource> => ipcRenderer.invoke('ai:prepare-source', id, tabId),
+  reviewAssistantRequest: (id: string, text: string, question: string, withEvidence?: boolean, edits?: AssistantSelectionEdit[]): Promise<AiRequestReview> => ipcRenderer.invoke('ai:review-request', id, text, question, withEvidence, edits),
   sendReviewedAssistant: (id: string): Promise<AssistantAnswer> => ipcRenderer.invoke('ai:send-reviewed', id),
   cancelReviewedAssistant: (id: string): Promise<void> => ipcRenderer.invoke('ai:cancel-reviewed', id),
+  setAssistantCloudAllowed: (accountId: AccountSpaceId, allowed: boolean): Promise<void> => ipcRenderer.invoke('ai:set-space-cloud', accountId, allowed),
   approveAiPreview: (previewId: string, mode?: 'cloud' | 'local'): Promise<AiApproval> => ipcRenderer.invoke('ai:approve-preview', previewId, mode),
   getAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:provider-status'),
   checkAiProvider: (): Promise<AiProviderCheckResult> => ipcRenderer.invoke('ai:check-provider'),
@@ -195,11 +198,15 @@ const api = {
   cleanupLegacyVault: (): Promise<boolean> => ipcRenderer.invoke('vault:cleanup-legacy'),
   openVaultEditor: (origin?: string): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:open-editor', origin),
   inspectVaultFormShape: (): Promise<{ hasUsername: boolean; hasPassword: boolean }> => ipcRenderer.invoke('vault:form-shape'),
+  resetVaultPicks: (accountId: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('vault:reset-picks', accountId),
+  vaultFillReadiness: (): Promise<VaultFillReadiness> => ipcRenderer.invoke('vault:fill-readiness'),
   requestSaveFromPage: (): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:save-from-page'),
   requestVaultDelete: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:request-delete', id),
   acknowledgeVaultRecovery: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:acknowledge-recovery'),
   copyPassword: (id: string): Promise<void> => ipcRenderer.invoke('vault:copy-password', id),
   copyTotp: (id: string): Promise<{ secondsRemaining: number }> => ipcRenderer.invoke('vault:copy-totp', id),
+  vaultClipboardDeadline: (): Promise<number | undefined> => ipcRenderer.invoke('vault:clipboard-deadline'),
+  clearVaultClipboard: (): Promise<boolean> => ipcRenderer.invoke('vault:clipboard-clear'),
   copyGeneratedCredential: (kind: 'password' | 'passphrase' | 'pin'): Promise<void> => ipcRenderer.invoke('vault:copy-generated', kind),
   autofill: (id: string): Promise<void> => ipcRenderer.invoke('vault:autofill', id),
   copyText: (value: string): Promise<void> => ipcRenderer.invoke('system:copy', value),

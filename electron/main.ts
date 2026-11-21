@@ -12,6 +12,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  ClipboardItem,
   desktopCapturer,
   dialog,
   ipcMain,
@@ -34,9 +35,9 @@ import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { AiProviderStore } from './ai-provider.js';
-import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, readAssistantAnswer } from './ai-prompt.js';
+import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
 import { WORKSPACES } from './state-store.js';
-import { AccountStore } from './account-store.js';
+import { AccountStore, MAX_ASSISTANT_RECEIPTS } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
 import { RuntimeStateStore } from './runtime-state-store.js';
 import { problemForFailedLoad, StartupRestoreJournal } from './startup-restore.js';
@@ -61,6 +62,10 @@ import type {
   AiPreviewScope,
   AiRequestReview,
   AssistantAnswer,
+  AssistantReceipt,
+  AssistantSelectionEdit,
+  AssistantSelectionSource,
+  AssistantSpacePolicy,
   ControlCenterRecheckInput,
   ControlCenterSendInput,
   AiProviderInput,
@@ -106,7 +111,8 @@ import { MyVaultDiskStore } from './myvault/vault-store.js';
 import { SecureVaultDialogs } from './myvault/secure-dialog.js';
 import { SECURE_CREDENTIAL_PRESETS, type ConfirmDeleteDialogValue, type EditLoginDialogValue, type SecureCredentialPreset, type UnlockDialogValue } from './myvault/secure-dialog-contract.js';
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
-import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape, probeFocusedLoginField } from './myvault/isolated-fill.js';
+import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fillLoginInIsolatedWorld, hasSupportedLoginForm, inspectLoginFormShape, probeFocusedLoginField } from './myvault/isolated-fill.js';
+import type { VaultFillReadiness } from './types.js';
 import { FillPicker } from './myvault/fill-picker.js';
 import { FillPreferenceStore } from './myvault/fill-preferences.js';
 import { isSameSiteFillCandidate } from './myvault/site-match.js';
@@ -151,6 +157,11 @@ import type { TabSetInput } from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
+
+interface AssistantCapture {
+  preview: AiPagePreview;
+  navigationGeneration: number;
+}
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -271,13 +282,20 @@ class BrowserController {
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
-  private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number }>();
-  private assistantReview?: { review: AiRequestReview; preview: AiPagePreview; question: string; withEvidence: boolean; expiresAt: number; navigationGeneration: number };
-  private activeAssistant?: { id: string; controller: AbortController };
+  private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
+  private assistantReview?: AssistantCapture & { review: AiRequestReview; question: string; withEvidence: boolean; expiresAt: number; additional: AssistantCapture[]; excerpts: string[] };
+  private activeAssistant?: { id: string; mode: 'local' | 'cloud'; controller: AbortController };
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
   private readonly developerPreviewIds = new Set<string>();
-  private readonly clipboardGuard = new ClipboardGuard(clipboard);
+  private readonly clipboardGuard = new ClipboardGuard({
+    writeText: (text) => process.platform === 'win32' ? clipboard.write([new ClipboardItem({
+      'text/plain': text,
+      'electron application/osclipboard;format="ExcludeClipboardContentFromMonitorProcessing"': new Blob([new Uint8Array(4)]),
+    })]) : clipboard.writeText(text),
+    readText: () => clipboard.readText(),
+    clear: () => clipboard.clear(),
+  });
   private readonly permissions: AccountPermissionManager;
   private pendingPermission?: {
     prompt: PermissionPrompt;
@@ -534,6 +552,7 @@ class BrowserController {
       ui: persisted.ui,
       settings: settingsForWorkspace(persisted, persisted.activeWorkspaceId),
       availableSpellcheckLanguages: this.availableSpellcheckLanguages(),
+      assistantPolicy: this.assistantPolicy(persisted),
       windowState: {
         maximized: windowReady && this.window.isMaximized(),
         fullscreen: windowReady && this.window.isFullScreen(),
@@ -2358,6 +2377,14 @@ class BrowserController {
     this.assistantReview = undefined;
     const state = this.store.get();
     const tab = this.activeTab(state);
+    const capture = await this.captureAssistantSelection(tab, scope, MAX_ASSISTANT_CONTEXT);
+    this.validateAssistantSource(capture.preview, capture.navigationGeneration);
+    this.addPrivacyEvent('local-read', 'Local page preview', `${capture.preview.title} · ${capture.preview.redactions} redaction(s)`);
+    this.pendingAiPreviews.set(capture.preview.id, { ...capture, expiresAt: Date.now() + 5 * 60_000 });
+    return capture.preview;
+  }
+
+  private async captureAssistantSelection(tab: BrowserTab, scope: AiPreviewScope, maximum: number): Promise<AssistantCapture> {
     const workspace = WORKSPACES.find((item) => item.id === tab.workspaceId)!;
     if (workspace.protected || isProtectedPage(tab.url)) {
       this.addPrivacyEvent('blocked', 'AI access blocked', `Protected page: ${tab.title}`);
@@ -2374,7 +2401,7 @@ class BrowserController {
     if (scope === 'selection' && !rawText.trim()) throw new Error('Select visible page text, then try again.');
     const result = redactSensitiveText(rawText);
     const safeTitle = redactSensitiveText(tab.title);
-    const text = result.text.slice(0, MAX_ASSISTANT_CONTEXT);
+    const text = result.text.slice(0, maximum);
     const preview: AiPagePreview = {
       id: randomUUID(),
       accountSpaceId: tab.accountSpaceId,
@@ -2388,27 +2415,73 @@ class BrowserController {
       redactions: result.redactions + safeTitle.redactions,
       protectedPage: false,
     };
-    this.validateAssistantSource(preview, navigationGeneration);
-    this.addPrivacyEvent('local-read', 'Local page preview', `${safeTitle.text} · ${preview.redactions} redaction(s)`);
-    this.pendingAiPreviews.set(preview.id, { preview, navigationGeneration, expiresAt: Date.now() + 5 * 60_000 });
-    return preview;
+    return { preview, navigationGeneration };
   }
 
-  reviewAssistantRequest(previewId: string, text: string, questionValue: string, withEvidence = false): AiRequestReview {
+  async prepareAssistantSource(parentId: string, tabId: string): Promise<AssistantSelectionSource> {
+    this.pruneAiCapabilities();
+    const parent = this.pendingAiPreviews.get(parentId);
+    if (parent?.navigationGeneration === undefined || parent.parentId || parent.expiresAt < Date.now()) {
+      throw new Error('Read the current page again before adding a source.');
+    }
+    this.validateAssistantSource(parent.preview, parent.navigationGeneration);
+    this.requireAssistantPolicy(parent.preview.accountSpaceId, 'local');
+    const state = this.store.get();
+    const tab = state.tabs.find((item) => item.id === tabId && item.accountSpaceId === parent.preview.accountSpaceId);
+    if (!tab || tab.id === parent.preview.tabId || classifyAiSource(tab.url) !== 'browser') {
+      throw new Error('Choose another open webpage in this Account Space.');
+    }
+    const capture = await this.captureAssistantSelection(tab, 'selection', MAX_ASSISTANT_SOURCE_TEXT);
+    this.validateAssistantSource(parent.preview, parent.navigationGeneration);
+    this.validateExtraAssistantSource(capture);
+    if (this.pendingAiPreviews.get(parentId) !== parent || parent.expiresAt <= Date.now()) throw new Error('The current page preview expired.');
+    this.pendingAiPreviews.set(capture.preview.id, { ...capture, parentId, expiresAt: parent.expiresAt });
+    const { id, title, url, text, redactions } = capture.preview;
+    return { id, tabId, title, url, text, redactions };
+  }
+
+  private validateExtraAssistantSource(capture: AssistantCapture): void {
+    const state = this.store.get();
+    const tab = state.tabs.find((item) => item.id === capture.preview.tabId);
+    if (!tab || !sameAiSource(capture.preview, this.activeAccountSpaceId(state), tab) || isProtectedPage(tab.url)
+      || this.runtimeTabs.get(tab.id)?.navigationGeneration !== capture.navigationGeneration) {
+      throw new Error('An added source changed. Read it again before sending.');
+    }
+  }
+
+  reviewAssistantRequest(previewId: string, text: string, questionValue: string, withEvidence = false, edits: AssistantSelectionEdit[] = []): AiRequestReview {
     this.assistantReview = undefined;
     const pending = this.pendingAiPreviews.get(previewId);
-    if (pending?.navigationGeneration === undefined || pending.expiresAt < Date.now()) {
+    if (pending?.navigationGeneration === undefined || pending.parentId || pending.expiresAt < Date.now()) {
       throw new Error('The page preview expired. Read the page again.');
     }
     this.validateAssistantSource(pending.preview, pending.navigationGeneration);
     if (!maySendAiPreviewToCloud(pending.preview)) throw new Error('Mailbox contents never enter an AI model.');
     const provider = this.aiProvider.status();
     if (!provider.configured || !provider.mode || !provider.model) throw new Error('Configure an AI provider first.');
+    this.requireAssistantPolicy(pending.preview.accountSpaceId, provider.mode);
     const question = redactSensitiveText(questionValue.trim());
     if (!question.text) throw new Error('Enter a question before reviewing the request.');
     const redacted = redactSensitiveText(text);
+    const additional = edits.map((edit) => {
+      const extra = this.pendingAiPreviews.get(edit.id);
+      if (extra?.parentId !== previewId || extra.navigationGeneration === undefined || extra.expiresAt < Date.now()) {
+        throw new Error('An added source expired. Read it again.');
+      }
+      const capture = { preview: extra.preview, navigationGeneration: extra.navigationGeneration };
+      this.validateExtraAssistantSource(capture);
+      return { capture, excerpt: redactSensitiveText(edit.text) };
+    });
+    const includeCurrent = !additional.length || Boolean(redacted.text.trim());
+    const edited = [...includeCurrent ? [redacted] : [], ...additional.map(({ excerpt }) => excerpt)];
+    const excerpts = edited.map((excerpt) => excerpt.text);
+    if (excerpts.reduce((total, excerpt) => total + excerpt.length, 0) > MAX_ASSISTANT_CONTEXT) {
+      throw new Error('Reduce the combined excerpts to 12,000 characters.');
+    }
     const reviewedQuestion = assistantQuestion(question.text, withEvidence);
-    const preview = { ...pending.preview, text: redacted.text };
+    const sources = [...includeCurrent ? [pending.preview] : [], ...additional.map(({ capture }) => capture.preview)];
+    const contextText = formatAssistantExcerpts(sources.map((source, index) => ({ ...source, text: excerpts[index] })), additional.length > 0);
+    const preview = { ...pending.preview, text: contextText, ...(additional.length ? { title: 'Reviewed webpages', url: 'See source origins below' } : {}) };
     const review: AiRequestReview = {
       id: randomUUID(),
       mode: provider.mode,
@@ -2416,9 +2489,11 @@ class BrowserController {
       model: provider.model,
       systemPrompt: AI_SYSTEM_PROMPT,
       userPrompt: aiUserPrompt(preview, reviewedQuestion),
-      redactions: preview.redactions + redacted.redactions + question.redactions,
+      redactions: sources.reduce((total, source) => total + source.redactions, question.redactions)
+        + edited.reduce((total, item) => total + item.redactions, 0),
     };
-    this.assistantReview = { review, preview, question: reviewedQuestion, withEvidence, expiresAt: pending.expiresAt, navigationGeneration: pending.navigationGeneration };
+    this.assistantReview = { review, preview, question: reviewedQuestion, withEvidence, expiresAt: pending.expiresAt,
+      navigationGeneration: pending.navigationGeneration, additional: additional.map(({ capture }) => capture), excerpts };
     return review;
   }
 
@@ -2430,6 +2505,8 @@ class BrowserController {
     if (pending.expiresAt < Date.now()) throw new Error('The review expired. Read the page again.');
     const validate = () => {
       this.validateAssistantSource(pending.preview, pending.navigationGeneration);
+      pending.additional.forEach((source) => this.validateExtraAssistantSource(source));
+      this.requireAssistantPolicy(pending.preview.accountSpaceId, pending.review.mode);
       const current = this.aiProvider.status();
       const destination = current.mode === 'local' ? 'http://127.0.0.1:11434/api/chat' : `${current.endpoint}/chat/completions`;
       if (!current.configured || current.mode !== pending.review.mode || current.model !== pending.review.model || destination !== pending.review.destination) {
@@ -2438,15 +2515,17 @@ class BrowserController {
     };
     validate();
     const kind = pending.review.mode === 'local' ? 'local-read' : 'cloud-approved';
+    this.recordAssistantReceipt(pending.preview.accountSpaceId, pending.review.mode, pending.review.destination, 'page-request');
     this.addPrivacyEvent(kind, 'Assistant request approved', `${pending.review.redactions} redaction(s)`);
     const controller = new AbortController();
-    this.activeAssistant = { id, controller };
+    this.activeAssistant = { id, mode: pending.review.mode, controller };
     try {
       const answer = await this.aiProvider.ask(pending.preview, pending.question, validate, controller.signal);
       controller.signal.throwIfAborted();
       this.pendingAiPreviews.delete(pending.preview.id);
-      this.addPrivacyEvent(kind, 'Assistant request completed', pending.preview.title);
-      return readAssistantAnswer(answer, pending.withEvidence, pending.preview.text);
+      for (const [sourceId, read] of this.pendingAiPreviews) if (read.parentId === pending.preview.id) this.pendingAiPreviews.delete(sourceId);
+      this.addPrivacyEvent(kind, 'Assistant request completed', 'Provider returned a response');
+      return readAssistantAnswer(answer, pending.withEvidence, pending.excerpts);
     } catch (error) {
       if (controller.signal.aborted) return { kind: 'cancelled' };
       if (error instanceof Error && (error.name === 'TimeoutError' || (error.cause instanceof Error && error.cause.name === 'TimeoutError'))) {
@@ -2490,15 +2569,53 @@ class BrowserController {
     return this.aiProvider.status();
   }
 
+  private assistantPolicy(state = this.store.get()): AssistantSpacePolicy {
+    const accountId = this.activeAccountSpaceId(state);
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountId);
+    if (this.store.isReadOnly() || !account || !isAvailableRegularAccount(state, account) || !workspaceVaultPolicy(state.activeWorkspaceId).aiExtraction) {
+      return { cloud: 'unavailable', receipts: [] };
+    }
+    const preferences = this.store.assistantPreferences(accountId);
+    return preferences ? { cloud: preferences.cloudAllowed ? 'allowed' : 'disabled', receipts: preferences.receipts }
+      : { cloud: 'unavailable', receipts: [] };
+  }
+
+  private requireAssistantPolicy(accountId: AccountSpaceId, mode: 'local' | 'cloud'): void {
+    const state = this.store.get();
+    const policy = this.assistantPolicy(state);
+    if (accountId !== this.activeAccountSpaceId(state) || policy.cloud === 'unavailable') {
+      throw new Error('Assistant requests are unavailable in this Account Space.');
+    }
+    if (mode === 'cloud' && policy.cloud === 'disabled') throw new Error('Cloud AI is disabled in this Account Space.');
+  }
+
+  setAssistantCloudAllowed(accountId: AccountSpaceId, allowed: boolean): void {
+    this.requireAssistantPolicy(accountId, 'local');
+    this.store.refreshAccount(this.accounts.update(accountId, (record) => { record.assistantCloudAllowed = allowed; }));
+    if (!allowed) {
+      if (this.assistantReview?.review.mode === 'cloud') this.assistantReview = undefined;
+      if (this.activeAssistant?.mode === 'cloud') this.activeAssistant.controller.abort();
+    }
+    this.broadcast();
+  }
+
+  private recordAssistantReceipt(accountId: AccountSpaceId, mode: AssistantReceipt['mode'], destination: string, purpose: AssistantReceipt['purpose']): void {
+    const receipt: AssistantReceipt = { at: new Date().toISOString(), mode, destination: new URL(destination).origin, purpose };
+    this.store.refreshAccount(this.accounts.update(accountId, (record) => {
+      record.assistantReceipts = [receipt, ...record.assistantReceipts ?? []].slice(0, MAX_ASSISTANT_RECEIPTS);
+    }));
+    this.broadcast();
+  }
+
   checkAiProvider() {
     const account = this.activeAccountSpaceId(this.store.get());
-    const validateWorkspace = () => {
-      const state = this.store.get();
-      if (account !== this.activeAccountSpaceId(state) || !workspaceVaultPolicy(state.activeWorkspaceId).aiExtraction) {
-        throw new Error('Assistant connection tests are unavailable in this Account Space.');
-      }
-    };
+    const provider = this.aiProvider.status();
+    const validateWorkspace = () => this.requireAssistantPolicy(account, provider.mode ?? 'local');
     validateWorkspace();
+    if (provider.configured && provider.mode) {
+      const target = provider.mode === 'local' ? 'http://127.0.0.1:11434' : provider.endpoint!;
+      this.recordAssistantReceipt(account, provider.mode, target, 'connection-test');
+    }
     return this.aiProvider.checkConnection(validateWorkspace);
   }
 
@@ -2532,11 +2649,18 @@ class BrowserController {
   async askAi(token: string, questionValue: string): Promise<string> {
     const question = questionValue.trim();
     if (!question || question.length > 2000) throw new Error('Enter a question under 2,000 characters');
-    const mode = this.aiProvider.status().mode ?? 'cloud';
+    const provider = this.aiProvider.status();
+    const mode = provider.mode ?? 'cloud';
     const preview = this.consumeAiApproval(token, mode);
     if (!this.developerPreviewIds.has(preview.id)) throw new Error('Review the Assistant request before sending it.');
-    const answer = await this.aiProvider.ask(preview, question, () => this.validateAiSource(preview));
-    this.addPrivacyEvent(mode === 'local' ? 'local-read' : 'cloud-approved', mode === 'local' ? 'Local AI request completed' : 'Cloud AI request completed', preview.title);
+    const validate = () => {
+      this.validateAiSource(preview);
+      this.requireAssistantPolicy(preview.accountSpaceId, mode);
+    };
+    validate();
+    if (provider.configured) this.recordAssistantReceipt(preview.accountSpaceId, mode, mode === 'local' ? 'http://127.0.0.1:11434' : provider.endpoint!, 'developer-request');
+    const answer = await this.aiProvider.ask(preview, question, validate);
+    this.addPrivacyEvent(mode === 'local' ? 'local-read' : 'cloud-approved', mode === 'local' ? 'Local AI request completed' : 'Cloud AI request completed', 'Provider returned a response');
     return answer;
   }
 
@@ -2783,19 +2907,19 @@ class BrowserController {
     return this.listVault();
   }
 
-  copyPassword(id: string): void {
+  async copyPassword(id: string): Promise<void> {
     const policy = this.activeVaultPolicy();
     if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Password clipboard is disabled in this workspace');
-    this.copySensitiveValue(this.vault.resolveSecretForTrustedOperation(id, 'password'));
+    await this.copySensitiveValue(this.vault.resolveSecretForTrustedOperation(id, 'password'));
     this.addPrivacyEvent('vault', 'Password copied', 'Clipboard clears automatically after 30 seconds');
   }
 
-  copyTotp(id: string): { secondsRemaining: number } {
+  async copyTotp(id: string): Promise<{ secondsRemaining: number }> {
     const policy = this.activeVaultPolicy();
     if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Vault clipboard is disabled in this workspace');
     const now = Math.floor(Date.now() / 1000);
     const code = generateTotp(this.vault.resolveSecretForTrustedOperation(id, 'totp-secret'), now);
-    this.copySensitiveValue(code);
+    await this.copySensitiveValue(code);
     this.addPrivacyEvent('vault', 'Authenticator code copied', 'Generated locally; clipboard auto-clear enabled');
     return { secondsRemaining: 30 - (now % 30) };
   }
@@ -2804,6 +2928,20 @@ class BrowserController {
    *  the 30-second window does not leave a password on the clipboard. */
   async flushClipboard(): Promise<void> {
     await this.clipboardGuard.flush();
+  }
+
+  get secretClipboardPending(): boolean {
+    return this.clipboardGuard.isPending;
+  }
+
+  vaultClipboardDeadline(): number | undefined {
+    if (!this.activeVaultPolicy().passwordClipboard) return undefined;
+    return this.clipboardGuard.expiresAt;
+  }
+
+  clearVaultClipboard(): Promise<boolean> {
+    if (!this.activeVaultPolicy().passwordClipboard) throw new Error('Vault clipboard is disabled in this workspace');
+    return this.clipboardGuard.flush();
   }
 
   async autofill(id: string): Promise<void> {
@@ -2840,7 +2978,7 @@ class BrowserController {
     const contents = this.activeContents();
     if (!contents || contents.id !== initial.webContentsId) throw new Error('Vault fill expired because the page context changed');
     await fillLoginInIsolatedWorld(contents, username, password);
-    this.fillPreferences.remember(initial.origin, id);
+    if (workspaceVaultPolicy(initial.workspaceId).fillPicker) this.fillPreferences.remember(initial.accountSpaceId, initial.origin, id);
     const runtime = this.runtimeTabs.get(initial.tabId);
     if (runtime) runtime.automaticFillGeneration = initial.navigationGeneration;
   }
@@ -2906,7 +3044,7 @@ class BrowserController {
       // Chrome's rule: this exact origin first, then other addresses of the same site.
       const candidates = orderFillCandidates(
         this.vault.searchMetadata('').filter((entry) => Boolean(entry.url) && isSameSiteFillCandidate(entry.url!, context.origin)),
-        this.fillPreferences.get(context.origin),
+        this.fillPreferences.get(context.accountSpaceId, context.origin),
         context.origin,
       ).slice(0, FILL_PICKER_MAX_ROWS);
       if (!candidates.length) return;
@@ -2975,7 +3113,7 @@ class BrowserController {
       if (initial.tabId !== tabId || initial.navigationGeneration !== generation || !initial.origin.startsWith('https://')) return;
       const match = selectAutomaticFillEntry(
         this.vault.searchMetadata('', initial.origin),
-        this.fillPreferences.get(initial.origin),
+        this.fillPreferences.get(initial.accountSpaceId, initial.origin),
       );
       if (!match?.url || !isAutofillTarget(match.url, initial.origin)) return;
       const capability = this.fillCapabilities.issue(initial, match.id, 'fill-login');
@@ -3006,6 +3144,36 @@ class BrowserController {
     return inspectLoginFormShape(contents);
   }
 
+  resetVaultPicks(accountId: AccountSpaceId): boolean {
+    if (accountId !== this.activeAccountSpaceId(this.store.get()) || !this.activeVaultPolicy().fillPicker) {
+      throw new Error('Remembered picks are unavailable in this Account Space.');
+    }
+    return this.fillPreferences.reset(accountId);
+  }
+
+  async vaultFillReadiness(): Promise<VaultFillReadiness> {
+    const policy = this.activeVaultPolicy();
+    const status = this.vault.status();
+    if (!policy.vaultSurface || !policy.manualFill || !status.credentialPersistenceAvailable) return 'unavailable';
+    if (status.lifecycle === 'unconfigured') return 'connect';
+    if (status.lifecycle === 'locked') return 'locked';
+    if (status.lifecycle !== 'unlocked') return 'unavailable';
+    try {
+      const initial = this.currentFillContext();
+      const contents = this.activeContents();
+      if (!contents || !initial.origin.startsWith('https://')) return 'unsupported';
+      if (policy.requireFillConfirmation) return 'manual';
+      if (!isAutomaticFillPageUrl(contents.getURL()) || !await hasSupportedLoginForm(contents)) return 'unsupported';
+      if (JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) return 'unsupported';
+      if (this.vault.status().lifecycle !== 'unlocked') return 'locked';
+      const matches = this.vault.searchMetadata('', initial.origin).filter((entry) => entry.url && isAutofillTarget(entry.url, initial.origin));
+      if (!matches.length) return 'no-match';
+      return selectAutomaticFillEntry(matches, this.fillPreferences.get(initial.accountSpaceId, initial.origin)) ? 'ready' : 'choose-login';
+    } catch {
+      return 'unsupported';
+    }
+  }
+
   async requestSaveFromPage() {
     const policy = this.activeVaultPolicy();
     if (!policy.vaultSurface || !policy.saveCapture) throw new Error('Password capture is disabled in this workspace');
@@ -3024,11 +3192,11 @@ class BrowserController {
     return { ...saved, label: saved.title, url: saved.url ?? '' };
   }
 
-  copyGeneratedCredential(kind: GeneratedCredentialKind): void {
+  async copyGeneratedCredential(kind: GeneratedCredentialKind): Promise<void> {
     const policy = this.activeVaultPolicy();
     if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Credential clipboard is disabled in this workspace');
     if (!['password', 'passphrase', 'pin'].includes(kind)) throw new Error('Unsupported generator type');
-    this.copySensitiveValue(this.vault.generateCredential(kind));
+    await this.copySensitiveValue(this.vault.generateCredential(kind));
     this.addPrivacyEvent('vault', 'Generated credential copied', 'Generated by the broker; clipboard auto-clear enabled');
   }
 
@@ -3823,8 +3991,18 @@ class BrowserController {
     this.broadcast();
   }
 
-  private copySensitiveValue(value: string): void {
-    this.clipboardGuard.copy(value);
+  private async copySensitiveValue(value: string): Promise<void> {
+    const account = this.activeAccountSpaceId(this.store.get());
+    try {
+      await this.clipboardGuard.copy(value, () => {
+        if (clipboardQuit !== 'not-started' || this.activeAccountSpaceId(this.store.get()) !== account
+          || !this.activeVaultPolicy().passwordClipboard || this.vault.status().lifecycle !== 'unlocked') {
+          throw new Error('The Account Space changed.');
+        }
+      });
+    } catch {
+      throw new Error('The vault could not protect and write to the clipboard.');
+    }
   }
 
   private pruneAiCapabilities(): void {
@@ -3958,7 +4136,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     await orphan.clearCache().catch(() => undefined);
   }
   const vault = new VaultBroker(new MyVaultDiskStore(userDataPath, safeStorage));
-  const fillPreferences = new FillPreferenceStore(join(userDataPath, 'myvault', 'fill-preferences.enc'), safeStorage);
+  const fillPreferences = new FillPreferenceStore(join(userDataPath, 'myvault', 'fill-preferences-v2.enc'), safeStorage);
   vault.initialize();
   const aiProvider = new AiProviderStore(join(userDataPath, 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(userDataPath, 'update-service.enc'));
@@ -4156,9 +4334,11 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('control-center:send', (_event, input: ControlCenterSendInput) => controller!.sendToControlCenter(input));
   handle('control-center:recheck', (_event, input: ControlCenterRecheckInput) => controller!.recheckControlCenterTask(input));
   handle('ai:prepare-preview', (_event, scope?: AiPreviewScope) => controller!.prepareAiPreview(scope));
-  handle('ai:review-request', (_event, id: string, text: string, question: string, withEvidence?: boolean) => controller!.reviewAssistantRequest(id, text, question, withEvidence));
+  handle('ai:prepare-source', (_event, id: string, tabId: string) => controller!.prepareAssistantSource(id, tabId));
+  handle('ai:review-request', (_event, id: string, text: string, question: string, withEvidence?: boolean, edits?: AssistantSelectionEdit[]) => controller!.reviewAssistantRequest(id, text, question, withEvidence, edits));
   handle('ai:send-reviewed', (_event, id: string) => controller!.askReviewedAssistant(id));
   handle('ai:cancel-reviewed', (_event, id: string) => controller!.cancelReviewedAssistant(id));
+  handle('ai:set-space-cloud', (_event, accountId: AccountSpaceId, allowed: boolean) => controller!.setAssistantCloudAllowed(accountId, allowed));
   handle('ai:approve-preview', (_event, previewId: string, mode?: 'local' | 'cloud') => controller!.approveAiPreview(previewId, mode));
   handle('ai:provider-status', () => controller!.getAiProvider());
   handle('ai:check-provider', () => controller!.checkAiProvider());
@@ -4183,12 +4363,16 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:cleanup-legacy', () => controller!.cleanupLegacyVault());
   handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
   handle('vault:form-shape', () => controller!.inspectVaultFormShape());
+  handle('vault:reset-picks', (_event, accountId: AccountSpaceId) => controller!.resetVaultPicks(accountId));
+  handle('vault:fill-readiness', () => controller!.vaultFillReadiness());
   handle('vault:save-from-page', () => controller!.requestSaveFromPage());
   handle('vault:request-delete', (_event, id: string) => controller!.requestVaultDelete(id));
   handle('vault:acknowledge-recovery', () => controller!.acknowledgeVaultRecovery());
   handle('vault:copy-password', (_event, id: string) => controller!.copyPassword(id));
   handle('vault:copy-totp', (_event, id: string) => controller!.copyTotp(id));
   handle('vault:copy-generated', (_event, kind: GeneratedCredentialKind) => controller!.copyGeneratedCredential(kind));
+  handle('vault:clipboard-deadline', () => controller!.vaultClipboardDeadline());
+  handle('vault:clipboard-clear', () => controller!.clearVaultClipboard());
   handle('vault:autofill', (_event, id: string) => controller!.autofill(id));
   handle('system:copy', (_event, value: string) => clipboard.writeText(String(value).slice(0, 100_000)));
   handle('system:is-default-browser', () => controller!.isDefaultBrowser());
@@ -4213,9 +4397,22 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   });
 });
 
-app.on('before-quit', () => {
+let clipboardQuit: 'not-started' | 'clearing' | 'done' = 'not-started';
+app.on('before-quit', (event) => {
+  if (clipboardQuit === 'clearing') {
+    event.preventDefault();
+    return;
+  }
   agentHost?.stop();
-  void controller?.flushClipboard();
+  if (clipboardQuit === 'not-started' && controller?.secretClipboardPending) {
+    event.preventDefault();
+    clipboardQuit = 'clearing';
+    void controller.flushClipboard().finally(() => {
+      clipboardQuit = 'done';
+      app.quit();
+    });
+    return;
+  }
   void vscodeBridge?.close();
 });
 

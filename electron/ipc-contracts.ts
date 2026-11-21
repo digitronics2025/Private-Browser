@@ -18,7 +18,7 @@ import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
 import { MAX_BOOKMARK_EDIT_BATCH } from './bookmark-maintenance.js';
-import { MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION } from './ai-prompt.js';
+import { MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION, MAX_ASSISTANT_EXTRA_SOURCES, MAX_ASSISTANT_SOURCE_TEXT } from './ai-prompt.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
@@ -352,13 +352,32 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       between(args, 0, 1);
       if (args[0] !== undefined && args[0] !== 'page' && args[0] !== 'selection') throw new Error('Choose a page or selection to read');
       return;
-    case 'ai:review-request':
-      between(args, 3, 4); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', MAX_ASSISTANT_CONTEXT); requireBoundedText(args[2], 'question', MAX_ASSISTANT_QUESTION);
+    case 'ai:prepare-source':
+      exact(args, 2); requireUuid(args[0], 'preview'); requireUuid(args[1], 'tab'); return;
+    case 'ai:review-request': {
+      between(args, 3, 5); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', MAX_ASSISTANT_CONTEXT); requireBoundedText(args[2], 'question', MAX_ASSISTANT_QUESTION);
       if (args[3] !== undefined && typeof args[3] !== 'boolean') throw new Error('Invalid source passage option');
+      const edits = args[4];
+      if (edits !== undefined) {
+        if (!Array.isArray(edits) || edits.length > MAX_ASSISTANT_EXTRA_SOURCES) throw new Error('Choose up to three additional sources.');
+        const ids = new Set<string>();
+        for (const item of edits) {
+          const source = requireExactKeys(item, ['id', 'text']);
+          const id = requireUuid(source.id, 'source');
+          if (ids.has(id)) throw new Error('Choose each source once.');
+          ids.add(id);
+          requireBoundedText(source.text, 'source excerpt', MAX_ASSISTANT_SOURCE_TEXT);
+        }
+      }
       return;
+    }
     case 'ai:send-reviewed':
     case 'ai:cancel-reviewed':
       exact(args, 1); requireUuid(args[0], 'review'); return;
+    case 'ai:set-space-cloud':
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (typeof args[1] !== 'boolean') throw new Error('Choose whether to allow cloud AI');
+      return;
     case 'ai:approve-preview':
       between(args, 1, 2); requireUuid(args[0], 'preview');
       if (args[1] !== undefined && args[1] !== 'cloud' && args[1] !== 'local') throw new Error('Invalid AI approval destination');
@@ -392,6 +411,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); if (!['right', 'bottom', 'detach'].includes(String(args[0]))) throw new Error('Invalid DevTools position'); return;
     case 'system:copy':
       exact(args, 1); requireBoundedText(args[0], 'copied text', 2 * 1024 * 1024); return;
+    case 'vault:reset-picks':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'vault:copy-generated':
       exact(args, 1); if (!['password', 'passphrase', 'pin'].includes(String(args[0]))) throw new Error('Invalid generated credential kind'); return;
     case 'vault:resolve-conflict':
@@ -417,7 +438,7 @@ const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',
   'google:clear-configuration', 'system:is-default-browser', 'system:open-default-browser-settings', 'system:test-default-browser', 'updates:check', 'updates:clear',
   'updates:open-history', 'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review',
-  'vault:form-shape', 'vault:hello-disable', 'vault:hello-enable', 'vault:hello-unlock', 'vault:list', 'vault:lock',
+  'vault:clipboard-clear', 'vault:clipboard-deadline', 'vault:fill-readiness', 'vault:form-shape', 'vault:hello-disable', 'vault:hello-enable', 'vault:hello-unlock', 'vault:list', 'vault:lock',
   'vault:migrate-legacy', 'vault:migration-status', 'vault:reconnect', 'vault:request-pairing', 'vault:request-unlock',
   'vault:save-from-page', 'vault:sync',
 ]);

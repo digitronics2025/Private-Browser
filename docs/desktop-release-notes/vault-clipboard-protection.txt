@@ -1,0 +1,1 @@
+MyVault shows a clipboard countdown and a Clear now button. Windows copies request history and sync exclusion, and the secure editor checks authenticator secrets before saving.

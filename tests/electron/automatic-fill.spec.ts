@@ -178,9 +178,15 @@ test('generates a credential in the isolated editor and saves only after explici
   await editor.getByLabel('Name', { exact: true }).fill('Generated fixture login');
   await editor.getByLabel('Website origin').fill(targetOrigin);
   await editor.getByLabel('Username or email').fill('generated@example.test');
+  const authenticator = editor.getByLabel('Authenticator secret (optional)');
+  await authenticator.fill('ABCDEFGH IJKLMNO0');
+  await expect(editor.getByText('Enter a valid Base32 authenticator secret.')).toBeVisible();
+  await expect(authenticator).toHaveJSProperty('validationMessage', 'Enter a valid Base32 authenticator secret.');
+  await authenticator.fill('abcd efgh-ijkl mnop');
+  await expect(authenticator).toHaveJSProperty('validationMessage', '');
   expect(await editor.locator('input:invalid').count()).toBe(0);
   await save.click();
-  await expect(saved).resolves.toMatchObject({ label: 'Generated fixture login' });
+  await expect(saved).resolves.toMatchObject({ label: 'Generated fixture login', hasTotp: true });
   const items = await page.evaluate(async () => (await window.privateBrowser.listVault()).items);
   expect(items.some((item) => item.label === 'Generated fixture login')).toBe(true);
   expect((await readForm(settingsPage)).password).toBe('');
@@ -201,6 +207,7 @@ test('automatically fills only safe empty HTTPS login forms without submitting',
   application = await launchFixture();
   const page = await application!.firstWindow();
   await page.getByRole('button', { name: 'Open MyVault' }).click();
+  await expect(page.getByText('Vault locked', { exact: true })).toBeVisible();
   const secureWindowPromise = application!.waitForEvent('window');
   await page.getByRole('button', { name: 'Unlock in secure window' }).click();
   const secureWindow = await secureWindowPromise;
@@ -215,6 +222,19 @@ test('automatically fills only safe empty HTTPS login forms without submitting',
     password: FIXTURE_PASSWORD,
     submitted: false,
   });
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.vaultFillReadiness())).toBe('ready');
+  const resetRememberedPicks = () => page.evaluate(async () => {
+    const api = window.privateBrowser;
+    const { activeAccountSpaceId } = await api.getState();
+    return api.resetVaultPicks(activeAccountSpaceId);
+  });
+  await page.evaluate(async () => {
+    const api = window.privateBrowser;
+    const { items } = await api.listVault();
+    await api.autofill(items[0].id);
+  });
+  await expect(resetRememberedPicks()).resolves.toBe(true);
+  await expect(resetRememberedPicks()).resolves.toBe(false);
 
   const occupiedUrl = `${targetOrigin}/occupied`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), occupiedUrl);
@@ -232,8 +252,43 @@ test('automatically fills only safe empty HTTPS login forms without submitting',
   const changePasswordUrl = `${targetOrigin}/account/security`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), changePasswordUrl);
   expect(await settledForm(changePasswordUrl)).toMatchObject({ username: '', password: '' });
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.vaultFillReadiness())).toBe('unsupported');
 
   await page.evaluate(() => window.privateBrowser.switchWorkspace('development'));
   await page.evaluate((target) => window.privateBrowser.navigate(target), loginUrl);
   expect(await settledForm(loginUrl)).toMatchObject({ username: '', password: '' });
+  await expect(page.evaluate(() => window.privateBrowser.vaultFillReadiness())).resolves.toBe('unavailable');
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await page.evaluate((target) => window.privateBrowser.navigate(target), loginUrl);
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.vaultFillReadiness())).toBe('manual');
+  expect(await settledForm(loginUrl)).toMatchObject({ username: '', password: '' });
+});
+
+test('protects a disposable Windows vault copy and clears it on quit', async () => {
+  test.skip(process.platform !== 'win32' || !process.env.CI, 'The hosted Windows runner provides a disposable system clipboard.');
+  writeFileSync(join(userDataPath, 'myvault', 'envelope.myvault'), JSON.stringify(fixtureEnvelope), 'utf8');
+  application = await launchFixture();
+  const page = await application.firstWindow();
+  await page.getByRole('button', { name: 'Open MyVault' }).click();
+  const secureWindowPromise = application.waitForEvent('window');
+  await page.getByRole('button', { name: 'Unlock in secure window' }).click();
+  const secureWindow = await secureWindowPromise;
+  await secureWindow.getByLabel('Master password').fill(MASTER_PASSWORD);
+  await secureWindow.getByRole('button', { name: 'Unlock' }).click();
+  await expect(page.getByText('Unlocked on this device')).toBeVisible();
+
+  await page.locator('.credential-card').getByRole('button', { name: 'Password', exact: true }).click();
+  await expect(page.getByText(/Vault clipboard clears in \d+s/)).toBeVisible();
+  const format = 'electron application/osclipboard;format="ExcludeClipboardContentFromMonitorProcessing"';
+  const nativeMarker = () => application!.evaluate(({ clipboard }, marker) => clipboard.has(marker), format);
+  await expect(nativeMarker()).resolves.toBe(true);
+  await page.getByRole('button', { name: 'Clear now', exact: true }).click();
+  await expect(nativeMarker()).resolves.toBe(false);
+
+  await page.locator('.credential-card').getByRole('button', { name: 'Password', exact: true }).click();
+  await expect(nativeMarker()).resolves.toBe(true);
+  await application.close();
+  application = await launchFixture();
+  await expect(nativeMarker()).resolves.toBe(false);
+  await expect(application.evaluate(async ({ clipboard }, value) => (await clipboard.readText()) === value, FIXTURE_PASSWORD)).resolves.toBe(false);
 });

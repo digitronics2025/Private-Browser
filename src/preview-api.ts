@@ -1,13 +1,13 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { ChromeImportOptions } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
-import type { AiPagePreview, AiRequestReview, AssistantAnswer } from '../electron/types';
+import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
-import { AI_SYSTEM_PROMPT, assistantQuestion, aiUserPrompt, readAssistantAnswer } from '../electron/ai-prompt';
+import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
 import { planBookmarkBatch } from '../electron/bookmark-batch';
@@ -63,6 +63,7 @@ export function installPreviewApi(): void {
   const state: BrowserSnapshot = {
     settings: { ...DEFAULT_BROWSER_SETTINGS },
     availableSpellcheckLanguages: ['en', 'fr'],
+    assistantPolicy: { cloud: 'allowed', receipts: [] },
     workspaces: WORKSPACES,
     activeWorkspaceId: 'personal',
     activeAccountSpaceId: google,
@@ -158,12 +159,21 @@ export function installPreviewApi(): void {
   ] : [];
   let previewProvider: AiProviderStatus = { configured: false };
   let assistantPage: AiPagePreview | undefined;
-  let assistantReview: { data: AiRequestReview; context: string; withEvidence: boolean } | undefined;
+  let assistantReview: { data: AiRequestReview; context: string[]; withEvidence: boolean } | undefined;
+  const assistantExtraSources = new Map<string, AssistantSelectionSource>();
   let timeoutFixtureUsed = false;
   let previewRequest: { id: string; finish: (answer: AssistantAnswer) => void } | undefined;
+  const disabledCloudAccounts = new Set<AccountSpaceId>();
+  const assistantReceipts = new Map<AccountSpaceId, AssistantReceipt[]>();
+  let vaultClipboardUntil: number | undefined;
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
     state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
+    const assistantUnavailable = state.activeWorkspaceId === 'banking' || state.accountSpaces.some((account) => account.id === state.activeAccountSpaceId && account.locked);
+    state.assistantPolicy = assistantUnavailable ? { cloud: 'unavailable', receipts: [] } : {
+      cloud: disabledCloudAccounts.has(state.activeAccountSpaceId) ? 'disabled' : 'allowed',
+      receipts: assistantReceipts.get(state.activeAccountSpaceId) ?? [],
+    };
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
@@ -177,6 +187,16 @@ export function installPreviewApi(): void {
     const batch = batchesByAccount.get(state.activeAccountSpaceId);
     state.closedTabBatch = batch ? { count: batch.entries.length, groupName: batch.groupName } : undefined;
     listeners.forEach((listener) => listener(structuredClone(state)));
+  };
+  const requireAssistantPolicy = (mode: 'cloud' | 'local') => {
+    if (state.assistantPolicy.cloud === 'unavailable') throw new Error('Assistant requests are unavailable in this Account Space.');
+    if (mode === 'cloud' && state.assistantPolicy.cloud === 'disabled') throw new Error('Cloud AI is disabled in this Account Space.');
+  };
+  const recordAssistantReceipt = (mode: AssistantReceipt['mode'], target: string, purpose: AssistantReceipt['purpose']) => {
+    const id = state.activeAccountSpaceId;
+    const receipt: AssistantReceipt = { at: new Date().toISOString(), mode, purpose, destination: new URL(target).origin };
+    assistantReceipts.set(id, [receipt, ...assistantReceipts.get(id) ?? []].slice(0, 12));
+    publish();
   };
   media.addEventListener('change', () => { syncDarkMode(); publish(); });
   const activeTab = () => state.tabs.find((tab) => tab.id === state.activeTabId)!;
@@ -566,14 +586,16 @@ export function installPreviewApi(): void {
     uploadBackup: async () => ({ status: 'uploaded', etag: 'preview-etag' }),
     getAiProvider: async () => previewProvider,
     checkAiProvider: async () => {
-      if (state.activeWorkspaceId === 'banking') throw new Error('Assistant connection tests are unavailable in this Account Space.');
+      requireAssistantPolicy(previewProvider.mode ?? 'local');
       if (!previewProvider.configured) return { state: 'not-configured' };
+      if (previewProvider.mode) recordAssistantReceipt(previewProvider.mode, previewProvider.mode === 'local' ? 'http://127.0.0.1:11434' : previewProvider.endpoint!, 'connection-test');
       return { state: params.get('aiCheck') === 'model' ? 'model' : 'ready' };
     },
     prepareAiPreview: (async (scope: unknown) => {
       if (state.activeWorkspaceId === 'banking') throw new Error('AI is unavailable in this workspace');
       if (params.get('localAi') !== 'sample') throw new Error('A sample reading page is unavailable.');
       assistantReview = undefined;
+      assistantExtraSources.clear();
       assistantPage = {
         id: crypto.randomUUID(), accountSpaceId: state.activeAccountSpaceId, tabId: state.activeTabId,
         service: 'browser', sourceRevision: 'preview-ai-page', sourceUrl: 'https://example.test/article',
@@ -582,20 +604,44 @@ export function installPreviewApi(): void {
       };
       return assistantPage;
     }) satisfies PrivateBrowserApi['prepareAiPreview'],
-    reviewAssistantRequest: async (id, context, questionValue, withEvidence) => {
+    prepareAssistantSource: async (id, tabId) => {
+      requireAssistantPolicy('local');
+      const tab = state.tabs.find((item) => item.id === tabId && item.accountSpaceId === state.activeAccountSpaceId && !item.isHome);
+      if (!tab || state.activeTabId === tab.id || assistantPage?.id !== id) throw new Error('Choose another open webpage in this Account Space.');
+      const source: AssistantSelectionSource = {
+        id: crypto.randomUUID(), tabId: tab.id, title: tab.title, url: new URL(tab.url).origin,
+        text: 'The additional catalogue lists a ceramic mug.', redactions: 0,
+      };
+      assistantExtraSources.set(source.id, source);
+      return source;
+    },
+    reviewAssistantRequest: async (id, context, questionValue, withEvidence, edits) => {
       if (!assistantPage || assistantPage.id !== id || assistantPage.accountSpaceId !== state.activeAccountSpaceId || assistantPage.tabId !== state.activeTabId) {
         throw new Error('Read the page again before reviewing the request.');
       }
       if (!previewProvider.configured || !previewProvider.mode || !previewProvider.model) throw new Error('Configure an AI provider first.');
+      requireAssistantPolicy(previewProvider.mode);
       const text = redactSensitiveText(String(context));
+      const additional = ((edits ?? []) as AssistantSelectionEdit[]).map((edit) => {
+        const source = assistantExtraSources.get(edit.id);
+        if (!source) throw new Error('Read the added source again.');
+        const excerpt = redactSensitiveText(edit.text);
+        return { ...source, text: excerpt.text, redactions: excerpt.redactions };
+      });
+      const includeCurrent = !additional.length || Boolean(text.text.trim());
+      const excerpts = [...(includeCurrent ? [{ ...assistantPage, text: text.text, redactions: text.redactions }] : []), ...additional];
+      if (excerpts.reduce((total, excerpt) => total + excerpt.text.length, 0) > MAX_ASSISTANT_CONTEXT) {
+        throw new Error('Reduce the combined excerpts to 12,000 characters.');
+      }
       const question = redactSensitiveText(String(questionValue).trim());
+      const parent = additional.length ? { title: 'Reviewed webpages', url: 'See source origins below' } : assistantPage;
       const data: AiRequestReview = {
         id: crypto.randomUUID(), mode: previewProvider.mode, model: previewProvider.model,
         destination: previewProvider.mode === 'local' ? 'http://127.0.0.1:11434/api/chat' : `${previewProvider.endpoint}/chat/completions`,
-        systemPrompt: AI_SYSTEM_PROMPT, userPrompt: aiUserPrompt({ ...assistantPage, text: text.text }, assistantQuestion(question.text, withEvidence === true)),
-        redactions: text.redactions + question.redactions,
+        systemPrompt: AI_SYSTEM_PROMPT, userPrompt: aiUserPrompt({ ...parent, text: formatAssistantExcerpts(excerpts, additional.length > 0) }, assistantQuestion(question.text, withEvidence === true)),
+        redactions: excerpts.reduce((total, source) => total + source.redactions, question.redactions),
       };
-      assistantReview = { data, context: text.text, withEvidence: withEvidence === true };
+      assistantReview = { data, context: excerpts.map((source) => source.text), withEvidence: withEvidence === true };
       return data;
     },
     sendReviewedAssistant: async (id) => {
@@ -603,6 +649,8 @@ export function installPreviewApi(): void {
         || !assistantReview || assistantReview.data.id !== id) throw new Error('Review the request before sending it.');
       const { data, context, withEvidence } = assistantReview;
       assistantReview = undefined;
+      requireAssistantPolicy(data.mode);
+      recordAssistantReceipt(data.mode, data.destination, 'page-request');
       if (params.get('aiRequest') === 'timeout-once' && !timeoutFixtureUsed) {
         timeoutFixtureUsed = true;
         return { kind: 'timeout' };
@@ -611,6 +659,7 @@ export function installPreviewApi(): void {
         return new Promise<AssistantAnswer>((finish) => { previewRequest = { id: data.id, finish }; });
       }
       assistantPage = undefined;
+      assistantExtraSources.clear();
       const answer = 'The sample shows a brass kettle on the shelf.';
       const fixture = withEvidence ? JSON.stringify({ findings: [{
         claim: answer, quote: params.get('aiSources') === 'unverified' ? 'This passage does not occur in the sample.' : 'A brass kettle sits on the shelf.',
@@ -623,9 +672,20 @@ export function installPreviewApi(): void {
         previewRequest = undefined;
       }
     },
+    setAssistantCloudAllowed: async (id, allowed) => {
+      if (id !== state.activeAccountSpaceId) throw new Error('The Account Space changed.');
+      requireAssistantPolicy('local');
+      if (allowed) disabledCloudAccounts.delete(state.activeAccountSpaceId);
+      else {
+        disabledCloudAccounts.add(state.activeAccountSpaceId);
+        if (assistantReview?.data.mode === 'cloud') assistantReview = undefined;
+      }
+      publish();
+    },
     revokeAiContext: async () => {
       assistantReview = undefined;
       assistantPage = undefined;
+      assistantExtraSources.clear();
       previewRequest?.finish({ kind: 'cancelled' });
       previewRequest = undefined;
     },
@@ -787,6 +847,29 @@ export function installPreviewApi(): void {
     sendToControlCenter: async () => ({ id: 'TASK-0043', title: 'Preview task', repositoryName: 'shop', status: 'QUEUED', currentStageName: 'Investigate', blocker: null, finalStatus: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0043' }),
     recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md' }),
     inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),
+    copyGeneratedCredential: async () => {
+      if (state.activeWorkspaceId === 'banking') throw new Error('Vault clipboard is disabled in this workspace');
+      vaultClipboardUntil = Date.now() + 30_000;
+    },
+    vaultClipboardDeadline: async () => state.activeWorkspaceId === 'banking' ? undefined : vaultClipboardUntil,
+    clearVaultClipboard: async () => {
+      if (state.activeWorkspaceId === 'banking') throw new Error('Vault clipboard is disabled in this workspace');
+      const hadCopy = Boolean(vaultClipboardUntil && vaultClipboardUntil > Date.now());
+      vaultClipboardUntil = undefined;
+      return hadCopy;
+    },
+    resetVaultPicks: async (id) => {
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development') {
+        throw new Error('Remembered picks are unavailable in this Account Space.');
+      }
+      return true;
+    },
+    vaultFillReadiness: async () => {
+      if (params.has('vaultGuide')) return 'locked';
+      if (state.activeWorkspaceId === 'banking') return 'manual';
+      const value = params.get('vaultFill');
+      return value && ['connect', 'locked', 'no-match', 'unsupported', 'ready', 'choose-login'].includes(value) ? value : 'unsupported';
+    },
   };
   const api = new Proxy(handlers, { get(target, property) { return target[String(property)] ?? (async () => undefined); } });
   Object.defineProperty(window, 'privateBrowser', { value: api as unknown as PrivateBrowserApi, configurable: true });
