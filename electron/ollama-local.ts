@@ -90,6 +90,7 @@ export class OllamaLocal {
     await this.requireInstalledModel(model, cancellation);
     cancellation?.throwIfAborted();
     beforeSend();
+    cancellation?.throwIfAborted();
     const result = record(await this.transport('/api/chat', {
       model, stream: false, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
     }, cancellation));
