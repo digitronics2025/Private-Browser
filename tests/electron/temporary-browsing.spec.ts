@@ -79,9 +79,10 @@ test('isolates guest data, keeps only an approved bookmark, and starts clean aft
     await expect(guest.getByRole('status')).toContainText('Downloads are blocked');
     await application.evaluate(({ dialog }) => {
       const show = dialog.showMessageBox;
-      dialog.showMessageBox = async (_window, options) => {
+      dialog.showMessageBox = async (windowOrOptions: Electron.BaseWindow | Electron.MessageBoxOptions, details?: Electron.MessageBoxOptions) => {
         dialog.showMessageBox = show;
-        if (!options || options.message !== 'Keep this bookmark?' || options.detail?.includes('fixture-volatile')) throw new Error('Bookmark review changed.');
+        const options = details ?? windowOrOptions as Electron.MessageBoxOptions;
+        if (options.message !== 'Keep this bookmark?' || options.detail?.includes('fixture-volatile')) throw new Error('Bookmark review changed.');
         return { response: 1, checkboxChecked: false };
       };
     });
