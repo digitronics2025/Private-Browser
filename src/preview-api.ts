@@ -9,6 +9,7 @@ import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, refere
 import type { BrowserSettings, BrowserSettingsPatch, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { canPauseTrackersAt, TrackerProtection } from '../electron/tracker-protection';
+import { memorySaverOrigin } from '../electron/memory-saver';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
@@ -162,6 +163,10 @@ export function installPreviewApi(): void {
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
   const savedDownloadHistory = new Set<AccountSpaceId>();
+  const memorySites = new Map<AccountSpaceId, Set<string>>();
+  if (params.get('memorySaver') === 'sample') {
+    state.tabs.push(pageTab('preview-sleeping-tab', google, 'Reading list', 'https://reading.example.test/', { sleeping: true }));
+  }
   let trackerBlocking = state.trackerBlocking;
   const trackers = new TrackerProtection();
   if (params.get('trackers') === 'sample') {
@@ -234,6 +239,8 @@ export function installPreviewApi(): void {
     state.trackerSite = activeTrackingTab && !activeTrackingTab.isHome ? trackers.status(state.activeAccountSpaceId,
       new URL(activeTrackingTab.url).origin, { enabled: trackerBlocking, strict: privateWorkspace,
         canPause: !privateWorkspace && trackerBlocking && canPauseTrackersAt(activeTrackingTab.url) }) : undefined;
+    const memorySite = !privateWorkspace && activeTrackingTab && !activeTrackingTab.isHome ? memorySaverOrigin(activeTrackingTab.url) : undefined;
+    state.memorySaverSite = memorySite ? { origin: memorySite, keptAwake: memorySites.get(state.activeAccountSpaceId)?.has(memorySite) === true } : undefined;
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     state.downloadHistory = state.activeWorkspaceId === 'banking' ? undefined : savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
     state.downloadFolder = state.activeWorkspaceId === 'banking' ? undefined : {
@@ -718,7 +725,7 @@ export function installPreviewApi(): void {
       publish();
     },
     toggleBookmarkBar: async () => { state.ui = mergeUiPreferences(state.ui, { bookmarkBarMode: state.ui.bookmarkBarMode === 'hidden' ? 'always' : 'hidden' }); publish(); },
-    activateTab: async (value) => { const tab = state.tabs.find((item) => item.id === value); if (tab) { state.activeTabId = tab.id; publish(); } },
+    activateTab: async (value) => { const tab = state.tabs.find((item) => item.id === value); if (tab) { tab.sleeping = undefined; state.activeTabId = tab.id; publish(); } },
     newTab: async () => { const id = `preview-${crypto.randomUUID()}`; state.tabs.push(homeTab(id, state.activeWorkspaceId, state.activeAccountSpaceId)); state.activeTabId = id; publish(); },
     closeTab: async (value) => {
       const tab = state.tabs.find((item) => item.id === value);
@@ -871,6 +878,14 @@ export function installPreviewApi(): void {
         throw new Error('Tracker compatibility is unavailable on this page.');
       }
       trackers.pause(state.activeAccountSpaceId, origin, paused);
+      publish();
+    },
+    setMemorySaverSite: async (tabId, origin, keepAwake) => {
+      if (tabId !== state.activeTabId || state.memorySaverSite?.origin !== origin) throw new Error('The site changed. Open Site information again.');
+      const sites = memorySites.get(state.activeAccountSpaceId) ?? new Set<string>();
+      if (keepAwake) sites.add(origin);
+      else sites.delete(origin);
+      memorySites.set(state.activeAccountSpaceId, sites);
       publish();
     },
     switchAccountSpace: async (value) => { const id = value as AccountSpaceId; const selected = state.accountSpaces.find((item) => item.id === id); if (!selected || selected.locked) throw new Error('Account Space is unavailable'); state.activeAccountSpaceId = id; state.activeWorkspaceId = selected.workspaceId; state.activeTabId = state.tabs.find((tab) => tab.accountSpaceId === id)!.id; publish(); },

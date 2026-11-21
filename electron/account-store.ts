@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { memorySaverExclusions } from './memory-saver.js';
 import type {
   AccountSpaceColor,
   AccountSpaceId,
@@ -92,6 +93,7 @@ export interface AccountSpaceRecord {
   enabledModules: GoogleModule[];
   grantedScopes: string[];
   permissionGrants: PersistedPermissionGrant[];
+  memorySaverExclusions?: string[];
   backup: AccountBackupConfiguration;
   assistantCloudAllowed?: boolean;
   assistantReceipts?: AssistantReceipt[];
@@ -358,6 +360,7 @@ function validateRecord(value: unknown, expectedId: AccountSpaceId): AccountSpac
     enabledModules: requireGoogleModules(input.enabledModules ?? []),
     grantedScopes: validateScopes(input.grantedScopes ?? []),
     permissionGrants,
+    memorySaverExclusions: workspaceId !== 'banking' ? memorySaverExclusions(input.memorySaverExclusions) : undefined,
     backup,
     assistantCloudAllowed: input.assistantCloudAllowed === undefined ? undefined : input.assistantCloudAllowed === true,
     assistantReceipts: validateAssistantReceipts(input.assistantReceipts),

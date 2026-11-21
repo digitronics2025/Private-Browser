@@ -8,7 +8,7 @@ import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
 import { DEFAULT_SPELLCHECK, MAX_SETTING_URL_LENGTH, MAX_SITE_KEYWORDS, MAX_STARTUP_PAGES, SEARCH_ENGINES, SPELLCHECK_LANGUAGES, type PresetSearchEngineId, type SpellcheckLanguage, type SpellcheckSettings } from '../../electron/browser-settings';
 import type { Workspace } from '../../electron/types';
 import { SetupGuide } from './SetupGuide';
-import { IDLE_LOCK_MINUTES } from '../../electron/ui-preferences';
+import { IDLE_LOCK_MINUTES, MEMORY_SAVER_MINUTES } from '../../electron/ui-preferences';
 import { AgentsPanel } from './AgentsPanel';
 import { SafeDiagnostics } from './SafeDiagnostics';
 import type { DiagnosticReason } from '../lib/safe-diagnostics';
@@ -401,6 +401,15 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       <label><input type="checkbox" checked={Boolean(ui.maskTodayIdentity)}
         onChange={(event) => onUiChange({ maskTodayIdentity: event.currentTarget.checked })} /> Mask Account Space identity on New Tab</label>
       <p>Hides the Account Space label, avatar, bookmarks, shortcuts and recent pages while New Tab is open.</p>
+    </fieldset>
+    <fieldset className="settings-card screen-privacy-settings">
+      <legend>Memory Saver</legend>
+      <label>Sleep inactive tabs after
+        <select value={ui.memorySaverMinutes ?? 0} onChange={(event) => onUiChange({ memorySaverMinutes: Number(event.currentTarget.value) })}>
+          {MEMORY_SAVER_MINUTES.map((minutes) => <option key={minutes} value={minutes}>{minutes ? minutes + ' minutes' : 'Off'}</option>)}
+        </select>
+      </label>
+      <p>Eligible inactive pages reload when selected. Use Site information to keep a site awake in its Account Space.</p>
     </fieldset>
     <div className="settings-card"><div className="settings-row"><span><Bookmark size={17} /></span><div><strong>Bookmarks bar</strong><small>Where the bookmarks bar appears. Shortcut: Ctrl+Shift+B.</small></div></div>
       <div className="segmented" role="radiogroup" aria-label="Bookmarks bar">{BOOKMARK_BAR_OPTIONS.map(([mode, label]) => <button type="button" key={mode} role="radio" aria-checked={ui.bookmarkBarMode === mode} className={ui.bookmarkBarMode === mode ? 'active' : ''} onClick={() => onUiChange({ bookmarkBarMode: mode })}>{label}</button>)}</div>

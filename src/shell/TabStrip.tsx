@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
-import { Bot, ChevronDown, ChevronRight, Globe2, LoaderCircle, Pin, Plus, Volume2, VolumeX, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Globe2, LoaderCircle, Moon, Pin, Plus, Volume2, VolumeX, X } from 'lucide-react';
 import type { BrowserTab, TabBatchScope, TabGroup, TabOrganizationAction } from '../../electron/types';
 import { tabBatchTargets } from '../../electron/tab-organization';
 import { BrandMark } from './BrandMark';
@@ -145,8 +145,8 @@ export function WindowTabStrip({ tabs, groups, activeTabId, shieldButtonRef, tab
         role="tab"
         aria-selected={active}
         tabIndex={active ? 0 : -1}
-        aria-label={`${title}${tab.loading ? ', loading' : ''}${tab.audible && !tab.muted ? ', playing audio' : ''}${tab.muted ? ', muted' : ''}`}
-        title={title}
+        aria-label={`${title}${tab.loading ? ', loading' : ''}${tab.sleeping ? ', sleeping' : ''}${tab.audible && !tab.muted ? ', playing audio' : ''}${tab.muted ? ', muted' : ''}`}
+        title={tab.sleeping ? title + ' · Sleeping until selected' : title}
         className={`browser-tab ${active ? 'active' : ''} ${dragging ? 'dragging' : ''} ${drag?.active ? 'reordering' : ''} ${tab.pinned ? 'pinned' : ''} ${group ? 'grouped' : ''}`}
         style={{ transform: dragging ? `translateX(${drag.dx}px)` : shiftFor(index) ? `translateX(${shiftFor(index)}px)` : undefined }}
         onPointerDown={(event) => beginDrag(event, tab, index)}
@@ -160,7 +160,7 @@ export function WindowTabStrip({ tabs, groups, activeTabId, shieldButtonRef, tab
         onKeyDown={(event) => onTabKeyDown(event, tab, index)}
       >
         <span className="tab-icon" aria-hidden="true">
-          {tab.loading ? <LoaderCircle className="spin" size={15} /> : tab.isHome ? <BrandMark size={16} /> : tab.favicon ? <img src={tab.favicon} alt="" draggable={false} /> : <Globe2 size={15} />}
+          {tab.loading ? <LoaderCircle className="spin" size={15} /> : tab.sleeping ? <Moon size={15} /> : tab.isHome ? <BrandMark size={16} /> : tab.favicon ? <img src={tab.favicon} alt="" draggable={false} /> : <Globe2 size={15} />}
         </span>
         <span className="tab-title">{title}</span>
         {(tab.audible || tab.muted) && (

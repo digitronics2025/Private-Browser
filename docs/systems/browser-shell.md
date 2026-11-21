@@ -146,6 +146,14 @@ and the tab strip leaves that space free via CSS `env(titlebar-area-*)`.
 
 ## Tabs and WebContentsView Lifecycle
 
+**Memory Saver** is off by default. When enabled, it unloads inactive site
+views that opened through a verified GET and stayed untouched. Tabs with
+navigation history, active downloads, form fields, media, editable surfaces,
+service workers, or protected pages stay awake. The native unload handler may
+also keep a page open. Selecting a sleeping tab reloads its page. **Keep this
+site awake** in Site information saves the exact site origin in the encrypted
+record for that Account Space. Banking always stays awake.
+
 A tab has two halves. The persisted half lives in `StateStore` (id, workspaceId,
 title, url, isHome). The runtime half lives in `runtimeTabs: Map<string, RuntimeTab>`
 and holds the `WebContentsView` plus `loading`, `canGoBack`, `canGoForward`,

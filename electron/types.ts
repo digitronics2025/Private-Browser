@@ -425,6 +425,7 @@ export interface BrowserTab {
   canGoForward: boolean;
   isHome: boolean;
   restorePaused?: boolean;
+  sleeping?: boolean;
   pinned?: boolean;
   groupId?: string;
   problem?: TabProblem;
@@ -547,6 +548,7 @@ export interface PrivacyEvent {
 }
 
 export interface BrowserSnapshot {
+  memorySaverSite?: { origin: string; keptAwake: boolean };
   sessionLock?: 'windows' | 'idle';
   workspaces: Workspace[];
   activeWorkspaceId: WorkspaceId;

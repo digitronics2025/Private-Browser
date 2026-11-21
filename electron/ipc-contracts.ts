@@ -26,6 +26,8 @@ const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox
 
 export function validateIpcArguments(channel: string, args: unknown[]): void {
   switch (channel) {
+    case 'browser:set-memory-saver-site':
+      exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 300); requireBoolean(args[2]); return;
     case 'browser:set-tracker-compatibility':
       exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 2048);
       if (typeof args[2] !== 'boolean') throw new Error('Invalid tracker compatibility setting');
