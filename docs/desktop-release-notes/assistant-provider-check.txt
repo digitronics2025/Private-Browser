@@ -1,0 +1,1 @@
+Test the selected assistant model with a built-in sample. Private Browser explains model, access, connection and rate-limit problems before you share page text.

@@ -641,6 +641,11 @@ export interface AiProviderStatus {
   error?: 'provider-corrupt' | 'os-encryption-unavailable';
 }
 
+export type AiProviderCheckState = 'ready' | 'not-configured' | 'authentication' | 'model' | 'rate-limit' | 'invalid-response' | 'unavailable' | 'local-setup';
+export interface AiProviderCheckResult {
+  state: AiProviderCheckState;
+}
+
 export interface CloudAiProviderInput {
   endpoint: string;
   model: string;

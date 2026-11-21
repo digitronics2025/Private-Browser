@@ -94,6 +94,9 @@ encrypts provider settings at rest. Reading and redaction happen locally. The
 user approves one sanitised snapshot for one question at a time.
 Find passages searches that same preview on the device and works without a
 model or network connection. Switching tabs or Account Spaces clears the view.
+Test connection sends a fixed fictional sample to the selected provider after
+the user clicks. It returns a bounded status without reading the active page
+or returning provider output. Banking refuses the action.
 
 ## The Consent Protocol
 

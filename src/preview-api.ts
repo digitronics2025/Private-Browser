@@ -520,6 +520,11 @@ export function installPreviewApi(): void {
     verifyAndEnableBackup: async (idValue, _code, includeOpenTabsValue, includeHistoryValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.backupEnabled = true; selected.backupIncludesOpenTabs = Boolean(includeOpenTabsValue); selected.backupIncludesHistory = Boolean(includeHistoryValue); publish(); } },
     uploadBackup: async () => ({ status: 'uploaded', etag: 'preview-etag' }),
     getAiProvider: async () => previewProvider,
+    checkAiProvider: async () => {
+      if (state.activeWorkspaceId === 'banking') throw new Error('Assistant connection tests are unavailable in this Account Space.');
+      if (!previewProvider.configured) return { state: 'not-configured' };
+      return { state: params.get('aiCheck') === 'model' ? 'model' : 'ready' };
+    },
     prepareAiPreview: (async () => {
       if (state.activeWorkspaceId === 'banking') throw new Error('AI is unavailable in this workspace');
       if (params.get('localAi') !== 'sample') throw new Error('A sample reading page is unavailable.');

@@ -2363,6 +2363,18 @@ class BrowserController {
     return this.aiProvider.status();
   }
 
+  checkAiProvider() {
+    const account = this.activeAccountSpaceId(this.store.get());
+    const validateWorkspace = () => {
+      const state = this.store.get();
+      if (account !== this.activeAccountSpaceId(state) || !workspaceVaultPolicy(state.activeWorkspaceId).aiExtraction) {
+        throw new Error('Assistant connection tests are unavailable in this Account Space.');
+      }
+    };
+    validateWorkspace();
+    return this.aiProvider.checkConnection(validateWorkspace);
+  }
+
   localAiModels() {
     if (!workspaceVaultPolicy(this.store.get().activeWorkspaceId).aiExtraction) throw new Error('AI is unavailable in this workspace');
     return this.aiProvider.localModels();
@@ -3962,6 +3974,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:prepare-preview', () => controller!.prepareAiPreview());
   handle('ai:approve-preview', (_event, previewId: string, mode?: 'local' | 'cloud') => controller!.approveAiPreview(previewId, mode));
   handle('ai:provider-status', () => controller!.getAiProvider());
+  handle('ai:check-provider', () => controller!.checkAiProvider());
   handle('ai:local-models', () => controller!.localAiModels());
   handle('ai:configure-provider', (_event, input: AiProviderInput) => controller!.configureAiProvider(input));
   handle('ai:clear-provider', () => controller!.clearAiProvider());
