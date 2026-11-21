@@ -176,13 +176,20 @@ open in VS Code.
 Users can list, open, delete, clear, and change retention (1–365 days, 10–500
 reports). Defaults are 30 days and 100 reports.
 
+Bridge 0.4.3 adds **Report history** for currently approved projects. Filter the
+local reports by project, route, date, and result. **Stop test** cancels only the
+selected project’s test. **Rerun with saved settings** reuses the selected
+report’s effective inputs. Replay settings use VS Code’s encrypted local
+storage. Sensitive routes are eligible only within the current session.
+**Review export** shows a JSON summary with counts and result metadata.
+
 ## Packaging and Compatibility
 
-The extension and browser are both version 0.4.0, require protocol v1, and the
-extension declares VS Code `^1.95.0`. `npm run extension:package` creates the
-fixed `build/private-browser-bridge.vsix` embedded in the installer. `npm run
-dist` also emits `release/private-browser-bridge-0.4.0.vsix` as a separate
-private CI artifact. Marketplace publication is intentionally absent.
+The browser and extension use protocol v1. The extension is version 0.4.3 and
+requires VS Code `^1.95.0`. `npm run extension:package` creates the fixed
+`build/private-browser-bridge.vsix` embedded in the installer. `npm run dist`
+also emits `release/private-browser-bridge-0.4.3.vsix` as a separate private CI
+artifact.
 
 Protocol incompatibility requires updating both the browser and VSIX from the
 same release. Remote SSH, Codespaces, WSL extension hosts, virtual workspaces,

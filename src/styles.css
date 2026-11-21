@@ -667,6 +667,16 @@ kbd { font: inherit; }
 .development-server dl > div { display: flex; flex-wrap: wrap; gap: 4px 8px; overflow-wrap: anywhere; }
 .development-server dt { font-weight: 650; }
 .development-server dd { margin: 0; color: var(--text-muted); }
+.developer-report-history { display: grid; gap: 10px; min-width: 0; }
+.developer-report-history h3, .developer-report-history h4, .developer-report-history p { margin: 0; }
+.developer-report-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.developer-report-filters label { display: grid; gap: 5px; min-width: 0; }
+.developer-report-filters input, .developer-report-filters select {
+  width: 100%; min-width: 0; padding: 6px; min-height: 34px; color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--field);
+}
+.report-history-row, .report-export { display: grid; gap: 7px; padding-block: 8px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.report-export pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 8px; background: var(--field); border-radius: var(--radius-md); }
 .bridge-label { display: flex; flex-direction: column; gap: 6px; color: var(--text-muted); font-size: var(--fs-xs); font-weight: 600; }
 .project-summary { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px; }
 .project-summary > div { display: flex; flex-direction: column; min-width: 0; }

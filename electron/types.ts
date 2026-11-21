@@ -813,7 +813,7 @@ export type DeveloperBridgeAction =
   | 'inspect.page' | 'inspect.open-source'
   | 'test.run' | 'test.cancel' | 'test.rerun' | 'test.save-artifact'
   | 'ai.handoff' | 'ai.apply-edits'
-  | 'reports.list' | 'reports.get' | 'reports.delete' | 'reports.clear' | 'reports.open' | 'reports.retention';
+  | 'reports.list' | 'reports.search' | 'reports.get' | 'reports.delete' | 'reports.clear' | 'reports.open' | 'reports.retention';
 
 export interface DeveloperPageInfo {
   route: string;
