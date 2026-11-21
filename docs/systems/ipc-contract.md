@@ -152,6 +152,16 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
 
+### routines:
+
+| Channel | Preload method | Arguments | Resolves with |
+| --- | --- | --- | --- |
+| `routines:save` | `saveRoutine(routine)` | bounded routine input, with an Account Space per link | `void` |
+| `routines:delete` | `deleteRoutine(id)` | routine ID | `void` |
+| `routines:run` | `runRoutine(id)` | routine ID | `RoutineRunResult` |
+| `routines:mark-checklist` | `markRoutineChecklist(id, index, done)` | routine ID, item index, boolean | `void` |
+| `routines:reset-checklist` | `resetRoutineChecklist(id)` | routine ID | `void` |
+
 ### ui:, bookmarks:, shortcuts:, app:
 
 | Channel | Preload method | Arguments | Resolves with |

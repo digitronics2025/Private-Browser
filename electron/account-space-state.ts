@@ -30,6 +30,7 @@ import { isAllowedRemoteUrl } from './security.js';
 import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings } from './browser-settings.js';
 import { sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
+import { sanitizeBrowserRoutines } from './browser-routines.js';
 import { orderAccountTabs } from './tab-organization.js';
 
 interface MigrationJournal {
@@ -386,6 +387,7 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
     privacyLog: sanitizePrivacyLog(input.privacyLog),
     ui,
     settings: sanitizeBrowserSettings(input.settings),
+    routines: sanitizeBrowserRoutines(input.routines),
   };
 }
 

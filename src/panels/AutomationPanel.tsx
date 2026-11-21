@@ -1,44 +1,125 @@
 import { useState } from 'react';
-import { Code2, Globe2, LoaderCircle, Play, Shield, Zap } from 'lucide-react';
-import type { WorkspaceId } from '../../electron/types';
-import { PanelHeader } from './common';
+import { Play, Plus, Shield, Zap } from 'lucide-react';
+import type { AccountSpaceId, BrowserRoutine, BrowserSnapshot, RoutineRunResult } from '../../electron/types';
+import { MAX_ROUTINE_ITEMS } from '../../electron/browser-routines';
+import { EmptyState, PanelHeader } from './common';
 
-const AUTOMATIONS = [
-  {
-    id: 'morning',
-    name: 'Morning command center',
-    description: 'Orders, Meta Ads and WhatsApp',
-    icon: Zap,
-    workspaceId: 'digitronics' as WorkspaceId,
-    urls: ['https://digitronics.ma', 'https://business.facebook.com', 'https://web.whatsapp.com'],
-  },
-  {
-    id: 'development',
-    name: 'Development stack',
-    description: 'GitHub and Cloudflare dashboard',
-    icon: Code2,
-    workspaceId: 'development' as WorkspaceId,
-    urls: ['https://github.com/digitronics2025', 'https://dash.cloudflare.com'],
-  },
-  {
-    id: 'marketplaces',
-    name: 'Marketplace check',
-    description: 'Jumia and Marjane Mall',
-    icon: Globe2,
-    workspaceId: 'tenten' as WorkspaceId,
-    urls: ['https://vendorhub.jumia.ma', 'https://www.marjanemall.ma'],
-  },
-];
+const completedTime = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
-export function AutomationPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
-  const [running, setRunning] = useState<string | null>(null);
-  const run = async (automation: typeof AUTOMATIONS[number]) => {
-    setRunning(automation.id);
-    try {
-      for (const url of automation.urls) await window.privateBrowser.newTab(automation.workspaceId, url);
-      onToast(`${automation.name} opened`);
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
-    finally { setRunning(null); }
+export function AutomationPanel({ state, onToast }: {
+  state: BrowserSnapshot;
+  onToast: (message: string, kind?: 'ok' | 'error') => void;
+}) {
+  const [draft, setDraft] = useState<BrowserRoutine>();
+  const [busy, setBusy] = useState(false);
+  const [lastRun, setLastRun] = useState<{ id: string; result: RoutineRunResult }>();
+  const accounts = state.accountSpaces.filter((account) => account.workspaceId !== 'banking');
+  const nameOf = (id: AccountSpaceId) => {
+    const account = accounts.find((item) => item.id === id);
+    const workspace = state.workspaces.find((item) => item.id === account?.workspaceId);
+    return account ? (workspace?.name ?? account.workspaceId) + ' / ' + account.label : 'Unavailable Account Space';
   };
-  return <div className="side-panel"><PanelHeader icon={Zap} eyebrow="Safe routines" title="Automations" /><p className="panel-intro">Open complete work setups in isolated sessions. Publishing, payments and destructive actions are never automated.</p><div className="automation-list">{AUTOMATIONS.map((automation) => { const Icon = automation.icon; return <button className="automation-card" key={automation.id} onClick={() => void run(automation)}><span><Icon size={18} /></span><div><strong>{automation.name}</strong><small>{automation.description}</small></div>{running === automation.id ? <LoaderCircle className="spin" size={17} /> : <Play size={17} />}</button>; })}</div><div className="safety-note"><Shield size={16} /><p><strong>Approval boundary</strong><br />Messages, purchases, ads, deletion and account changes always require you.</p></div></div>;
+  if (state.activeWorkspaceId === 'banking') return <div className="side-panel"><EmptyState icon={Shield} text="Routines are unavailable in Banking." /></div>;
+
+  const operate = async (action: () => Promise<void>) => {
+    setBusy(true);
+    try { await action(); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setBusy(false); }
+  };
+  const newLink = () => ({ url: '', accountSpaceId: state.activeAccountSpaceId });
+  const moveLink = (index: number, offset: number) => {
+    if (!draft) return;
+    const next = index + offset;
+    const links = draft.links.slice();
+    [links[index], links[next]] = [links[next], links[index]];
+    setDraft({ ...draft, links, focusIndex: draft.focusIndex === index ? next : draft.focusIndex === next ? index : draft.focusIndex });
+  };
+  const removeLink = (index: number) => {
+    if (!draft) return;
+    const links = draft.links.filter((_, position) => position !== index);
+    const focusIndex = draft.focusIndex > index ? draft.focusIndex - 1 : Math.min(draft.focusIndex, links.length - 1);
+    setDraft({ ...draft, links, focusIndex });
+  };
+  const editLink = (index: number, field: 'url' | 'accountSpaceId', value: string) => {
+    if (!draft) return;
+    setDraft({ ...draft, links: draft.links.map((link, position) => position === index ? { ...link, [field]: value } : link) });
+  };
+  const start = (routine: BrowserRoutine) => void operate(async () => {
+    setLastRun({ id: routine.id, result: await window.privateBrowser.runRoutine(routine.id) });
+  });
+
+  return <div className="side-panel">
+    <PanelHeader icon={Zap} eyebrow="Account Spaces" title="Routines" />
+    {draft ? <form className="settings-card routine-form" onSubmit={(event) => {
+      event.preventDefault();
+      void operate(async () => { await window.privateBrowser.saveRoutine(draft); setDraft(undefined); });
+    }}>
+      <label>Routine name <input required maxLength={80} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+      <fieldset>
+        <legend>Links in opening order</legend>
+        {draft.links.map((link, index) => <div className="routine-form-row" key={index}>
+          <label>Web address {index + 1}<input required maxLength={4096} placeholder="https://example.com" value={link.url} onChange={(event) => editLink(index, 'url', event.target.value)} /></label>
+          <label>Account Space {index + 1}<select value={link.accountSpaceId} onChange={(event) => editLink(index, 'accountSpaceId', event.target.value)}>
+            {!accounts.some((account) => account.id === link.accountSpaceId) && <option value={link.accountSpaceId}>Unavailable Account Space</option>}
+            {accounts.map((account) => <option key={account.id} value={account.id}>{nameOf(account.id)}</option>)}
+          </select></label>
+          <div className="panel-actions">
+            <button type="button" disabled={index === 0} aria-label={'Move link ' + (index + 1) + ' up'} onClick={() => moveLink(index, -1)}>Up</button>
+            <button type="button" disabled={index === draft.links.length - 1} aria-label={'Move link ' + (index + 1) + ' down'} onClick={() => moveLink(index, 1)}>Down</button>
+            <button type="button" disabled={draft.links.length === 1} aria-label={'Remove link ' + (index + 1)} onClick={() => removeLink(index)}>Remove</button>
+          </div>
+        </div>)}
+        <div className="panel-actions"><button type="button" disabled={draft.links.length === MAX_ROUTINE_ITEMS} onClick={() => setDraft({ ...draft, links: [...draft.links, newLink()] })}>Add link</button></div>
+        <label>Focus when run<select value={draft.focusIndex} onChange={(event) => setDraft({ ...draft, focusIndex: Number(event.target.value) })}>
+          {draft.links.map((link, index) => <option value={index} key={index}>{index + 1}. {link.url || 'Untitled link'}</option>)}
+        </select></label>
+      </fieldset>
+      <fieldset>
+        <legend>Checklist</legend>
+        {draft.checklist.map((item, index) => <div className="routine-form-row" key={index}>
+          <label>Checklist item {index + 1}<input required maxLength={120} value={item.label} onChange={(event) => {
+            setDraft({ ...draft, checklist: draft.checklist.map((row, position) => position === index ? { label: event.target.value } : row) });
+          }} /></label>
+          <div className="panel-actions"><button type="button" aria-label={'Remove checklist item ' + (index + 1)}
+            onClick={() => setDraft({ ...draft, checklist: draft.checklist.filter((_, position) => position !== index) })}>Remove</button></div>
+        </div>)}
+        <div className="panel-actions"><button type="button" disabled={draft.checklist.length === MAX_ROUTINE_ITEMS}
+          onClick={() => setDraft({ ...draft, checklist: [...draft.checklist, { label: '' }] })}>Add checklist item</button></div>
+      </fieldset>
+      <div className="panel-actions"><button type="submit" disabled={busy}>Save routine</button><button type="button" disabled={busy} onClick={() => setDraft(undefined)}>Cancel</button></div>
+    </form> : <>
+      <div className="panel-actions"><button type="button" onClick={() => setDraft({ id: crypto.randomUUID(), name: '', links: [newLink()], focusIndex: 0, checklist: [] })}><Plus size={14} /> New routine</button></div>
+      <div className="automation-list">{(state.routines ?? []).map((routine) => <details key={routine.id} className="settings-card routine-details">
+        <summary>{routine.name}</summary>
+        <ol className="routine-preview">
+          {routine.links.map((link, index) => <li key={index}>
+            <strong>{link.url}</strong><small>{nameOf(link.accountSpaceId)}{index === routine.focusIndex ? ' · Focus' : ''}</small>
+          </li>)}
+        </ol>
+        <div className="panel-actions">
+          <button type="button" disabled={busy} onClick={() => start(routine)}><Play size={14} /> Run routine</button>
+          <button type="button" disabled={busy} onClick={() => setDraft(structuredClone(routine))}>Edit</button>
+          <button type="button" disabled={busy} className="danger" onClick={() => {
+            if (window.confirm('Delete the routine “' + routine.name + '”?')) void operate(() => window.privateBrowser.deleteRoutine(routine.id));
+          }}>Delete</button>
+        </div>
+        {lastRun?.id === routine.id && <div role="status" className="routine-result">
+          <p>{lastRun.result.opened} added · {lastRun.result.reused} reused · {lastRun.result.skipped.length} skipped</p>
+          {lastRun.result.skipped.map((index) => <p key={index}>Link {index + 1} could not be opened in its selected Account Space.</p>)}
+          {lastRun.result.focusUnavailable && <p>The selected page could not take focus.</p>}
+        </div>}
+        {routine.checklist.length > 0 && <fieldset className="routine-checklist">
+          <legend>Checklist</legend>
+          {routine.checklist.map((item, index) => <label key={index}>
+            <input type="checkbox" disabled={busy} checked={Boolean(item.done)}
+              onChange={(event) => { const checked = event.currentTarget.checked; void operate(() => window.privateBrowser.markRoutineChecklist(routine.id, index, checked)); }} />
+            <span>{item.label}{item.completedAt && <small>Last done {completedTime.format(new Date(item.completedAt))}</small>}</span>
+          </label>)}
+          <div className="panel-actions"><button type="button" disabled={busy || !routine.checklist.some((item) => item.done)}
+            onClick={() => void operate(() => window.privateBrowser.resetRoutineChecklist(routine.id))}>Reset checklist</button></div>
+        </fieldset>}
+      </details>)}</div>
+    </>}
+  </div>;
 }

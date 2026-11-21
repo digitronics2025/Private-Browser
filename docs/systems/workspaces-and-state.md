@@ -61,6 +61,10 @@ Account Space deletes its plaintext browsing file.
 
 ## Version-2 plaintext boundary
 
+The optional routine list holds names, public web addresses entered by the user,
+Account Space IDs, focus positions and manual checklist status. Banking cannot
+view or run routines and cannot be a destination.
+
 The manifest contains opaque UUID references, active selection, an optional
 last regular Account Space for external-link routing, tracker
 preference, the privacy log and `ui` interface preferences: `theme`

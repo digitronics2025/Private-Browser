@@ -5,6 +5,7 @@ import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsP
 import { parseWebAddress } from '../electron/security';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
+import { canonicalRoutineUrl, defaultBrowserRoutines, requireBrowserRoutine } from '../electron/browser-routines';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
 import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
@@ -116,12 +117,15 @@ export function installPreviewApi(): void {
   syncDarkMode();
   const listeners = new Set<(snapshot: BrowserSnapshot) => void>();
   const closedByAccount = new Map<AccountSpaceId, RecentlyClosedTab[]>();
+  let routines = defaultBrowserRoutines(Object.fromEntries(accounts.filter((account) => account.id !== google).map((account) => [account.workspaceId, account.id])));
+  state.routines = routines;
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const publish = () => {
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
     state.canReopenClosedTab = state.recentlyClosedTabs.length > 0;
+    state.routines = state.activeWorkspaceId === 'banking' ? [] : routines;
     state.tabGroups = (groupsByAccount.get(state.activeAccountSpaceId) ?? [])
       .filter((group) => state.tabs.some((tab) => tab.accountSpaceId === state.activeAccountSpaceId && tab.groupId === group.id));
     groupsByAccount.set(state.activeAccountSpaceId, state.tabGroups);
@@ -144,6 +148,55 @@ export function installPreviewApi(): void {
   };
   const handlers: Record<string, (...args: unknown[]) => unknown> = {
     getState: async () => structuredClone(state),
+    saveRoutine: async (input) => {
+      const routine = requireBrowserRoutine(input);
+      if (state.activeWorkspaceId === 'banking' || routine.links.some((link) => !state.accountSpaces.some((account) => account.id === link.accountSpaceId && account.workspaceId !== 'banking'))) {
+        throw new Error('Choose a regular Account Space for each link');
+      }
+      const index = routines.findIndex((item) => item.id === routine.id);
+      if (index === -1) routines.push(routine);
+      else routines[index] = routine;
+      publish();
+    },
+    deleteRoutine: async (id) => { routines = routines.filter((routine) => routine.id !== id); publish(); },
+    markRoutineChecklist: async (id, index, done) => {
+      const item = routines.find((routine) => routine.id === id)?.checklist[Number(index)];
+      if (!item) return;
+      item.done = done === true;
+      if (item.done) item.completedAt = new Date().toISOString();
+      publish();
+    },
+    resetRoutineChecklist: async (id) => {
+      for (const item of routines.find((routine) => routine.id === id)?.checklist ?? []) item.done = false;
+      publish();
+    },
+    runRoutine: async (id) => {
+      const routine = routines.find((item) => item.id === id);
+      if (state.activeWorkspaceId === 'banking' || !routine) throw new Error('Routine is unavailable');
+      let reused = 0;
+      let opened = 0;
+      let focus: BrowserTab | undefined;
+      const skipped: number[] = [];
+      for (const [index, link] of routine.links.entries()) {
+        const account = state.accountSpaces.find((candidate) => candidate.id === link.accountSpaceId);
+        if (!account || account.locked || account.workspaceId === 'banking') { skipped.push(index); continue; }
+        let tab = state.tabs.find((item) => item.accountSpaceId === link.accountSpaceId && !item.isHome && canonicalRoutineUrl(item.url) === link.url);
+        if (tab) reused += 1;
+        else {
+          tab = pageTab(crypto.randomUUID(), account.id, new URL(link.url).hostname, link.url, { workspaceId: account.workspaceId });
+          state.tabs.push(tab);
+          opened += 1;
+        }
+        if (index === routine.focusIndex && !tab.restorePaused && !tab.problem) focus = tab;
+      }
+      if (focus) {
+        state.activeTabId = focus.id;
+        state.activeWorkspaceId = focus.workspaceId;
+        state.activeAccountSpaceId = focus.accountSpaceId;
+      }
+      publish();
+      return { opened, reused, skipped, focusUnavailable: !focus };
+    },
     reload: async () => { Object.assign(activeTab(), { problem: undefined, restorePaused: undefined }); publish(); },
     restoreSelectedTabs: async (value) => {
       const ids = new Set(value as string[]);
