@@ -6,6 +6,7 @@ import { useModalFocus } from '../lib/dialog';
 import { AccountPermissionGrants } from './AccountPermissionGrants';
 import { GoogleHealthCard } from './GoogleHealthCard';
 import { BackupRestore } from './BackupRestore';
+import { GoogleAccountOverview } from './GoogleAccountOverview';
 
 const ACCOUNT_COLORS: AccountSpaceColor[] = ['indigo', 'sky', 'emerald', 'amber', 'rose', 'violet', 'slate'];
 const GOOGLE_MODULE_OPTIONS: Array<{ id: GoogleModule; label: string; detail: string; highRisk?: boolean }> = [
@@ -169,6 +170,8 @@ export function AccountManager({ state, onClose, onToast }: { state: BrowserSnap
             </>}
           </section>
           {selected.enabledModules.includes('encrypted-backup') && <section className="manager-section"><div className="manager-section-heading"><div><h3>Encrypted app-data backup</h3><p>Google receives AES-256-GCM ciphertext only. My Vault, cookies, tokens, bodies, attachments, downloads and privacy logs are excluded.</p></div></div>{!recoveryCode ? <div className="backup-actions">{!selected.backupEnabled && <button className="secondary-button" onClick={() => void run(async () => setRecoveryCode(await window.privateBrowser.createBackupRecoveryCode(selected.id)))}><KeyRound size={14} /> Create recovery code</button>}{selected.backupEnabled && <button className="secondary-button" onClick={() => void run(() => window.privateBrowser.uploadBackup(selected.id, crypto.randomUUID()), 'Encrypted backup uploaded')}><Cloud size={14} /> Back up now</button>}</div> : <div className="recovery-code"><strong>Save this once-only recovery code</strong><code>{recoveryCode}</code><p>Verify it before backup is enabled. It cannot be recovered by Google or Digitronics.</p><input aria-label="Verify recovery code" value={recoveryVerification} onChange={(event) => setRecoveryVerification(event.target.value)} placeholder="Enter the complete recovery code" /><button className="primary-button" disabled={recoveryVerification !== recoveryCode} onClick={() => void run(async () => { await window.privateBrowser.verifyAndEnableBackup(selected.id, recoveryVerification, true, false); setRecoveryCode(''); setRecoveryVerification(''); }, 'Encrypted backup enabled')}>Verify and enable</button></div>}</section>}
+          {canUseGoogle && selected.googleConnection === 'connected' && <GoogleAccountOverview
+            key={'overview-' + selected.id} account={selected} active={state.activeAccountSpaceId === selected.id} onOpenOriginal={openGoogleWebsite} />}
           {!selected.locked && selected.googleConnection === 'connected' && selected.enabledModules.includes('encrypted-backup')
             && <BackupRestore key={selected.id} account={selected} workspaceName={state.workspaces.find((workspace) => workspace.id === selected.workspaceId)?.name ?? selected.workspaceId} onToast={onToast} />}
           {!selected.locked && selected.workspaceId !== 'banking' && <AccountPermissionGrants key={selected.id} accountSpaceId={selected.id} />}
