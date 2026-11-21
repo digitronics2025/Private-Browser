@@ -38,6 +38,13 @@ test.beforeEach(async () => {
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
+    if (request.url === '/sleep-static' || request.url === '/sleep-form') {
+      response.setHeader('Content-Type', 'text/html');
+      response.end(request.url === '/sleep-static'
+        ? '<!doctype html><title>Reference to sleep</title><p>Static reference text.</p>'
+        : '<!doctype html><title>Page with a form</title><form><input name="unsaved"></form>');
+      return;
+    }
     if (request.url === '/slow-download') {
       const size = 20 * 1024 * 1024;
       const match = /^bytes=(\d+)-$/.exec(request.headers.range ?? '');
@@ -223,6 +230,68 @@ test('idle auto-lock uses the Windows idle clock without leaving a browser unloc
   expect((await page.evaluate(() => window.privateBrowser.getState())).sessionLock).toBe('idle');
   await expect(page.getByRole('button', { name: /resume|unlock/i })).toHaveCount(0);
   await expect(page.getByText('Lock and unlock Windows to resume browsing.')).toBeVisible();
+});
+
+test('sleeps a static inactive tab and restores it without unloading forms or pinned origins', async () => {
+  const page = await application!.firstWindow();
+  const fixtures = { reading: origin + '/sleep-static', form: origin + '/sleep-form' };
+  const { reading, form } = await page.evaluate(async (urls) => {
+    const api = window.privateBrowser;
+    await api.switchWorkspace('personal');
+    await api.setUiPreferences({ memorySaverMinutes: 5 });
+    await api.newTab('personal', urls.reading);
+    const reading = (await api.getState()).activeTabId;
+    await api.newTab('personal', urls.form);
+    const form = (await api.getState()).activeTabId;
+    await api.newTab('personal');
+    return { reading, form };
+  }, fixtures);
+  const openNative = (url: string) => application!.evaluate(({ webContents }, value) =>
+    webContents.getAllWebContents().filter((contents) => !contents.isDestroyed() && contents.getURL() === value).length, url);
+  await expect.poll(() => openNative(fixtures.reading)).toBe(1);
+  await expect.poll(() => openNative(fixtures.form)).toBe(1);
+  await application!.evaluate(() => {
+    const now = Date.now.bind(Date);
+    Date.now = () => now() + 6 * 60_000;
+  });
+  const snapshot = () => page.evaluate(() => window.privateBrowser.getState());
+  await expect.poll(async () => (await snapshot()).tabs.find(({ id }) => id === reading)?.sleeping, { timeout: 12_000 }).toBe(true);
+  expect((await snapshot()).tabs.find(({ id }) => id === form)?.sleeping).toBeUndefined();
+  expect(await openNative(fixtures.reading)).toBe(0);
+  expect(await openNative(fixtures.form)).toBe(1);
+  await page.evaluate((id) => window.privateBrowser.activateTab(id), reading);
+  await expect.poll(() => openNative(fixtures.reading)).toBe(1);
+  const awake = await page.evaluate(async ({ id, site }) => {
+    await window.privateBrowser.setMemorySaverSite(id, site, true);
+    return (await window.privateBrowser.getState()).memorySaverSite;
+  }, { id: reading, site: origin });
+  expect(awake).toEqual({ origin, keptAwake: true });
+  const original = (await snapshot()).activeAccountSpaceId;
+  const other = await page.evaluate(async (url) => {
+    const api = window.privateBrowser;
+    await api.addLocalAccountSpace('personal', 'Other memory space', 'sky');
+    await api.navigate(url);
+    const state = await api.getState();
+    await api.newTab('personal');
+    return { site: state.memorySaverSite, id: state.activeTabId };
+  }, fixtures.reading);
+  expect(other.site).toEqual({ origin, keptAwake: false });
+  await application!.evaluate(() => {
+    const now = Date.now.bind(Date);
+    Date.now = () => now() + 6 * 60_000;
+  });
+  await expect.poll(async () => (await snapshot()).tabs.find(({ id }) => id === other.id)?.sleeping, { timeout: 12_000 }).toBe(true);
+  expect((await snapshot()).tabs.find(({ id }) => id === reading)?.sleeping).toBeUndefined();
+  expect(await openNative(fixtures.reading)).toBe(1);
+  await application!.close();
+  application = await launchProfile();
+  const restarted = await application.firstWindow();
+  const retained = await restarted.evaluate(async (id) => {
+    const api = window.privateBrowser;
+    await api.switchAccountSpace(id);
+    return (await api.getState()).memorySaverSite;
+  }, original);
+  expect(retained).toEqual(awake);
 });
 
 test('checks the managed update in its own directory and opens it only on an eligible explicit action', async () => {
