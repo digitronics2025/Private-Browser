@@ -199,7 +199,9 @@ test(`${name} hides in Banking, under menus and in full screen, and signs out cl
   // Banking turns it off, and links from it are refused there.
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   await expect.poll(async () => (await sideView(application!, appOrigin, id))?.visible).toBe(false);
+  await page.getByRole('tab', { name, exact: true }).click();
   await expect(page.getByText(`${name} is turned off in Banking`)).toBeVisible();
+  expect((await sideView(application!, appOrigin, id))?.visible).toBe(false);
   const bankingTabs = async () => (await page.evaluate(() => window.privateBrowser.getState())).tabs.filter((tab) => tab.workspaceId === 'banking').length;
   const before = await bankingTabs();
   await runInSideApp(application!, `window.open('${otherOrigin}/elsewhere?banking=1'); true`, id);
