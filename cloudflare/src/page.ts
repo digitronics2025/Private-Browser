@@ -1,4 +1,5 @@
 import type { ReleaseRecord } from './protocol';
+import type { PublisherStatus } from './publisher-receipt.mjs';
 
 export interface DeveloperProfile {
   name: string;
@@ -14,6 +15,7 @@ export interface DownloadPageModel {
   canonicalUrl: string;
   renderedAt: string;
   developer: DeveloperProfile;
+  publisher?: PublisherStatus;
 }
 
 export const DEVELOPER_PROFILE: DeveloperProfile = {
@@ -27,6 +29,11 @@ export function renderDownloadPage(model: DownloadPageModel): string {
   const { release, history, developer } = model;
   const published = formatPublished(release.published_at, model.renderedAt);
   const notes = release.release_notes || `Private Browser ${release.version} stable release.`;
+  const publisher = model.publisher?.status === 'verified'
+    ? `CI verified the installer signature for <strong>${escapeHtml(model.publisher.name)}</strong> against the approved certificate.`
+    : model.publisher?.status === 'unsigned'
+      ? 'Windows reported this installer as unsigned.'
+      : 'Publisher verification is unavailable for this release.';
   const sourceUrl = sourceCommitUrl(release.commit_sha);
   const historyUrl = 'https://github.com/digitronics2025/Private-Browser/actions/workflows/ci.yml';
   const changelogUrl = 'https://github.com/digitronics2025/Private-Browser/blob/main/CHANGELOG.md';
@@ -230,7 +237,7 @@ export function renderDownloadPage(model: DownloadPageModel): string {
 
     <section class="shell content install-grid" aria-label="Installation and verification">
       <div class="install-steps"><h2>Install in three steps</h2><ol><li>Download the Windows installer.</li><li>Open ${escapeHtml(release.filename)}.</li><li>Follow the setup prompts and launch Private Browser.</li></ol></div>
-      <div class="checksum"><h2>Verify the installer</h2><p>Compare the downloaded file with this SHA-256 checksum before running it.</p><code>${escapeHtml(release.sha256)}</code></div>
+      <div class="checksum"><h2>Verify the installer</h2><p data-publisher-status="${model.publisher?.status ?? 'unavailable'}"><strong>Windows publisher</strong><br>${publisher}</p><p><strong>SHA-256 checksum</strong><br>Compare the downloaded file with this checksum before running it.</p><code>${escapeHtml(release.sha256)}</code><p><strong>Download link</strong><br>The server checks the expiring link signature before sending the file.</p></div>
     </section>
 
     <section class="shell content" aria-labelledby="developer-title">

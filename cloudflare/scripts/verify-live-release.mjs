@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, statSync } from 'node:fs';
-import { basename } from 'node:path';
+import { createReadStream, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
+import { parsePublisherReceipt } from '../src/publisher-receipt.mjs';
 
 const [installerPath] = process.argv.slice(2);
 const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
@@ -11,6 +12,9 @@ if (!installerPath || !endpoint || !accessToken) throw new Error('Live release v
 const expectedSize = statSync(installerPath).size;
 const expectedHash = await hashFile(installerPath);
 const expectedFilename = basename(installerPath);
+const publisher = parsePublisherReceipt(JSON.parse(readFileSync(join(dirname(installerPath), 'PUBLISHER.json'), 'utf8').replace(/^\uFEFF/, '')), expectedHash);
+assert(publisher, 'Windows publisher evidence does not match the installer');
+const publisherStatus = `data-publisher-status="${publisher.status}"`;
 
 await expectStatus(`${endpoint}/update.json`, 404);
 await expectStatus(`${endpoint}/update.json`, 404, { authorization: 'Bearer invalid-test-token' });
@@ -30,6 +34,7 @@ const pageResponse = await fetch(manifest.downloadPageUrl, { redirect: 'error', 
 assert(pageResponse.status === 200, `Signed download page returned ${pageResponse.status}`);
 const page = await pageResponse.text();
 assert(page.includes(manifest.version) && page.includes(expectedHash), 'Download page metadata is incomplete');
+assert(page.includes(publisherStatus), 'Download page omitted the verified Windows publisher status');
 
 for (const publicPath of ['/', '/download']) {
   const publicPageResponse = await fetch(`${endpoint}${publicPath}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
@@ -40,6 +45,7 @@ for (const publicPath of ['/', '/download']) {
   const publicPage = await publicPageResponse.text();
   assert(publicPage.includes('Download for Windows'), `Public download page ${publicPath} is missing its primary action`);
   assert(publicPage.includes(manifest.version) && publicPage.includes(expectedHash), `Public download page ${publicPath} metadata is incomplete`);
+  assert(publicPage.includes(publisherStatus), `Public download page ${publicPath} omitted the Windows publisher status`);
   assert(/href="\/download\/latest\.exe\?expires=\d+&amp;signature=[A-Za-z0-9_-]+"/.test(publicPage), `Public download page ${publicPath} is missing its signed installer link`);
   assert(!publicPage.includes(accessToken), `Public download page ${publicPath} exposed its access token`);
 }
@@ -48,6 +54,7 @@ const stablePageResponse = await fetch(`${endpoint}/download/${encodeURIComponen
 assert(stablePageResponse.status === 200, `Stable install page returned ${stablePageResponse.status}`);
 const stablePage = await stablePageResponse.text();
 assert(stablePage.includes('Download for Windows') && stablePage.includes(expectedHash), 'Stable install page metadata is incomplete');
+assert(stablePage.includes(publisherStatus), 'Private download page omitted the verified Windows publisher status');
 assert(!stablePage.includes(accessToken), 'Stable install page exposed its access token');
 await expectStatus(`${endpoint}/download/invalid-private-browser-token-000000`, 404);
 

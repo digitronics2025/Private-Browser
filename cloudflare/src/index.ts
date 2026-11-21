@@ -3,6 +3,7 @@
 import { constantTimeEqual, futureExpiry, isLiveExpiry, signValue, verifySignedValue } from './auth';
 import { APP_ID, compareSemver, normalizeTtl, parseSingleRange, validateReleaseInput, type ReleaseManifest, type ReleaseRecord } from './protocol';
 import { DEVELOPER_PROFILE, renderDownloadPage, type DownloadPageModel } from './page';
+import { MAX_PUBLISHER_RECEIPT_BYTES, parsePublisherReceipt, type PublisherStatus } from './publisher-receipt.mjs';
 
 export interface Env {
   DB: D1Database;
@@ -130,11 +131,11 @@ async function handlePublicDownloadPage(request: Request, env: Env): Promise<Res
   if (!secretsReady(env)) return notFound();
   const release = await latestRelease(env);
   if (!release) return notFound();
-  const history = await releaseHistory(env, release.id);
+  const [history, publisher] = await Promise.all([releaseHistory(env, release.id), releasePublisher(env, release)]);
   const expires = futureExpiry(Date.now() / 1000, normalizeTtl(env.LINK_TTL_SECONDS));
   const downloadSignature = await signValue(env.SIGNING_SECRET, `binary\n${release.id}\n${expires}`);
   const downloadUrl = `/download/latest.exe?expires=${expires}&signature=${downloadSignature}`;
-  return downloadPageResponse(request, createDownloadPageModel(request, release, history, downloadUrl), true);
+  return downloadPageResponse(request, createDownloadPageModel(request, release, history, downloadUrl, publisher), true);
 }
 
 async function handleStableDownloadPage(request: Request, env: Env, token: string): Promise<Response> {
@@ -142,20 +143,35 @@ async function handleStableDownloadPage(request: Request, env: Env, token: strin
   if (!secretsReady(env) || token.length > 1_000 || !(await constantTimeEqual(token, env.DOWNLOAD_ACCESS_TOKEN))) return notFound();
   const release = await latestRelease(env);
   if (!release) return notFound();
-  const history = await releaseHistory(env, release.id);
+  const [history, publisher] = await Promise.all([releaseHistory(env, release.id), releasePublisher(env, release)]);
   const expires = futureExpiry(Date.now() / 1000, normalizeTtl(env.LINK_TTL_SECONDS));
   const downloadSignature = await signValue(env.SIGNING_SECRET, `binary\n${release.id}\n${expires}`);
   const downloadUrl = `/download/latest.exe?expires=${expires}&signature=${downloadSignature}`;
-  return downloadPageResponse(request, createDownloadPageModel(request, release, history, downloadUrl), false);
+  return downloadPageResponse(request, createDownloadPageModel(request, release, history, downloadUrl, publisher), false);
 }
 
-function createDownloadPageModel(request: Request, release: ReleaseRecord, history: ReleaseRecord[], downloadUrl: string): DownloadPageModel {
+async function releasePublisher(env: Env, release: ReleaseRecord): Promise<PublisherStatus | undefined> {
+  try {
+    const receipt = await env.RELEASES.get(release.object_key + '.publisher.json');
+    if (!receipt || receipt.size > MAX_PUBLISHER_RECEIPT_BYTES) {
+      await receipt?.body.cancel();
+      return undefined;
+    }
+    return parsePublisherReceipt(await receipt.json(), release.sha256);
+  } catch {
+    // Publisher metadata is optional for releases made before it was recorded.
+    return undefined;
+  }
+}
+
+function createDownloadPageModel(request: Request, release: ReleaseRecord, history: ReleaseRecord[], downloadUrl: string, publisher?: PublisherStatus): DownloadPageModel {
   return {
     release,
     history,
     downloadUrl,
     canonicalUrl: `${new URL(request.url).origin}/`,
     renderedAt: new Date().toISOString(),
+    publisher,
     developer: DEVELOPER_PROFILE,
   };
 }
