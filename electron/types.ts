@@ -490,7 +490,12 @@ export interface DownloadEntry {
   extension?: string;
   publisher?: { state: 'unsigned' | 'valid' | 'untrusted' | 'unavailable'; name?: string };
   risk: 'ordinary' | 'dangerous' | 'deceptive';
+  origin?: string;
+  finishedAt?: string;
+  retained?: boolean;
 }
+
+export type DownloadHistoryStatus = 'off' | 'on' | 'unavailable';
 
 export type DownloadAction = 'pause' | 'resume' | 'retry' | 'cancel';
 
@@ -512,6 +517,7 @@ export interface BrowserSnapshot {
   bookmarks: Bookmark[];
   history: HistoryEntry[];
   downloads: DownloadEntry[];
+  downloadHistory?: DownloadHistoryStatus;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
   /** Present after Account Spaces initialization; contains renderer-safe data only. */

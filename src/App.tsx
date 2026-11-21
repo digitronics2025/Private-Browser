@@ -415,7 +415,7 @@ export default function App() {
         ? <EmptyState icon={KeyRound} text="MyVault is isolated from the Development workspace." />
         : <VaultPanel accountId={state.activeAccountSpaceId} workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onOpenFull={() => setVaultFullOpen(true)} onToast={showToast} />;
       case 'automations': return <AutomationPanel state={state} onToast={showToast} />;
-      case 'downloads': return <DownloadsPanel state={state} onToast={showToast} />;
+      case 'downloads': return <DownloadsPanel key={state.activeAccountSpaceId} state={state} onToast={showToast} />;
       case 'privacy': return <PrivacyPanel state={state} />;
       case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} entry={settingsEntry}
         onSetupExit={() => setSettingsEntry('overview')} onManageAccounts={() => setAccountManagerOpen(true)}
