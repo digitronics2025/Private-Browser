@@ -67,6 +67,7 @@ import type {
   AccountSpaceId,
   ExternalBrowserId,
   GoogleModule,
+  GmailReplyDraft,
   GoogleOperationResult,
   GoogleOverviewPage,
   GoogleOverviewService,
@@ -156,7 +157,8 @@ import { GoogleConfigurationStore } from './google-config.js';
 import { ExternalBrowserLauncher } from './external-browser.js';
 import { GoogleOAuthManager } from './google-oauth.js';
 import { GoogleTokenBroker } from './google-token-broker.js';
-import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailSendInput } from './google-services.js';
+import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailReplySource, type GmailSendInput } from './google-services.js';
+import { GoogleActionReceipts } from './google-action-receipts.js';
 import { GOOGLE_OVERVIEW_MAX_PAGES, googleOverviewModule } from './google-overview.js';
 import { healthFromGoogleConnection, observeGoogleHealth } from './google-connection-health.js';
 import type { GoogleConnectionHealth } from './types.js';
@@ -337,6 +339,7 @@ class BrowserController {
     token: string; page: number; timeMin: string; expiresAt: number; inUse?: boolean;
   }>();
   private readonly googleChecks = new Map<AccountSpaceId, GoogleConnectionHealth>();
+  private readonly gmailReplySources = new Map<string, { accountSpaceId: AccountSpaceId; subject: string; source: GmailReplySource; expiresAt: number }>();
   private expectedInstaller?: ExpectedInstaller;
   private readonly sessionLock = new BrowserSessionLock(join(app.getPath('userData'), 'browser-session.lock'));
   private sessionLockWork = Promise.resolve();
@@ -1559,8 +1562,38 @@ class BrowserController {
   }
 
   prepareGmailSend(accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) {
-    this.requireAccountMembership(accountSpaceId);
-    return this.googleServices.prepareGmailSend(accountSpaceId, input, sourceRevision);
+    this.requireGoogleWriteAccount(accountSpaceId, 'gmail-send');
+    return this.googleServices.prepareGmailSend(accountSpaceId, input, sourceRevision, this.gmailReplySource(accountSpaceId, sourceRevision));
+  }
+
+  async readGmailReplyDraft(accountSpaceId: AccountSpaceId, operationId: string, messageId: string): Promise<GoogleOperationResult<GmailReplyDraft>> {
+    const readAccount = () => {
+      const record = this.requireGoogleWriteAccount(accountSpaceId, 'gmail-send');
+      if (!record.enabledModules.includes('gmail-metadata')) throw new Error('Enable Gmail headers to open a reply.');
+      return record.googleIdentity!.sub;
+    };
+    const subject = readAccount();
+    return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', async (signal) => {
+      const result = await this.googleServices.readGmailReplySource(accountSpaceId, messageId, signal);
+      signal.throwIfAborted();
+      if (readAccount() !== subject) throw new Error('The Google account changed. Open the original message again.');
+      if (!result.ok || !result.data) return { ok: false, error: result.error };
+      const sourceRevision = randomUUID();
+      const expiresAt = Date.now() + 5 * 60_000;
+      while (this.gmailReplySources.size >= 48) this.gmailReplySources.delete(this.gmailReplySources.keys().next().value!);
+      this.gmailReplySources.set(sourceRevision, { accountSpaceId, subject, source: result.data, expiresAt });
+      setTimeout(() => this.gmailReplySources.delete(sourceRevision), expiresAt - Date.now()).unref();
+      return { ok: true, data: { sourceRevision, recipient: result.data.recipient, subject: result.data.subject } };
+    });
+  }
+
+  private gmailReplySource(accountSpaceId: AccountSpaceId, revision?: string): GmailReplySource | undefined {
+    if (revision === undefined) return undefined;
+    const source = this.gmailReplySources.get(revision);
+    const record = this.accounts.require(accountSpaceId);
+    if (!source || source.accountSpaceId !== accountSpaceId || source.expiresAt <= Date.now() || record.googleIdentity?.sub !== source.subject
+      || !record.enabledModules.includes('gmail-metadata')) throw new Error('The original Gmail message expired. Open it again to prepare a new reply.');
+    return source.source;
   }
 
   gmailOverview(accountSpaceId: AccountSpaceId, operationId: string) {
@@ -1624,7 +1657,9 @@ class BrowserController {
   }
 
   sendGmail(accountSpaceId: AccountSpaceId, operationId: string, input: GmailSendInput, confirmationToken: string, sourceRevision?: string) {
-    return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.sendGmail(accountSpaceId, input, confirmationToken, sourceRevision, signal));
+    this.requireGoogleWriteAccount(accountSpaceId, 'gmail-send');
+    const source = this.gmailReplySource(accountSpaceId, sourceRevision);
+    return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.sendGmail(accountSpaceId, input, confirmationToken, sourceRevision, signal, source));
   }
 
   listDriveFiles(accountSpaceId: AccountSpaceId, operationId: string, query?: string, wholeDrive?: boolean) {
@@ -1636,11 +1671,12 @@ class BrowserController {
   }
 
   prepareDriveShare(accountSpaceId: AccountSpaceId, fileId: string, email: string, role: 'reader' | 'writer', sourceRevision?: string) {
-    this.requireAccountMembership(accountSpaceId);
+    this.requireGoogleWriteAccount(accountSpaceId, 'drive-files');
     return this.googleServices.prepareDriveShare(accountSpaceId, fileId, email, role, sourceRevision);
   }
 
   shareDriveFile(accountSpaceId: AccountSpaceId, operationId: string, fileId: string, email: string, role: 'reader' | 'writer', confirmationToken: string, sourceRevision?: string) {
+    this.requireGoogleWriteAccount(accountSpaceId, 'drive-files');
     return this.runGoogleOperation(accountSpaceId, operationId, 'drive', (signal) => this.googleServices.shareDriveFile(accountSpaceId, fileId, email, role, confirmationToken, sourceRevision, signal));
   }
 
@@ -1649,11 +1685,12 @@ class BrowserController {
   }
 
   prepareCalendarWrite(accountSpaceId: AccountSpaceId, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, sourceRevision?: string) {
-    this.requireAccountMembership(accountSpaceId);
+    this.requireGoogleWriteAccount(accountSpaceId, 'calendar-write');
     return this.googleServices.prepareCalendarWrite(accountSpaceId, action, input, sourceRevision);
   }
 
   writeCalendarEvent(accountSpaceId: AccountSpaceId, operationId: string, action: 'create' | 'update' | 'delete', input: CalendarWriteInput, confirmationToken: string, sourceRevision?: string) {
+    this.requireGoogleWriteAccount(accountSpaceId, 'calendar-write');
     return this.runGoogleOperation(accountSpaceId, operationId, 'calendar', (signal) => this.googleServices.writeCalendarEvent(accountSpaceId, action, input, confirmationToken, sourceRevision, signal));
   }
 
@@ -1862,6 +1899,18 @@ class BrowserController {
     return account;
   }
 
+  private requireGoogleWriteAccount(accountSpaceId: AccountSpaceId, module: GoogleModule) {
+    const state = this.store.get();
+    const account = state.accountSpaces.find((item) => item.id === accountSpaceId);
+    if (!account || !isAvailableRegularAccount(state, account) || this.activeAccountSpaceId(state) !== accountSpaceId
+      || this.sessionIsLocked || this.store.isReadOnly()) throw new Error('Open the original unlocked Account Space to review this Google action.');
+    const record = this.accounts.require(accountSpaceId);
+    if (!record.googleIdentity || record.googleConnection !== 'connected' || !record.enabledModules.includes(module)) {
+      throw new Error('This Google action requires its separate permission in the active Account Space.');
+    }
+    return record;
+  }
+
   private closeAccountViews(accountSpaceId: AccountSpaceId): void {
     this.fillPicker.close();
     this.splitPairs.delete(accountSpaceId);
@@ -1898,6 +1947,7 @@ class BrowserController {
     this.permissions.clearAccount(accountSpaceId);
     this.googleOAuth.clearMemory(accountSpaceId);
     this.googleServices.clearAccount(accountSpaceId);
+    for (const [revision, source] of this.gmailReplySources) if (source.accountSpaceId === accountSpaceId) this.gmailReplySources.delete(revision);
     this.googleChecks.delete(accountSpaceId);
     for (const [id, pending] of this.googleOverviewCursors) {
       if (pending.accountSpaceId === accountSpaceId) this.googleOverviewCursors.delete(id);
@@ -5437,7 +5487,11 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   const externalBrowsers = new ExternalBrowserLauncher();
   const googleOAuth = new GoogleOAuthManager(googleConfiguration, accountStore, externalBrowsers);
   const googleTokens = new GoogleTokenBroker(googleConfiguration, accountStore);
-  const googleServices = new GoogleServices(googleTokens);
+  const actionReceipts = new GoogleActionReceipts({
+    read: (account) => accountStore.require(account).googleActionReceipts ?? [],
+    write: (account, receipts) => { accountStore.update(account, (record) => { record.googleActionReceipts = receipts; }); },
+  });
+  const googleServices = new GoogleServices(googleTokens, actionReceipts);
   const backups = new AccountBackupManager(accountStore, safeStorage, new GoogleDriveAppDataTransport(googleTokens));
   const persistedState = new AccountSpaceStateStore({
     paths: {
@@ -5573,6 +5627,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('google:connect', (_event, id: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) => controller!.connectGoogleAccount(id, modules, browserId));
   handle('google:cancel', (_event, id: AccountSpaceId) => controller!.cancelGoogleConnection(id));
   handle('google:gmail-overview-run', (_event, id: AccountSpaceId, operationId: string) => controller!.gmailOverview(id, operationId));
+  handle('google:gmail-reply-draft', (_event, id: AccountSpaceId, operationId: string, messageId: string) => controller!.readGmailReplyDraft(id, operationId, messageId));
   handle('google:overview-page', (_event, id: AccountSpaceId, operationId: string, service: GoogleOverviewService, cursor?: string) => controller!.googleOverviewPage(id, operationId, service, cursor));
   handle('google:gmail-search-run', (_event, id: AccountSpaceId, operationId: string, query?: string) => controller!.searchGmail(id, operationId, query));
   handle('google:gmail-prepare-send', (_event, id: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) => controller!.prepareGmailSend(id, input, sourceRevision));
