@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AccountStore, type SafeStorageAdapter } from '../electron/account-store';
 import { AccountSpaceStateStore } from '../electron/account-space-state';
 import { DEFAULT_BROWSER_SETTINGS } from '../electron/browser-settings';
@@ -56,6 +56,64 @@ function fixture() {
 }
 
 describe('v1 to Account Spaces v2 migration', () => {
+  it('coalesces routine writes and saves only the changed account while intentional changes flush immediately', () => {
+    vi.useFakeTimers();
+    try {
+      const { options } = fixture();
+      const disk = new AccountSpaceStateStore(options);
+      const store = new RuntimeStateStore(disk, options.accountStore, disk.initialize());
+      store.update(() => undefined);
+      const account = vi.spyOn(disk, 'saveAccountState');
+      const manifest = vi.spyOn(disk, 'saveManifest');
+      const personal = store.get().activeAccountSpaceByWorkspace.personal;
+      const title = (value: string) => store.update((state) => {
+        state.tabs.find((tab) => tab.id === 'p-home')!.title = value;
+      }, 'routine');
+      title('First');
+      vi.advanceTimersByTime(200);
+      title('Last');
+      expect(account).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(50);
+      expect(account).toHaveBeenCalledTimes(1);
+      expect(account.mock.calls[0][0]).toMatchObject({ accountSpaceId: personal, tabs: expect.arrayContaining([expect.objectContaining({ title: 'Last' })]) });
+      expect(manifest).not.toHaveBeenCalled();
+      title('Keep this through shutdown');
+      store.flushPendingWrites();
+      expect(account).toHaveBeenCalledTimes(2);
+      store.update((next) => { next.trackerBlocking = !next.trackerBlocking; });
+      expect(manifest).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(2000);
+      expect(account).toHaveBeenCalledTimes(2);
+      const restored = new RuntimeStateStore(disk, options.accountStore, disk.initialize()).get();
+      expect(restored.tabs.find((tab) => tab.id === 'p-home')?.title).toBe('Keep this through shutdown');
+      expect(restored.trackerBlocking).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restores the last accepted account state if a later write rejects an immediate change', () => {
+    vi.useFakeTimers();
+    try {
+      const { options } = fixture();
+      const disk = new AccountSpaceStateStore(options);
+      const store = new RuntimeStateStore(disk, options.accountStore, disk.initialize());
+      store.update(() => undefined);
+      vi.spyOn(disk, 'saveManifest').mockImplementationOnce(() => { throw new Error('fixture write failure'); });
+      expect(() => store.update((next) => {
+        next.tabs.find((tab) => tab.id === 'p-home')!.title = 'Unaccepted title';
+        next.trackerBlocking = false;
+      })).toThrow('fixture write failure');
+      expect(store.get().trackerBlocking).toBe(true);
+      vi.advanceTimersByTime(1000);
+      const restored = new RuntimeStateStore(disk, options.accountStore, disk.initialize()).get();
+      expect(restored.tabs.find((tab) => tab.id === 'p-home')?.title).toBe('Inbox');
+      expect(restored.trackerBlocking).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('remembers a regular external-link destination through a restart in Banking', () => {
     const { options } = fixture();
     const disk = new AccountSpaceStateStore(options);
