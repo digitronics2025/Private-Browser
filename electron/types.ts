@@ -88,6 +88,9 @@ export interface AccountSpaceSummary {
   enabledModules: GoogleModule[];
   grantedScopes: string[];
   backupEnabled: boolean;
+  backupLastUploadedAt?: string;
+  backupReminderDays?: BackupReminderDays;
+  backupReminderAt?: string;
   backupIncludesOpenTabs: boolean;
   backupIncludesHistory: boolean;
 }
@@ -211,7 +214,28 @@ export interface BackupRestorePreview {
   accountLabel: string;
   workspaceId: WorkspaceId;
   createdAt: string;
-  counts: { bookmarks: BackupRestoreCount; history: BackupRestoreCount; tabs: BackupRestoreCount };
+  generations?: BackupGenerationSummary[];
+  counts: { bookmarks: BackupRestoreCount; folders?: BackupRestoreCount; history: BackupRestoreCount; tabs: BackupRestoreCount };
+}
+
+export interface BackupGenerationSummary {
+  createdAt: string;
+  bookmarks: number;
+  folders: number;
+  tabs: number;
+  history: number;
+}
+
+export type BackupReminderDays = 0 | 7 | 14 | 30;
+
+export interface BackupUploadPreview {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  local: BackupGenerationSummary;
+  remote?: BackupGenerationSummary;
+  merged?: BackupGenerationSummary;
+  generations: BackupGenerationSummary[];
+  conflict: boolean;
 }
 
 export type GoogleService = 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup';
@@ -717,6 +741,7 @@ export interface AiPagePreview {
   tabId: string;
   service: 'browser' | 'gmail' | 'drive' | 'calendar' | 'contacts';
   sourceRevision: string;
+  capturedAt?: string;
   sourceUrl: string;
   title: string;
   url: string;
@@ -991,6 +1016,18 @@ export interface ControlCenterTask {
   updatedAt: string;
   /** Where the task opens in the Control Center dashboard. */
   dashboardUrl: string;
+  browserContext?: {
+    route?: string;
+    routeMatch: boolean;
+    capturedAt: string;
+    receipt?: ControlCenterEvidenceReceipt;
+  };
+}
+
+export interface ControlCenterEvidenceReceipt {
+  name: string;
+  capturedAt: string;
+  attachedAt: string;
 }
 
 export interface ControlCenterSendInput {

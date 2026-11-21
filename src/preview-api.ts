@@ -3,7 +3,7 @@ import type { ChromeImportOptions, ChromePasswordImportReview } from '../electro
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource, PageExcerptReview } from '../electron/types';
-import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, GoogleModule, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, BackupUploadPreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, GoogleModule, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings, BrowserSettingsPatch, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
@@ -157,8 +157,19 @@ export function installPreviewApi(): void {
   syncDarkMode();
   const listeners = new Set<(snapshot: BrowserSnapshot) => void>();
   let backupRestoreReview: BackupRestorePreview | undefined;
-  if (params.get('backupRestore') === 'sample') {
-    state.accountSpaces.find(({ id }) => id === google)?.enabledModules.push('encrypted-backup');
+  let backupUploadReview: BackupUploadPreview | undefined;
+  const backupGenerationFixture = params.get('backupGenerations') === 'sample';
+  const previousBackups = [
+    { createdAt: '2026-11-20T12:00:00.000Z', bookmarks: 5, folders: 2, tabs: 2, history: 0 },
+    { createdAt: '2026-11-09T12:00:00.000Z', bookmarks: 2, folders: 1, tabs: 0, history: 0 },
+  ];
+  if (params.get('backupRestore') === 'sample' || backupGenerationFixture) {
+    const account = state.accountSpaces.find(({ id }) => id === google)!;
+    account.enabledModules.push('encrypted-backup');
+    if (backupGenerationFixture) Object.assign(account, {
+      backupEnabled: true, backupReminderDays: 14, backupReminderAt: new Date(Date.now() + 60_000).toISOString(),
+      backupLastUploadedAt: previousBackups[0].createdAt,
+    });
   }
   const closedByAccount = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   let routines = defaultBrowserRoutines(Object.fromEntries(accounts.filter((account) => account.id !== google).map((account) => [account.workspaceId, account.id])));
@@ -421,13 +432,40 @@ export function installPreviewApi(): void {
     prepareCalendarWrite: desktopOnly,
     writeCalendarEvent: desktopOnly,
     listContacts: desktopOnly,
-    previewBackupRestore: async (id, _operation, code) => {
-      if (params.get('backupRestore') !== 'sample' || id !== google || code !== 'fixture-recovery-code') {
+    previewBackupUpload: async (id) => {
+      if (!backupGenerationFixture || id !== google || state.activeAccountSpaceId !== id) throw new Error('Open the enabled backup in its unlocked Account Space.');
+      backupUploadReview = { id: crypto.randomUUID(), accountSpaceId: id, conflict: true,
+        local: { createdAt: new Date().toISOString(), bookmarks: 3, folders: 1, tabs: 1, history: 0 },
+        remote: previousBackups[0], generations: previousBackups.slice(1),
+        merged: { createdAt: new Date().toISOString(), bookmarks: 6, folders: 2, tabs: 3, history: 0 } };
+      return backupUploadReview;
+    },
+    applyBackupUpload: async (id, _operation, resolution) => {
+      if (backupUploadReview?.id !== id || backupUploadReview.accountSpaceId !== state.activeAccountSpaceId) throw new Error('Review the backup again before saving.');
+      backupUploadReview = undefined;
+      document.documentElement.dataset.previewBackupResolution = resolution;
+      const account = state.accountSpaces.find(({ id }) => id === google)!;
+      account.backupLastUploadedAt = new Date().toISOString();
+      account.backupReminderAt = undefined;
+      publish();
+      return { status: 'uploaded', etag: 'fixture-backup-etag' };
+    },
+    cancelBackupUpload: async (id) => { if (backupUploadReview?.id === id) backupUploadReview = undefined; },
+    setBackupReminder: async (id, days) => {
+      if (!backupGenerationFixture || id !== google || state.activeAccountSpaceId !== id) throw new Error('The backup changed.');
+      const account = state.accountSpaces.find(({ id }) => id === google)!;
+      account.backupReminderDays = days;
+      account.backupReminderAt = days ? new Date(Date.now() + days * 86_400_000).toISOString() : undefined;
+      publish();
+    },
+    previewBackupRestore: async (id, _operation, code, generation) => {
+      if (id !== google || (!backupGenerationFixture && (params.get('backupRestore') !== 'sample' || code !== 'fixture-recovery-code'))) {
         throw new Error('Encrypted backup failed authentication or is corrupt.');
       }
       backupRestoreReview = {
         id: crypto.randomUUID(), accountSpaceId: id, accountLabel: 'Operations', workspaceId: 'personal',
-        createdAt: '2026-11-21T12:00:00.000Z',
+        createdAt: generation ?? (backupGenerationFixture ? previousBackups[0].createdAt : '2026-11-21T12:00:00.000Z'),
+        ...(backupGenerationFixture ? { generations: previousBackups } : {}),
         counts: { bookmarks: { added: 2, duplicates: 1, capacityExceeded: 0 },
           history: { added: 0, duplicates: 1, capacityExceeded: 0 }, tabs: { added: 1, duplicates: 0, capacityExceeded: 2 } },
       };
@@ -1318,7 +1356,7 @@ export function installPreviewApi(): void {
     listControlCenterRepositories: async () => ({ repositories: [{ id: 'repo-shop', name: 'shop', devOrigin: 'http://127.0.0.1:5173' }, { id: 'repo-site', name: 'site', devOrigin: null }], suggestedId: 'repo-shop' }),
     listControlCenterTasks: async () => [{ id: 'TASK-0042', title: 'The cart page crashes when it is empty', repositoryName: 'shop', status: 'COMPLETED', currentStageName: 'Complete', blocker: null, finalStatus: 'READY', createdAt: '2026-09-24T10:00:00.000Z', updatedAt: '2026-09-24T10:20:00.000Z', dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0042' }],
     sendToControlCenter: async () => ({ id: 'TASK-0043', title: 'Preview task', repositoryName: 'shop', status: 'QUEUED', currentStageName: 'Investigate', blocker: null, finalStatus: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0043' }),
-    recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md' }),
+    recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md', capturedAt: new Date().toISOString(), attachedAt: new Date().toISOString() }),
     inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),
     copyGeneratedCredential: async () => {
       if (state.activeWorkspaceId === 'banking') throw new Error('Vault clipboard is disabled in this workspace');

@@ -16,6 +16,7 @@ import type {
   AccountSpaceKind,
   AccountSpaceSummary,
   AssistantReceipt,
+  BackupReminderDays,
   GoogleConnectionStatus,
   GoogleModule,
   PermissionCapability,
@@ -58,6 +59,9 @@ export interface AccountBackupConfiguration {
   wrappedRecoveryKey?: string;
   remoteEtag?: string;
   remoteFileId?: string;
+  enabledAt?: string;
+  lastUploadedAt?: string;
+  reminderDays?: BackupReminderDays;
   includeOpenTabs: boolean;
   includeHistory: boolean;
 }
@@ -247,6 +251,10 @@ export class AccountStore {
 
   toSummary(record: AccountSpaceRecord): AccountSpaceSummary {
     const avatar = record.googleIdentity?.avatar;
+    const backup = record.backup;
+    const base = backup.lastUploadedAt ?? backup.enabledAt ?? record.createdAt;
+    const reminderAt = backup.enabled && !record.locked && backup.reminderDays
+      ? new Date(Date.parse(base) + backup.reminderDays * 86_400_000).toISOString() : undefined;
     return {
       id: record.id,
       workspaceId: record.workspaceId,
@@ -266,6 +274,9 @@ export class AccountStore {
       enabledModules: [...record.enabledModules],
       grantedScopes: [...record.grantedScopes],
       backupEnabled: record.backup.enabled,
+      backupLastUploadedAt: !record.locked ? backup.lastUploadedAt : undefined,
+      backupReminderDays: !record.locked ? backup.reminderDays : undefined,
+      backupReminderAt: reminderAt,
       backupIncludesOpenTabs: record.backup.includeOpenTabs,
       backupIncludesHistory: record.backup.includeHistory,
     };
@@ -413,9 +424,16 @@ function validateBackup(value: unknown): AccountBackupConfiguration {
     wrappedRecoveryKey: input.wrappedRecoveryKey ? requireShortText(input.wrappedRecoveryKey, 'Wrapped recovery key', 4096) : undefined,
     remoteEtag: input.remoteEtag ? requireShortText(input.remoteEtag, 'Remote ETag', 512) : undefined,
     remoteFileId: input.remoteFileId ? requireShortText(input.remoteFileId, 'Remote backup file ID', 512) : undefined,
+    enabledAt: backupDate(input.enabledAt),
+    lastUploadedAt: backupDate(input.lastUploadedAt),
+    reminderDays: input.reminderDays === 0 || input.reminderDays === 7 || input.reminderDays === 14 || input.reminderDays === 30 ? input.reminderDays : undefined,
     includeOpenTabs: input.includeOpenTabs === true,
     includeHistory: input.includeHistory === true,
   };
+}
+
+function backupDate(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= 30 && /^\d{4}-/.test(value) && Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
 function validateScopes(value: unknown): string[] {
