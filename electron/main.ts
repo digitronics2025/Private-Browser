@@ -2833,7 +2833,7 @@ class BrowserController {
       }
     }
     if (action === 'test.configuration') {
-      const result = await this.vscodeBridge.request(action, { projectId });
+      const result = await this.vscodeBridge.request(action, { projectId, includeKeyboard: true });
       this.requireDeveloperWorkspace();
       if (this.sessionIsLocked || this.vscodeBridge.status().project?.project.id !== projectId) throw new Error('The selected project changed.');
       return testConfigurationSchema.parse(result);
