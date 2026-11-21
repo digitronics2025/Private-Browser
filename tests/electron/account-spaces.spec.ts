@@ -409,6 +409,44 @@ test('retains only opted-in downloads and removes entries without deleting the s
   expect((await getState()).downloads).toEqual([]);
 });
 
+test('deletes only reviewed visits and website data in one Account Space', async () => {
+  const page = await application!.firstWindow();
+  const first = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Review owner', 'sky'));
+  const firstUrl = origin + '/review-history-first';
+  const secondUrl = origin + '/review-history-second';
+  const lateUrl = origin + '/review-history-late';
+  const navigate = (url: string) => page.evaluate((target) => window.privateBrowser.navigate(target), url);
+  const cookie = (url: string, action: 'write' | 'count') => application!.evaluate(async ({ webContents }, { url, action }) => {
+    const source = webContents.getAllWebContents().find((contents) => contents.getURL() === url);
+    if (!source) throw new Error('Disposable page is missing');
+    if (action === 'write') await source.session.cookies.set({ url, name: 'review-fixture', value: 'sample' });
+    return (await source.session.cookies.get({ url, name: 'review-fixture' })).length;
+  }, { url, action });
+  await navigate(firstUrl);
+  expect(await cookie(firstUrl, 'write')).toBe(1);
+  const second = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Review separate', 'rose'));
+  await navigate(secondUrl);
+  expect(await cookie(secondUrl, 'write')).toBe(1);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), first);
+  const review = await page.evaluate(({ accountSpaceId, site }) => window.privateBrowser.reviewBrowsingData({
+    accountSpaceId, site, range: 'all', history: true, websiteData: true, cache: false,
+  }), { accountSpaceId: first, site: origin });
+  expect(review).toMatchObject({ accountSpaceId: first, siteOrigin: origin, historyCount: 1 });
+  await navigate(lateUrl);
+  const remove = () => page.evaluate((id) => window.privateBrowser.deleteReviewedBrowsingData(id), review.id);
+  await expect(remove()).resolves.toBe(1);
+  await expect(remove()).rejects.toThrow(/review the browsing data again/i);
+  const history = (accountId: typeof first) => page.evaluate(async (id) => (await window.privateBrowser.queryHistory(id, {
+    text: '', site: '', from: null, until: null, page: 0,
+  })).entries.map((entry) => entry.url), accountId);
+  expect(await history(first)).toContain(lateUrl);
+  expect(await history(first)).not.toContain(firstUrl);
+  expect(await cookie(lateUrl, 'count')).toBe(0);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), second);
+  expect(await history(second)).toContain(secondUrl);
+  expect(await cookie(secondUrl, 'count')).toBe(1);
+});
+
 test('rechecks the installer after a same-size file replacement before it reaches Windows Open', async () => {
   const page = await application!.firstWindow();
   const endpoint = 'https://private-browser-downloads.digitronics-electro.workers.dev';

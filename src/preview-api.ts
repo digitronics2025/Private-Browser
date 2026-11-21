@@ -11,6 +11,8 @@ import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
+import { browsingDataVisitIds, requireBrowsingDataInput } from '../electron/browsing-data';
+import type { BrowsingDataReview } from '../electron/types';
 import { planBookmarkBatch } from '../electron/bookmark-batch';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from '../electron/bookmark-maintenance';
 import { canonicalRoutineUrl, defaultBrowserRoutines, requireBrowserRoutine } from '../electron/browser-routines';
@@ -163,6 +165,7 @@ export function installPreviewApi(): void {
   const siteZoom = new Map<string, number>();
   const siteZoomKey = (account: string, url: string) => JSON.stringify([account, new URL(url).origin]);
   let pendingChromeImport: { id: string; options: ChromeImportOptions; owner: AccountSpaceId } | undefined;
+  let clearDataReview: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string> } | undefined;
   const chromeUndo = new Map<AccountSpaceId, { bookmark: boolean; history: boolean }>();
   let sampleGrants: PermissionGrantSummary[] = params.get('permissions') === 'sample' ? [
     { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
@@ -460,6 +463,33 @@ export function installPreviewApi(): void {
       const first = state.tabs.find((tab) => ids.has(tab.id) && tab.accountSpaceId === state.activeAccountSpaceId);
       if (first) state.activeTabId = first.id;
       else await handlers.newTab();
+      publish();
+    },
+    reviewBrowsingData: async (value) => {
+      const input = requireBrowsingDataInput(value);
+      if (!state.accountSpaces.some((account) => account.id === input.accountSpaceId && account.workspaceId === state.activeWorkspaceId && !account.locked)) {
+        throw new Error('Unlock this Account Space to manage its browsing data.');
+      }
+      const visits = browsingDataVisitIds(state.history, input, Date.now());
+      const review: BrowsingDataReview = { id: crypto.randomUUID(), accountSpaceId: input.accountSpaceId, range: input.range,
+        siteOrigin: input.siteOrigin, historyCount: visits.size, websiteData: input.websiteData, cache: input.cache };
+      clearDataReview = { review, visits, initiator: state.activeAccountSpaceId };
+      return review;
+    },
+    deleteReviewedBrowsingData: async (id) => {
+      const pending = clearDataReview;
+      if (!pending || pending.review.id !== id || pending.initiator !== state.activeAccountSpaceId) {
+        throw new Error('Review the browsing data again before deleting.');
+      }
+      clearDataReview = undefined;
+      const count = state.history.length;
+      state.history = state.history.filter((item) => item.accountSpaceId !== pending.review.accountSpaceId || !pending.visits.has(item.id));
+      publish();
+      return count - state.history.length;
+    },
+    deleteHistoryVisit: async (id, visitId) => {
+      if (id !== state.activeAccountSpaceId) throw new Error('Return to the Account Space that owns this visit.');
+      state.history = state.history.filter((item) => item.accountSpaceId !== id || item.id !== visitId);
       publish();
     },
     queryHistory: (async (id: unknown, input: unknown) => {

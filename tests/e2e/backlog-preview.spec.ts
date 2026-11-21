@@ -225,8 +225,39 @@ test('filters and groups the full retained history with date and site controls',
   await panel.getByRole('textbox', { name: 'Filter history by site' }).fill('archive.example.test');
   await expect(panel.getByRole('button', { name: /Older sample visit.*2 visits/ })).toBeVisible();
   await panel.getByLabel('From', { exact: true }).fill('2026-10-02');
-  await expect(panel.getByRole('button', { name: /Older sample visit/ })).toBeVisible();
+  await expect(panel.getByRole('button', { name: /^Older sample visit/ })).toBeVisible();
   await expect(panel.getByText(/2 visits/)).toHaveCount(0);
+});
+
+test('deletes a single visit and reviews site and time scope before clearing', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/?history=large');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: /^History/ }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('textbox', { name: 'Filter history by site' }).fill('archive.example.test');
+  await expect(panel.getByRole('button', { name: /Older sample visit.*2 visits/ })).toBeVisible();
+  page.once('dialog', (dialog) => void dialog.accept());
+  await panel.getByRole('button', { name: 'Delete most recent visit to Older sample visit' }).click();
+  await expect(panel.getByText(/2 visits/)).toHaveCount(0);
+  await expect(panel.getByText('Older sample visit')).toBeVisible();
+  await panel.getByRole('button', { name: 'Delete browsing data…' }).click();
+  const review = page.getByRole('dialog', { name: 'Delete browsing data' });
+  await expect(review.getByRole('combobox', { name: 'Account Space', exact: true })).toBeVisible();
+  await review.getByLabel('Website address (optional)').fill('https://archive.example.test');
+  await review.getByRole('combobox', { name: 'History time range' }).selectOption('week');
+  await review.getByRole('button', { name: 'Review deletion' }).click();
+  await expect(review.getByText('0 visits to remove · Last 7 days')).toBeVisible();
+  await expect(review.getByRole('button', { name: 'Delete reviewed data' })).toBeDisabled();
+  await review.getByRole('button', { name: 'Change selection' }).click();
+  await review.getByRole('combobox', { name: 'History time range' }).selectOption('all');
+  await review.getByRole('checkbox', { name: 'Website data and sign-ins' }).check();
+  await review.getByRole('button', { name: 'Review deletion' }).click();
+  await expect(review.getByText('1 visit to remove · All time')).toBeVisible();
+  await expect(review.getByText(/may sign you out/)).toBeVisible();
+  await review.getByRole('button', { name: 'Delete reviewed data' }).click();
+  await expect(review).toHaveCount(0);
+  await expect(panel.getByText('No retained visits match those filters.')).toBeVisible();
 });
 
 test('reopens a chosen recently closed tab without stealing focus', async ({ page }) => {

@@ -13,12 +13,13 @@ function dayBoundary(value: string, nextDay = false): number | null {
   return Number.isFinite(date.getTime()) ? date.getTime() : null;
 }
 
-export function HistoryPanel({ accountSpaceId, revision, protectedWorkspace, onOpen, onClearData }: {
+export function HistoryPanel({ accountSpaceId, revision, protectedWorkspace, onOpen, onClearData, onToast }: {
   accountSpaceId: AccountSpaceId;
   revision: string;
   protectedWorkspace: boolean;
   onOpen: (id: string) => void;
   onClearData: () => void;
+  onToast: (message: string, kind?: 'ok' | 'error') => void;
 }) {
   const [text, setText] = useState('');
   const [site, setSite] = useState('');
@@ -84,6 +85,13 @@ export function HistoryPanel({ accountSpaceId, revision, protectedWorkspace, onO
                     <small>{domainFromUrl(item.url)} · <time dateTime={item.visitedAt}>{visitDate.format(new Date(item.visitedAt))}</time>{item.visits > 1 && ' · ' + item.visits + ' visits'}</small>
                   </span>
                 </button>
+                <button className="toolbar-button small history-delete" type="button" aria-label={'Delete most recent visit to ' + (item.title || domainFromUrl(item.url))}
+                  title="Delete most recent visit" onClick={() => {
+                    if (!window.confirm('Delete this retained visit?')) return;
+                    void window.privateBrowser.deleteHistoryVisit(accountSpaceId, item.id)
+                      .then(() => setRetry((value) => value + 1))
+                      .catch((error) => onToast(error instanceof Error ? error.message : 'Could not delete the visit.', 'error'));
+                  }}><Trash2 size={15} /></button>
               </li>
             ))}
           </ul> : <EmptyState icon={Clock3} text={text || site || since || through ? 'No retained visits match those filters.' : 'Pages you visit in this Account Space appear here.'} />}

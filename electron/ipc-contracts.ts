@@ -13,6 +13,7 @@ import type { ExternalBrowserId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
 import { MAX_ADDRESS_QUERY_LENGTH } from './address-matches.js';
 import { MAX_REFERENCE_LENGTH, requireBrowserSettingsPatch } from './browser-settings.js';
+import { requireBrowsingDataInput } from './browsing-data.js';
 import { requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
@@ -214,6 +215,14 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       for (const id of args[2]) requireNonEmptyText(id, 'tab identifier', 200);
       return;
     }
+    case 'browser:review-browsing-data':
+      exact(args, 1);
+      requireBrowsingDataInput(requireExactKeys(args[0], ['accountSpaceId', 'range', 'site', 'history', 'websiteData', 'cache']));
+      return;
+    case 'browser:delete-reviewed-data':
+      exact(args, 1); requireNonEmptyText(args[0], 'browsing data review identifier', 128); return;
+    case 'browser:delete-history-visit':
+      exact(args, 2); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'history visit identifier', 128); return;
     case 'browser:query-history': {
       exact(args, 2); requireAccountSpaceId(args[0]);
       const input = requireExactKeys(args[1], ['text', 'site', 'from', 'until', 'page']);
