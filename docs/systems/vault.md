@@ -35,6 +35,16 @@ Windows copies from clipboard history and sync using the OS exclusion format.
 On normal quit it waits for the unchanged-copy check and cleanup.
 [Windows clipboard formats](https://learn.microsoft.com/en-gb/windows/desktop/dataxchg/clipboard-formats)
 
+Login health runs on demand inside the unlocked broker. It checks exact
+origin and username duplicates, invalid or missing website origins, reused
+passwords, and passwords with fewer than 15 Unicode characters or one
+repeated character. It returns a count, affected login IDs and issue labels.
+An edit opens the isolated editor and preserves existing secrets when
+replacement fields are empty. A change to the login or vault session
+invalidates a pending edit. The check uses 15 characters as a local review
+threshold based on the guidance for single-factor passwords.
+[NIST password guidance](https://pages.nist.gov/800-63-4/sp800-63b/authenticators/)
+
 
 > Last verified: 2026-09-25
 

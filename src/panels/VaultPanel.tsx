@@ -3,6 +3,7 @@ import { Clock3, Cloud, Copy, Eye, FileDown, Fingerprint, KeyRound, LockKeyhole,
 import type { AccountSpaceId, VaultFillReadiness, VaultItemMeta, VaultStatus, WorkspaceId } from '../../electron/types';
 import { EmptyState, PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
+import { VaultHealthPanel } from './VaultHealthPanel';
 
 const fillReadinessText: Record<VaultFillReadiness, [string, string]> = {
   locked: ['Vault locked', 'Unlock MyVault to check for a saved login.'],
@@ -114,6 +115,8 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
       {status.lifecycle === 'unlocked' && legacyAvailable && <div className="permission-card"><strong>Old Private Browser vault found</strong><p>Migration makes and verifies an encrypted backup first. The old ciphertext remains until you separately remove it.</p><button className="primary-button full" onClick={() => void window.privateBrowser.migrateLegacyVault().then((report) => { onToast(`${report.validatedCount} legacy records validated`); void load(); }).catch((error) => onToast(error.message, 'error'))}>Migrate into MyVault</button><button className="text-button danger-text" onClick={() => void window.privateBrowser.cleanupLegacyVault().then((removed) => { if (removed) { setLegacyAvailable(false); onToast('Old ciphertext removed; backup retained'); } }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}>Remove old ciphertext after verification</button></div>}
       {status.lifecycle === 'unlocked' && workspaceId !== 'banking' && <button className="text-button" onClick={() => void window.privateBrowser.importChromePasswords().then((report) => { onToast(`${report.imported.passwords} Chrome passwords imported; CSV retained`); void load(); }).catch((error) => onToast(error.message, 'error'))}><FileDown size={14} /> Import Chrome password CSV</button>}
       {status.lifecycle === 'unlocked' && <><label className="vault-search"><Search size={14} /><input aria-label="Search MyVault metadata" placeholder="Search logins" value={query} onChange={(event) => setQuery(event.target.value)} /></label>{workspaceId !== 'banking' && <div className="credential-actions"><button onClick={() => void copyGenerated('password')}>Password</button><button onClick={() => void copyGenerated('passphrase')}>Passphrase</button><button onClick={() => void copyGenerated('pin')}>PIN</button></div>}</>}
+      {status.lifecycle === 'unlocked' && workspaceId !== 'banking' && workspaceId !== 'development'
+        && <VaultHealthPanel key={accountId + ':' + status.generation} accountId={accountId} items={items} onChange={load} onToast={onToast} />}
       <div className="credential-list">
         {visibleItems.map((item) => <div className="credential-card" key={item.id}>
           <div className="credential-top"><span className="site-badge">{item.label.slice(0, 1).toUpperCase()}</span><div><strong>{item.label}</strong><small>{domainFromUrl(item.url)} · {item.username}</small></div></div>

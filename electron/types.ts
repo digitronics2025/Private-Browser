@@ -786,6 +786,9 @@ export interface VaultStatus {
 }
 
 export type VaultFillReadiness = 'ready' | 'locked' | 'connect' | 'no-match' | 'unsupported' | 'manual' | 'choose-login' | 'unavailable';
+export type VaultHealthIssue = 'duplicate-login' | 'missing-origin' | 'reused-password' | 'weak-password';
+export interface VaultHealthFinding { id: string; issues: VaultHealthIssue[] }
+export interface VaultHealthReport { checked: number; findings: VaultHealthFinding[] }
 
 export interface UpdateServiceInput {
   endpoint: string;

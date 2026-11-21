@@ -2667,7 +2667,8 @@ class BrowserController {
   listVault() {
     const status = this.vault.status();
     const items = status.lifecycle === 'unlocked' && this.activeVaultPolicy().vaultSurface
-      ? this.vault.searchMetadata().map((item) => ({ ...item, label: item.title, url: item.url ?? '' }))
+      ? this.vault.searchMetadata().map((item) => ({ ...item, label: item.title,
+        url: item.url && isAllowedRemoteUrl(item.url) ? new URL(item.url).origin : '' }))
       : [];
     return {
       available: status.credentialPersistenceAvailable && status.lifecycle !== 'recovery-required',
@@ -2865,6 +2866,36 @@ class BrowserController {
     const removed = await this.vault.deleteEntry(id);
     if (removed) this.addPrivacyEvent('vault', 'Vault entry removed', 'A credential was deleted');
     return removed;
+  }
+
+  private assertVaultHealthScope(accountId: AccountSpaceId): void {
+    if (this.activeAccountSpaceId(this.store.get()) !== accountId || !this.activeVaultPolicy().saveCapture) {
+      throw new Error('Vault health is unavailable in this Account Space.');
+    }
+  }
+
+  checkVaultHealth(accountId: AccountSpaceId) {
+    this.assertVaultHealthScope(accountId);
+    return this.vault.checkLoginHealth();
+  }
+
+  async editVaultHealthLogin(accountId: AccountSpaceId, id: string): Promise<boolean> {
+    this.assertVaultHealthScope(accountId);
+    const edit = this.vault.beginLoginEdit(id);
+    const { title, username, url } = edit.metadata;
+    const origin = url && isAllowedRemoteUrl(url) ? new URL(url).origin : undefined;
+    const value = await this.secureDialogs.open('update-login', origin, undefined, { title, username }) as EditLoginDialogValue | undefined;
+    if (!value) return false;
+    this.assertVaultHealthScope(accountId);
+    await edit.save({
+      title: value.title,
+      url: value.url,
+      username: value.username,
+      password: value.password,
+      totp: value.totpSecret ? { secret: value.totpSecret, algorithm: 'SHA-1', digits: 6, period: 30 } : undefined,
+    });
+    this.addPrivacyEvent('vault', 'MyVault login updated', 'A saved login was edited in the secure window');
+    return true;
   }
 
   acknowledgeVaultRecovery() {
@@ -4275,6 +4306,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:migrate-legacy', () => controller!.migrateLegacyVault());
   handle('vault:cleanup-legacy', () => controller!.cleanupLegacyVault());
   handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
+  handle('vault:check-health', (_event, accountId: AccountSpaceId) => controller!.checkVaultHealth(accountId));
+  handle('vault:edit-health-login', (_event, accountId: AccountSpaceId, id: string) => controller!.editVaultHealthLogin(accountId, id));
   handle('vault:form-shape', () => controller!.inspectVaultFormShape());
   handle('vault:reset-picks', (_event, accountId: AccountSpaceId) => controller!.resetVaultPicks(accountId));
   handle('vault:fill-readiness', () => controller!.vaultFillReadiness());

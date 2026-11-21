@@ -379,6 +379,10 @@ kbd { font: inherit; }
 .vault-setup-guide dt { font-weight: 650; }
 .vault-setup-guide dd { margin: 3px 0 0; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.45; }
 .vault-fill-readiness p { color: var(--text-muted); margin: 4px 0; font-size: var(--fs-sm); }
+.vault-health-review h3, .vault-health-review p { margin: 4px 0; overflow-wrap: anywhere; }
+.vault-health-review p { color: var(--text-muted); font-size: var(--fs-sm); }
+.vault-health-review ul { margin: 8px 0 0; padding: 0; list-style: none; }
+.vault-health-review li { border-top: 1px solid var(--border); padding: 8px 0; }
 .ntp-space-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--workspace-color); }
 .ntp-shortcuts { width: min(584px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 4px; }
 .ntp-tile { position: relative; }
