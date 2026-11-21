@@ -39,8 +39,8 @@ renders the preview is [renderer-ui.md](renderer-ui.md).
 ### Invariants
 
 1. **Nothing leaves the device without an approval for that specific request.**
-   Three separate IPC calls — prepare, approve, ask — and one approval buys one
-   question. → **The Consent Protocol**
+   The Assistant reads locally, builds a review, then sends only after the user
+   approves. → **The Consent Protocol**
 2. **Capabilities are single-use and burned on read.** Both `approveAiPreview`
    and `askAi` delete the map entry *before* validating it, so a failed or replayed
    attempt consumes the capability instead of allowing a retry.
@@ -112,8 +112,9 @@ Banking continues to deny before extraction.
 
 Implemented in `electron/main.ts` (owned by
 [browser-shell.md](browser-shell.md)). Three IPC calls in order —
-`ai:prepare-preview`, `ai:approve-preview`, `ai:ask` — with two short-lived
-in-memory maps between them, `pendingAiPreviews` and `aiApprovals`.
+   `ai:prepare-preview`, `ai:review-request` and `ai:send-reviewed`. The
+   Developer panel's bridge and diagnostic flows keep their existing approval
+   tokens.
 
 ### 1. Local extraction — `prepareAiPreview()`
 
@@ -125,10 +126,9 @@ in-memory maps between them, `pendingAiPreviews` and `aiApprovals`.
    is true, it writes a `blocked` privacy event and throws
    `AI access is disabled for protected and banking pages`. Nothing is read.
 3. A tab must be open and not the home page, otherwise `Open a webpage first`.
-4. **Extraction is local and shallow.** It evaluates
-   `document.body ? document.body.innerText.slice(0, 20000) : ''` in the page.
-   `innerText` is rendered text only: no input values, no `value` attributes, no
-   cookies, no storage, no headers, no markup.
+4. **Extraction is local and shallow.** The page selection or rendered page
+   text is read in an isolated world, up to 20,000 characters. The read excludes
+   input values, cookies, storage, headers and markup.
 5. **Redaction runs immediately**, on the extracted text and separately on the tab
    title, via `redactSensitiveText`. A `local-read` privacy event records the
    title and the redaction count *before* any approval exists — the log shows the
@@ -137,11 +137,36 @@ in-memory maps between them, `pendingAiPreviews` and `aiApprovals`.
    URL reduced to its **origin** by `urlOriginForSharing`, the redacted text cut
    to the first **12,000 characters**, the summed redaction count from body and
    title, and `protectedPage: false`.
-7. It is stored as `{ preview, sourceUrl: tab.url, expiresAt: now + 5 minutes }`
-   and returned to the renderer, which shows the text alongside "*N* redacted"
-   ([src/App.tsx:430](../../src/App.tsx)).
+7. The app rechecks the tab and navigation before storing the preview for
+   five minutes. The Assistant shows the redacted text and its redaction count.
 
-### 2. Approval — `approveAiPreview(previewId, mode)`
+### 2. Assistant review and one-time send
+
+Users can remove text and edit the question before building the review. Main
+redacts the edited text and question. It shows the provider destination, model,
+instructions and user prompt using the same formatter as the outbound request.
+Only the current review can be approved. The approval consumes it before
+rechecking the account, URL, navigation and provider. The read expires after
+five minutes, including time spent editing and reviewing. The app keeps the
+review in memory.
+
+The Assistant offers four editable prompt presets. Explicit preset saves are
+workspace settings and pass through the same pattern redaction. Preview text
+and answers stay in memory. Copy answer writes to the clipboard on demand.
+
+Product extraction and comparison request source passages by default. Users
+can choose this for other prompts. Each displayed finding includes a quote
+matched against the exact approved excerpt. If the provider returns no
+matching passage, the app displays Insufficient page information.
+
+The Assistant shows the current input counts and the active provider while a
+request runs. Cancellation aborts the browser's request to Ollama or the cloud
+provider. A timeout consumes approval. Users can review and approve a new
+request against the retained excerpt while its five-minute read is valid.
+The cloud cost estimate uses user-entered prices and expected output length.
+It runs locally and the prices stay in the review panel's memory.
+
+### Developer approval — `approveAiPreview(previewId, mode)`
 
 1. The pending entry is fetched and **deleted immediately**, before any check. A
    preview id is good for exactly one approval attempt; a failed attempt does not
@@ -159,7 +184,7 @@ in-memory maps between them, `pendingAiPreviews` and `aiApprovals`.
 Note what is *not* here: no re-extraction. The approved preview object is the one
 built in step 1, and it is what will be sent verbatim.
 
-### 3. The single request — `askAi(token, question)`
+### Developer diagnostic request — `askAi(token, question)`
 
 1. The question is trimmed and must be non-empty and ≤2,000 characters (the
    renderer's textarea carries the same `maxLength`). An invalid question is

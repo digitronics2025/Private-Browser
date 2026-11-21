@@ -1,11 +1,13 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { ChromeImportOptions } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
+import type { AiPagePreview, AiRequestReview, AssistantAnswer } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings } from '../electron/types';
-import { parseWebAddress } from '../electron/security';
+import { parseWebAddress, redactSensitiveText } from '../electron/security';
+import { AI_SYSTEM_PROMPT, assistantQuestion, aiUserPrompt, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
 import { planBookmarkBatch } from '../electron/bookmark-batch';
@@ -154,6 +156,10 @@ export function installPreviewApi(): void {
     { origin: 'https://mail.google.com', capability: 'notifications', duration: 'session' },
   ] : [];
   let previewProvider: AiProviderStatus = { configured: false };
+  let assistantPage: AiPagePreview | undefined;
+  let assistantReview: { data: AiRequestReview; context: string; withEvidence: boolean } | undefined;
+  let timeoutFixtureUsed = false;
+  let previewRequest: { id: string; finish: (answer: AssistantAnswer) => void } | undefined;
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
     state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
@@ -332,6 +338,7 @@ export function installPreviewApi(): void {
       }
       const active = state.activeWorkspaceId;
       if (workspace !== undefined && workspace !== active) throw new Error('The workspace changed. Reopen its settings.');
+      if (active === 'banking' && patch.assistantPrompts) throw new Error('Assistant presets are unavailable in this workspace.');
       if (active === 'banking' && (patch.homePage !== undefined || patch.homePageUrl !== undefined
         || patch.startup !== undefined || patch.startupPages !== undefined || patch.siteKeywords !== undefined)) {
         throw new Error('Home, startup pages and site keywords are unavailable in Banking.');
@@ -525,16 +532,65 @@ export function installPreviewApi(): void {
       if (!previewProvider.configured) return { state: 'not-configured' };
       return { state: params.get('aiCheck') === 'model' ? 'model' : 'ready' };
     },
-    prepareAiPreview: (async () => {
+    prepareAiPreview: (async (scope: unknown) => {
       if (state.activeWorkspaceId === 'banking') throw new Error('AI is unavailable in this workspace');
       if (params.get('localAi') !== 'sample') throw new Error('A sample reading page is unavailable.');
-      return {
-        id: 'preview-ai-page', accountSpaceId: state.activeAccountSpaceId, tabId: state.activeTabId,
+      assistantReview = undefined;
+      assistantPage = {
+        id: crypto.randomUUID(), accountSpaceId: state.activeAccountSpaceId, tabId: state.activeTabId,
         service: 'browser', sourceRevision: 'preview-ai-page', sourceUrl: 'https://example.test/article',
         title: 'Sample catalogue', url: 'https://example.test', redactions: 0, protectedPage: false,
-        text: 'The café stocks ceramic mugs. A brass kettle sits on the shelf. الشاي متوفر اليوم.',
+        text: scope === 'selection' ? 'A brass kettle sits on the shelf.' : 'The café stocks ceramic mugs. A brass kettle sits on the shelf. الشاي متوفر اليوم.',
       };
+      return assistantPage;
     }) satisfies PrivateBrowserApi['prepareAiPreview'],
+    reviewAssistantRequest: async (id, context, questionValue, withEvidence) => {
+      if (!assistantPage || assistantPage.id !== id || assistantPage.accountSpaceId !== state.activeAccountSpaceId || assistantPage.tabId !== state.activeTabId) {
+        throw new Error('Read the page again before reviewing the request.');
+      }
+      if (!previewProvider.configured || !previewProvider.mode || !previewProvider.model) throw new Error('Configure an AI provider first.');
+      const text = redactSensitiveText(String(context));
+      const question = redactSensitiveText(String(questionValue).trim());
+      const data: AiRequestReview = {
+        id: crypto.randomUUID(), mode: previewProvider.mode, model: previewProvider.model,
+        destination: previewProvider.mode === 'local' ? 'http://127.0.0.1:11434/api/chat' : `${previewProvider.endpoint}/chat/completions`,
+        systemPrompt: AI_SYSTEM_PROMPT, userPrompt: aiUserPrompt({ ...assistantPage, text: text.text }, assistantQuestion(question.text, withEvidence === true)),
+        redactions: text.redactions + question.redactions,
+      };
+      assistantReview = { data, context: text.text, withEvidence: withEvidence === true };
+      return data;
+    },
+    sendReviewedAssistant: async (id) => {
+      if (!assistantPage || assistantPage.accountSpaceId !== state.activeAccountSpaceId || assistantPage.tabId !== state.activeTabId
+        || !assistantReview || assistantReview.data.id !== id) throw new Error('Review the request before sending it.');
+      const { data, context, withEvidence } = assistantReview;
+      assistantReview = undefined;
+      if (params.get('aiRequest') === 'timeout-once' && !timeoutFixtureUsed) {
+        timeoutFixtureUsed = true;
+        return { kind: 'timeout' };
+      }
+      if (params.get('aiRequest') === 'waiting') {
+        return new Promise<AssistantAnswer>((finish) => { previewRequest = { id: data.id, finish }; });
+      }
+      assistantPage = undefined;
+      const answer = 'The sample shows a brass kettle on the shelf.';
+      const fixture = withEvidence ? JSON.stringify({ findings: [{
+        claim: answer, quote: params.get('aiSources') === 'unverified' ? 'This passage does not occur in the sample.' : 'A brass kettle sits on the shelf.',
+      }] }) : answer;
+      return readAssistantAnswer(fixture, withEvidence, context);
+    },
+    cancelReviewedAssistant: async (id) => {
+      if (previewRequest && previewRequest.id === id) {
+        previewRequest.finish({ kind: 'cancelled' });
+        previewRequest = undefined;
+      }
+    },
+    revokeAiContext: async () => {
+      assistantReview = undefined;
+      assistantPage = undefined;
+      previewRequest?.finish({ kind: 'cancelled' });
+      previewRequest = undefined;
+    },
     getLocalAiModels: async () => {
       if (state.activeWorkspaceId === 'banking') throw new Error('AI is unavailable in this workspace');
       return params.get('localAi') === 'sample'
@@ -547,6 +603,7 @@ export function installPreviewApi(): void {
       return previewProvider;
     },
     clearAiProvider: async () => { previewProvider = { configured: false }; return previewProvider; },
+    copyText: async (value) => navigator.clipboard.writeText(String(value)),
     importBookmarkHtml: (async (id: unknown) => {
       const accountSpaceId = state.activeAccountSpaceId;
       if (state.activeWorkspaceId === 'banking' || id !== accountSpaceId

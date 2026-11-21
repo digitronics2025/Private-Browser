@@ -633,6 +633,23 @@ export interface AiApproval {
   preview: AiPagePreview;
 }
 
+export type AiPreviewScope = 'page' | 'selection';
+
+export interface AiRequestReview {
+  id: string;
+  mode: 'cloud' | 'local';
+  destination: string;
+  model: string;
+  systemPrompt: string;
+  userPrompt: string;
+  redactions: number;
+}
+
+export type AssistantAnswer =
+  | { kind: 'answer'; text: string }
+  | { kind: 'sources'; items: { claim: string; quote: string }[] }
+  | { kind: 'insufficient' | 'cancelled' | 'timeout' };
+
 export interface AiProviderStatus {
   configured: boolean;
   mode?: 'cloud' | 'local';

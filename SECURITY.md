@@ -87,7 +87,9 @@ Google-host-only, redirect-free, bounded and magic-byte validated.
 - Page extraction reads rendered text only and never reads input values, cookies, local storage or authentication headers.
 - Sensitive-pattern redaction runs locally before preview.
 - Page previews for the AI assistant include only the page origin: query parameters, paths and fragments are never shared. Developer diagnostics previews (Development workspace only) include the sanitized origin and path, never the query or fragment, and are shown in full before approval.
-- The user approves the exact sanitized preview through a five-minute, single-use capability token.
+- The Assistant shows the exact sanitized messages, provider destination and
+  model before an explicit one-time send. The review is bound to the five-minute
+  read window and the page navigation.
 - Approval also binds the opaque Account Space, exact tab, Google-service class
   and source revision. Mailbox content is never cloud-model input.
 - Every local read, approval, denial and vault access is logged without secret values.

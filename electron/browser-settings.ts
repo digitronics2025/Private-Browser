@@ -1,5 +1,6 @@
-import { DEFAULT_SEARCH_TEMPLATE, isAllowedRemoteUrl, normalizeNavigationInput, parseWebAddress } from './security.js';
+import { DEFAULT_SEARCH_TEMPLATE, isAllowedRemoteUrl, normalizeNavigationInput, parseWebAddress, redactSensitiveText } from './security.js';
 import { WORKSPACE_IDS } from './account-space-validation.js';
+import { ASSISTANT_PRESETS, type AssistantPresetId, type AssistantPresetOverrides } from './ai-prompt.js';
 import type { WorkspaceId } from './types.js';
 
 export type SearchEngineId = 'duckduckgo' | 'google' | 'bing' | 'brave' | 'startpage' | 'ecosia' | 'custom';
@@ -42,6 +43,7 @@ export interface BrowserSettings {
   startupPages?: string[];
   siteKeywords?: SiteKeyword[];
   spellcheck?: SpellcheckSettings;
+  assistantPrompts?: AssistantPresetOverrides;
 }
 
 export type BrowserSettingsPatch = Partial<BrowserSettings>;
@@ -68,7 +70,7 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   startup: 'continue',
 };
 
-const PATCH_KEYS = new Set(['searchEngine', 'customSearchTemplate', 'homePage', 'homePageUrl', 'startup', 'startupPages', 'siteKeywords', 'spellcheck']);
+const PATCH_KEYS = new Set(['searchEngine', 'customSearchTemplate', 'homePage', 'homePageUrl', 'startup', 'startupPages', 'siteKeywords', 'spellcheck', 'assistantPrompts']);
 
 function member<T extends string>(values: readonly T[], value: unknown): value is T {
   return typeof value === 'string' && (values as readonly string[]).includes(value);
@@ -82,6 +84,18 @@ function requireSpellcheck(value: unknown): SpellcheckSettings {
     throw new Error('Choose a supported spellcheck language.');
   }
   return { enabled, languages: [...new Set(languages)] };
+}
+
+function requireAssistantPrompts(value: unknown): AssistantPresetOverrides {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid prompt presets.');
+  const result: AssistantPresetOverrides = {};
+  for (const [key, prompt] of Object.entries(value)) {
+    if (!Object.hasOwn(ASSISTANT_PRESETS, key) || typeof prompt !== 'string' || !prompt.trim() || prompt.length > 2000) {
+      throw new Error('Enter a prompt of up to 2,000 characters.');
+    }
+    result[key as AssistantPresetId] = redactSensitiveText(prompt.trim()).text.slice(0, 2000);
+  }
+  return result;
 }
 
 /**
@@ -175,6 +189,9 @@ export function sanitizeBrowserSettings(value: unknown): BrowserSettings {
   if (input.spellcheck !== undefined) {
     try { settings.spellcheck = requireSpellcheck(input.spellcheck); } catch { /* Ignore invalid stored spellcheck settings. */ }
   }
+  if (input.assistantPrompts !== undefined) {
+    try { settings.assistantPrompts = requireAssistantPrompts(input.assistantPrompts); } catch { /* Ignore invalid stored prompt presets. */ }
+  }
   return settings;
 }
 
@@ -211,6 +228,7 @@ export function requireBrowserSettingsPatch(value: unknown): BrowserSettingsPatc
   if ('startupPages' in input) patch.startupPages = requireStartupPages(input.startupPages);
   if ('siteKeywords' in input) patch.siteKeywords = requireSiteKeywords(input.siteKeywords);
   if ('spellcheck' in input) patch.spellcheck = requireSpellcheck(input.spellcheck);
+  if ('assistantPrompts' in input) patch.assistantPrompts = requireAssistantPrompts(input.assistantPrompts);
   if (patch.searchEngine === 'custom' && patch.customSearchTemplate === undefined) throw new Error('Enter a search address');
   if (patch.homePage === 'url' && patch.homePageUrl === undefined) throw new Error('Enter a web address');
   if (patch.startup === 'pages' && !patch.startupPages?.length) throw new Error('Add at least one startup page.');

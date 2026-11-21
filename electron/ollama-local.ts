@@ -2,15 +2,16 @@ import { request } from 'node:http';
 import type { LocalAiModels } from './types.js';
 
 type Path = '/api/status' | '/api/tags' | '/api/show' | '/api/chat';
-type Transport = (path: Path, value?: unknown) => Promise<unknown>;
+type Transport = (path: Path, value?: unknown, cancellation?: AbortSignal) => Promise<unknown>;
 const MAX_BYTES = 512 * 1024;
 
-function ollamaRequest(path: Path, value?: unknown): Promise<unknown> {
+function ollamaRequest(path: Path, value?: unknown, cancellation?: AbortSignal): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const body = value === undefined ? undefined : JSON.stringify(value);
+    const timeout = AbortSignal.timeout(path === '/api/chat' ? 120_000 : 4_000);
     const connection = request({
       hostname: '127.0.0.1', port: 11434, path, method: body === undefined ? 'GET' : 'POST',
-      agent: false, signal: AbortSignal.timeout(path === '/api/chat' ? 120_000 : 4_000),
+      agent: false, signal: cancellation ? AbortSignal.any([cancellation, timeout]) : timeout,
       headers: { accept: 'application/json', ...(body ? { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } : {}) },
     }, (response) => {
       if (response.statusCode !== 200) {
@@ -47,12 +48,12 @@ function remote(model: Record<string, unknown>): boolean {
 export class OllamaLocal {
   constructor(private readonly transport: Transport = ollamaRequest) {}
 
-  async models(): Promise<LocalAiModels> {
+  async models(cancellation?: AbortSignal): Promise<LocalAiModels> {
     try {
-      const localOnly = record(record(await this.transport('/api/status'))?.cloud)?.disabled;
+      const localOnly = record(record(await this.transport('/api/status', undefined, cancellation))?.cloud)?.disabled;
       if (typeof localOnly !== 'boolean') return { state: 'unavailable', models: [] };
       if (!localOnly) return { state: 'cloud-enabled', models: [] };
-      const response = record(await this.transport('/api/tags'));
+      const response = record(await this.transport('/api/tags', undefined, cancellation));
       if (!Array.isArray(response?.models)) return { state: 'unavailable', models: [] };
       const names = new Set<string>();
       for (const entry of response.models) {
@@ -68,28 +69,31 @@ export class OllamaLocal {
       }
       return { state: 'ready', models: [...names].sort() };
     } catch {
+      cancellation?.throwIfAborted();
       return { state: 'unavailable', models: [] };
     }
   }
 
-  async requireInstalledModel(model: string): Promise<void> {
-    const readiness = await this.models();
+  async requireInstalledModel(model: string, cancellation?: AbortSignal): Promise<void> {
+    const readiness = await this.models(cancellation);
     if (readiness.state === 'cloud-enabled') throw new Error('Turn off Ollama cloud features and check again.');
     if (readiness.state !== 'ready') throw new Error('Start a version of Ollama that reports local-only status on this device.');
     if (!readiness.models.includes(model)) throw new Error('Choose an installed local chat model.');
-    const details = record(await this.transport('/api/show', { model }));
+    const details = record(await this.transport('/api/show', { model }, cancellation));
     if (!details || remote(details) || !record(details.model_info)
       || (Array.isArray(details.capabilities) && !details.capabilities.includes('completion'))) {
       throw new Error('Ollama did not confirm an installed local chat model.');
     }
   }
 
-  async ask(model: string, system: string, prompt: string, beforeSend: () => void): Promise<string> {
-    await this.requireInstalledModel(model);
+  async ask(model: string, system: string, prompt: string, beforeSend: () => void, cancellation?: AbortSignal): Promise<string> {
+    await this.requireInstalledModel(model, cancellation);
+    cancellation?.throwIfAborted();
     beforeSend();
+    cancellation?.throwIfAborted();
     const result = record(await this.transport('/api/chat', {
       model, stream: false, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
-    }));
+    }, cancellation));
     const answer = record(result?.message)?.content;
     if (!result || remote(result) || typeof answer !== 'string' || !answer.trim()) throw new Error('Ollama did not return a local answer.');
     return answer.trim().slice(0, 30_000);
