@@ -7,6 +7,7 @@ import { AccountPermissionGrants } from './AccountPermissionGrants';
 import { GoogleHealthCard } from './GoogleHealthCard';
 import { BackupRestore } from './BackupRestore';
 import { BackupUpload } from './BackupUpload';
+import { GoogleAccountOverview } from './GoogleAccountOverview';
 
 const ACCOUNT_COLORS: AccountSpaceColor[] = ['indigo', 'sky', 'emerald', 'amber', 'rose', 'violet', 'slate'];
 const GOOGLE_MODULE_OPTIONS: Array<{ id: GoogleModule; label: string; detail: string; highRisk?: boolean }> = [
@@ -184,6 +185,8 @@ export function AccountManager({ state, onClose, onToast }: { state: BrowserSnap
                 <KeyRound size={14} /> Create recovery code
               </button>}
           </section>}
+          {canUseGoogle && selected.googleConnection === 'connected' && <GoogleAccountOverview
+            key={'overview-' + selected.id} account={selected} active={state.activeAccountSpaceId === selected.id} onOpenOriginal={openGoogleWebsite} />}
           {!selected.locked && selected.googleConnection === 'connected' && selected.enabledModules.includes('encrypted-backup')
             && <BackupRestore key={selected.id} account={selected} workspaceName={state.workspaces.find((workspace) => workspace.id === selected.workspaceId)?.name ?? selected.workspaceId} onToast={onToast} />}
           {!selected.locked && selected.workspaceId !== 'banking' && <AccountPermissionGrants key={selected.id} accountSpaceId={selected.id} />}

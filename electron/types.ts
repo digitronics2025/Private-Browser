@@ -1,4 +1,4 @@
-import type { BrowserSettings, SpellcheckLanguage } from './browser-settings.js';
+import type { BrowserSettings, BrowserSettingsPatch, SpellcheckLanguage } from './browser-settings.js';
 import type { AccountPanelPreferences, PinnablePanelTool, UiPreferences } from './ui-preferences.js';
 
 export type { SideAppCommand, SideAppId, SideAppRect, SideAppSnapshot, SideAppStatus } from './side-app-registry.js';
@@ -270,6 +270,23 @@ export interface GmailOverview {
   recent: GmailMessageHeader[];
 }
 
+export type GoogleOverviewService = 'gmail' | 'drive' | 'calendar';
+
+export interface GoogleOverviewItem {
+  id: string;
+  title: string;
+  detail?: string;
+  date?: string;
+  original?: string;
+}
+
+export interface GoogleOverviewPage {
+  items: GoogleOverviewItem[];
+  page: number;
+  next?: string;
+  limited: boolean;
+}
+
 export interface DriveFileSummary {
   id: string;
   name: string;
@@ -379,6 +396,7 @@ export interface BrowserStateManifestV2 {
   /** Optional: builds before 0.7.0 ignore it and fall back to defaults. */
   settings?: BrowserSettings;
   workspaceSettings?: Partial<Record<WorkspaceId, BrowserSettings>>;
+  chromeProfileImports?: Record<string, AccountSpaceId>;
   routines?: BrowserRoutine[];
 }
 
@@ -645,7 +663,14 @@ export interface ChromeProfileSource {
   isDefault: boolean;
   hasBookmarks: boolean;
   hasHistory: boolean;
+  hasPreferences?: boolean;
+  suggestedAccountSpaceId?: AccountSpaceId;
+  imported?: boolean;
+  importedInto?: AccountSpaceId;
 }
+
+export type ChromeSettingChoice = 'search' | 'home' | 'startup';
+export type ChromeSettingsSelection = Partial<Record<ChromeSettingChoice, boolean>>;
 
 export interface ChromeImportOptions {
   profileId: string;
@@ -653,12 +678,14 @@ export interface ChromeImportOptions {
   accountSpaceId: AccountSpaceId;
   bookmarks: boolean;
   history: boolean;
+  settings?: ChromeSettingsSelection;
 }
 
 export interface ChromeImportResult {
   imported: { bookmarks: number; history: number; passwords: number };
   skipped: { bookmarks: number; history: number; passwords: number };
   warnings: string[];
+  appliedSettings?: ChromeSettingChoice[];
 }
 
 export interface ChromeImportReview {
@@ -671,6 +698,7 @@ export interface ChromeImportReview {
   folders: Array<{ location: Bookmark['location']; path: string[]; count: number }>;
   moreFolders: number;
   historyRange?: { from: string; through: string };
+  settingsPatch?: BrowserSettingsPatch;
 }
 
 export interface RuntimeBrowserStateV2 {
@@ -690,6 +718,7 @@ export interface RuntimeBrowserStateV2 {
   ui: UiPreferences;
   settings: BrowserSettings;
   workspaceSettings?: Partial<Record<WorkspaceId, BrowserSettings>>;
+  chromeProfileImports?: Record<string, AccountSpaceId>;
   routines?: BrowserRoutine[];
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
   bookmarkIconsByAccountSpace: Record<string, Record<string, string>>;
@@ -802,6 +831,8 @@ export interface DeveloperConsoleEntry {
 
 export interface DeveloperNetworkIssue {
   at: string;
+  firstAt?: string;
+  count?: number;
   method: string;
   resourceType: string;
   url: string;
@@ -846,7 +877,9 @@ export interface DeveloperPageInfo {
   selector?: string;
   element?: string;
   sourcePath?: string;
+  sourceReference?: string;
   confidence?: 'exact' | 'source-map' | 'nearest';
+  failures?: DeveloperNetworkIssue[];
 }
 
 export interface VaultItemInput {

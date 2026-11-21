@@ -55,7 +55,7 @@ import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
-import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettings, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
 import { DEFAULT_UI_PREFERENCES, isPinnablePanelTool, mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
@@ -66,6 +66,9 @@ import type {
   AccountSpaceId,
   ExternalBrowserId,
   GoogleModule,
+  GoogleOperationResult,
+  GoogleOverviewPage,
+  GoogleOverviewService,
   AiApproval,
   AiPagePreview,
   PageExcerptReview,
@@ -119,7 +122,7 @@ import type {
   TabBatchScope,
   TabGroup,
 } from './types.js';
-import { devServerStatusSchema, gitRevisionSchema, reportHistoryPageSchema, reportHistoryQuerySchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
+import { devServerStatusSchema, gitRevisionSchema, inspectionSourcePath, inspectionSourceSchema, localDevelopmentAddress, reportHistoryPageSchema, reportHistoryQuerySchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
 import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
 import { MyVaultDiskStore } from './myvault/vault-store.js';
@@ -142,7 +145,7 @@ import { canInstallPasskeyProvider, InternalPasskeyController, type PasskeyOptIn
 import { PlatformUnlockError, WindowsHelloSigner } from './myvault/windows-hello.js';
 import { PUBLIC_UPDATE_ENDPOINT, UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
-import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
+import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl, trackNetworkFailure } from './developer-tools.js';
 import { IpcGuard } from './ipc-guard.js';
 import { clearAndVerifyAccountSession } from './account-session.js';
 import { AccountPermissionManager } from './account-permissions.js';
@@ -151,6 +154,7 @@ import { ExternalBrowserLauncher } from './external-browser.js';
 import { GoogleOAuthManager } from './google-oauth.js';
 import { GoogleTokenBroker } from './google-token-broker.js';
 import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailSendInput } from './google-services.js';
+import { GOOGLE_OVERVIEW_MAX_PAGES, googleOverviewModule } from './google-overview.js';
 import { healthFromGoogleConnection, observeGoogleHealth } from './google-connection-health.js';
 import type { GoogleConnectionHealth } from './types.js';
 import { AccountBackupManager, backupRestoreRevision, backupUploadRevision, planBackupRestore, type BackupWriteResult } from './account-backup.js';
@@ -160,6 +164,7 @@ import { ControlCenterLink, developerEvidence } from './control-center-link.js';
 import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
 import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-status.js';
 import { listChromeProfiles, readChromeProfile, type ChromeProfileData } from './chrome-importer.js';
+import { chromeProfileKey, MAX_CHROME_PROFILE_RECEIPTS } from './chrome-profile-preferences.js';
 import { chromeImportBookmarkStamp, chromeImportKey, planChromeImport } from './chrome-import-review.js';
 import type { ChromeImportReview } from './types.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
@@ -301,6 +306,7 @@ class BrowserController {
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
   private readonly developerPreviewIds = new Set<string>();
+  private inspectedSource?: { reference: string; projectId: string; tabId: string; url: string; expiresAt: number };
   private readonly clipboardGuard = new ClipboardGuard({
     writeText: (text) => process.platform === 'win32' ? clipboard.write([new ClipboardItem({
       'text/plain': text,
@@ -317,6 +323,10 @@ class BrowserController {
   };
   private readonly faviconCache = new Map<string, string>();
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
+  private readonly googleOverviewCursors = new Map<string, {
+    accountSpaceId: AccountSpaceId; service: GoogleOverviewService; subject: string;
+    token: string; page: number; timeMin: string; expiresAt: number; inUse?: boolean;
+  }>();
   private readonly googleChecks = new Map<AccountSpaceId, GoogleConnectionHealth>();
   private expectedInstaller?: ExpectedInstaller;
   private readonly sessionLock = new BrowserSessionLock(join(app.getPath('userData'), 'browser-session.lock'));
@@ -334,8 +344,12 @@ class BrowserController {
   private readonly bookmarkUndo = new Map<AccountSpaceId, BookmarkUndo<AccountSpaceBookmark>>();
   private pendingChromeImport?: {
     id: string; accountSpaceId: AccountSpaceId; initiatingAccount: AccountSpaceId; source: ChromeProfileData; importKey: string; expiresAt: number;
+    profileKey: string; settingsRevision?: string;
   };
-  private readonly chromeImportUndo = new Map<AccountSpaceId, { bookmarks: Map<string, string>; history: Set<string> }>();
+  private readonly chromeImportUndo = new Map<AccountSpaceId, {
+    profileKey: string; bookmarks: Map<string, string>; history: Set<string>;
+    settings?: { workspaceId: WorkspaceId; before: BrowserSettings; after: BrowserSettings };
+  }>();
   private readonly closedTabBatches = new Map<AccountSpaceId, {
     entries: Array<{ tab: AccountSpaceBrowserTab; index: number }>;
     groups: TabGroup[];
@@ -1473,6 +1487,58 @@ class BrowserController {
     return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.gmailOverview(accountSpaceId, signal));
   }
 
+  async googleOverviewPage(accountSpaceId: AccountSpaceId, operationId: string, service: GoogleOverviewService, cursor?: string):
+    Promise<GoogleOperationResult<GoogleOverviewPage>> {
+    const readCurrent = () => {
+      const state = this.store.get();
+      const account = this.requireAccountMembership(accountSpaceId);
+      const record = this.accounts.require(accountSpaceId);
+      if (this.sessionIsLocked || this.activeAccountSpaceId(state) !== accountSpaceId || account.workspaceId === 'banking'
+        || account.locked || account.googleConnection !== 'connected' || !record.googleIdentity
+        || !googleOverviewModule(service, record.enabledModules)) throw new Error('This Google tool is unavailable in the active Account Space.');
+      return { subject: record.googleIdentity.sub, modules: record.enabledModules };
+    };
+    const before = readCurrent();
+    const now = Date.now();
+    for (const [id, pending] of this.googleOverviewCursors) {
+      if (pending.expiresAt <= now) this.googleOverviewCursors.delete(id);
+    }
+    const previous = cursor ? this.googleOverviewCursors.get(cursor) : undefined;
+    if (cursor && (!previous || previous.accountSpaceId !== accountSpaceId || previous.service !== service
+      || previous.subject !== before.subject || previous.inUse)) throw new Error('This overview expired. Refresh the first page.');
+    if (previous) previous.inUse = true;
+    try {
+      const timeMin = previous?.timeMin ?? new Date(now).toISOString();
+      return await this.runGoogleOperation(accountSpaceId, operationId, service, async (signal) => {
+        const result = await this.googleServices.recentOverviewPage(accountSpaceId, service, before.modules, previous?.token, timeMin, signal);
+        signal.throwIfAborted();
+        const after = readCurrent();
+        if (before.subject !== after.subject || googleOverviewModule(service, before.modules) !== googleOverviewModule(service, after.modules)) {
+          throw new Error('Google access changed. Refresh the first page.');
+        }
+        if (!result.ok || !result.data) return { ok: false, error: result.error };
+        if (cursor) this.googleOverviewCursors.delete(cursor);
+        const page = previous?.page ?? 1;
+        let next: string | undefined;
+        const { items, token } = result.data;
+        const limited = Boolean(token && page >= GOOGLE_OVERVIEW_MAX_PAGES);
+        if (token && !limited) {
+          while (this.googleOverviewCursors.size >= 64) this.googleOverviewCursors.delete(this.googleOverviewCursors.keys().next().value!);
+          next = randomUUID();
+          this.googleOverviewCursors.set(next, {
+            accountSpaceId, service, subject: before.subject, token, timeMin, page: page + 1,
+            expiresAt: Date.now() + 2 * 60_000,
+          });
+          const key = next;
+          setTimeout(() => this.googleOverviewCursors.delete(key), 2 * 60_000).unref();
+        }
+        return { ok: true, data: { items, page, next, limited } };
+      });
+    } finally {
+      if (previous) previous.inUse = false;
+    }
+  }
+
   searchGmail(accountSpaceId: AccountSpaceId, operationId: string, query?: string) {
     return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.searchGmail(accountSpaceId, query ?? '', signal));
   }
@@ -1746,6 +1812,9 @@ class BrowserController {
     this.googleOAuth.clearMemory(accountSpaceId);
     this.googleServices.clearAccount(accountSpaceId);
     this.googleChecks.delete(accountSpaceId);
+    for (const [id, pending] of this.googleOverviewCursors) {
+      if (pending.accountSpaceId === accountSpaceId) this.googleOverviewCursors.delete(id);
+    }
     this.backups.clearAccount(accountSpaceId);
     if (this.backupRestoreReview?.preview.accountSpaceId === accountSpaceId) this.backupRestoreReview = undefined;
     for (const [operationId, operation] of this.operations) {
@@ -1940,10 +2009,10 @@ class BrowserController {
       }
       return;
     }
-    if (settings.startup !== 'home') return;
+    if (settings.startup !== 'home' && settings.startup !== 'new-tab') return;
     try {
       await this.newTab(state.activeWorkspaceId);
-      await this.goHome();
+      if (settings.startup === 'home') await this.goHome();
     } catch {
       this.addPrivacyEvent('blocked', 'Home page could not open at startup', 'The browser started with the restored tabs');
     }
@@ -2359,7 +2428,26 @@ class BrowserController {
   }
 
   listChromeProfiles(): ChromeProfileSource[] {
-    return listChromeProfiles();
+    const state = this.store.get();
+    if (state.activeWorkspaceId === 'banking' || this.store.isReadOnly()) return [];
+    const destinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && isAvailableRegularAccount(state, account));
+    return listChromeProfiles().map((profile) => {
+      const imported = state.chromeProfileImports?.[chromeProfileKey(profile.id)];
+      const matches = destinations.filter((account) => account.label.localeCompare(profile.name, undefined, { sensitivity: 'accent' }) === 0);
+      return {
+        ...profile, imported: Boolean(imported),
+        importedInto: destinations.find(({ id }) => id === imported)?.id,
+        suggestedAccountSpaceId: imported ? undefined : matches.length === 1 ? matches[0].id
+          : profile.isDefault ? destinations.find(({ id }) => id === this.activeAccountSpaceId(state))?.id : undefined,
+      };
+    });
+  }
+
+  private unimportedChromeProfile(state: RuntimeBrowserStateV2, profileKey: string): void {
+    if (state.chromeProfileImports?.[profileKey]) throw new Error('This Chrome profile has already been imported.');
+    if (Object.keys(state.chromeProfileImports ?? {}).length >= MAX_CHROME_PROFILE_RECEIPTS) {
+      throw new Error('This browser has reached its Chrome import receipt limit.');
+    }
   }
 
   private requireChromeDestination(id: AccountSpaceId, workspaceId?: WorkspaceId) {
@@ -2373,15 +2461,17 @@ class BrowserController {
   previewChromeImport(options: ChromeImportOptions): ChromeImportReview {
     const { accountSpaceId } = options;
     this.requireChromeDestination(accountSpaceId, options.workspaceId);
-    if (!options.bookmarks && !options.history) throw new Error('Choose bookmarks, history or both.');
-    this.pendingChromeImport = undefined;
-    const source = readChromeProfile(options.profileId, options.workspaceId, accountSpaceId, options.bookmarks, options.history);
     const state = this.store.get();
+    const profileKey = chromeProfileKey(options.profileId);
+    this.unimportedChromeProfile(state, profileKey);
+    this.pendingChromeImport = undefined;
+    const source = readChromeProfile(options.profileId, options.workspaceId, accountSpaceId, options.bookmarks, options.history, undefined, options.settings);
     const plan = planChromeImport(state, source);
     const id = randomUUID();
     const expiresIn = 5 * 60_000;
     this.pendingChromeImport = {
       id, accountSpaceId, initiatingAccount: this.activeAccountSpaceId(state), source, importKey: chromeImportKey(plan), expiresAt: Date.now() + expiresIn,
+      profileKey, settingsRevision: source.settingsPatch ? JSON.stringify(settingsForWorkspace(state, options.workspaceId)) : undefined,
     };
     setTimeout(() => this.discardChromeImport(id), expiresIn).unref();
     return { id, accountSpaceId, ...plan.summary };
@@ -2398,24 +2488,38 @@ class BrowserController {
     if (review.expiresAt <= Date.now() || review.initiatingAccount !== this.activeAccountSpaceId(this.store.get())) {
       throw new Error('The import preview expired. Preview this Chrome import again.');
     }
-    this.requireChromeDestination(review.accountSpaceId);
-    const plan = planChromeImport(this.store.get(), review.source);
+    const account = this.requireChromeDestination(review.accountSpaceId);
+    const state = this.store.get();
+    this.unimportedChromeProfile(state, review.profileKey);
+    if (review.settingsRevision !== undefined && review.settingsRevision !== JSON.stringify(settingsForWorkspace(state, account.workspaceId))) {
+      throw new Error('Workspace settings changed. Preview this Chrome import again.');
+    }
+    const plan = planChromeImport(state, review.source);
     if (chromeImportKey(plan) !== review.importKey) throw new Error('Browsing data changed. Preview this Chrome import again.');
-    return this.applyChromeImport(review.accountSpaceId, plan);
+    return this.applyChromeImport(review.accountSpaceId, account.workspaceId, review.profileKey, plan);
   }
 
   importChrome(options: ChromeImportOptions): ChromeImportResult {
     this.requireChromeDestination(options.accountSpaceId, options.workspaceId);
-    return this.applyChromeImport(options.accountSpaceId, planChromeImport(this.store.get(),
+    if (Object.values(options.settings ?? {}).some(Boolean)) throw new Error('Preview Chrome settings before importing them.');
+    const state = this.store.get();
+    const profileKey = chromeProfileKey(options.profileId);
+    this.unimportedChromeProfile(state, profileKey);
+    return this.applyChromeImport(options.accountSpaceId, options.workspaceId, profileKey, planChromeImport(state,
       readChromeProfile(options.profileId, options.workspaceId, options.accountSpaceId, options.bookmarks, options.history)));
   }
 
-  private applyChromeImport(id: AccountSpaceId, plan: ReturnType<typeof planChromeImport>): ChromeImportResult {
-    if (plan.bookmarks.length || plan.history.length) {
+  private applyChromeImport(id: AccountSpaceId, workspaceId: WorkspaceId, profileKey: string, plan: ReturnType<typeof planChromeImport>): ChromeImportResult {
+    const patch = plan.summary.settingsPatch;
+    if (plan.bookmarks.length || plan.history.length || patch) {
+      const before = patch ? settingsForWorkspace(this.store.get(), workspaceId) : undefined;
+      const newSettings = before && patch ? { workspaceId, before, after: mergeBrowserSettings(before, patch) } : undefined;
       this.store.update((state) => {
         state.bookmarks.push(...plan.bookmarks);
         state.history.push(...plan.history);
         state.history.sort((left, right) => right.visitedAt.localeCompare(left.visitedAt));
+        (state.chromeProfileImports ??= {})[profileKey] = id;
+        if (newSettings) (state.workspaceSettings ??= {})[workspaceId] = newSettings.after;
         state.privacyLog.unshift({
           id: randomUUID(), at: new Date().toISOString(), kind: 'local-read', title: 'Chrome data imported',
           detail: `${plan.bookmarks.length} bookmarks and ${plan.history.length} history entries imported locally`,
@@ -2424,6 +2528,7 @@ class BrowserController {
         state.privacyLog = state.privacyLog.slice(0, 100);
       });
       this.chromeImportUndo.set(id, {
+        profileKey, settings: newSettings,
         bookmarks: new Map(plan.bookmarks.map((item) => [item.id, chromeImportBookmarkStamp(item)])),
         history: new Set(plan.history.map((item) => item.id)),
       });
@@ -2437,10 +2542,10 @@ class BrowserController {
     return this.chromeImportUndo.has(id);
   }
 
-  undoChromeImport(id: AccountSpaceId): { bookmarks: number; history: number } {
+  undoChromeImport(id: AccountSpaceId): { bookmarks: number; history: number; settingsRestored?: boolean } {
     this.requireChromeDestination(id);
     const undo = this.chromeImportUndo.get(id);
-    const removed = { bookmarks: 0, history: 0 };
+    const removed: { bookmarks: number; history: number; settingsRestored?: boolean } = { bookmarks: 0, history: 0 };
     if (!undo) return removed;
     this.store.update((state) => {
       state.bookmarks = state.bookmarks.filter((entry) => {
@@ -2454,6 +2559,15 @@ class BrowserController {
         removed.history += 1;
         return false;
       });
+      if (undo.settings) {
+        const { workspaceId, before, after } = undo.settings;
+        removed.settingsRestored = JSON.stringify(settingsForWorkspace(state, workspaceId)) === JSON.stringify(after);
+        if (removed.settingsRestored) (state.workspaceSettings ??= {})[workspaceId] = before;
+      }
+      if (removed.bookmarks === undo.bookmarks.size && removed.history === undo.history.size
+        && (!undo.settings || removed.settingsRestored) && state.chromeProfileImports?.[undo.profileKey] === id) {
+        delete state.chromeProfileImports[undo.profileKey];
+      }
     });
     this.chromeImportUndo.delete(id);
     this.broadcast();
@@ -2616,10 +2730,19 @@ class BrowserController {
 
   async runBridgeAction(action: DeveloperBridgeAction, payload: Record<string, unknown>): Promise<unknown> {
     this.requireDeveloperWorkspace();
-    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'source.open', 'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
+    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
     if (!allowed.has(action)) throw new Error('Unsupported VS Code action');
     const bridge = this.vscodeBridge.status();
     const projectId = bridge.project?.project.id;
+    if (action === 'inspect.open-source') {
+      const target = this.requireDeveloperTarget();
+      const source = this.inspectedSource;
+      if (this.sessionIsLocked || !source || source.reference !== payload.reference || source.projectId !== projectId
+        || source.tabId !== target.tab.id || source.url !== target.tab.url || source.expiresAt <= Date.now()) {
+        throw new Error('Inspect the current page again to confirm the source file.');
+      }
+      return this.vscodeBridge.request(action, { projectId, reference: source.reference });
+    }
     if ((action.startsWith('test.') || action.startsWith('reports.')) && !projectId) throw new Error('Choose an approved workspace first.');
     if (action === 'reports.search' || action === 'test.cancel' || (action === 'test.rerun' && payload.reportId)) {
       const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
@@ -2680,20 +2803,56 @@ class BrowserController {
 
   async inspectDeveloperPage(selectElement: boolean): Promise<DeveloperPageInfo> {
     const target = this.requireDeveloperTarget();
+    this.inspectedSource = undefined;
+    const initialUrl = target.tab.url;
     const expression = selectElement ? `new Promise((resolve) => {
       const finish = (value) => { document.removeEventListener('click', click, true); document.removeEventListener('keydown', key, true); resolve(value); };
       const selector = (node) => { if (node.id) return '#' + CSS.escape(node.id); const parts = []; for (let item = node; item && item.nodeType === 1 && parts.length < 5; item = item.parentElement) { let part = item.tagName.toLowerCase(); if (item.classList.length) part += '.' + [...item.classList].slice(0, 2).map((name) => CSS.escape(name)).join('.'); parts.unshift(part); } return parts.join(' > '); };
-      const click = (event) => { event.preventDefault(); event.stopPropagation(); const node = event.target; finish({ route: location.pathname, framework: window.__REACT_DEVTOOLS_GLOBAL_HOOK__ ? 'React' : 'Unknown', viewport: innerWidth + '?' + innerHeight, selector: selector(node), element: node.tagName.toLowerCase() }); };
+      const click = (event) => {
+        event.preventDefault(); event.stopPropagation();
+        const node = event.target;
+        if (!(node instanceof Element)) { finish({}); return; }
+        const source = node instanceof HTMLScriptElement ? node.src : node instanceof HTMLLinkElement && node.rel === 'stylesheet' ? node.href : undefined;
+        finish({ route: location.pathname, framework: window.__REACT_DEVTOOLS_GLOBAL_HOOK__ ? 'React' : 'Unknown', viewport: innerWidth + ' × ' + innerHeight, selector: selector(node), element: node.tagName.toLowerCase(), source });
+      };
       const key = (event) => { if (event.key === 'Escape') finish({ route: location.pathname, framework: 'Unknown', viewport: innerWidth + '?' + innerHeight }); };
       document.addEventListener('click', click, true); document.addEventListener('keydown', key, true); setTimeout(() => finish({ route: location.pathname, framework: 'Unknown', viewport: innerWidth + '?' + innerHeight }), 60000);
     })` : `(() => ({ route: location.pathname, framework: window.__REACT_DEVTOOLS_GLOBAL_HOOK__ ? 'React' : 'Unknown', viewport: innerWidth + '?' + innerHeight }))()`;
-    const raw = await this.evaluateWithCdp(target.contents, expression, selectElement) as Record<string, unknown>;
+    const result = await this.evaluateWithCdp(target.contents, expression, selectElement);
+    const raw = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+    const requireSamePage = () => {
+      const current = this.requireDeveloperTarget();
+      if (current.contents !== target.contents || current.tab.url !== initialUrl || this.sessionIsLocked) {
+        throw new Error('The page changed. Inspect it again.');
+      }
+      return current;
+    };
+    const current = requireSamePage();
     const clean = (value: unknown, limit: number) => sanitizeDiagnosticText(String(value ?? ''), limit).text;
     const selector = clean(raw.selector, 500);
-    const page: DeveloperPageInfo = { route: clean(raw.route, 1_000), framework: clean(raw.framework, 100), viewport: clean(raw.viewport, 50), ...(selector ? { selector, element: clean(raw.element, 100), confidence: 'nearest' as const } : {}) };
-    if (this.vscodeBridge.status().state !== 'connected' || !this.vscodeBridge.status().project) return page;
-    const sourceUrl = target.runtime.console.at(-1)?.source;
-    return await this.vscodeBridge.request('inspect.page', { ...page, ...(sourceUrl ? { sourceUrl } : {}) }) as DeveloperPageInfo;
+    const page: DeveloperPageInfo = { route: clean(raw.route, 1_000), framework: clean(raw.framework, 100), viewport: clean(raw.viewport, 50),
+      ...(selector ? { selector, element: clean(raw.element, 100) } : {}),
+      failures: current.runtime.network.slice(-12).reverse().map(({ redactions: _redactions, ...issue }) => issue) };
+    const bridge = this.vscodeBridge.status();
+    const project = bridge.project;
+    if (bridge.state !== 'connected' || !project) return page;
+    const nearest: DeveloperPageInfo = project.activeFile ? { ...page, confidence: 'nearest' } : page;
+    const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+    if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 4)) || !project.devServerUrl) return nearest;
+    const original = new URL(initialUrl);
+    const server = localDevelopmentAddress(project.devServerUrl);
+    if (server?.origin !== original.origin) return nearest;
+    const candidate = selectElement ? (typeof raw.source === 'string' ? localDevelopmentAddress(raw.source) : undefined) : original;
+    if (!candidate || candidate.origin !== original.origin || (!selectElement && !/\.html?$/i.test(candidate.pathname))) return nearest;
+    const pathname = inspectionSourcePath(candidate.pathname);
+    if (!pathname) return nearest;
+    const projectId = project.project.id;
+    const match = inspectionSourceSchema.nullable().parse(await this.vscodeBridge.request('inspect.page', { projectId, pathname: candidate.pathname }));
+    requireSamePage();
+    const latest = this.vscodeBridge.status();
+    if (!match || latest.project?.project.id !== projectId || latest.instanceId !== bridge.instanceId) return nearest;
+    this.inspectedSource = { reference: match.reference, projectId, tabId: target.tab.id, url: initialUrl, expiresAt: Date.now() + 2 * 60_000 };
+    return { ...page, confidence: 'exact', sourcePath: match.path, sourceReference: match.reference };
   }
 
   private async evaluateWithCdp(contents: Electron.WebContents, expression: string, awaitPromise: boolean): Promise<unknown> {
@@ -4126,7 +4285,7 @@ class BrowserController {
     if (!target) return;
     const url = sanitizeDiagnosticUrl(details.url);
     const error = sanitizeDiagnosticText(details.error || '', 300);
-    target.runtime.network.push({
+    trackNetworkFailure(target.runtime.network, {
       at: new Date().toISOString(),
       method: details.method.slice(0, 16),
       resourceType: details.resourceType,
@@ -4135,7 +4294,6 @@ class BrowserController {
       ...(error.text ? { error: error.text } : {}),
       redactions: url.redactions + error.redactions,
     });
-    if (target.runtime.network.length > 100) target.runtime.network.splice(0, target.runtime.network.length - 100);
   }
 
   /**
@@ -5064,6 +5222,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('google:connect', (_event, id: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) => controller!.connectGoogleAccount(id, modules, browserId));
   handle('google:cancel', (_event, id: AccountSpaceId) => controller!.cancelGoogleConnection(id));
   handle('google:gmail-overview-run', (_event, id: AccountSpaceId, operationId: string) => controller!.gmailOverview(id, operationId));
+  handle('google:overview-page', (_event, id: AccountSpaceId, operationId: string, service: GoogleOverviewService, cursor?: string) => controller!.googleOverviewPage(id, operationId, service, cursor));
   handle('google:gmail-search-run', (_event, id: AccountSpaceId, operationId: string, query?: string) => controller!.searchGmail(id, operationId, query));
   handle('google:gmail-prepare-send', (_event, id: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) => controller!.prepareGmailSend(id, input, sourceRevision));
   handle('google:gmail-send', (_event, id: AccountSpaceId, operationId: string, input: GmailSendInput, confirmationToken: string, sourceRevision?: string) => controller!.sendGmail(id, operationId, input, confirmationToken, sourceRevision));

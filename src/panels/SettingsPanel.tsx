@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Bookmark, Home, Search, Palette, Check, ChevronRight, Code2, Download, ExternalLink, Globe2, LoaderCircle, LockKeyhole, RefreshCw, Settings, Shield, ShieldCheck, Upload, TriangleAlert, X } from 'lucide-react';
 import type { AccountSpaceId, BrowserSettings, BrowserSettingsPatch, BrowserSnapshot, ChromeImportResult, ChromeProfileSource, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, UiPreferences, UiPreferencesPatch } from '../../electron/types';
-import type { ChromeImportReview, ManagedUpdateStatus } from '../../electron/types';
+import type { ChromeImportReview, ChromeSettingChoice, ChromeSettingsSelection, ManagedUpdateStatus } from '../../electron/types';
 import { PanelHeader } from './common';
 import { ChromePasswordImportWizard } from './ChromePasswordImportWizard';
 import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
@@ -17,7 +17,8 @@ import { Bot } from 'lucide-react';
 const THEME_OPTIONS = [['system', 'Match Windows'], ['light', 'Light'], ['dark', 'Dark']] as const;
 const BOOKMARK_BAR_OPTIONS = [['always', 'Always'], ['new-tab', 'New Tab only'], ['hidden', 'Hidden']] as const;
 const HOME_PAGE_OPTIONS = [['new-tab', 'New Tab page'], ['url', 'Web address']] as const;
-const STARTUP_OPTIONS = [['continue', 'Continue where you left off'], ['home', 'Also open Home page'], ['pages', 'Also open selected pages']] as const;
+const STARTUP_OPTIONS = [['continue', 'Continue where you left off'], ['home', 'Also open Home page'], ['new-tab', 'Also open New Tab'], ['pages', 'Also open selected pages']] as const;
+const CHROME_SETTINGS: Array<[ChromeSettingChoice, string]> = [['search', 'Search engine'], ['home', 'Home page'], ['startup', 'Startup settings']];
 
 export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, onOpenVault, onSetupExit, onUiChange, onToast }: {
   state: BrowserSnapshot;
@@ -41,10 +42,8 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
   const [updateForm, setUpdateForm] = useState<UpdateServiceInput>({ endpoint: '', accessToken: '' });
   const [chromeProfiles, setChromeProfiles] = useState<ChromeProfileSource[]>([]);
   const [chromeProfileId, setChromeProfileId] = useState('');
-  const [chromeAccountSpaceId, setChromeAccountSpaceId] = useState(() => {
-    const active = state.accountSpaces.find((account) => account.id === state.activeAccountSpaceId && account.workspaceId !== 'banking');
-    return active?.id ?? state.accountSpaces.find((account) => account.workspaceId !== 'banking')?.id ?? state.activeAccountSpaceId;
-  });
+  const [chromeAccountSpaceId, setChromeAccountSpaceId] = useState<AccountSpaceId | ''>('');
+  const [chromeSettingsSelection, setChromeSettingsSelection] = useState<ChromeSettingsSelection>({});
   const [chromeBookmarks, setChromeBookmarks] = useState(true);
   const [chromeHistory, setChromeHistory] = useState(true);
   const [chromeImportOpen, setChromeImportOpen] = useState(false);
@@ -58,6 +57,11 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
   const searchSection = useRef<HTMLDivElement>(null);
   const workspace = state.workspaces.find((item) => item.id === state.activeWorkspaceId)!;
   const chromeDestinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && account.workspaceId !== 'banking' && !account.locked);
+  const chromeProfile = chromeProfiles.find((profile) => profile.id === chromeProfileId);
+  const suggestedChromeDestination = chromeDestinations.find(({ id }) => id === chromeProfile?.suggestedAccountSpaceId);
+  const importedChromeDestination = chromeDestinations.find(({ id }) => id === chromeProfile?.importedInto);
+  const hasChromeSelection = chromeProfile && (chromeBookmarks && chromeProfile.hasBookmarks
+    || chromeHistory && chromeProfile.hasHistory || chromeProfile.hasPreferences && Object.values(chromeSettingsSelection).some(Boolean));
   useEffect(() => {
     const id = chromeReview?.id;
     return () => { if (id) void window.privateBrowser.discardChromeImport(id).catch(() => undefined); };
@@ -67,13 +71,11 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     setChromeReview(undefined);
   }, [state.activeAccountSpaceId]);
   useEffect(() => {
-    if (chromeDestinations.length && !chromeDestinations.some((account) => account.id === chromeAccountSpaceId)) {
-      setChromeAccountSpaceId(chromeDestinations.find((account) => account.id === state.activeAccountSpaceId)?.id ?? chromeDestinations[0].id);
-    }
+    if (chromeAccountSpaceId && !chromeDestinations.some((account) => account.id === chromeAccountSpaceId)) setChromeAccountSpaceId('');
   }, [state.accountSpaces, state.activeAccountSpaceId, state.activeWorkspaceId, chromeAccountSpaceId]);
   useEffect(() => {
     setChromeUndo(false);
-    if (!chromeImportOpen || state.activeWorkspaceId === 'banking') return;
+    if (!chromeImportOpen || !chromeAccountSpaceId || state.activeWorkspaceId === 'banking') return;
     let current = true;
     void window.privateBrowser.canUndoChromeImport(chromeAccountSpaceId).then((available) => {
       if (current) setChromeUndo(available);
@@ -105,8 +107,23 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       .finally(() => setChecking(false));
   }, []);
   useEffect(() => {
-    if (!chromeDestinations.some((account) => account.id === chromeAccountSpaceId) && chromeDestinations[0]) setChromeAccountSpaceId(chromeDestinations[0].id);
-  }, [state.activeWorkspaceId, state.activeAccountSpaceId, state.accountSpaces]);
+    if (!chromeImportOpen) return;
+    let current = true;
+    setChromeProfiles([]);
+    setChromeAccountSpaceId('');
+    setChromeSettingsSelection({});
+    setChromeLoading(true);
+    void window.privateBrowser.listChromeProfiles().then((profiles) => {
+      if (current) {
+        setChromeProfiles(profiles);
+        setChromeProfileId(profiles.find((profile) => profile.isDefault && !profile.imported)?.id
+          ?? profiles.find((profile) => !profile.imported)?.id ?? profiles[0]?.id ?? '');
+      }
+    }, (error: unknown) => {
+      if (current) onToast(error instanceof Error ? error.message : 'Could not read Chrome profiles', 'error');
+    }).finally(() => { if (current) setChromeLoading(false); });
+    return () => { current = false; };
+  }, [chromeImportOpen, state.activeWorkspaceId]);
   const runDefaultBrowserAction = async (action: () => Promise<void>) => {
     try { await action(); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
@@ -150,16 +167,24 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       await checkUpdates(false);
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
-  const openChromeImport = async () => {
-    setChromeImportOpen(true);
-    setChromeLoading(true);
+  const openChromeImport = () => {
     setChromeResult(null);
+    setChromeImportOpen(true);
+  };
+  const setChromeProfile = (id: string) => {
+    setChromeProfileId(id);
+    setChromeAccountSpaceId('');
+    setChromeSettingsSelection({});
+    setChromeResult(null);
+  };
+  const createChromeDestination = async () => {
+    if (!chromeProfile || chromeProfile.imported) return;
+    setChromeLoading(true);
     try {
-      const profiles = await window.privateBrowser.listChromeProfiles();
-      setChromeProfiles(profiles);
-      setChromeProfileId((current) => current || profiles.find((profile) => profile.isDefault)?.id || profiles[0]?.id || '');
-      if (!profiles.length) onToast('No local Chrome profile was found', 'error');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+      const label = chromeProfile.name.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 80) || 'Chrome profile';
+      const id = await window.privateBrowser.addLocalAccountSpace(workspace.id, label, 'indigo');
+      setChromeAccountSpaceId(id);
+    } catch (error) { onToast(error instanceof Error ? error.message : 'Could not create the Account Space', 'error'); }
     finally { setChromeLoading(false); }
   };
   const previewChrome = async () => {
@@ -170,7 +195,9 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       if (!destination || destination.workspaceId === 'banking') throw new Error('Choose a non-Banking Account Space');
       setChromeResult(null);
       const review = await window.privateBrowser.previewChromeImport({
-        profileId: chromeProfileId, workspaceId: destination.workspaceId, accountSpaceId: destination.id, bookmarks: chromeBookmarks, history: chromeHistory,
+        profileId: chromeProfileId, workspaceId: destination.workspaceId, accountSpaceId: destination.id,
+        bookmarks: chromeBookmarks && Boolean(chromeProfile?.hasBookmarks), history: chromeHistory && Boolean(chromeProfile?.hasHistory),
+        settings: chromeProfile?.hasPreferences ? chromeSettingsSelection : undefined,
       });
       if (request === chromeReviewRequest.current) setChromeReview(review);
       else await window.privateBrowser.discardChromeImport(review.id);
@@ -183,21 +210,27 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     try {
       const result = await window.privateBrowser.confirmChromeImport(chromeReview.id);
       setChromeResult(result);
-      if (result.imported.bookmarks + result.imported.history > 0) {
+      if (result.imported.bookmarks + result.imported.history > 0 || result.appliedSettings?.length) {
         setChromeUndo(true);
+        setChromeProfiles((current) => current.map((profile) => profile.id === chromeProfileId
+          ? { ...profile, imported: true, importedInto: chromeReview.accountSpaceId } : profile));
         if (!ui.importedChromeData) onUiChange({ importedChromeData: true });
       }
-      onToast(`Imported ${result.imported.bookmarks} bookmarks and ${result.imported.history} history entries`);
+      onToast(result.appliedSettings?.length ? 'Chrome import and selected workspace settings applied'
+        : `Imported ${result.imported.bookmarks} bookmarks and ${result.imported.history} history entries`);
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setChromeReview(undefined); setChromeLoading(false); }
   };
   const undoChrome = async () => {
+    if (!chromeAccountSpaceId) return;
     setChromeLoading(true);
     try {
       const removed = await window.privateBrowser.undoChromeImport(chromeAccountSpaceId);
       setChromeUndo(false);
       setChromeResult(null);
-      onToast(`Removed ${removed.bookmarks} imported bookmarks and ${removed.history} history entries`);
+      setChromeProfiles(await window.privateBrowser.listChromeProfiles());
+      onToast(removed.settingsRestored ? 'Imported items removed and workspace settings restored'
+        : `Removed ${removed.bookmarks} imported bookmarks and ${removed.history} history entries`);
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setChromeLoading(false); }
   };
@@ -289,6 +322,14 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
           <p>{chromeReview.result.imported.bookmarks} bookmarks · {chromeReview.result.imported.history} history entries to add</p>
           <p>{chromeReview.duplicates} duplicates · {chromeReview.unsupported} unsupported · {chromeReview.overLimit} over the storage limit</p>
           {chromeReview.historyRange && <p>History dates · {formatReleaseDate(chromeReview.historyRange.from)} to {formatReleaseDate(chromeReview.historyRange.through)}</p>}
+          {chromeReview.settingsPatch && <div className="import-note">
+            <strong>Settings for {workspace.name}</strong>
+            {chromeReview.settingsPatch.searchEngine && chromeReview.settingsPatch.searchEngine !== 'custom'
+              && <p>Search engine · {SEARCH_ENGINES[chromeReview.settingsPatch.searchEngine].label}</p>}
+            {chromeReview.settingsPatch.homePage && <p>Home page · {chromeReview.settingsPatch.homePageUrl ?? 'New Tab'}</p>}
+            {chromeReview.settingsPatch.startup && <p>On startup · {STARTUP_OPTIONS.find(([mode]) => mode === chromeReview.settingsPatch?.startup)?.[1]}</p>}
+            {chromeReview.settingsPatch.startupPages?.length && <ul>{chromeReview.settingsPatch.startupPages.map((url) => <li key={url}>{url}</li>)}</ul>}
+          </div>}
           {chromeReview.folders.length > 0 && <details>
             <summary>Bookmark folders</summary>
             <ul>{chromeReview.folders.map((folder) => <li key={JSON.stringify([folder.location, folder.path])}>
@@ -298,27 +339,45 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
           </details>}
           {chromeReview.result.warnings.map((warning) => <p key={warning}>{warning}</p>)}
           <div className="panel-actions">
-            <button type="button" disabled={chromeLoading || chromeReview.result.imported.bookmarks + chromeReview.result.imported.history === 0}
+            <button type="button" disabled={chromeLoading || (chromeReview.result.imported.bookmarks + chromeReview.result.imported.history === 0 && !chromeReview.settingsPatch)}
               onClick={() => void confirmChrome()}>Import selected data</button>
             <button type="button" disabled={chromeLoading} onClick={() => setChromeReview(undefined)}>Change selection</button>
           </div>
         </div> : chromeLoading && !chromeProfiles.length ? <div className="import-loading"><LoaderCircle className="spin" size={15} /> Detecting Chrome profiles…</div> : chromeProfiles.length > 0 ? <>
-          <label><span>Chrome profile</span><select value={chromeProfileId} onChange={(event) => setChromeProfileId(event.target.value)}>{chromeProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}{profile.isDefault ? ' (Default)' : ''}</option>)}</select></label>
-          <label><span>Import into Account Space</span><select disabled={!chromeDestinations.length} value={chromeAccountSpaceId} onChange={(event) => setChromeAccountSpaceId(event.target.value as AccountSpaceId)}>{chromeDestinations.map((account) => <option value={account.id} key={account.id}>{account.label}</option>)}</select></label>
+          <label><span>Chrome profile</span><select value={chromeProfileId} disabled={chromeLoading} onChange={(event) => setChromeProfile(event.target.value)}>{chromeProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}{profile.isDefault ? ' (Default)' : ''}{profile.imported ? ' · Imported' : ''}</option>)}</select></label>
+          {chromeProfile?.imported && <p role="status">This Chrome profile has already been imported{importedChromeDestination ? ' into ' + importedChromeDestination.label : ''}.</p>}
+          <label><span>Import into Account Space</span><select disabled={!chromeDestinations.length || chromeProfile?.imported || chromeLoading}
+            value={chromeAccountSpaceId} onChange={(event) => setChromeAccountSpaceId(event.target.value as AccountSpaceId | '')}>
+            <option value="">Choose a destination</option>
+            {chromeDestinations.map((account) => <option value={account.id} key={account.id}>{account.label}</option>)}
+          </select></label>
+          {!chromeProfile?.imported && suggestedChromeDestination && <div className="panel-actions">
+            <p className="import-note">Suggested destination · {suggestedChromeDestination.label}</p>
+            <button type="button" disabled={chromeLoading} onClick={() => setChromeAccountSpaceId(suggestedChromeDestination.id)}>Use suggested destination</button>
+          </div>}
+          {chromeProfile && !chromeProfile.imported && !suggestedChromeDestination && chromeDestinations.length > 0
+            && <button type="button" className="secondary-button" disabled={chromeLoading} onClick={() => void createChromeDestination()}>Create an Account Space for this profile</button>}
           {!chromeDestinations.length && <p className="import-note">Chrome data cannot be imported into Banking. Switch to another workspace first.</p>}
           <div className="import-checks">
-            <label><input type="checkbox" checked={chromeBookmarks} onChange={(event) => setChromeBookmarks(event.target.checked)} /> <span><strong>Bookmarks</strong><small>Includes the full Chrome bookmarks bar and folder hierarchy.</small></span></label>
-            <label><input type="checkbox" checked={chromeHistory} onChange={(event) => setChromeHistory(event.target.checked)} /> <span><strong>Browsing history</strong><small>Up to 10,000 recent Chrome pages.</small></span></label>
+            <label><input type="checkbox" disabled={!chromeProfile?.hasBookmarks || chromeProfile.imported} checked={Boolean(chromeProfile?.hasBookmarks && chromeBookmarks)} onChange={(event) => setChromeBookmarks(event.target.checked)} /> <span><strong>Bookmarks</strong><small>Includes the full Chrome bookmarks bar and folder hierarchy.</small></span></label>
+            <label><input type="checkbox" disabled={!chromeProfile?.hasHistory || chromeProfile.imported} checked={Boolean(chromeProfile?.hasHistory && chromeHistory)} onChange={(event) => setChromeHistory(event.target.checked)} /> <span><strong>Browsing history</strong><small>Up to 10,000 recent Chrome pages.</small></span></label>
           </div>
-          <button className="primary-button full" disabled={chromeLoading || !chromeDestinations.length || (!chromeBookmarks && !chromeHistory)} onClick={() => void previewChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Preview import</button>
-        </> : !chromeLoading ? <p className="import-note">Choose a bookmark HTML export below, or open Chrome once to create a local profile.</p> : null}
+          {chromeProfile?.hasPreferences && !chromeProfile.imported && <fieldset className="import-checks">
+            <legend>Optional settings for {workspace.name}</legend>
+            {CHROME_SETTINGS.map(([key, label]) => <label key={key}><input type="checkbox" checked={Boolean(chromeSettingsSelection[key])}
+              onChange={(event) => setChromeSettingsSelection((selection) => ({ ...selection, [key]: event.target.checked }))} /> <span>{label}</span></label>)}
+          </fieldset>}
+          <button className="primary-button full" disabled={chromeLoading || !chromeAccountSpaceId || !hasChromeSelection || chromeProfile?.imported} onClick={() => void previewChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Preview import</button>
+        </> : !chromeLoading ? <p className="import-note">{state.activeWorkspaceId === 'banking'
+          ? 'Chrome data cannot be imported into Banking. Switch to another workspace first.'
+          : 'Choose a bookmark HTML export below, or open Chrome once to create a local profile.'}</p> : null}
         <div className="password-import-row"><div><strong>Bookmark HTML file</strong><small>Imports saved web addresses and folders into the current Account Space.</small></div>
           <button type="button" disabled={chromeLoading || state.activeWorkspaceId === 'banking'} onClick={() => void importBookmarkHtml()}>Choose HTML</button>
         </div>
         {bookmarkHtmlResult && <p className="import-note" role="status">{bookmarkHtmlResult.imported} {bookmarkHtmlResult.imported === 1 ? 'bookmark' : 'bookmarks'} imported · {bookmarkHtmlResult.skipped} skipped</p>}
         {chromeUndo && <div className="panel-actions">
           <button type="button" disabled={chromeLoading} onClick={() => void undoChrome()}>Undo last Chrome import</button>
-          <small className="import-note">Available this session. Bookmarks you edited stay.</small>
+          <small className="import-note">Available this session. Bookmarks and workspace settings you edited stay.</small>
         </div>}
         <ChromePasswordImportWizard key={state.activeAccountSpaceId} buttonLabel="Choose CSV"
           disabled={chromeLoading || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development'} />

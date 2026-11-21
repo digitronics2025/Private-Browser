@@ -82,7 +82,8 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
     const timer = window.setInterval(() => void refresh().catch(() => undefined), 3000);
     return () => window.clearInterval(timer);
   }, [activeTab.workspaceId]);
-  useEffect(() => { setInspection(null); setAiPreview(null); void window.privateBrowser.revokeAiContext().catch(() => undefined); }, [activeTab.id, activeTab.url]);
+  useEffect(() => { setInspection(null); }, [activeTab.id, activeTab.url, project?.project.id, bridge.instanceId]);
+  useEffect(() => { setAiPreview(null); void window.privateBrowser.revokeAiContext().catch(() => undefined); }, [activeTab.id, activeTab.url]);
   useEffect(() => () => { void window.privateBrowser.revokeAiContext().catch(() => undefined); }, []);
 
   const run = async (action: () => Promise<unknown>, success?: string) => {
@@ -172,8 +173,26 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
       </>}</div>}
 
       {tab === 'inspect' && <div className="bridge-pane"><div className="developer-launch"><select value={mode} onChange={(event) => setMode(event.target.value as DevToolsMode)} aria-label="DevTools position"><option value="right">Dock right</option><option value="bottom">Dock bottom</option><option value="detach">Separate window</option></select><button className="primary-button" disabled={!activeTab.developerToolsAllowed || loading} onClick={() => void run(() => window.privateBrowser.toggleDeveloperTools(mode))}>{activeTab.developerToolsOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}{activeTab.developerToolsOpen ? 'Close tools' : 'Open DevTools'}</button></div>
-        <div className="bridge-action-grid"><button disabled={!activeTab.developerToolsAllowed} onClick={() => void inspect(false)}><FileCode2 size={15} />Inspect page</button><button disabled={!activeTab.developerToolsAllowed} onClick={() => void inspect(true)}><ScanSearch size={15} />Select element</button></div>
-        {inspection ? <div className="inspection-result"><small>{inspection.framework} · {inspection.viewport}</small><strong>{inspection.selector ?? inspection.route}</strong><span>{inspection.confidence ? `${inspection.confidence} source match` : 'Page metadata only'}</span>{(inspection.sourcePath || project?.activeFile) && <button onClick={() => void bridgeAction('source.open', { path: inspection.sourcePath ?? project?.activeFile, line: 1 })}>Open {inspection.confidence ?? 'nearest'} location in VS Code</button>}</div> : <div className="developer-tip"><ScanSearch size={16} /><p>Pick an element on the current development page. Only bounded structure and source hints cross the authenticated bridge.</p></div>}
+        <div className="bridge-action-grid"><button disabled={!activeTab.developerToolsAllowed || loading} onClick={() => void inspect(false)}><FileCode2 size={15} />Inspect page</button><button disabled={!activeTab.developerToolsAllowed || loading} onClick={() => void inspect(true)}><ScanSearch size={15} />Select element</button></div>
+        {inspection ? <div className="inspection-result">
+          <small>{inspection.framework} · {inspection.viewport}</small>
+          <strong>{inspection.selector ?? inspection.route}</strong>
+          {inspection.element && <span>Selected element <code>{inspection.element}</code></span>}
+          <span>{inspection.confidence === 'exact' ? 'Confirmed source file' : inspection.confidence === 'nearest' ? 'Nearest editor match, source unconfirmed' : 'Source file unconfirmed'}</span>
+          {inspection.confidence === 'exact' && inspection.sourceReference && inspection.sourcePath && <>
+            <code>{inspection.sourcePath}</code>
+            <button disabled={loading} onClick={() => void bridgeAction('inspect.open-source', { reference: inspection.sourceReference })}>Open source in VS Code</button>
+          </>}
+          {inspection.failures && <section aria-label="Recent request failures">
+            <h3>Recent request failures</h3>
+            {inspection.failures.length ? <ul className="inspection-failures">{inspection.failures.map((issue) => <li
+              key={JSON.stringify([issue.method, issue.url, issue.status, issue.error, issue.resourceType])}>
+              <code>{issue.method} {issue.url}</code>
+              <small>{issue.status ? 'HTTP ' + issue.status : issue.error || 'Request failed'} · {issue.count ?? 1} {(issue.count ?? 1) === 1 ? 'occurrence' : 'occurrences'}</small>
+              <small>First {new Date(issue.firstAt ?? issue.at).toLocaleString()} · Last {new Date(issue.at).toLocaleString()}</small>
+            </li>)}</ul> : <p>No request failures captured for this tab.</p>}
+          </section>}
+        </div> : <div className="developer-tip"><ScanSearch size={16} /><p>Pick an element on the current development page. Only bounded structure and source hints cross the authenticated bridge.</p></div>}
       </div>}
 
       {tab === 'test' && <div className="bridge-pane">

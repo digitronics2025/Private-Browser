@@ -205,6 +205,7 @@ test('labels the preview and exercises Chrome import and protected browsing', as
   await page.getByRole('menuitem', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.getByLabel('Chrome profile')).toContainText('Sample Chrome profile');
+  await page.getByRole('button', { name: 'Use suggested destination' }).click();
   await page.getByRole('button', { name: 'Preview import' }).click();
   await expect(page.getByText('Review Chrome import')).toBeVisible();
   await expect(page.getByText(/History dates/)).toBeVisible();

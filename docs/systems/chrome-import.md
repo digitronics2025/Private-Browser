@@ -18,7 +18,7 @@ preview and requires a new review if the destination or accepted records
 change. Undo is available for the latest import into each Account Space during
 the session. Existing browsing data and edited bookmarks stay.
 
-> Last verified: 2026-09-26
+> Last verified: 2026-11-21
 
 ## Agent Brief
 
@@ -67,10 +67,16 @@ cross the preload bridge.
   how to remove the plaintext CSV after verifying the import.
   [Chrome export instructions](https://support.google.com/chrome/answer/13068232)
 
-Cookies, sessions, payment cards, extensions, account tokens, search engines and
-autofill profiles are not copied. The current product has no compatible storage
-or runtime for most of them, and copying authentication state would violate the
-browser's session-isolation boundary.
+The setup guide suggests a destination when the profile name matches one
+unlocked Account Space in the current workspace. Confirm an existing destination
+or create one before previewing. The local import receipt prevents importing
+the same profile again after restart. The preview can separately include a
+supported search preset, Home and startup preferences for the destination
+workspace. A concurrent settings edit requires a fresh preview.
+
+Cookies, sessions, payment cards, extensions, account tokens and autofill
+profiles stay in Chrome. Keeping authentication state outside the import
+preserves browser session isolation.
 
 The Setup guide includes an add-on checklist. Match each Chrome add-on to its
 task, test the browser's own MyVault, Privacy or Developer tools when they fit,

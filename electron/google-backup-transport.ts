@@ -15,7 +15,8 @@ export class GoogleDriveAppDataTransport implements EncryptedBackupTransport {
   async read(accountSpaceId: AccountSpaceId, signal?: AbortSignal): Promise<RemoteEncryptedBackup | undefined> {
     const token = await this.tokens.getAccessToken(accountSpaceId, 'encrypted-backup', signal);
     const listUrl = new URL('https://www.googleapis.com/drive/v3/files');
-    listUrl.search = new URLSearchParams({ spaces: 'appDataFolder', pageSize: '2', fields: 'files(id,name)', q: `name = '${BACKUP_FILENAME}' and trashed = false` }).toString();
+    listUrl.search = new URLSearchParams({ spaces: 'appDataFolder', pageSize: '2', fields: 'files(id,name)', orderBy: 'modifiedTime desc',
+      q: `name = '${BACKUP_FILENAME}' and trashed = false` }).toString();
     const listedResponse = await this.authorizedFetch(listUrl, token, {}, signal);
     if (!listedResponse.ok) throw new Error('Encrypted backup lookup failed');
     const listed = await readBoundedJson(listedResponse, 64 * 1024) as { files?: Array<{ id?: unknown; name?: unknown }> };
@@ -67,21 +68,15 @@ export class GoogleDriveAppDataTransport implements EncryptedBackupTransport {
   private async authorizedFetch(url: string | URL, token: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:' || parsed.hostname !== 'www.googleapis.com') throw new Error('Unexpected backup endpoint');
-    const controller = new AbortController();
-    const cancel = () => controller.abort();
-    signal?.addEventListener('abort', cancel, { once: true });
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    try {
-      return await this.request(parsed, {
-        ...init,
-        headers: { ...init.headers, Authorization: `Bearer ${token}`, Accept: 'application/json' },
-        signal: controller.signal,
-        redirect: 'error',
-      });
-    } finally {
-      clearTimeout(timeout);
-      signal?.removeEventListener('abort', cancel);
-    }
+    const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    combined.throwIfAborted();
+    return await this.request(parsed, {
+      ...init,
+      headers: { ...init.headers, Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      signal: combined,
+      redirect: 'error',
+    });
   }
 }
 

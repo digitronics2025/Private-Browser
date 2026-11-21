@@ -28,6 +28,10 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
   switch (channel) {
     case 'browser:set-memory-saver-site':
       exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 300); requireBoolean(args[2]); return;
+    case 'google:overview-page':
+      between(args, 3, 4); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation');
+      if (args[2] !== 'gmail' && args[2] !== 'drive' && args[2] !== 'calendar') throw new Error('Unknown Google overview');
+      if (args[3] !== undefined) requireUuid(args[3], 'overview cursor'); return;
     case 'browser:set-tracker-compatibility':
       exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 2048);
       if (typeof args[2] !== 'boolean') throw new Error('Invalid tracker compatibility setting');
@@ -345,6 +349,13 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       requireAccountSpaceId(input.accountSpaceId);
       requireBoolean(input.bookmarks);
       requireBoolean(input.history);
+      if (input.settings !== undefined) {
+        const selection = requireObject(input.settings);
+        for (const [key, value] of Object.entries(selection)) {
+          if (!['search', 'home', 'startup'].includes(key)) throw new Error('Unknown Chrome workspace setting');
+          requireBoolean(value);
+        }
+      }
       return;
     }
     case 'recovery:act':
