@@ -135,9 +135,10 @@ describe('encrypted Account Space backup', () => {
     const sample = { id: 'one', accountSpaceId: ID, workspaceId: 'personal' as const, title: 'Saved page', url: 'https://example.test/',
       createdAt: empty.createdAt, location: 'bar' as const, folderPath: [], order: 0, orderPath: [0] };
     await manager.upload(ID, empty);
-    const current = { ...empty, createdAt: '2026-09-13T10:00:00.000Z', bookmarks: [sample] };
+    const folder = { location: 'bar' as const, path: ['Empty fixture folder'], orderPath: [1] };
+    const current = { ...empty, createdAt: '2026-09-13T10:00:00.000Z', bookmarks: [sample], folderTree: [folder] };
     const review = await manager.reviewUpload(ID, current);
-    expect(review.details).toMatchObject({ local: { bookmarks: 1 }, remote: { bookmarks: 0 }, merged: { bookmarks: 1 }, conflict: false });
+    expect(review.details).toMatchObject({ local: { bookmarks: 1, folders: 1 }, remote: { bookmarks: 0 }, merged: { bookmarks: 1, folders: 1 }, conflict: false });
     transport.remote = { ...transport.remote!, etag: 'another-computer' };
     await expect(manager.upload(ID, current, 'overwrite', undefined, review.expectedEtag)).rejects.toThrow(/changed/);
     expect(transport.writes).toHaveLength(1);
@@ -147,6 +148,8 @@ describe('encrypted Account Space backup', () => {
     await manager.upload(ID, { ...empty, createdAt: '2026-09-15T10:00:00.000Z' }, 'overwrite');
     const older = await manager.restoreGeneration(ID, code, current.createdAt);
     expect(older.payload.bookmarks.map(({ id }) => id)).toEqual(['one']);
+    expect(planBackupRestore(older.payload, { accountSpaceId: ID, workspaceId: 'personal' }, { bookmarks: [], tabs: [], history: [] }))
+      .toMatchObject({ counts: { folders: { added: 1, duplicates: 0, capacityExceeded: 0 } }, items: { folders: [folder] } });
     expect(older.generations.map(({ createdAt }) => createdAt)).toEqual(['2026-09-15T10:00:00.000Z', '2026-09-14T10:00:00.000Z', current.createdAt]);
     await expect(manager.restoreGeneration(ID, code, empty.createdAt)).rejects.toThrow(/no longer available/);
     expect(Buffer.from(transport.remote!.bytes).toString()).not.toContain('Saved page');

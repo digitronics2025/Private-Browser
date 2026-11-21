@@ -3,6 +3,7 @@ import type { AccountSpaceSummary, BackupGenerationSummary, BackupRestorePreview
 
 const dataTypes = [
   ['bookmarks', 'Bookmarks'],
+  ['folders', 'Bookmark folders'],
   ['history', 'History visits'],
   ['tabs', 'Tabs'],
 ] as const;
@@ -100,13 +101,16 @@ export function BackupRestore({ account, workspaceName, onToast }: {
       <p>Backup created <time dateTime={review.createdAt}>{new Date(review.createdAt).toLocaleString()}</time></p>
       <table>
         <thead><tr><th scope="col">Items</th><th scope="col">Add</th><th scope="col">Duplicates</th><th scope="col">Over limit</th></tr></thead>
-        <tbody>{dataTypes.map(([key, label]) => <tr key={key}><th scope="row">{label}</th>
-          <td>{review.counts[key].added}</td><td>{review.counts[key].duplicates}</td><td>{review.counts[key].capacityExceeded}</td></tr>)}</tbody>
+        <tbody>{dataTypes.flatMap(([key, label]) => {
+          const count = review.counts[key];
+          return count ? [<tr key={key}><th scope="row">{label}</th>
+            <td>{count.added}</td><td>{count.duplicates}</td><td>{count.capacityExceeded}</td></tr>] : [];
+        })}</tbody>
       </table>
       <p>Existing data stays in place. Restored tabs stay paused until opened.</p>
       <div className="backup-actions">
         <button type="button" className="secondary-button" disabled={busy} onClick={cancel}>Cancel</button>
-        <button type="button" className="primary-button" disabled={busy || !dataTypes.some(([key]) => review.counts[key].added)} onClick={() => void restore()}>Add reviewed items</button>
+        <button type="button" className="primary-button" disabled={busy || !dataTypes.some(([key]) => review.counts[key]?.added)} onClick={() => void restore()}>Add reviewed items</button>
       </div>
     </div> : <form onSubmit={(event) => void load(event)} className="backup-restore-detail">
       <label>Recovery code {account.backupEnabled && '(optional on this PC)'}

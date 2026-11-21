@@ -1,8 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import type { AccountBrowsingStateV2, AccountSpaceBookmark, AccountSpaceHistoryEntry, AccountSpaceId, BackupGenerationSummary, BackupRestorePreview, BackupUploadPreview, BrowserTab, HistoryEntry, WorkspaceId } from './types.js';
+import type { AccountBrowsingStateV2, AccountSpaceBookmark, AccountSpaceHistoryEntry, AccountSpaceId, BackupGenerationSummary, BackupRestorePreview, BackupUploadPreview, BookmarkFolder, BrowserTab, HistoryEntry, WorkspaceId } from './types.js';
 import { MAX_ACCOUNT_BOOKMARKS, MAX_ACCOUNT_TABS, validateAccountState } from './account-space-state.js';
 import { RETAINED_HISTORY_LIMIT } from './history-query.js';
 import { AccountStore, type SafeStorageAdapter } from './account-store.js';
+import { appendBookmarkFolders, validateBookmarkFolders } from './bookmark-tree.js';
 
 const BACKUP_AAD = Buffer.from('private-browser-account-space-backup:v1', 'utf8');
 const MAX_BACKUP_BYTES = 8 * 1024 * 1024;
@@ -21,6 +22,7 @@ export interface AccountBackupSnapshot {
   workspaceId?: WorkspaceId;
   bookmarks: AccountSpaceBookmark[];
   bookmarkFolders: BackupBookmarkFolder[];
+  folderTree?: BookmarkFolder[];
   settings: { trackerBlocking: boolean };
   openTabs?: Array<Pick<BrowserTab, 'id' | 'workspaceId' | 'accountSpaceId' | 'title' | 'url' | 'isHome'>>;
   history?: HistoryEntry[];
@@ -104,6 +106,7 @@ export class AccountBackupManager {
     value: {
       bookmarks: AccountSpaceBookmark[];
       bookmarkFolders?: BackupBookmarkFolder[];
+      folderTree?: BookmarkFolder[];
       trackerBlocking: boolean;
       openTabs: BrowserTab[];
       history: HistoryEntry[];
@@ -112,12 +115,14 @@ export class AccountBackupManager {
     const account = this.accounts.require(accountSpaceId);
     const bookmarks = value.bookmarks.filter((item) => item.accountSpaceId === accountSpaceId && item.workspaceId === account.workspaceId).map(sanitizeBookmark);
     const bookmarkFolders = (value.bookmarkFolders ?? []).slice(0, 1000).map(sanitizeFolder);
+    const folderTree = validateBookmarkFolders(value.folderTree);
     const payload: AccountBackupPayload = {
       version: 1,
       createdAt: this.now().toISOString(),
       workspaceId: account.workspaceId,
       bookmarks,
       bookmarkFolders,
+      ...(folderTree.length ? { folderTree } : {}),
       settings: { trackerBlocking: value.trackerBlocking },
     };
     if (account.backup.includeOpenTabs) {
@@ -231,7 +236,7 @@ function decryptCompatibleBackup(remote: RemoteEncryptedBackup, key: Uint8Array,
 }
 
 export function summarizeBackup(payload: AccountBackupSnapshot): BackupGenerationSummary {
-  return { createdAt: payload.createdAt, bookmarks: payload.bookmarks.length, folders: payload.bookmarkFolders.length,
+  return { createdAt: payload.createdAt, bookmarks: payload.bookmarks.length, folders: payload.folderTree?.length ?? payload.bookmarkFolders.length,
     tabs: payload.openTabs?.length ?? 0, history: payload.history?.length ?? 0 };
 }
 
@@ -290,7 +295,9 @@ export function restorableItems(
   };
 }
 
-type CurrentBrowsingItems = Pick<AccountBrowsingStateV2, 'bookmarks' | 'history' | 'tabs'>;
+type CurrentBrowsingItems = Pick<AccountBrowsingStateV2, 'bookmarks' | 'history' | 'tabs'> & {
+  bookmarkFoldersByAccountSpace?: Record<string, BookmarkFolder[]>;
+};
 
 function accountBrowsingItems(accountSpaceId: AccountSpaceId, current: CurrentBrowsingItems): CurrentBrowsingItems {
   return {
@@ -304,6 +311,7 @@ export function backupRestoreRevision(accountSpaceId: AccountSpaceId, current: C
   const { bookmarks, history, tabs } = accountBrowsingItems(accountSpaceId, current);
   return createHash('sha256').update(JSON.stringify({
     bookmarks, history, retainedHistoryCount: current.history.length,
+    folders: current.bookmarkFoldersByAccountSpace?.[accountSpaceId],
     tabs: tabs.map(({ id, url, title, isHome }) => [id, url, title, isHome]),
   })).digest('base64url');
 }
@@ -321,7 +329,17 @@ export function planBackupRestore(payload: AccountBackupPayload, target: {
   const history = newBackupItems(readableHistory, local.history, historyKey, RETAINED_HISTORY_LIMIT - current.history.length);
   const tabs = newBackupItems((source.openTabs ?? []).filter((item) => !item.isHome), local.tabs, tabKey, MAX_ACCOUNT_TABS - local.tabs.length);
   const counts: BackupRestorePreview['counts'] = { bookmarks: bookmarks.counts, history: history.counts, tabs: tabs.counts };
-  return { counts, items: { bookmarks: bookmarks.items, history: history.items, tabs: tabs.items } };
+  const folders = validateBookmarkFolders(payload.folderTree);
+  const existing = current.bookmarkFoldersByAccountSpace?.[target.accountSpaceId] ?? [];
+  const result = appendBookmarkFolders(existing, folders);
+  const added = result.slice(existing.length);
+  if (folders.length) {
+    const keyFor = (item: BookmarkFolder) => JSON.stringify([item.location, item.path]);
+    const localKeys = new Set(existing.map(keyFor));
+    const duplicates = folders.filter((item) => localKeys.has(keyFor(item))).length;
+    counts.folders = { added: added.length, duplicates, capacityExceeded: Math.max(0, folders.length - duplicates - added.length) };
+  }
+  return { counts, items: { bookmarks: bookmarks.items, folders: added, history: history.items, tabs: tabs.items } };
 }
 
 function newBackupItems<T extends { id: string }>(remote: T[], current: T[], key: (item: T) => string, capacity: number) {
@@ -404,7 +422,9 @@ function validateSnapshot(value: unknown): AccountBackupSnapshot {
   if (payload.version !== 1 || typeof payload.createdAt !== 'string' || !Number.isFinite(Date.parse(payload.createdAt)) || !Array.isArray(payload.bookmarks) || !Array.isArray(payload.bookmarkFolders) || !payload.settings || typeof payload.settings.trackerBlocking !== 'boolean') throw new Error('Invalid backup payload');
   if (payload.openTabs && !Array.isArray(payload.openTabs)) throw new Error('Invalid backup tabs');
   if (payload.history && !Array.isArray(payload.history)) throw new Error('Invalid backup history');
-  return snapshotForGeneration(payload as AccountBackupPayload);
+  const clean = snapshotForGeneration(payload as AccountBackupPayload);
+  if (clean.folderTree !== undefined) clean.folderTree = validateBookmarkFolders(clean.folderTree);
+  return clean;
 }
 
 function mergePayloads(remote: AccountBackupPayload, local: AccountBackupPayload): AccountBackupPayload {
@@ -412,6 +432,7 @@ function mergePayloads(remote: AccountBackupPayload, local: AccountBackupPayload
     ...local,
     bookmarks: mergeById(remote.bookmarks, local.bookmarks),
     bookmarkFolders: mergeById(remote.bookmarkFolders, local.bookmarkFolders),
+    folderTree: remote.folderTree || local.folderTree ? appendBookmarkFolders(local.folderTree ?? [], remote.folderTree ?? []) : undefined,
     openTabs: local.openTabs ? mergeById(remote.openTabs ?? [], local.openTabs) : undefined,
     history: local.history ? mergeById(remote.history ?? [], local.history).sort((left, right) => right.visitedAt.localeCompare(left.visitedAt)).slice(0, 500) : undefined,
   };

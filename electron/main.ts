@@ -1616,6 +1616,7 @@ class BrowserController {
     const state = this.store.get();
     return this.backups.buildPayload(accountSpaceId, {
       bookmarks: state.bookmarks,
+      folderTree: state.bookmarkFoldersByAccountSpace?.[accountSpaceId],
       trackerBlocking: state.trackerBlocking,
       openTabs: state.tabs,
       history: state.history,
@@ -1714,6 +1715,10 @@ class BrowserController {
     }
     this.store.update((state) => {
       state.bookmarks.push(...pending.items.bookmarks);
+      if (pending.items.folders.length) {
+        const folders = state.bookmarkFoldersByAccountSpace ??= {};
+        folders[accountSpaceId] = appendBookmarkFolders(folders[accountSpaceId] ?? [], pending.items.folders);
+      }
       state.history.push(...pending.items.history);
       state.tabs.push(...pending.items.tabs.map((tab) => ({
         ...tab, restorePaused: true, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false,

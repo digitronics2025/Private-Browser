@@ -215,7 +215,7 @@ export interface BackupRestorePreview {
   workspaceId: WorkspaceId;
   createdAt: string;
   generations?: BackupGenerationSummary[];
-  counts: { bookmarks: BackupRestoreCount; history: BackupRestoreCount; tabs: BackupRestoreCount };
+  counts: { bookmarks: BackupRestoreCount; folders?: BackupRestoreCount; history: BackupRestoreCount; tabs: BackupRestoreCount };
 }
 
 export interface BackupGenerationSummary {
