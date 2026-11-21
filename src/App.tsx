@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Check, KeyRound, LoaderCircle, ShieldCheck, X } from 'lucide-react';
-import type { AccountSpaceId, Bookmark, BookmarkLevelInput, BrowserSnapshot, PageExcerptReview, Shortcut, ShortcutTile, SidePanelTool, UiPreferences, UiPreferencesPatch, WindowState } from '../electron/types';
+import type { AccountSpaceId, Bookmark, BookmarkFolder, BookmarkLevelInput, BrowserSnapshot, PageExcerptReview, Shortcut, ShortcutTile, SidePanelTool, UiPreferences, UiPreferencesPatch, WindowState } from '../electron/types';
+import { bookmarkFolderKey, bookmarkFolderLabel, bookmarkFolders } from '../electron/bookmark-maintenance';
+import { hasBookmarkPath } from '../electron/bookmark-tree';
 import { CHROME, computeChromeLayout, FRAME_COLORS } from '../electron/chrome-layout';
 import { resolveShortcut } from '../electron/shortcuts';
 import { DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
@@ -44,6 +46,7 @@ import { useAgentStatus } from './panels/AgentsPanel';
 type MenuKind = 'browser' | 'profile' | 'shield' | 'tab-search' | 'site-info' | 'zoom';
 
 const DEFAULT_WINDOW_STATE: WindowState = { maximized: false, fullscreen: false, darkMode: true };
+const EMPTY_BOOKMARK_FOLDERS: BookmarkFolder[] = [];
 
 function nextPaint(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -99,6 +102,7 @@ export default function App() {
   const searchPrompt = engineLabel ? `Search ${engineLabel} or enter address` : 'Search the web or enter address';
   const workspaceTabs = useMemo(() => state?.tabs.filter((tab) => tab.accountSpaceId === state.activeAccountSpaceId) ?? [], [state?.tabs, state?.activeAccountSpaceId]);
   const accountBookmarks = useMemo(() => state?.bookmarks.filter((item) => item.accountSpaceId === state.activeAccountSpaceId) ?? [], [state?.bookmarks, state?.activeAccountSpaceId]);
+  const accountFolders = state?.bookmarkFolders ?? EMPTY_BOOKMARK_FOLDERS;
   const favicons = useMemo(() => faviconsByHost(state?.tabs ?? [], state?.bookmarkIcons), [state?.tabs, state?.bookmarkIcons]);
   const ui: UiPreferences = { ...DEFAULT_UI_PREFERENCES, ...state?.ui, ...pendingUi };
   const windowState = state?.windowState ?? DEFAULT_WINDOW_STATE;
@@ -398,16 +402,39 @@ export default function App() {
     void act(() => saveShortcuts(next), 'Shortcut moved');
   };
 
+  const chooseBookmarkFolder = (title: string, confirmLabel: string, allowed: (item: BookmarkLevelInput) => boolean,
+    submit: (folder: BookmarkLevelInput) => Promise<unknown>) => {
+    const folders = bookmarkFolders(accountBookmarks, accountFolders).filter(allowed);
+    setPrompt({ title, confirmLabel, fields: [{ name: 'folder', label: 'Destination folder', value: '',
+      options: folders.map((level) => ({ value: bookmarkFolderKey(level), label: bookmarkFolderLabel(level) })) }],
+    submit: ({ folder }) => {
+      const chosen = folders.find((entry) => bookmarkFolderKey(entry) === folder);
+      if (!chosen) throw new Error('Choose a destination folder.');
+      return submit(chosen);
+    } });
+  };
+  const bookmarkToFolder = () => {
+    if (activeTab.isHome) return;
+    chooseBookmarkFolder('Bookmark this tab in a folder', 'Save bookmark', () => true,
+      (folder) => window.privateBrowser.saveBookmarkToFolder(activeAccount.id, activeTab.id, activeTab.url, folder));
+  };
+  const createBookmarkFolder = (parent: BookmarkLevelInput) => setPrompt({ title: 'New bookmark folder', confirmLabel: 'Create folder',
+    fields: [{ name: 'name', label: 'Folder name', value: '', maxLength: 200 }],
+    submit: ({ name }) => window.privateBrowser.addBookmarkFolder(activeAccount.id, parent, name) });
+  const moveBookmarkFolder = (source: BookmarkLevelInput) => chooseBookmarkFolder('Move bookmark folder', 'Move folder',
+    (parent) => parent.path.length < 20 && (source.location !== parent.location || !hasBookmarkPath(parent.path, source.path)),
+    (parent) => window.privateBrowser.moveBookmarkFolder(activeAccount.id, source, parent));
+
   const bookmarkActions: BookmarkActions = {
     open: (id) => void act(() => window.privateBrowser.openBookmark(id)),
     openAll: (items) => setBookmarkBatch({ accountId: activeAccount.id, items }),
     copyLink: (url) => void act(() => window.privateBrowser.copyText(url), 'Link copied'),
     rename: (item) => setPrompt({ title: 'Edit bookmark name', description: 'Leave the name empty to show only the icon on the bookmarks bar.', confirmLabel: 'Save', fields: [{ name: 'title', label: 'Name', value: item.title, maxLength: 500, optional: true }], submit: (values) => window.privateBrowser.renameBookmark(item.id, values.title) }),
     remove: (item) => void act(() => window.privateBrowser.removeBookmark(item.id), 'Bookmark deleted'),
-    renameFolder: (level: BookmarkLevelInput, name) => setPrompt({ title: 'Rename folder', confirmLabel: 'Save', fields: [{ name: 'name', label: 'Folder name', value: name, maxLength: 200 }], submit: (values) => window.privateBrowser.renameBookmarkFolder(level, name, values.name) }),
+    renameFolder: (level: BookmarkLevelInput, name) => setPrompt({ title: 'Rename folder', confirmLabel: 'Save', fields: [{ name: 'name', label: 'Folder name', value: name, maxLength: 200 }], submit: (values) => window.privateBrowser.renameBookmarkFolder(level, name, values.name, activeAccount.id) }),
     removeFolder: (level, name, count) => {
       if (!window.confirm(`Delete the folder “${name}” and the ${count} bookmark${count === 1 ? '' : 's'} inside it?`)) return;
-      void act(() => window.privateBrowser.removeBookmarkFolder(level, name), 'Folder deleted');
+      void act(() => window.privateBrowser.removeBookmarkFolder(level, name, activeAccount.id), 'Folder deleted');
     },
     move: (level, key, toIndex) => void act(() => window.privateBrowser.moveBookmark(level, key, toIndex)),
     setMode: (mode) => setUi({ bookmarkBarMode: mode }),
@@ -444,8 +471,10 @@ export default function App() {
       case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} entry={settingsEntry}
         onSetupExit={() => setSettingsEntry('overview')} onManageAccounts={() => setAccountManagerOpen(true)}
         onOpenVault={() => openTool('vault')} onUiChange={setUi} onToast={showToast} />;
-      case 'bookmarks': return <BookmarksPanel key={activeAccount.id} bookmarks={accountBookmarks} favicons={favicons} undo={state.bookmarkUndo}
+      case 'bookmarks': return <BookmarksPanel key={activeAccount.id} bookmarks={accountBookmarks} savedFolders={accountFolders} favicons={favicons} undo={state.bookmarkUndo}
         onOpen={bookmarkActions.open} onRename={bookmarkActions.rename} onRemove={bookmarkActions.remove}
+        onCreateFolder={createBookmarkFolder} onMoveFolder={moveBookmarkFolder} onRenameFolder={bookmarkActions.renameFolder}
+        onDeleteFolder={bookmarkActions.removeFolder} onBookmarkPage={activeTab.isHome ? undefined : bookmarkToFolder}
         onImport={bookmarkActions.importBookmarks} onExport={bookmarkActions.exportBookmarks}
         onEditAddress={(item) => setPrompt({ title: 'Edit bookmark address', confirmLabel: 'Save',
           fields: [{ name: 'url', label: 'URL', value: item.url, type: 'url', maxLength: 4096 }],
@@ -538,6 +567,7 @@ export default function App() {
               onHome={() => void act(() => window.privateBrowser.goHome())}
               onSiteInfo={() => setMenu((current) => (current === 'site-info' ? null : 'site-info'))}
               onToggleBookmark={() => void act(() => window.privateBrowser.toggleBookmark())}
+              onBookmarkToFolder={bookmarkToFolder}
               onOpenVault={() => toggleTool('vault')}
               onZoomMenu={() => setMenu((current) => (current === 'zoom' ? null : 'zoom'))}
               onToggleSidePanel={() => ui.sidePanelOpen ? setUi({ sidePanelOpen: false }) : openTool(ui.sidePanelTool)}
@@ -546,7 +576,7 @@ export default function App() {
               onProfile={() => setMenu((current) => (current === 'profile' ? null : 'profile'))}
               onMenu={() => setMenu((current) => (current === 'browser' ? null : 'browser'))}
             />
-            {liveLayout.bookmarkBar > 0 && <BookmarkBar bookmarks={accountBookmarks} mode={ui.bookmarkBarMode} favicons={favicons} actions={bookmarkActions} />}
+            {liveLayout.bookmarkBar > 0 && <BookmarkBar key={activeAccount.id} bookmarks={accountBookmarks} savedFolders={accountFolders} mode={ui.bookmarkBarMode} favicons={favicons} actions={bookmarkActions} />}
             {findOpen && !activeTab.isHome && <FindBar tabId={activeTab.id} focusSignal={findFocus} onClose={() => setFindOpen(false)} />}
           </>
         )}
@@ -648,6 +678,7 @@ export default function App() {
               manageAccounts: () => setAccountManagerOpen(true),
               openTool,
               toggleBookmark: () => void act(() => window.privateBrowser.toggleBookmark()),
+              bookmarkToFolder,
               pinCurrentPage: canPinCurrentPage ? () => editShortcut(undefined, true) : undefined,
               setUi,
               exportBookmarks: bookmarkActions.exportBookmarks,

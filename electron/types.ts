@@ -347,6 +347,7 @@ export interface AccountBrowsingStateV2 {
   tabs: Array<Pick<AccountSpaceBrowserTab, 'id' | 'workspaceId' | 'accountSpaceId' | 'title' | 'url' | 'isHome' | 'restorePaused' | 'pinned' | 'groupId'>>;
   activeTabId: string;
   bookmarks: AccountSpaceBookmark[];
+  bookmarkFolders?: BookmarkFolder[];
   history: AccountSpaceHistoryEntry[];
   historyTrimmed?: boolean;
   tabGroups?: TabGroup[];
@@ -379,6 +380,10 @@ export interface FindResult {
 export interface BookmarkLevelInput {
   location: 'bar' | 'other';
   path: string[];
+}
+
+export interface BookmarkFolder extends BookmarkLevelInput {
+  orderPath: number[];
 }
 
 export type BookmarkEntryKeyInput = { kind: 'bookmark'; id: string } | { kind: 'folder'; name: string };
@@ -596,6 +601,7 @@ export interface BrowserSnapshot {
   activeTabId: string;
   tabs: BrowserTab[];
   bookmarks: Bookmark[];
+  bookmarkFolders?: BookmarkFolder[];
   history: HistoryEntry[];
   downloads: DownloadEntry[];
   downloadHistory?: DownloadHistoryStatus;
@@ -709,6 +715,7 @@ export interface RuntimeBrowserStateV2 {
   tabs: AccountSpaceBrowserTab[];
   activeTabByAccountSpace: Record<string, string>;
   bookmarks: AccountSpaceBookmark[];
+  bookmarkFoldersByAccountSpace?: Record<string, BookmarkFolder[]>;
   history: AccountSpaceHistoryEntry[];
   historyTrimmedByAccountSpace?: Record<string, true>;
   tabGroupsByAccountSpace?: Record<string, TabGroup[]>;

@@ -32,3 +32,15 @@ it('accepts only web bookmarks inside an HTML export and bounds folder depth', a
   await expect(parseBookmarkHtml('<!doctype html><DL><DT><A HREF="https://example.test/">Other page</A></DL>', destination))
     .rejects.toThrow(/standard browser bookmark HTML/);
 });
+
+it('round-trips a nested empty folder with no bookmarks', async () => {
+  const folders = [
+    { location: 'other', path: ['Work'], orderPath: [0] },
+    { location: 'other', path: ['Work', 'New references'], orderPath: [0, 0] },
+  ] as const;
+  const parsed = await parseBookmarkHtml(exportBookmarksHtml([], folders.map((folder) => ({
+    ...folder, path: [...folder.path], orderPath: [...folder.orderPath],
+  }))), destination);
+  expect(parsed.folders).toEqual(folders);
+  expect(parsed.bookmarks).toEqual([]);
+});

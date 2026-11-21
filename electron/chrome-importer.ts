@@ -3,8 +3,9 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import type { AccountSpaceId, Bookmark, ChromeImportResult, ChromePasswordIssue, ChromePasswordSkipReason, ChromeProfileSource, HistoryEntry, VaultItemInput, WorkspaceId } from './types.js';
+import type { AccountSpaceId, Bookmark, BookmarkFolder, ChromeImportResult, ChromePasswordIssue, ChromePasswordSkipReason, ChromeProfileSource, HistoryEntry, VaultItemInput, WorkspaceId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
+import { MAX_BOOKMARK_FOLDERS, validateBookmarkFolders } from './bookmark-tree.js';
 import type { BrowserSettingsPatch } from './browser-settings.js';
 import type { ChromeSettingChoice, ChromeSettingsSelection } from './types.js';
 import { selectedChromeSettings } from './chrome-profile-preferences.js';
@@ -34,6 +35,7 @@ interface ProfileRecord extends ChromeProfileSource {
 
 export interface ChromeProfileData {
   bookmarks: Bookmark[];
+  folders?: BookmarkFolder[];
   history: HistoryEntry[];
   result: ChromeImportResult;
   settingsPatch?: BrowserSettingsPatch;
@@ -86,9 +88,10 @@ function chromeTime(value?: string | number): string {
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
-export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): { bookmarks: Bookmark[]; skipped: number; truncated: boolean } {
+export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): { bookmarks: Bookmark[]; folders: BookmarkFolder[]; skipped: number; truncated: boolean } {
   const parsed = JSON.parse(content) as ChromeBookmarksFile;
   const bookmarks: Bookmark[] = [];
+  const folders: BookmarkFolder[] = [];
   let skipped = 0;
   let truncated = false;
 
@@ -116,16 +119,19 @@ export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, 
     }
     if (node.type !== 'folder' && !Array.isArray(node.children)) return;
     const nextPath = node.name ? [...folderPath, node.name.slice(0, 200)] : folderPath;
+    if (node.name && folders.length < MAX_BOOKMARK_FOLDERS) folders.push({ location, path: nextPath, orderPath });
     for (const [childOrder, child] of (node.children ?? []).entries()) visit(child, location, nextPath, [...orderPath, childOrder]);
   };
 
   const roots = parsed.roots ?? {};
   for (const [rootName, root] of Object.entries(roots)) {
     const location: Bookmark['location'] = rootName === 'bookmark_bar' ? 'bar' : 'other';
-    const prefix = rootName === 'bookmark_bar' || rootName === 'other' ? [] : [root.name || 'Mobile bookmarks'];
-    for (const [order, child] of (root.children ?? []).entries()) visit(child, location, prefix, [order]);
+    const prefix = rootName === 'bookmark_bar' || rootName === 'other' ? [] : [(root.name || 'Mobile bookmarks').slice(0, 200)];
+    const rootOrder = prefix.length ? [0] : [];
+    if (prefix.length && folders.length < MAX_BOOKMARK_FOLDERS) folders.push({ location, path: prefix, orderPath: rootOrder });
+    for (const [order, child] of (root.children ?? []).entries()) visit(child, location, prefix, [...rootOrder, order]);
   }
-  return { bookmarks, skipped, truncated };
+  return { bookmarks, folders: validateBookmarkFolders(folders), skipped, truncated };
 }
 
 function readBookmarks(directory: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId) {
@@ -134,7 +140,7 @@ function readBookmarks(directory: string, workspaceId: WorkspaceId, accountSpace
   try {
     descriptor = openSync(filePath, 'r');
   } catch (error: unknown) {
-    if (isMissingFile(error)) return { bookmarks: [] as Bookmark[], skipped: 0, truncated: false };
+    if (isMissingFile(error)) return { bookmarks: [] as Bookmark[], folders: [] as BookmarkFolder[], skipped: 0, truncated: false };
     throw error;
   }
   try {
@@ -208,7 +214,7 @@ export function readChromeProfile(profileId: string, workspaceId: WorkspaceId, a
   const includeSettings = Object.values(choice).some(Boolean);
   if (!includeBookmarks && !includeHistory && !includeSettings) throw new Error('Choose at least one data type or workspace setting');
   const warnings: string[] = [];
-  let bookmarkData = { bookmarks: [] as Bookmark[], skipped: 0, truncated: false };
+  let bookmarkData = { bookmarks: [] as Bookmark[], folders: [] as BookmarkFolder[], skipped: 0, truncated: false };
   let historyData = { history: [] as HistoryEntry[], skipped: 0 };
   if (includeBookmarks) {
     try { bookmarkData = readBookmarks(profile.directory, workspaceId, accountSpaceId); }
@@ -230,6 +236,7 @@ export function readChromeProfile(profileId: string, workspaceId: WorkspaceId, a
   }
   return {
     bookmarks: bookmarkData.bookmarks,
+    folders: bookmarkData.folders,
     history: historyData.history,
     settingsPatch: settings?.applied.length ? settings.patch : undefined,
     result: {

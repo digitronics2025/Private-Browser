@@ -461,6 +461,33 @@ test('suggests a Chrome profile destination and persists one settings import per
   expect(await profile()).toMatchObject({ imported: true, importedInto: undefined });
 });
 
+test('persists empty and moved bookmark folders in their native Account Space', async () => {
+  let page = await application!.firstWindow();
+  const id = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Bookmark folder fixture', 'sky'));
+  const url = origin + '/reference';
+  await page.evaluate(async ({ id, url }) => {
+    const api = window.privateBrowser;
+    const bar = { location: 'bar', path: [] } as const;
+    await api.addBookmarkFolder(id, { ...bar, path: [] }, 'Research');
+    await api.addBookmarkFolder(id, { ...bar, path: ['Research'] }, 'Empty');
+    await api.navigate(url);
+    const state = await api.getState();
+    await api.saveBookmarkToFolder(id, state.activeTabId, url, { ...bar, path: ['Research'] });
+    await api.moveBookmarkFolder(id, { ...bar, path: ['Research'] }, { location: 'other', path: [] });
+  }, { id, url });
+  await application!.close();
+  application = await launchProfile();
+  page = await application.firstWindow();
+  const state = await page.evaluate(() => window.privateBrowser.getState());
+  expect(state.activeAccountSpaceId).toBe(id);
+  expect(state.bookmarkFolders).toMatchObject([{ location: 'other', path: ['Research'] }, { location: 'other', path: ['Research', 'Empty'] }]);
+  expect(state.bookmarks).toContainEqual(expect.objectContaining({ accountSpaceId: id, location: 'other', folderPath: ['Research'], url }));
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
+  await expect(page.evaluate((id) => window.privateBrowser.renameBookmarkFolder({ location: 'other', path: [] }, 'Research', 'Wrong space', id), id))
+    .rejects.toThrow(/Account Space changed/);
+  expect(await page.evaluate(() => window.privateBrowser.getState().then((next) => next.bookmarkFolders ?? []))).toEqual([]);
+});
+
 test('imports standard bookmark HTML into the selected native Account Space', async () => {
   const page = await application!.firstWindow();
   const account = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'HTML destination', 'sky'));

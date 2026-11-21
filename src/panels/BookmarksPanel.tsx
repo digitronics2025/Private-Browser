@@ -1,15 +1,17 @@
 import { useDeferredValue, useMemo, useState } from 'react';
 import { FileDown, Globe2, Link2, Pencil, Search, Star, Trash2, Upload } from 'lucide-react';
 import { bookmarkFolderKey, bookmarkFolderLabel, bookmarkFolders, duplicateBookmarkIds, MAX_BOOKMARK_EDIT_BATCH } from '../../electron/bookmark-maintenance';
-import type { Bookmark, BookmarkLevelInput, BrowserSnapshot } from '../../electron/types';
+import type { Bookmark, BookmarkFolder, BookmarkLevelInput, BrowserSnapshot } from '../../electron/types';
 import { domainFromUrl } from '../lib/format';
 import { EmptyState, PanelHeader } from './common';
+import { BookmarkFolderTree } from './BookmarkFolderTree';
 
 const PAGE_SIZE = 75;
 const folderOrder = new Intl.Collator();
 
-export function BookmarksPanel({ bookmarks, favicons, undo, onOpen, onRename, onEditAddress, onRemove, onImport, onExport, onBatch, onUndo }: {
+export function BookmarksPanel({ bookmarks, savedFolders, favicons, undo, onOpen, onRename, onEditAddress, onRemove, onImport, onExport, onBatch, onUndo, onCreateFolder, onMoveFolder, onRenameFolder, onDeleteFolder, onBookmarkPage }: {
   bookmarks: Bookmark[];
+  savedFolders: BookmarkFolder[];
   favicons: Map<string, string>;
   undo: BrowserSnapshot['bookmarkUndo'];
   onOpen: (id: string) => void;
@@ -20,9 +22,15 @@ export function BookmarksPanel({ bookmarks, favicons, undo, onOpen, onRename, on
   onExport: () => void;
   onBatch: (ids: string[], destination?: BookmarkLevelInput) => Promise<number>;
   onUndo: () => Promise<number>;
+  onCreateFolder: (parent: BookmarkLevelInput) => void;
+  onMoveFolder: (folder: BookmarkLevelInput) => void;
+  onRenameFolder: (parent: BookmarkLevelInput, name: string) => void;
+  onDeleteFolder: (parent: BookmarkLevelInput, name: string, count: number) => void;
+  onBookmarkPage?: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [folder, setFolder] = useState('');
+  const [chosenFolder, setChosenFolder] = useState<BookmarkLevelInput>();
   const [requestedPage, setRequestedPage] = useState(0);
   const [duplicatesOnly, setDuplicatesOnly] = useState(false);
   const [selected, setSelected] = useState(new Set<string>());
@@ -33,6 +41,9 @@ export function BookmarksPanel({ bookmarks, favicons, undo, onOpen, onRename, on
   const [notice, setNotice] = useState<{ text: string; error?: boolean }>();
   const needle = useDeferredValue(query.trim().toLocaleLowerCase());
   const folderNeedle = useDeferredValue(folder.trim().toLocaleLowerCase());
+  const folders = useMemo(() => bookmarkFolders(bookmarks, savedFolders), [bookmarks, savedFolders]);
+  const activeFolder = chosenFolder && folders.find((entry) => bookmarkFolderKey(entry) === bookmarkFolderKey(chosenFolder));
+  const parentFolder = activeFolder && activeFolder.path.length ? { location: activeFolder.location, path: activeFolder.path.slice(0, -1) } : undefined;
   const index = useMemo(() => bookmarks.map((item) => {
     const folderPath = item.folderPath.join(' / ');
     const location = item.location === 'bar' ? 'Bookmarks bar' : 'Other bookmarks';
@@ -44,12 +55,13 @@ export function BookmarksPanel({ bookmarks, favicons, undo, onOpen, onRename, on
   const duplicates = useMemo(() => duplicatesOnly ? duplicateBookmarkIds(bookmarks) : undefined, [bookmarks, duplicatesOnly]);
   const matches = useMemo(() => {
     const filtered = index.filter((entry) => (!duplicates || duplicates.has(entry.item.id))
-      && entry.search.includes(needle) && entry.folderSearch.includes(folderNeedle));
+      && entry.search.includes(needle) && entry.folderSearch.includes(folderNeedle)
+      && (!activeFolder || (entry.item.location === activeFolder.location && entry.item.folderPath.length === activeFolder.path.length
+        && activeFolder.path.every((part, depth) => entry.item.folderPath[depth] === part))));
     return duplicates ? filtered.sort((left, right) => left.item.url.localeCompare(right.item.url)) : filtered;
-  }, [duplicates, index, needle, folderNeedle]);
+  }, [duplicates, index, needle, folderNeedle, activeFolder]);
   const selection = bookmarks.filter((item) => selected.has(item.id));
   const sourceFolders = [...new Set(selection.map((item) => bookmarkFolderLabel({ location: item.location, path: item.folderPath })))].sort(folderOrder.compare);
-  const folders = useMemo(() => operation === 'move' ? bookmarkFolders(bookmarks) : [], [bookmarks, operation]);
   const destinations = folders.filter((item) => bookmarkFolderLabel(item).toLocaleLowerCase().includes(folderQuery.toLocaleLowerCase())).slice(0, 50);
   const destination = destinations.find((item) => bookmarkFolderKey(item) === destinationKey);
   const pages = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
@@ -84,9 +96,23 @@ export function BookmarksPanel({ bookmarks, favicons, undo, onOpen, onRename, on
       <label className="vault-search"><Search size={14} /><input aria-label="Filter by bookmark folder" placeholder="Filter by folder" value={folder} onChange={(event) => { setFolder(event.target.value); setRequestedPage(0); }} /></label>
       <div className="panel-actions">
         <button type="button" onClick={onImport}><Upload size={14} /> Import</button>
-        <button type="button" onClick={onExport} disabled={!bookmarks.length}><FileDown size={14} /> Export</button>
+        <button type="button" onClick={onExport} disabled={!bookmarks.length && !savedFolders.length}><FileDown size={14} /> Export</button>
         <button type="button" aria-pressed={duplicatesOnly} onClick={() => { setDuplicatesOnly(!duplicatesOnly); setRequestedPage(0); }}>Duplicate addresses</button>
       </div>
+      <details className="settings-card bookmark-folders">
+        <summary>Manage folders</summary>
+        <BookmarkFolderTree folders={folders} selected={activeFolder} onSelect={(target) => { setChosenFolder(target); setRequestedPage(0); }} />
+        <div className="panel-actions">
+          <button type="button" onClick={() => onCreateFolder(activeFolder ?? { location: 'bar', path: [] })}>New folder</button>
+          {onBookmarkPage && <button type="button" onClick={onBookmarkPage}>Bookmark this tab in a folder</button>}
+          {activeFolder && parentFolder && <>
+            <button type="button" onClick={() => onRenameFolder(parentFolder, activeFolder.path.at(-1)!)}>Rename folder</button>
+            <button type="button" onClick={() => onMoveFolder(activeFolder)}>Move folder</button>
+            <button type="button" onClick={() => onDeleteFolder(parentFolder, activeFolder.path.at(-1)!, bookmarks.filter((item) =>
+              item.location === activeFolder.location && activeFolder.path.every((part, depth) => item.folderPath[depth] === part)).length)}>Delete folder</button>
+          </>}
+        </div>
+      </details>
       {undo && <div className="settings-card panel-actions">
         <span>{undo.count} {undo.count === 1 ? 'bookmark' : 'bookmarks'} {undo.kind}</span>
         <button type="button" disabled={pending} onClick={() => void run(onUndo, (count) => `${count} bookmark${count === 1 ? '' : 's'} restored.`)}>Undo bookmark change</button>
@@ -116,7 +142,7 @@ export function BookmarksPanel({ bookmarks, favicons, undo, onOpen, onRename, on
           <button type="button" disabled={pending} onClick={() => setOperation(undefined)}>Cancel</button>
         </div>
       </section>}
-      <p className="panel-count">{needle || folderNeedle || duplicatesOnly ? `${matches.length} of ${bookmarks.length} bookmarks` : `${bookmarks.length} bookmarks`}</p>
+      <p className="panel-count">{needle || folderNeedle || duplicatesOnly || activeFolder ? `${matches.length} of ${bookmarks.length} bookmarks` : `${bookmarks.length} bookmarks`}</p>
       {pages > 1 && <nav className="panel-actions" aria-label="Bookmark pages">
         <button type="button" disabled={page === 0} onClick={() => setRequestedPage(page - 1)}>Previous</button>
         <button type="button" disabled={page + 1 === pages} onClick={() => setRequestedPage(page + 1)}>Next</button>
@@ -140,7 +166,8 @@ export function BookmarksPanel({ bookmarks, favicons, undo, onOpen, onRename, on
           );
         })}
       </ul>
-      {!matches.length && <EmptyState icon={Star} text={needle || folderNeedle || duplicatesOnly ? 'No bookmark matches those filters.' : 'Star a page to keep it close.'} />}
+      {!matches.length && <EmptyState icon={Star} text={needle || folderNeedle || duplicatesOnly ? 'No bookmark matches those filters.'
+        : activeFolder ? 'This folder is empty.' : 'Star a page to keep it close.'} />}
     </div>
   );
 }
