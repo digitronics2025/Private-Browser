@@ -325,6 +325,9 @@ the main process; `VaultItemMeta` carries `hasTotp`, never the secret.
 | `updates:clear` | `clearUpdateService()` | — | `UpdateServiceStatus` |
 | `updates:check` | `checkForUpdates()` | — | `UpdateCheckResult` |
 | `updates:open-page` | `openUpdatePage()` | — | `void` |
+| `updates:download-installer` | `downloadManagedUpdate(version, sha256)` | reviewed release metadata, current unlocked regular Account Space | `void` |
+| `updates:cancel-installer` | `cancelManagedUpdate()` | — | `void` |
+| `updates:install-verified` | `installManagedUpdate()` | — | `void` |
 | `updates:open-history` | `openReleaseHistory()` | — | `void` |
 
 There is no mechanical rule mapping a channel name to a method name. Four break

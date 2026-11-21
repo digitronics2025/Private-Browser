@@ -35,6 +35,7 @@ import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { DownloadHistoryStore } from './download-history.js';
+import { ManagedUpdate } from './managed-update.js';
 import { getDomain } from 'tldts';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
@@ -321,6 +322,14 @@ class BrowserController {
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private readonly googleChecks = new Map<AccountSpaceId, GoogleConnectionHealth>();
   private expectedInstaller?: ExpectedInstaller;
+  private readonly managedUpdate = new ManagedUpdate({
+    directory: join(app.getPath('userData'), 'update-installers'),
+    currentVersion: app.getVersion(),
+    check: () => this.checkForUpdates(),
+    canUse: () => process.platform === 'win32' && Boolean(this.activeDownloadAccount()) && !this.store.isReadOnly(),
+    openInstaller: (path) => shell.openPath(path),
+    notify: () => this.broadcast(),
+  });
   private layout: Layout = { ...DEFAULT_CONTENT_INSETS };
   private readonly closedTabs = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   private readonly bookmarkUndo = new Map<AccountSpaceId, BookmarkUndo<AccountSpaceBookmark>>();
@@ -548,6 +557,7 @@ class BrowserController {
       downloads: downloadAccount ? this.downloadEntries(downloadAccount) : [],
       downloadHistory: !downloadAccount ? undefined : this.downloadHistoryFailures.has(downloadAccount)
         ? 'unavailable' : this.downloadHistory.status(downloadAccount),
+      managedUpdate: downloadAccount && process.platform === 'win32' && !this.store.isReadOnly() ? this.managedUpdate.snapshot() : undefined,
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
       activeAccountSpaceId,
@@ -3561,6 +3571,12 @@ class BrowserController {
     await this.newTab('development', PUBLIC_UPDATE_ENDPOINT + '/#release-history');
   }
 
+  downloadManagedUpdate(version: string, sha256: string): Promise<void> { return this.managedUpdate.download(version, sha256); }
+
+  cancelManagedUpdate(): void { this.managedUpdate.cancel(); }
+
+  installManagedUpdate(): Promise<void> { return this.managedUpdate.install(); }
+
   async checkForUpdatesInBackground(): Promise<void> {
     if (this.window.isDestroyed()) return;
     try {
@@ -4621,6 +4637,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:clear', () => controller!.clearUpdateService());
   handle('updates:check', () => controller!.checkForUpdates());
   handle('updates:open-page', () => controller!.openUpdatePage());
+  handle('updates:download-installer', (_event, version: string, sha256: string) => controller!.downloadManagedUpdate(version, sha256));
+  handle('updates:cancel-installer', () => controller!.cancelManagedUpdate());
+  handle('updates:install-verified', () => controller!.installManagedUpdate());
   handle('updates:open-history', () => controller!.openReleaseHistory());
 
   await controller.createWindow();

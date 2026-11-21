@@ -424,6 +424,14 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); const input = requireExactKeys(args[0], ['endpoint', 'accessToken']);
       requireBoundedText(input.endpoint, 'service address', 2048); requireBoundedText(input.accessToken, 'access token', 4096); return;
     }
+    case 'updates:download-installer':
+      exact(args, 2);
+      requireNonEmptyText(args[0], 'release version', 80);
+      if (typeof args[1] !== 'string' || !/^[a-f0-9]{64}$/.test(args[1])) throw new Error('Invalid release checksum');
+      return;
+    case 'updates:cancel-installer':
+    case 'updates:install-verified':
+      exact(args, 0); return;
     case 'developer:bridge-action':
       between(args, 1, 2); requireNonEmptyText(args[0], 'VS Code action', 40);
       if (args[1] !== undefined && JSON.stringify(requireObject(args[1])).length > 256 * 1024) throw new Error('VS Code action payload is too large'); return;

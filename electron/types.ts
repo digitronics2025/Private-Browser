@@ -537,6 +537,7 @@ export interface BrowserSnapshot {
   history: HistoryEntry[];
   downloads: DownloadEntry[];
   downloadHistory?: DownloadHistoryStatus;
+  managedUpdate?: ManagedUpdateStatus;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
   /** Present after Account Spaces initialization; contains renderer-safe data only. */
@@ -870,6 +871,15 @@ export interface UpdateCheckResult {
   currentVersion: string;
   latest: ReleaseManifest;
   checkedAt: string;
+}
+
+export interface ManagedUpdateStatus {
+  phase: 'idle' | 'preparing' | 'downloading' | 'verifying' | 'ready' | 'launched' | 'installed' | 'failed';
+  version?: string;
+  receivedBytes?: number;
+  totalBytes?: number;
+  publisher?: DownloadEntry['publisher'];
+  message?: string;
 }
 export type { BridgeStatus, GitRevision, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';
 

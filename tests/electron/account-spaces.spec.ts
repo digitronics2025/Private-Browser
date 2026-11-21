@@ -113,6 +113,51 @@ test('offers first-launch setup once and keeps a skip after restart', async () =
   expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.ui.offerSetupGuide))).toBe(false);
 });
 
+test('checks the managed update in its own directory and opens it only on an eligible explicit action', async () => {
+  test.skip(process.platform !== 'win32', 'Exercises the Windows installer download marker.');
+  const page = await application!.firstWindow();
+  const targetVersion = '90.0.0';
+  const checksum = createHash('sha256').update(installerBytes).digest('hex');
+  await application!.evaluate(({ shell }, sample) => {
+    const endpoint = 'https://private-browser-downloads.digitronics-electro.workers.dev';
+    const expiresAt = new Date(Date.now() + 60_000);
+    const signature = 'expires=' + Math.floor(expiresAt.getTime() / 1000) + '&signature=fixture';
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin !== endpoint) throw new Error('Unexpected fixture request');
+      if (url.pathname === '/api/v1/releases/public/latest') {
+        return Response.json({
+          schemaVersion: 1, appId: 'private-browser', version: sample.version, buildNumber: 1, channel: 'stable',
+          sha256: sample.checksum, filename: 'Private-Browser-Setup.exe', sizeBytes: Buffer.byteLength(sample.bytes),
+          commitSha: 'a'.repeat(40), publishedAt: new Date().toISOString(), releaseNotes: '',
+          downloadUrl: endpoint + '/download/latest.exe?' + signature,
+          downloadPageUrl: endpoint + '/download?' + signature, expiresAt: expiresAt.toISOString(),
+        });
+      }
+      if (url.pathname === '/download/latest.exe') return new Response(sample.bytes);
+      throw new Error('Unexpected fixture route');
+    };
+    shell.openPath = async (file) => {
+      process.env.PRIVATE_BROWSER_TEST_MANAGED_OPEN = file;
+      return '';
+    };
+  }, { version: targetVersion, checksum, bytes: installerBytes });
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  const openedPath = () => application!.evaluate(() => process.env.PRIVATE_BROWSER_TEST_MANAGED_OPEN);
+  await page.evaluate(({ version, sha }) => window.privateBrowser.downloadManagedUpdate(version, sha), { version: targetVersion, sha: checksum });
+  expect((await getState()).managedUpdate).toMatchObject({ phase: 'ready', version: targetVersion });
+  expect(await openedPath()).toBeUndefined();
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  expect((await getState()).managedUpdate).toBeUndefined();
+  await expect(page.evaluate(() => window.privateBrowser.installManagedUpdate())).rejects.toThrow(/regular Account Space/);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  await page.evaluate(() => window.privateBrowser.installManagedUpdate());
+  expect((await getState()).managedUpdate).toEqual({ phase: 'launched', version: targetVersion });
+  const path = (await openedPath())!;
+  expect(path).toMatch(/[/\\]update-installers[/\\]installer-[^/\\]+[/\\]PrivateBrowserUpdate\.exe$/);
+  expect(existsSync(path)).toBe(true);
+});
+
 test('previews a native Chrome import and undoes its untouched records only', async () => {
   test.skip(process.platform !== 'win32', 'The disposable Chrome path in this test uses the Windows profile convention');
   const page = await application!.firstWindow();

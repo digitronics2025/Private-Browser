@@ -228,6 +228,9 @@ const api = {
   clearUpdateService: (): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:clear'),
   checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check'),
   openUpdatePage: (): Promise<void> => ipcRenderer.invoke('updates:open-page'),
+  downloadManagedUpdate: (version: string, sha256: string): Promise<void> => ipcRenderer.invoke('updates:download-installer', version, sha256),
+  cancelManagedUpdate: (): Promise<void> => ipcRenderer.invoke('updates:cancel-installer'),
+  installManagedUpdate: (): Promise<void> => ipcRenderer.invoke('updates:install-verified'),
   openReleaseHistory: (): Promise<void> => ipcRenderer.invoke('updates:open-history'),
   onState: (callback: (state: BrowserSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: BrowserSnapshot) => callback(state);
