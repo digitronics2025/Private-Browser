@@ -196,6 +196,23 @@ masked, and request logs omit queries, headers and bodies. Link the
 [Agent Mode threat model](docs/systems/agent-mode.md) when reviewing changes
 to these permissions or to the Agent Workspace boundary.
 
+### Owner-lent tabs
+
+The trusted tab menu lets the owner choose a connected client for one active
+tab. A loan ends after fifteen minutes at most and is scoped to its exact
+origin. Switching browser tabs, crossing that origin, stopping the client,
+opening Developer Tools, or disconnecting ends the loan. The broker assigns a
+temporary ID and never accepts a regular browser tab ID through MCP.
+
+Banking, protected sites, Google account and service pages, pages with
+certificate errors, and views already attached to a debugger are refused.
+The owner sees the active client's name and Stop in the tab strip. Every page
+write requires a separate confirmation in the trusted Agent Workspace. Loans
+block popups, downloads, login picker, automatic fill and new device
+permissions. Downloads, emulation and scripting diagnostics require an Agent
+Account Space. Returning a lent tab detaches the Agent debugger and keeps the
+owner's tab open.
+
 ## Release service
 
 **Distribution is public.** Anyone may download the current stable installer

@@ -28,6 +28,16 @@ Under **Agent Account Spaces**, click **Reset agent space**, then **Clear this
 space** to erase its cookies, cache and site data. Use **Revoke client** to
 require fresh pairing.
 
+### Lend an existing tab
+
+Right-click the active tab and choose **Let agent use this tab for 15
+minutes**, then select a connected client. A banner names the client, and
+Private Browser asks you before each page change. Click **Stop** in that
+banner or switch tabs to take the page back.
+
+For parallel checks, ask your agent to label each task's tab and keep using
+its returned tab ID. Each task can record its own Playwright test.
+
 ### Development setup
 
 Run `npm ci`, then `npm run build` and `npm start`. On Windows, the panel

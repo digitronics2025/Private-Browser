@@ -21,6 +21,8 @@ export const cleanUrl = (url: string) => sanitizeDiagnosticUrl(url).text;
 
 export class AgentDriver {
   private world?: { frame: string; id: number };
+  private attachedByDriver = false;
+  private disposers: (() => void)[] = [];
   private generation = 0;
   private dialog?: string;
   private dialogGeneration = 0;
@@ -31,23 +33,42 @@ export class AgentDriver {
   private networkLog: { at: number; method: string; url: string; status?: number; error?: string }[] = [];
 
   constructor(readonly contents: WebContents) {
-    contents.on('console-message', ({ level, message, sourceId }) => {
+    const consoleMessage = (details: Electron.Event<Electron.WebContentsConsoleMessageEventParams>) => {
+      const { level, message, sourceId } = details;
       if (level !== 'warning' && level !== 'error') return;
       this.consoleLog = [{ at: Date.now(), level, message: clean(message), source: cleanUrl(sourceId) }, ...this.consoleLog].slice(0, DIAGNOSTIC_LIMIT);
-    });
-    contents.on('did-start-navigation', (_event, _url, inPlace, mainFrame) => {
+    };
+    const navigation = (_event: Electron.Event, _url: string, inPlace: boolean, mainFrame: boolean) => {
       if (mainFrame && !inPlace) { this.world = undefined; this.generation += 1; }
-    });
-    contents.debugger.on('message', (_event, method, data) => {
+    };
+    const debugMessage = (_event: Electron.Event, method: string, data: Record<string, unknown>) => {
       if (method === 'Page.javascriptDialogOpening') { this.dialog = String(data.type); this.dialogGeneration += 1; this.dialogListener?.(); }
       if (method === 'Page.javascriptDialogClosed') { this.dialog = undefined; this.dialogGeneration += 1; }
-    });
-    contents.debugger.on('detach', () => { this.world = undefined; this.generation += 1; });
+    };
+    const detach = () => { this.attachedByDriver = false; this.world = undefined; this.generation += 1; };
+    contents.on('console-message', consoleMessage);
+    contents.on('did-start-navigation', navigation);
+    contents.debugger.on('message', debugMessage);
+    contents.debugger.on('detach', detach);
+    this.disposers = [
+      () => contents.removeListener('console-message', consoleMessage),
+      () => contents.removeListener('did-start-navigation', navigation),
+      () => contents.debugger.removeListener('message', debugMessage),
+      () => contents.debugger.removeListener('detach', detach),
+    ];
+  }
+
+  dispose(): void {
+    if (this.contents.isDestroyed()) return;
+    for (const dispose of this.disposers.splice(0)) dispose();
+    if (this.attachedByDriver && this.contents.debugger.isAttached()) this.contents.debugger.detach();
+    this.world = undefined;
   }
 
   async initialize(): Promise<void> {
     if (!this.contents.debugger.isAttached()) {
       this.contents.debugger.attach('1.3');
+      this.attachedByDriver = true;
       await this.contents.debugger.sendCommand('Page.enable');
     }
   }

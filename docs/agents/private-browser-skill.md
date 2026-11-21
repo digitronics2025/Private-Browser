@@ -23,6 +23,10 @@ Use `record_start` before a workflow you'd like to save and `record_stop`
 after verification. Review the returned TypeScript before saving it in the
 project. Run the Playwright test against the intended development address.
 
+For parallel tasks, open a tab with a `label` for each task and pass its
+`tabId` on every page call and recording call. For a tab the owner lent,
+stay within its origin and wait for each write approval.
+
 ## Codex project instructions
 
 Copy this into the project’s `AGENTS.md` if Codex should use Private Browser.

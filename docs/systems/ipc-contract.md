@@ -239,7 +239,8 @@ The main chrome uses `agents:status`, `agents:enable`, `agents:pair`,
 `agents:stop`, `agents:resume`, `agents:open-workspace`, `agents:revoke`, `agents:renew`,
 `agents:set-policy`, `agents:grant-uploads`, `agents:revoke-uploads`,
 `agents:add-space`, `agents:reset-space`, `agents:clear-audit` and
-`agents:export-audit`. The pinned Agent Workspace chrome may call only the
+`agents:export-audit`. The regular chrome also owns `agents:lend-tab` and
+`agents:return-tab` for the owner's active browser tab. The pinned Agent Workspace chrome may call only the
 status, stop, select, manual, close-tab and decide channels. Only its main
 frame can invoke `agents:decide`. The `agents:changed` event signals the
 app to fetch fresh status. Agent tab views have no preload.

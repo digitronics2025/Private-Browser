@@ -12,6 +12,7 @@ import { agentAccess, AgentConfirmation, agentError, AgentError, agentLoopback, 
 import { agentTabUrl, AgentWorkspace, type AgentSpace, type AgentTab } from './agent-workspace.js';
 import { clean, cleanUrl, untrusted, type TargetDetails } from './agent-driver.js';
 import { AgentRecording } from './agent-recording.js';
+import { AgentLentTab, type LendableTab } from './agent-lent-tab.js';
 import { stageAgentUpload, verifyUploadFolder } from './agent-upload.js';
 import type { AgentConfirmationCard, AgentDecision, AgentUiStatus } from './agent-types.js';
 
@@ -24,6 +25,7 @@ type Live = {
   step: AgentMethod | 'ready';
   trustedOrigins: Set<string>;
   recording?: AgentRecording;
+  tabRecordings: Map<string, AgentRecording>;
 };
 type Pending = { card: AgentConfirmationCard; connection: AgentConnection; finish(decision: AgentDecision): void };
 type Options = {
@@ -53,6 +55,7 @@ export class AgentHost {
   private pipe?: AgentPipe;
   private paused = false;
   private pending?: Pending;
+  private loan?: AgentLentTab;
   private pairing?: { code: string; expiresAt: number; attempts: number };
   private readonly active = new Map<string, Live>();
   private readonly leases = new Map<string, number>();
@@ -75,10 +78,11 @@ export class AgentHost {
       identity: this.state.identity,
       authorize: (device, code) => this.authorize(device, code),
       opened: (connection) => {
-        this.active.set(connection.device.id, { connection, step: 'ready', trustedOrigins: new Set() });
+        this.active.set(connection.device.id, { connection, step: 'ready', trustedOrigins: new Set(), tabRecordings: new Map() });
         this.changed();
       },
       closed: (connection) => {
+        if (this.loan?.tab.connection === connection) this.returnLentTab();
         this.workspace.closeConnection(connection);
         if (this.active.get(connection.device.id)?.connection === connection) this.active.delete(connection.device.id);
         this.changed();
@@ -107,6 +111,9 @@ export class AgentHost {
       spaces: state?.spaces ?? [], current, pending: this.pending?.card,
       tabs: this.workspace.summaries(), selectedTab: this.workspace.selected,
       active: this.active.size > 0, audit: this.audit?.list() ?? [], command: this.options.command, commandArgs: this.options.commandArgs,
+      lent: this.loan?.valid() ? {
+        tabId: this.loan.source.tabId, client: this.loan.tab.connection.device.name, origin: this.loan.origin, expiresAt: this.loan.expiresAt,
+      } : undefined,
     };
   }
 
@@ -139,6 +146,7 @@ export class AgentHost {
     this.paused = Boolean(this.state?.enabled);
     this.pairing = undefined;
     this.pending?.finish('deny');
+    this.returnLentTab();
     for (const { connection } of this.active.values()) connection.close();
     this.active.clear();
     this.leases.clear();
@@ -154,6 +162,75 @@ export class AgentHost {
     this.persist({ ...state, clients: state.clients.filter((client) => client.id !== id) });
     this.disconnect(id);
     this.changed();
+  }
+
+  async lendTab(source: LendableTab, clientId: string): Promise<void> {
+    const state = this.requireEnabled();
+    const live = this.active.get(clientId);
+    const client = state.clients.find(({ id }) => id === clientId);
+    if (!client || !live || live.connection.abort.aborted || live.step !== 'ready') {
+      throw new AgentError('CLIENT_UNAVAILABLE', 'Connect a paired client and wait for its current step to finish.');
+    }
+    if (this.loan) throw new AgentError('LOAN_ACTIVE', 'End the current tab loan before lending another tab.');
+    const loan = new AgentLentTab(source, live.connection, client.policy, () => this.returnLentTab());
+    this.loan = loan;
+    live.selected = loan.tab.id;
+    this.changed();
+    try {
+      await loan.tab.driver.initialize();
+      if (!loan.valid()) throw new AgentError('LOAN_ENDED', 'The tab loan ended.');
+    } catch (error) {
+      if (this.loan === loan) this.returnLentTab();
+      throw error;
+    }
+  }
+
+  returnLentTab(tabId?: string): void {
+    const loan = this.loan;
+    if (!loan || tabId && loan.source.tabId !== tabId) return;
+    this.loan = undefined;
+    loan.return();
+    const live = this.active.get(loan.tab.connection.device.id);
+    live?.tabRecordings.delete(loan.tab.id);
+    if (live?.selected === loan.tab.id) live.selected = this.workspace.forConnection(loan.tab.connection)[0]?.id;
+    this.changed();
+  }
+
+  validateLentTab(): void { if (this.loan && !this.loan.valid()) this.returnLentTab(); }
+
+  isLentContents(contentsId?: number): boolean {
+    return Boolean(contentsId && this.loan?.contentsId === contentsId);
+  }
+
+  allowLentRequest(details: { webContentsId?: number; url: string; method: string; resourceType: string }): boolean {
+    const loan = this.loan;
+    if (!loan || !this.isLentContents(details.webContentsId)) return true;
+    if (details.resourceType === 'mainFrame' && !loan.sameOrigin(details.url)) {
+      this.returnLentTab();
+      return false;
+    }
+    const method = details.method.toUpperCase();
+    if (['GET', 'HEAD', 'OPTIONS'].includes(method)) return true;
+    const grant = loan.tab.requestGrant;
+    if (!grant || grant.until < Date.now() || grant.method !== method || !loan.sameOrigin(details.url)) return false;
+    const target = new URL(details.url);
+    target.hash = '';
+    if (target.href !== grant.url) return false;
+    loan.tab.requestGrant = undefined;
+    return true;
+  }
+
+  private lookupTab(connection: AgentConnection, id?: string): AgentTab | undefined {
+    if (!id) return undefined;
+    if (this.loan?.tab.id === id && this.loan.tab.connection === connection && this.loan.valid()) return this.loan.tab;
+    const tab = this.workspace.get(id);
+    return tab?.connection === connection ? tab : undefined;
+  }
+
+  private ownTab(connection: AgentConnection, id?: string): AgentTab {
+    const tab = this.lookupTab(connection, id);
+    if (!tab || tab.manual || connection.abort.aborted) throw new AgentError('TAB_UNAVAILABLE', 'Select a tab owned by this session.');
+    return tab;
   }
 
   renew(id: string): void {
@@ -214,7 +291,10 @@ export class AgentHost {
     const live = this.active.get(connection.device.id);
     const client = this.state?.clients.find(({ id }) => id === connection.device.id);
     if (!live || !client || live.connection !== connection || connection.abort.aborted || !this.audit) throw new AgentError('SESSION_CLOSED', 'This session ended.');
-    const tab = this.workspace.get(live.selected ?? '');
+    this.validateLentTab();
+    const scope = (request.input as { tabId?: string }).tabId;
+    const tab = this.lookupTab(connection, scope ?? live.selected);
+    const loanSignal = tab === this.loan?.tab ? this.loan?.controller.signal : undefined;
     const origin = tab?.origin;
     let allowed = false;
     let code = 'completed';
@@ -223,6 +303,7 @@ export class AgentHost {
     try {
       const result = await this.dispatch(live, client, request);
       connection.abort.throwIfAborted();
+      if (!['tab_open', 'tab_select', 'tab_close'].includes(request.method)) loanSignal?.throwIfAborted();
       allowed = true;
       return result;
     } catch (error) {
@@ -248,16 +329,20 @@ export class AgentHost {
     const connection = live.connection;
     const state = this.requireEnabled();
     if (method === 'browser_status') return {
-      enabled: true, client: client.name, activeSpace: this.workspace.get(live.selected ?? '')?.space.name,
+      enabled: true, client: client.name, activeSpace: this.lookupTab(connection, live.selected)?.space.name,
       allowedOrigins: client.policy.origins, profile: client.policy.profile, protocolVersion: AGENT_PROTOCOL_VERSION, outside: client.policy.outside,
       limits: { actionsPerMinute: AGENT_ACTIONS_PER_MINUTE, tabs: AGENT_MAX_TABS, idleMs: AGENT_IDLE_MS, expiresAt: connection.expiresAt },
       spaces: state.spaces,
     };
-    if (method === 'tabs_list') return untrusted(this.workspace.forConnection(connection).map((tab) => ({
-      tabId: tab.id, url: agentTabUrl(tab), selected: tab.id === live.selected, space: tab.space.name, manual: tab.manual,
-    })));
+    if (method === 'tabs_list') {
+      const lent = this.loan?.tab.connection === connection && this.loan.valid() ? [this.loan.tab] : [];
+      return untrusted([...this.workspace.forConnection(connection), ...lent].map((tab) => ({
+        tabId: tab.id, url: agentTabUrl(tab), selected: tab.id === live.selected, space: tab.space.name,
+        manual: tab.manual, label: tab.label, lent: lent.includes(tab),
+      })));
+    }
     if (method === 'tab_open') {
-      const { url, space: id } = input as AgentInput<'tab_open'>;
+      const { url, space: id, label } = input as AgentInput<'tab_open'>;
       const target = agentUrl(url);
       const space = id ? state.spaces.find((item) => item.id === id) : state.spaces[0];
       if (!space || this.resetting.has(space.id)) throw new AgentError('SPACE_UNAVAILABLE', 'Choose an available Agent Account Space.');
@@ -265,44 +350,71 @@ export class AgentHost {
       this.allowNavigation(client.policy, target);
       await this.confirm(live, request, { destination: target, allowSession: true });
       if (this.resetting.has(space.id)) throw new AgentError('SPACE_UNAVAILABLE', 'The Agent Account Space is resetting.');
-      const tab = await this.workspace.create(space, connection, client.policy);
+      if (this.loan?.tab.connection === connection) this.returnLentTab();
+      const tab = await this.workspace.create(space, connection, client.policy, label);
       live.selected = tab.id;
       try { await this.workspace.load(tab, target); } catch (error) { this.workspace.close(tab.id); throw error; }
       live.recording?.navigate(target.href);
-      return untrusted({ tabId: tab.id, url: agentTabUrl(tab), space: space.name });
+      return untrusted({ tabId: tab.id, url: agentTabUrl(tab), space: space.name, label });
     }
     if (method === 'tab_select' || method === 'tab_close') {
-      const tab = this.workspace.owned(connection, (input as AgentInput<'tab_select'>).tabId);
-      if (method === 'tab_close') this.workspace.close(tab.id);
-      else { live.selected = tab.id; this.workspace.select(tab.id); }
+      const tab = this.ownTab(connection, (input as AgentInput<'tab_select'>).tabId);
+      if (tab === this.loan?.tab) {
+        if (method === 'tab_close') this.returnLentTab();
+        else live.selected = tab.id;
+      } else if (method === 'tab_close') {
+        live.tabRecordings.delete(tab.id);
+        this.workspace.close(tab.id);
+      } else {
+        if (this.loan?.tab.connection === connection) this.returnLentTab();
+        live.selected = tab.id;
+        this.workspace.select(tab.id);
+      }
       return { tabId: tab.id };
     }
     if (method === 'dev_servers') return { origins: await this.devServers(connection.abort) };
+    const explicit = (input as { tabId?: string }).tabId;
+    const recordingTab = explicit ? this.ownTab(connection, explicit) : this.lookupTab(connection, live.selected);
     if (method === 'record_start') {
-      const tab = this.workspace.get(live.selected ?? '');
-      live.recording = new AgentRecording(tab?.origin && tab.view.webContents.getURL());
+      const recording = new AgentRecording(recordingTab?.origin && recordingTab.view.webContents.getURL());
+      if (explicit) live.tabRecordings.set(explicit, recording);
+      else live.recording = recording;
       return { recording: true };
     }
     if (method === 'record_stop') {
-      if (!live.recording) throw new AgentError('NO_RECORDING', 'Start a recording first.');
-      const output = untrusted({ playwright: live.recording.finish() });
-      live.recording = undefined;
+      const recording = explicit ? live.tabRecordings.get(explicit) : live.recording;
+      if (!recording) throw new AgentError('NO_RECORDING', 'Start a recording first.');
+      const output = untrusted({ playwright: recording.finish() });
+      if (explicit) live.tabRecordings.delete(explicit);
+      else live.recording = undefined;
       return output;
     }
 
-    const tab = this.workspace.owned(connection, live.selected);
+    const tab = this.ownTab(connection, explicit ?? live.selected);
+    const loan = tab === this.loan?.tab ? this.loan : undefined;
+    const recording = live.tabRecordings.get(tab.id) ?? live.recording;
     const contents = tab.view.webContents;
     const url = agentUrl(contents.getURL());
-    this.allowNavigation(client.policy, url);
+    this.allowNavigation(tab.policy, url);
+    const requireLoanOrigin = (destination: URL) => {
+      if (!loan || loan.sameOrigin(destination.href)) return;
+      this.returnLentTab();
+      throw new AgentError('LOAN_ORIGIN', 'The tab loan ended at its origin boundary.');
+    };
     if (method === 'navigate') {
       const target = agentUrl((input as AgentInput<'navigate'>).url);
-      this.allowNavigation(client.policy, target);
-      if (target.origin !== url.origin) await this.confirm(live, request, { tab, destination: target, allowSession: true });
-      await this.workspace.load(tab, target);
-      live.recording?.navigate(target.href);
+      requireLoanOrigin(target);
+      this.allowNavigation(tab.policy, target);
+      if (loan && agentAccess(tab.policy, url) !== 'drive') throw new AgentError('READ_ONLY', 'This client can only read this tab.');
+      if (loan || target.origin !== url.origin) await this.confirm(live, request, { tab, destination: target, allowSession: !loan });
+      await this.workspace.load(tab, target, loan?.controller.signal);
+      recording?.navigate(target.href);
       return untrusted({ url: agentTabUrl(tab) });
     }
-    if (!READ.has(method) && agentAccess(client.policy, url) !== 'drive') throw new AgentError('READ_ONLY', 'This client can only read pages at this origin.');
+    if (!READ.has(method) && agentAccess(tab.policy, url) !== 'drive') throw new AgentError('READ_ONLY', 'This client can only read pages at this origin.');
+    if (loan && ['downloads_list', 'emulate', 'evaluate'].includes(method)) {
+      throw new AgentError('LOAN_RESTRICTED', 'Use an Agent Account Space for this tool.');
+    }
     if (method === 'go_back' || method === 'go_forward') {
       const history = contents.navigationHistory;
       const delta = method === 'go_back' ? -1 : 1;
@@ -310,16 +422,22 @@ export class AgentHost {
       const destination = history.getEntryAtIndex(targetIndex);
       if (!destination) throw new AgentError('HISTORY_EMPTY', 'There is no navigation in that direction.');
       const target = agentUrl(destination.url);
-      this.allowNavigation(client.policy, target);
-      if (url.origin !== target.origin) await this.confirm(live, request, { tab, destination: target, allowSession: true });
+      requireLoanOrigin(target);
+      this.allowNavigation(tab.policy, target);
+      if (loan || url.origin !== target.origin) await this.confirm(live, request, { tab, destination: target, allowSession: !loan });
       tab.navigationGrant = { origin: target.origin, until: Date.now() + 4_000 };
       history.goToIndex(targetIndex);
-      live.recording?.step(method === 'go_back' ? 'goBack' : 'goForward');
+      recording?.step(method === 'go_back' ? 'goBack' : 'goForward');
       return { started: true };
     }
-    if (method === 'reload') { contents.reload(); live.recording?.step('reload'); return { started: true }; }
+    if (method === 'reload') {
+      if (loan) await this.confirm(live, request, { tab });
+      contents.reload();
+      recording?.step('reload');
+      return { started: true };
+    }
 
-    const signal = connection.abort;
+    const signal = loan?.controller.signal ?? connection.abort;
     const driver = tab.driver;
     const ref = (input as { ref?: string }).ref;
     switch (method) {
@@ -362,7 +480,8 @@ export class AgentHost {
     if (element?.submit && element.formTarget && agentUrl(element.formTarget).origin !== url.origin) {
       throw new AgentError('FORM_ORIGIN', 'Only same-origin form targets can be used by an agent.');
     }
-    const consequential = consequentialAction(method, url, element);
+    if (element?.link) requireLoanOrigin(agentUrl(element.link));
+    const consequential = Boolean(loan) || consequentialAction(method, url, element);
     if (method === 'upload_file' && !client.uploadFolder) {
       throw new AgentError('UPLOAD_FOLDER_REQUIRED', 'Grant an upload folder in Settings → Agents.');
     }
@@ -372,7 +491,8 @@ export class AgentHost {
       if (!client.uploadFolder) throw new AgentError('UPLOAD_FOLDER_REQUIRED', 'Grant an upload folder in Settings → Agents.');
       const file = await stageAgentUpload(client.uploadFolder, (input as AgentInput<'upload_file'>).path, this.options.data);
       try { await driver.upload(ref!, revision, file.path, signal); } catch (error) { await file.clean(); throw error; }
-      this.workspace.retainUpload(tab.id, file.clean);
+      if (loan) loan.retainUpload(file.clean);
+      else this.workspace.retainUpload(tab.id, file.clean);
       return { selected: true };
     }
     if (consequential && element?.submit && element.formTarget && element.formMethod?.toUpperCase() === 'POST') {
@@ -382,14 +502,14 @@ export class AgentHost {
     }
     if (consequential && target?.link) {
       const destination = agentUrl(target.link);
-      this.allowNavigation(client.policy, destination);
+      this.allowNavigation(tab.policy, destination);
       tab.navigationGrant = { origin: destination.origin, until: Date.now() + 4_000 };
     }
     const command = ACTIONS[method];
     if (!command) throw new AgentError('UNSUPPORTED_ACTION', 'This action is unavailable on the selected tab.');
     try {
       const result = await driver.action(command, input as object, revision, signal);
-      if (target) live.recording?.action(method, target, input as AgentInput<'type'>);
+      if (target) recording?.action(method, target, input as AgentInput<'type'>);
       return result ? untrusted(result) : { completed: true };
     } catch (error) {
       tab.navigationGrant = undefined;
@@ -406,19 +526,21 @@ export class AgentHost {
     if (!origin) throw new AgentError('ORIGIN_REQUIRED', 'The action needs a web origin.');
     if (allowSession && live.trustedOrigins.has(origin)) return;
     const connection = live.connection;
-    const readRevision = () => details.dialog ? tab!.driver.dialogRevision() : tab ? tab.driver.run<string>('revision', {}, connection.abort) : 'new-tab';
+    const loan = tab === this.loan?.tab ? this.loan : undefined;
+    const signal = loan?.controller.signal ?? connection.abort;
+    const readRevision = () => details.dialog ? tab!.driver.dialogRevision() : tab ? tab.driver.run<string>('revision', {}, signal) : 'new-tab';
     const context = {
       session: connection.id, tab: tab?.id ?? 'new-tab', url: tab?.view.webContents.getURL() ?? destination?.href ?? origin,
       revision: details.revision ?? await readRevision(), method: request.method, input: request.input,
     };
     const proof = new AgentConfirmation(context);
     await this.workspace.show();
-    connection.abort.throwIfAborted();
+    signal.throwIfAborted();
     if (this.pending) throw new AgentError('CONFIRMATION_BUSY', 'The owner is reviewing another action. Try again shortly.');
     const decision = await new Promise<AgentDecision>((resolve) => {
       const abort = () => finish('deny');
       const finish = (decision: AgentDecision) => {
-        connection.abort.removeEventListener('abort', abort);
+        signal.removeEventListener('abort', abort);
         clearTimeout(timer);
         this.pending = undefined;
         this.workspace.setHidden(false);
@@ -426,10 +548,11 @@ export class AgentHost {
         resolve(decision);
       };
       const timer = setTimeout(abort, Math.max(0, proof.expiresAt - Date.now()));
-      connection.abort.addEventListener('abort', abort, { once: true });
+      signal.addEventListener('abort', abort, { once: true });
       this.pending = { connection, finish, card: {
         id: proof.id, client: connection.device.name, action: request.method.replaceAll('_', ' '),
-        tab: tab?.origin ?? 'New Agent tab', origin, expiresAt: proof.expiresAt, canAllowSession: Boolean(allowSession),
+        tab: loan ? `Lent tab · ${loan.origin}` : tab?.label ?? tab?.origin ?? 'New Agent tab',
+        origin, expiresAt: proof.expiresAt, canAllowSession: Boolean(allowSession),
         target: target ? clean(`${target.role}: ${target.name}`, 300) : destination ? cleanUrl(destination.href) : undefined,
         input: request.method === 'upload_file' ? clean((request.input as AgentInput<'upload_file'>).path, 500)
           : 'text' in (request.input as object) ? '[typed text hidden]' : undefined,
@@ -439,7 +562,7 @@ export class AgentHost {
       this.changed();
     });
     if (decision === 'deny') throw new AgentError('ACTION_DENIED', 'The action was denied or its confirmation expired.');
-    connection.abort.throwIfAborted();
+    signal.throwIfAborted();
     if (tab?.manual || !proof.spend({ ...context, url: tab?.view.webContents.getURL() ?? context.url, revision: await readRevision() })) {
       throw new AgentError('PAGE_CHANGED', 'The page changed while awaiting approval. Get a fresh snapshot.');
     }

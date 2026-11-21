@@ -5,9 +5,10 @@ sources:
   - electron/agent-workspace.ts
   - electron/agent-driver.ts
   - electron/agent-policy.ts
+  - electron/agent-lent-tab.ts
   - packages/agent-mcp/src/cli.ts
   - packages/bridge-protocol/src/agent.ts
-verified_at: be6b5f9
+verified_at: 69109ce
 ---
 
 # Agent Mode
@@ -59,6 +60,22 @@ See the [setup guide](../agents/private-browser.md) and [security contract](../.
   confirmations. A browser session lasts up to 60 minutes and a connection
   times out after ten idle minutes. One client can own up to four tabs.
 
+## Lend a tab and run parallel tasks
+
+The owner uses the active tab's trusted context menu to pick a connected
+client. A loan exposes one opaque ID for at most fifteen minutes, through the
+same bounded driver. The regular browser tab ID never crosses MCP. The loan
+ends on an attempted change of origin, tab switch, client disconnect or
+owner stop. The owner keeps the tab. Each lent write repeats the approval
+flow, even for an ordinary click or typing. See
+[SECURITY.md](../../SECURITY.md#owner-lent-tabs) for the special restrictions.
+
+For each parallel task, use `tab_open` with a `label` and keep the returned
+`tabId`. Pass it on every page call, including `snapshot`, `record_start`
+and `record_stop`. Element references include a document identifier and
+cannot select elements from a different task's page. The pipe serializes
+calls within one connected client so action and approval order remain clear.
+
 ## Interfaces and storage
 
 | Surface | Implementation |
@@ -84,7 +101,7 @@ save dialog. Persistent Chromium data uses random Agent-space partition IDs.
 | Repudiation | A client disputes an operation | Local encrypted audit with stable outcome codes. The owner can export or clear records. |
 | Information disclosure | Malicious instructions or secrets appear in a page | Data envelopes, bounded redaction and image masks. A site can deliberately print its own sensitive data in ordinary page text. Keep high-value accounts out of Agent Spaces. |
 | Denial of service | An agent burns resources or a page stalls a call | Per-connection rate limits, frame and output limits, tab caps, idle and absolute expiry, and a chrome stop switch. |
-| Elevation of privilege | An agent attempts to access a regular signed-in tab | Main only resolves IDs from the private Agent tab registry. A future lend-tab feature would need its own authorization, revocation and security review. |
+| Elevation of privilege | An agent attempts to access a regular signed-in tab | Main resolves Agent IDs and at most one opaque, owner-lent tab ID. The loan expires, forbids origin changes, and confirms every write. Site content shown in a signed-in tab can still include data the owner has chosen to expose to the client. |
 | Supply chain | A compromised MCP dependency adds another route to browser control | Exact dependency version and lockfile, npm audit, a bundled stdio-only client, and no browser capabilities in the CLI. Main validates everything again. |
 
 ## Verification

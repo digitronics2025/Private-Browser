@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentMethod } from '@private-browser/bridge-protocol/agent';
@@ -77,9 +77,28 @@ async function executeCli(args: string[], input = '') {
   });
 }
 
-async function startMcp() {
+async function startMcp(profile = 'codex') {
   client = new Client({ name: 'private-browser-fixture', version: '1.0.0' });
-  await client.connect(new StdioClientTransport({ command: process.execPath, args: [cli, '--client', 'codex'], env, stderr: 'pipe' }));
+  await client.connect(new StdioClientTransport({ command: process.execPath, args: [cli, '--client', profile], env, stderr: 'pipe' }));
+}
+
+async function verifyRecordedTest(spec: string): Promise<void> {
+  const directory = join(root, 'recorded-test');
+  await mkdir(directory);
+  await symlink(join(process.cwd(), 'node_modules'), join(directory, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+  await writeFile(join(directory, 'recorded.spec.ts'), spec);
+  await writeFile(join(directory, 'playwright.config.cjs'), "module.exports = { testDir: '.', workers: 1, reporter: 'line' };\n");
+  const log = await new Promise<string>((resolve, reject) => {
+    const proc = spawn(process.execPath, [
+      join(process.cwd(), 'node_modules', 'playwright', 'cli.js'), 'test', '--config', join(directory, 'playwright.config.cjs'),
+    ], { env, cwd: directory, windowsHide: true, timeout: 28_000 });
+    let output = '';
+    proc.stdout.setEncoding('utf8').on('data', (data: string) => { output += data; });
+    proc.stderr.setEncoding('utf8').on('data', (data: string) => { output += data; });
+    proc.on('error', reject);
+    proc.on('close', (code) => code === 0 ? resolve(output) : reject(new Error('The generated Playwright test failed to replay: ' + output.slice(-1_800))));
+  });
+  expect(log).toContain('1 passed');
 }
 
 async function call(name: AgentMethod, args: Record<string, unknown> = {}) {
@@ -154,6 +173,7 @@ test('Agent MCP stdio smoke and isolated security checks', async () => {
   const spec = JSON.parse(recording.text).untrusted_page_content.playwright as string;
   expect(spec).toContain("import { test } from '@playwright/test'");
   expect(spec).toContain('getByRole("button", { name: "Show nickname", exact: true }).click()');
+  await verifyRecordedTest(spec);
   expect((await call('console_messages')).text).toContain('Expected fixture console error');
   const network = await call('network_requests');
   expect(network.text).toContain('/broken');
@@ -162,6 +182,13 @@ test('Agent MCP stdio smoke and isolated security checks', async () => {
   expect((await call('evaluate', { expression: 'window.innerWidth' })).text).toContain('375');
   const capture = await call('screenshot');
   expect(capture.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'image', mimeType: 'image/jpeg' })]));
+  const maskedField = await call('screenshot', { ref: privateFields[0].ref });
+  const maskedImage = maskedField.content.find((item) => (item as { type?: string }).type === 'image') as { data: string };
+  expect(maskedImage?.data).toBeTruthy();
+  expect(await app.evaluate(({ nativeImage }, data) => {
+    const bitmap = nativeImage.createFromBuffer(Buffer.from(data, 'base64')).toBitmap();
+    return bitmap.length > 0 && bitmap.every((value, position) => position % 4 === 3 || value < 20);
+  }, maskedImage.data)).toBe(true);
 
   const submit = call('click', { ref: ref('Save entry') });
   await expect(confirm.getByText(origin + '/save')).toBeVisible();
@@ -197,4 +224,89 @@ test('Agent MCP stdio smoke and isolated security checks', async () => {
   expect(audit.some((row) => row.tool === 'click' && row.decision === 'denied')).toBe(true);
   expect(JSON.stringify(audit)).not.toMatch(/Mock nickname|fixture passphrase|drop-me/);
   console.log('Agent smoke: stdio pairing, isolated navigation, snapshot, action, Playwright recording, and stop passed.');
+});
+
+test('lends only the owner-selected tab and keeps parallel tasks scoped by tab ID', async () => {
+  test.setTimeout(100_000);
+  const chrome = await app.firstWindow();
+  await chrome.evaluate(async () => {
+    await window.privateBrowser.setAgentsEnabled(true);
+    await window.privateBrowser.beginAgentPairing();
+  });
+  const code = await chrome.evaluate(async () => (await window.privateBrowser.getAgentStatus()).pairing?.code);
+  if (!code) throw new Error('No disposable pairing code was issued.');
+  expect((await executeCli(['pair', '--client', 'claude-code'], `${code}\n`)).stdout).toContain('Paired Claude Code');
+  await startMcp('claude-code');
+  expect((await call('browser_status')).text).toContain('Claude Code');
+  await chrome.evaluate((url) => window.privateBrowser.navigate(url), origin + '/lent');
+  const normalTab = await chrome.evaluate(async () => (await window.privateBrowser.getState()).activeTabId);
+  expect((await call('snapshot', { tabId: normalTab })).error).toBe(true);
+  await chrome.getByRole('tab', { name: 'Agent fixture' }).click({ button: 'right' });
+  const ownerMenu = chrome.getByRole('menu', { name: 'Tab actions' });
+  await ownerMenu.getByRole('menuitem', { name: 'Let agent use this tab for 15 minutes' }).hover();
+  await chrome.getByRole('menuitem', { name: 'Claude Code', exact: true }).click();
+  await expect(chrome.getByText('Claude Code is controlling this tab')).toBeVisible();
+
+  const tabs = JSON.parse((await call('tabs_list')).text).untrusted_page_content as { tabId: string; lent: boolean }[];
+  const borrowed = tabs.find((tab) => tab.lent);
+  expect(borrowed).toBeDefined();
+  expect(borrowed?.tabId).not.toBe(normalTab);
+  const snapshot = async (tabId: string) => {
+    const result = await call('snapshot', { tabId });
+    expect(result.error).toBeFalsy();
+    return JSON.parse(result.text).untrusted_page_content as { url: string; nodes: { ref: string; name: string; role: string; value?: string }[] };
+  };
+  const nickname = (page: Awaited<ReturnType<typeof snapshot>>) => page.nodes.find((node) => node.name === 'Nickname' && node.role === 'textbox')!;
+  const held = await snapshot(borrowed!.tabId);
+  const workspaceOpened = app.waitForEvent('window');
+  const attempted = call('type', { tabId: borrowed!.tabId, ref: nickname(held).ref, text: 'Denied text' });
+  const workspace = await workspaceOpened;
+  const approval = workspace.getByRole('alertdialog', { name: 'Approve agent action' });
+  await expect(approval.getByText(`Lent tab · ${origin}`)).toBeVisible();
+  await expect(approval.getByRole('button', { name: /for this session/ })).toHaveCount(0);
+  await approval.getByRole('button', { name: 'Deny', exact: true }).click();
+  expect((await attempted).error).toBe(true);
+  expect(nickname(await snapshot(borrowed!.tabId)).value).toBe('');
+  const permitted = call('type', { tabId: borrowed!.tabId, ref: nickname(held).ref, text: 'Owner-approved text' });
+  await approval.getByRole('button', { name: 'Allow once' }).click();
+  expect((await permitted).error).toBeFalsy();
+  expect(nickname(await snapshot(borrowed!.tabId)).value).toBe('Owner-approved text');
+  expect((await call('downloads_list', { tabId: borrowed!.tabId })).error).toBe(true);
+  await chrome.getByRole('button', { name: 'Stop agent control' }).click();
+  expect((await call('snapshot', { tabId: borrowed!.tabId })).error).toBe(true);
+  expect(await chrome.evaluate(async () => (await window.privateBrowser.getState()).activeTabId)).toBe(normalTab);
+
+  const device = await chrome.evaluate(async () => (await window.privateBrowser.getAgentStatus()).clients[0].id);
+  await chrome.evaluate(({ tab, client }) => window.privateBrowser.lendAgentTab(tab, client), { tab: normalTab, client: device });
+  const otherOrigin = new URL(origin);
+  otherOrigin.hostname = 'localhost';
+  expect((await call('navigate', { url: otherOrigin.href })).text).toContain('origin boundary');
+  expect((await call('tabs_list')).text).not.toContain('"lent":true');
+  await chrome.evaluate(({ tab, client }) => window.privateBrowser.lendAgentTab(tab, client), { tab: normalTab, client: device });
+  await chrome.evaluate(() => window.privateBrowser.newTab());
+  expect((await call('tabs_list')).text).not.toContain('"lent":true');
+  await chrome.evaluate(async (url) => {
+    await window.privateBrowser.switchWorkspace('banking');
+    await window.privateBrowser.navigate(url);
+  }, origin);
+  await expect(chrome.evaluate(async (client) => {
+    return window.privateBrowser.lendAgentTab((await window.privateBrowser.getState()).activeTabId, client);
+  }, device)).rejects.toThrow('non-protected');
+
+  const firstOpen = call('tab_open', { url: origin + '/parallel-one', label: 'Task one' });
+  await approval.getByRole('button', { name: 'Allow navigation for this session on this origin' }).click();
+  const first = JSON.parse((await firstOpen).text).untrusted_page_content.tabId as string;
+  const second = JSON.parse((await call('tab_open', { url: origin + '/parallel-two', label: 'Task two' })).text).untrusted_page_content.tabId as string;
+  await expect(workspace.getByRole('button', { name: 'Task one' })).toBeVisible();
+  await expect(workspace.getByRole('button', { name: 'Task two' })).toBeVisible();
+  const firstPage = await snapshot(first);
+  const secondPage = await snapshot(second);
+  expect(firstPage.url).toContain('/parallel-one');
+  expect(secondPage.url).toContain('/parallel-two');
+  expect(nickname(firstPage).ref).not.toBe(nickname(secondPage).ref);
+  expect((await call('type', { tabId: second, ref: nickname(firstPage).ref, text: 'Wrong tab' })).error).toBe(true);
+  expect((await call('type', { tabId: first, ref: nickname(firstPage).ref, text: 'Task one only' })).error).toBeFalsy();
+  expect(nickname(await snapshot(first)).value).toBe('Task one only');
+  expect(nickname(await snapshot(second)).value).toBe('');
+  console.log('Agent smoke: consented tab loan, per-action denial, automatic return, Banking refusal, and labeled tab routing passed.');
 });

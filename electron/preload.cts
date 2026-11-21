@@ -30,6 +30,8 @@ const api = {
   selectAgentTab: (id: string): Promise<void> => ipcRenderer.invoke('agents:select', id),
   setAgentTabManual: (id: string, manual: boolean): Promise<void> => ipcRenderer.invoke('agents:manual', id, manual),
   closeAgentTab: (id: string): Promise<void> => ipcRenderer.invoke('agents:close-tab', id),
+  lendAgentTab: (tabId: string, clientId: string): Promise<void> => ipcRenderer.invoke('agents:lend-tab', tabId, clientId),
+  returnAgentTab: (): Promise<void> => ipcRenderer.invoke('agents:return-tab'),
   onAgentChanged: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on('agents:changed', listener);

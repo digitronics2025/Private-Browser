@@ -31,6 +31,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'agents:open-workspace':
     case 'agents:clear-audit':
     case 'agents:export-audit':
+    case 'agents:return-tab':
       exact(args, 0); return;
     case 'agents:enable':
       exact(args, 1); requireBoolean(args[0]); return;
@@ -46,6 +47,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); requireNonEmptyText(args[0], 'Agent Account Space name', 60); return;
     case 'agents:manual':
       exact(args, 2); requireUuid(args[0], 'Agent tab'); requireBoolean(args[1]); return;
+    case 'agents:lend-tab':
+      exact(args, 2); requireUuid(args[0], 'Browser tab'); requireUuid(args[1], 'Agent client'); return;
     case 'agents:decide':
       exact(args, 2); requireUuid(args[0], 'Agent confirmation');
       if (args[1] !== 'allow' && args[1] !== 'session' && args[1] !== 'deny') throw new Error('Choose an Agent decision');

@@ -7,9 +7,11 @@ import { PanelHeader } from './common';
 export function useAgentStatus() {
   const [status, setStatus] = useState<AgentUiStatus>();
   useEffect(() => {
+    const api = window.privateBrowser;
+    if (typeof api?.getAgentStatus !== 'function' || typeof api.onAgentChanged !== 'function') return;
     let current = true;
-    const refresh = () => { void window.privateBrowser.getAgentStatus().then((value) => { if (current) setStatus(value); }).catch(() => undefined); };
-    const unsubscribe = window.privateBrowser.onAgentChanged(refresh);
+    const refresh = () => { void api.getAgentStatus().then((value) => { if (current) setStatus(value); }).catch(() => undefined); };
+    const unsubscribe = api.onAgentChanged(refresh);
     refresh();
     return () => { current = false; unsubscribe?.(); };
   }, []);
@@ -169,7 +171,7 @@ export function AgentWorkspaceView() {
       <div className="agent-workspace-heading"><Bot size={19} /><h1>Agent Workspace</h1><button className="agent-danger"
         onClick={() => void perform(api.stopAgents)}><Square size={13} /> Stop</button></div>
       <nav aria-label="Agent tabs">{status?.tabs.map((item) => <button key={item.id} aria-current={item.id === status.selectedTab}
-        onClick={() => void perform(() => api.selectAgentTab(item.id))}>{item.name}</button>)}</nav>
+        title={item.name} onClick={() => void perform(() => api.selectAgentTab(item.id))}>{item.label || item.name}</button>)}</nav>
       <div className="agent-control-line" role="status">
         {status?.current ? <span>{status.current.client} is controlling this tab <small>· {status.current.step.replaceAll('_', ' ')}</small></span>
           : <span>{tab?.manual ? 'You are controlling this tab' : 'No agent is driving'}</span>}

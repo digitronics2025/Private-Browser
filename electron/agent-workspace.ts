@@ -24,6 +24,7 @@ export interface AgentTab {
   view: WebContentsView;
   driver: AgentDriver;
   manual: boolean;
+  label?: string;
   origin?: string;
   navigationGrant?: { origin: string; until: number };
   requestGrant?: RequestGrant;
@@ -93,7 +94,7 @@ export class AgentWorkspace {
 
   summaries() {
     return [...this.tabs.values()].map((tab) => ({
-      id: tab.id, name: tab.origin ?? 'New tab', client: tab.connection.device.name, space: tab.space.name, manual: tab.manual,
+      id: tab.id, name: tab.origin ?? 'New tab', client: tab.connection.device.name, space: tab.space.name, manual: tab.manual, label: tab.label,
     }));
   }
 
@@ -101,15 +102,7 @@ export class AgentWorkspace {
     return [...this.tabs.values()].filter((tab) => tab.connection === connection);
   }
 
-  owned(connection: AgentConnection, id?: string): AgentTab {
-    const tab = id ? this.tabs.get(id) : undefined;
-    if (!tab || tab.connection !== connection || connection.abort.aborted || tab.manual) {
-      throw new AgentError('TAB_UNAVAILABLE', 'Select a tab owned by this session and return it to agent control.');
-    }
-    return tab;
-  }
-
-  async create(space: AgentSpace, connection: AgentConnection, policy: AgentPolicy): Promise<AgentTab> {
+  async create(space: AgentSpace, connection: AgentConnection, policy: AgentPolicy, label?: string): Promise<AgentTab> {
     await this.show();
     connection.abort.throwIfAborted();
     const targetSession = this.partition(space.id);
@@ -118,7 +111,7 @@ export class AgentWorkspace {
       session: targetSession, contextIsolation: true, sandbox: true, nodeIntegration: false,
       webSecurity: true, allowRunningInsecureContent: false, devTools: false,
     } });
-    const tab: AgentTab = { id: randomUUID(), space, connection, policy, view, driver: new AgentDriver(view.webContents), manual: false };
+    const tab: AgentTab = { id: randomUUID(), space, connection, policy, view, driver: new AgentDriver(view.webContents), manual: false, label };
     const guard = (event: { preventDefault(): void; url: string }) => {
       if (!this.navigationAllowed(tab, event.url)) event.preventDefault();
     };
@@ -199,12 +192,12 @@ export class AgentWorkspace {
     await clearAndVerifyAccountSession(this.partition(space.id));
   }
 
-  async load(tab: AgentTab, url: URL): Promise<void> {
-    tab.connection.abort.throwIfAborted();
+  async load(tab: AgentTab, url: URL, signal = tab.connection.abort): Promise<void> {
+    signal.throwIfAborted();
     tab.navigationGrant = { origin: url.origin, until: Date.now() + 15_000 };
     try {
       await tab.view.webContents.loadURL(stripTrackingParameters(url.href));
-      tab.connection.abort.throwIfAborted();
+      signal.throwIfAborted();
       await tab.driver.initialize();
     }
     catch { throw new AgentError('LOAD_FAILED', 'The page could not load or a redirect was blocked.'); }

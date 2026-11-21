@@ -1,1 +1,1 @@
-Use Private Browser with Claude Code or Codex in a separate Agent Workspace. Pair from Settings, approve important actions in the browser, and stop a session from the Agent toolbar.
+Use Private Browser with Claude Code or Codex in a separate Agent Workspace. Pair from Settings, label parallel tasks, or lend one tab for up to 15 minutes. Approve changes to a lent tab in the browser and click Stop to take it back.

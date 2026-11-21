@@ -30,10 +30,11 @@ export interface AgentUiStatus {
   pairing?: { code: string; expiresAt: number };
   clients: { id: string; name: string; policy: AgentPolicy; active: boolean; uploadFolder?: string }[];
   spaces: { id: string; name: string }[];
-  tabs: { id: string; name: string; client: string; space: string; manual: boolean }[];
+  tabs: { id: string; name: string; client: string; space: string; manual: boolean; label?: string }[];
   selectedTab?: string;
   current?: { client: string; step: string; tabId: string };
   active: boolean;
+  lent?: { tabId: string; client: string; origin: string; expiresAt: number };
   paused: boolean;
   pending?: AgentConfirmationCard;
   audit: AgentAuditRow[];

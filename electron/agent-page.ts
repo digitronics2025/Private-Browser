@@ -9,10 +9,29 @@ export function createAgentPage() {
   const sensitive = new WeakSet<HTMLElement>();
   let next = 0;
   let sequence = 0;
-  const documentId = Array.from(crypto.getRandomValues(new Uint8Array(16))).join('.');
+  const documentId = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
   const observer = new MutationObserver(() => { sequence += 1; });
   observer.observe(doc, { childList: true, subtree: true, attributes: true, characterData: true });
   for (const type of ['input', 'change']) doc.addEventListener(type, () => { sequence += 1; }, true);
+  let largestContentfulPaintMs: number | undefined;
+  let layoutShift = 0;
+  let shiftWindow = { start: 0, latest: 0, score: 0 };
+  const observe = (type: string, consume: (entry: PerformanceEntry) => void) => {
+    if (PerformanceObserver.supportedEntryTypes.includes(type)) {
+      new PerformanceObserver((list) => list.getEntries().forEach(consume)).observe({ type, buffered: true });
+    }
+  };
+  observe('largest-contentful-paint', (entry) => { largestContentfulPaintMs = entry.startTime; });
+  observe('layout-shift', (entry) => {
+    const shift = entry as PerformanceEntry & { hadRecentInput: boolean; value: number };
+    if (shift.hadRecentInput) return;
+    if (shift.startTime - shiftWindow.latest > 1_000 || shift.startTime - shiftWindow.start > 5_000) {
+      shiftWindow = { start: shift.startTime, latest: shift.startTime, score: 0 };
+    }
+    shiftWindow.latest = shift.startTime;
+    shiftWindow.score += shift.value;
+    layoutShift = Math.max(layoutShift, shiftWindow.score);
+  });
   const revision = () => {
     if (observer.takeRecords().length) sequence += 1;
     return `${documentId}:${sequence}:${location.href}`;
@@ -98,9 +117,9 @@ export function createAgentPage() {
       if (!(node instanceof HTMLElement) || !node.matches(selectors) || !visible(node)) continue;
       const element = node;
       let ref = ids.get(element);
-      if (!ref || !/^e\d{1,4}$/.test(ref)) {
+      if (!ref) {
         if (next >= 9999) throw new Error('reference limit');
-        ref = `e${++next}`;
+        ref = `e${++next}-${documentId.slice(0, 12)}`;
         ids.set(element, ref);
       }
       refs.set(ref, element);
@@ -144,6 +163,8 @@ export function createAgentPage() {
       return entry ? {
         domInteractiveMs: entry.domInteractive, domContentLoadedMs: entry.domContentLoadedEventEnd,
         loadMs: entry.loadEventEnd, responseStartMs: entry.responseStart, transferBytes: entry.transferSize,
+        firstContentfulPaintMs: performance.getEntriesByName('first-contentful-paint', 'paint')[0]?.startTime,
+        largestContentfulPaintMs, cumulativeLayoutShift: layoutShift,
       } : {};
     }
     if (command === 'evaluate') {

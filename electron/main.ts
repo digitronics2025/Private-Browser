@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { agentDataRoot } from '@private-browser/bridge-protocol/agent-location';
 import { AgentHost } from './agent-host.js';
 import type { AgentDecision } from './agent-types.js';
-import type { AgentPolicy } from './agent-policy.js';
+import { agentUrl, type AgentPolicy } from './agent-policy.js';
 import {
   app,
   BrowserWindow,
@@ -577,6 +577,7 @@ class BrowserController {
   }
 
   broadcast(): void {
+    agentHost?.validateLentTab();
     if (!this.window.isDestroyed()) this.window.webContents.send('browser:state', this.getSnapshot());
   }
 
@@ -591,6 +592,28 @@ class BrowserController {
   }
 
   notifyAgentChange(): void { this.agentParent()?.webContents.send('agents:changed'); }
+
+  async lendAgentTab(tabId: string, clientId: string): Promise<void> {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tabId);
+    const view = runtime?.view;
+    if (!agentHost || tab.id !== tabId || tab.isHome || tab.workspaceId === 'banking' || !view || runtime?.problem
+      || runtime?.certificateError || runtime?.automaticFillPending || this.window.isFullScreen()
+      || WORKSPACES.find(({ id }) => id === tab.workspaceId)?.protected) {
+      throw new Error('Select a loaded, non-protected tab before lending it.');
+    }
+    const url = agentUrl(view.webContents.getURL());
+    if (isKnownGoogleWebHost(url.href)) throw new Error('Google account and service pages cannot be lent.');
+    this.fillCapabilities.invalidateTab(tabId);
+    this.fillPicker.close();
+    await agentHost.lendTab({
+      tabId, view,
+      current: () => !this.window.isDestroyed() && !this.window.isFullScreen()
+        && this.activeTab(this.store.get()).id === tabId && this.runtimeTabs.get(tabId)?.view === view
+        && !this.activeTab(this.store.get()).isHome,
+    }, clientId);
+  }
 
   focus(): void {
     if (!this.window || this.window.isDestroyed()) return;
@@ -2941,7 +2964,7 @@ class BrowserController {
     const active = this.activeTab(state);
     const runtime = this.runtimeTabs.get(tabId);
     const contents = runtime?.view?.webContents;
-    if (!tab || active.id !== tabId || !runtime || !contents || tab.isHome) return;
+    if (!tab || active.id !== tabId || !runtime || !contents || tab.isHome || agentHost?.isLentContents(contents.id)) return;
     if (!workspaceVaultPolicy(tab.workspaceId).automaticFill || this.vault.status().lifecycle !== 'unlocked') return;
     if (runtime.navigationGeneration !== generation || runtime.automaticFillGeneration === generation || runtime.automaticFillPending || runtime.certificateError) return;
     if (!isAutomaticFillPageUrl(contents.getURL())) return;
@@ -3321,6 +3344,7 @@ class BrowserController {
     const popupTimes: number[] = [];
     // `popup` is set when the request comes from a popup window this tab opened.
     const openFromPage = ({ url, disposition }: HandlerDetails, popup?: BrowserWindow): WindowOpenHandlerResponse => {
+      if (agentHost?.isLentContents(view.webContents.id)) return { action: 'deny' };
       if (tab.workspaceId === 'banking') {
         this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
         return { action: 'deny' };
@@ -3400,11 +3424,12 @@ class BrowserController {
         () => Boolean(this.developerTarget(tabId)));
     });
     view.webContents.on('before-input-event', (event, input) => {
-      if (this.handleFillPickerKey(tabId, event, input)) return;
+      if (!agentHost?.isLentContents(view.webContents.id) && this.handleFillPickerKey(tabId, event, input)) return;
       this.handleShortcut(event, input);
     });
     // Only genuine user input opens the login picker; nothing the page does can.
     view.webContents.on('input-event', (_event, input) => {
+      if (agentHost?.isLentContents(view.webContents.id)) return;
       if (input.type === 'mouseWheel' || input.type === 'gestureScrollBegin') this.fillPicker.close();
       if (input.type !== 'mouseDown') return;
       this.fillPicker.close();
@@ -3467,7 +3492,7 @@ class BrowserController {
     if (spelling) this.applySpellcheck(ses, spelling);
     const protectedWorkspace = WORKSPACES.find((workspace) => workspace.id === workspaceId)!.protected;
     ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-      if (protectedWorkspace || !details.isMainFrame) {
+      if (protectedWorkspace || !details.isMainFrame || agentHost?.isLentContents(_webContents?.id)) {
         callback(false);
         return;
       }
@@ -3489,7 +3514,7 @@ class BrowserController {
       }
     });
     ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
-      if (protectedWorkspace || !details.isMainFrame) return false;
+      if (protectedWorkspace || !details.isMainFrame || agentHost?.isLentContents(_webContents?.id)) return false;
       const capability = permissionCapability(permission, details);
       if (!capability) return isAllowedSitePermission(permission, details.requestingUrl ?? requestingOrigin, false, details.isMainFrame);
       const origin = safeOrigin(details.requestingUrl ?? requestingOrigin);
@@ -3502,6 +3527,7 @@ class BrowserController {
       const activeView = this.runtimeTabs.get(active.id)?.view;
       const origin = safeOrigin(request.securityOrigin);
       if (protectedWorkspace
+        || agentHost?.isLentContents(activeView?.webContents.id)
         || active.accountSpaceId !== accountSpaceId
         || origin !== 'https://meet.google.com'
         || !request.userGesture
@@ -3531,7 +3557,9 @@ class BrowserController {
         deny();
       }
     }, { useSystemPicker: false });
-    ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: this.isBlockedTrackerRequest(details.url) }));
+    ses.webRequest.onBeforeRequest((details, callback) => callback({
+      cancel: this.isBlockedTrackerRequest(details.url) || agentHost?.allowLentRequest(details) === false,
+    }));
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
     });
@@ -3540,6 +3568,7 @@ class BrowserController {
     });
     ses.webRequest.onErrorOccurred((details) => this.recordNetworkIssue(details));
     ses.on('will-download', (event, item, sourceContents) => {
+      if (agentHost?.isLentContents(sourceContents?.id)) { event.preventDefault(); return; }
       if (protectedWorkspace) {
         event.preventDefault();
         this.addPrivacyEvent('blocked', 'Download blocked in Banking', 'Banking does not allow saving downloads');
@@ -3998,6 +4027,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('agents:select', (_event, id: string) => agentHost!.workspace.select(id));
   handle('agents:manual', (_event, id: string, manual: boolean) => agentHost!.workspace.setManual(id, manual));
   handle('agents:close-tab', (_event, id: string) => agentHost!.workspace.close(id));
+  handle('agents:lend-tab', (_event, tabId: string, clientId: string) => controller!.lendAgentTab(tabId, clientId));
+  handle('agents:return-tab', () => agentHost!.returnLentTab());
   handle('routines:save', (_event, routine: BrowserRoutine) => controller!.saveRoutine(routine));
   handle('routines:save-tabs', (_event, input: TabSetInput) => controller!.saveTabSet(input));
   handle('routines:delete', (_event, id: string) => controller!.deleteRoutine(id));
