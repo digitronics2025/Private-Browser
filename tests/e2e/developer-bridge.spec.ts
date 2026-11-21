@@ -14,9 +14,13 @@ function snapshot(workspaceId: 'development' | 'banking') {
   return { workspaces, activeWorkspaceId: workspaceId, activeAccountSpaceId: active.id, activeTabId: workspaceId, tabs, bookmarks: [], history: [], downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true, accountSpaces: accounts, accountHealth: accounts.map((account) => ({ accountSpaceId: account.id, status: account.googleConnection, checkedAt: '2026-09-12T10:00:00Z' })), googleConfiguration: { configured: false }, externalBrowsers: [] };
 }
 
-async function installMock(page: import('@playwright/test').Page, workspaceId: 'development' | 'banking') {
-  await page.addInitScript(({ state }) => {
-    let bridge: { state: string; browserVersion: string; pairingCode?: string; pairingExpiresAt?: number } = { state: 'disconnected', browserVersion: '0.4.0' };
+async function installMock(page: import('@playwright/test').Page, workspaceId: 'development' | 'banking', connected = false) {
+  await page.addInitScript(({ state, connected }) => {
+    const project = { project: { id: 'a'.repeat(32), name: 'Fixture workspace' }, framework: 'Vite', packageManager: 'npm', types: ['vite-react'] };
+    const commit = 'a'.repeat(40);
+    let bridge: { state: string; browserVersion: string; extensionVersion?: string; project?: typeof project; pairingCode?: string; pairingExpiresAt?: number } = connected
+      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: '0.4.1', project }
+      : { state: 'disconnected', browserVersion: '0.4.0' };
     let ui: Record<string, unknown> = {};
     let notify: ((value: ReturnType<typeof getState>) => void) | undefined;
     const getState = () => ({ ...state, ui });
@@ -30,10 +34,14 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
       beginBridgePairing: async () => (bridge = { state: 'pairing', browserVersion: '0.4.0', pairingCode: '12345678', pairingExpiresAt: Date.now() + 300000 }),
       listBridgeProjects: async () => [],
       setUiPreferences: async (patch: Record<string, unknown>) => { ui = { ...ui, ...patch }; notify?.(getState()); },
+      runBridgeAction: async (action: string) => action === 'project.revision'
+        ? { branch: 'topic/review', commit, staged: 1, unstaged: 2, untracked: 0, conflicts: 0, githubRepository: 'example/app' }
+        : undefined,
+      newTab: async (_workspace: string, url: string) => { document.documentElement.dataset.openedGitHubUrl = url; },
       setLayout: async () => undefined,
     }, { get: (target, property) => property in target ? target[property as keyof typeof target] : async () => undefined });
     Object.defineProperty(window, 'privateBrowser', { value: api });
-  }, { state: snapshot(workspaceId) });
+  }, { state: snapshot(workspaceId), connected });
 }
 
 test('shows focused pairing and all four bridge tabs in Development', async ({ page }) => {
@@ -59,4 +67,20 @@ test('keeps bridge actions hidden in Banking', async ({ page }) => {
   await page.getByRole('tab', { name: 'Developer Bridge' }).click();
   await expect(page.getByText('Protected by workspace policy')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Pair', exact: true })).toHaveCount(0);
+});
+
+test('opens the exact GitHub revision on request from a narrow Developer Bridge panel', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await installMock(page, 'development', true);
+  await page.goto('/');
+  const panelToggle = page.getByRole('button', { name: 'Side panel', exact: true });
+  await panelToggle.click();
+  await page.locator('#side-panel-tab-developer').click();
+  const revision = page.getByRole('region', { name: 'Git revision' });
+  await expect(revision.getByText('topic/review')).toBeVisible();
+  await expect(revision.getByText('1 staged · 2 unstaged · 0 untracked · 0 conflicts')).toBeVisible();
+  await expect(page.locator('html')).not.toHaveAttribute('data-opened-git-hub-url');
+  await revision.getByRole('button', { name: 'Open commit' }).click();
+  const destination = await page.locator('html').evaluate((root: HTMLElement) => root.dataset.openedGitHubUrl);
+  expect(destination).toBe('https://github.com/example/app/commit/' + 'a'.repeat(40));
 });

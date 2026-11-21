@@ -20,6 +20,7 @@ import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js'
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
 import { MAX_BOOKMARK_EDIT_BATCH } from './bookmark-maintenance.js';
 import { MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION, MAX_ASSISTANT_EXTRA_SOURCES, MAX_ASSISTANT_SOURCE_TEXT } from './ai-prompt.js';
+import { isAgentSessionLength, MAX_AGENT_ORIGINS } from './agent-policy.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
@@ -52,14 +53,15 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 2); requireUuid(args[0], 'Browser tab'); requireUuid(args[1], 'Agent client'); return;
     case 'agents:decide':
       exact(args, 2); requireUuid(args[0], 'Agent confirmation');
-      if (args[1] !== 'allow' && args[1] !== 'session' && args[1] !== 'deny') throw new Error('Choose an Agent decision');
+      if (args[1] !== 'allow' && args[1] !== 'session' && args[1] !== 'always' && args[1] !== 'deny') throw new Error('Choose an Agent decision');
       return;
     case 'agents:set-policy': {
       exact(args, 2); requireUuid(args[0], 'Agent client');
-      const policy = requireExactKeys(args[1], ['profile', 'origins', 'outside']);
+      const policy = requireExactKeys(args[1], ['profile', 'origins', 'outside', 'session']);
       if (policy.profile !== 'observe' && policy.profile !== 'develop' && policy.profile !== 'operate') throw new Error('Choose an Agent profile');
       if (policy.outside !== 'observe' && policy.outside !== 'deny') throw new Error('Choose a rule for other origins');
-      if (!Array.isArray(policy.origins) || policy.origins.length > 30) throw new Error('Enter up to 30 origins');
+      if (!isAgentSessionLength(policy.session)) throw new Error('Choose an Agent session length');
+      if (!Array.isArray(policy.origins) || policy.origins.length > MAX_AGENT_ORIGINS) throw new Error(`Enter up to ${MAX_AGENT_ORIGINS} origins`);
       for (const origin of policy.origins) requireNonEmptyText(origin, 'Agent origin', 300);
       return;
     }
@@ -434,6 +436,14 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); const input = requireExactKeys(args[0], ['endpoint', 'accessToken']);
       requireBoundedText(input.endpoint, 'service address', 2048); requireBoundedText(input.accessToken, 'access token', 4096); return;
     }
+    case 'updates:download-installer':
+      exact(args, 2);
+      requireNonEmptyText(args[0], 'release version', 80);
+      if (typeof args[1] !== 'string' || !/^[a-f0-9]{64}$/.test(args[1])) throw new Error('Invalid release checksum');
+      return;
+    case 'updates:cancel-installer':
+    case 'updates:install-verified':
+      exact(args, 0); return;
     case 'developer:bridge-action':
       between(args, 1, 2); requireNonEmptyText(args[0], 'VS Code action', 40);
       if (args[1] !== undefined && JSON.stringify(requireObject(args[1])).length > 256 * 1024) throw new Error('VS Code action payload is too large'); return;

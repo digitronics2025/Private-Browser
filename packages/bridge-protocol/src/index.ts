@@ -25,7 +25,7 @@ export const PAIRING_TTL_MS = 5 * 60_000;
 
 export const bridgeMethodSchema = z.enum([
   'connection.status', 'connection.heartbeat', 'connection.disconnect', 'connection.revoke',
-  'project.list', 'project.authorize', 'project.inspect', 'project.open', 'source.open',
+  'project.list', 'project.authorize', 'project.inspect', 'project.open', 'project.revision', 'source.open',
   'server.discover', 'server.start', 'server.stop', 'server.restart',
   'inspect.page', 'inspect.open-source',
   'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact',
@@ -56,6 +56,17 @@ export const projectInfoSchema = z.object({
   activeFile: z.string().max(2_000).optional(), guidance: z.array(z.string().max(500)).max(20),
 }).strict();
 export type ProjectInfo = z.infer<typeof projectInfoSchema>;
+
+export const gitRevisionSchema = z.object({
+  branch: z.string().min(1).max(256).optional(),
+  commit: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/).optional(),
+  githubRepository: z.string().regex(/^[a-z\d-]{1,39}\/[a-z\d_.-]{1,100}$/i).optional(),
+  staged: z.number().int().nonnegative(),
+  unstaged: z.number().int().nonnegative(),
+  untracked: z.number().int().nonnegative(),
+  conflicts: z.number().int().nonnegative(),
+}).strict();
+export type GitRevision = z.infer<typeof gitRevisionSchema>;
 
 export const reportStatusSchema = z.enum(['passed', 'attention', 'failed', 'skipped']);
 export const testKindSchema = z.enum(['quick', 'everything', 'current-page', 'live-site', 'compare', 'responsive', 'accessibility', 'performance', 'record-flow']);

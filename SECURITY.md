@@ -255,6 +255,11 @@ uploaded to R2, and the desktop app verifies a downloaded installer against the
 manifest before it will open it. Resumable downloads are restricted to one
 validated byte range per request.
 
+Managed updates use a main-process HTTPS stream without redirects, a private
+staging directory, an installer size cap, and the Windows Internet zone marker.
+Opening requires an explicit action in an unlocked regular Account Space,
+a fresh matching release manifest, and a second hash of the staged file.
+
 ## Credentials in the repository
 
 No credential is ever stored in a tracked file. `.gitignore` is itself committed and public; it keeps named paths out of the index and nothing more, and `git add -f` bypasses it entirely. Enforcement is [scripts/secret-guard.mjs](scripts/secret-guard.mjs), which refuses vendor token shapes, private key blocks, URLs carrying embedded credentials, and any path that names an environment or key file regardless of its contents.

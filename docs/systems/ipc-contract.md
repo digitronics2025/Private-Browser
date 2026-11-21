@@ -252,7 +252,10 @@ The main chrome uses `agents:status`, `agents:enable`, `agents:pair`,
 `agents:export-audit`. The regular chrome also owns `agents:lend-tab` and
 `agents:return-tab` for the owner's active browser tab. The pinned Agent Workspace chrome may call only the
 status, stop, select, manual, close-tab and decide channels. Only its main
-frame can invoke `agents:decide`. The `agents:changed` event signals the
+frame can invoke `agents:decide`, and main accepts `always` only for an eligible
+pending confirmation. Client status includes the current lease expiry when
+one exists. The `agents:set-policy` payload includes a session length of
+`1h`, `8h` or `open`. The `agents:changed` event signals the
 app to fetch fresh status. Agent tab views have no preload.
 
 ### ai: — 7 channels
@@ -328,6 +331,9 @@ the main process; `VaultItemMeta` carries `hasTotp`, never the secret.
 | `updates:clear` | `clearUpdateService()` | — | `UpdateServiceStatus` |
 | `updates:check` | `checkForUpdates()` | — | `UpdateCheckResult` |
 | `updates:open-page` | `openUpdatePage()` | — | `void` |
+| `updates:download-installer` | `downloadManagedUpdate(version, sha256)` | reviewed release metadata, current unlocked regular Account Space | `void` |
+| `updates:cancel-installer` | `cancelManagedUpdate()` | — | `void` |
+| `updates:install-verified` | `installManagedUpdate()` | — | `void` |
 | `updates:open-history` | `openReleaseHistory()` | — | `void` |
 
 There is no mechanical rule mapping a channel name to a method name. Four break

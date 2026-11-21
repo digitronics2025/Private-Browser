@@ -1,0 +1,1 @@
+Download updates from Settings and watch progress. When the checksum is verified, choose when to open the Windows installer. Private Browser shows the installed version after you reopen it.

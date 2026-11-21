@@ -6,7 +6,7 @@ import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt,
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
-import type { BrowserSettings, PinnablePanelTool, SidePanelTool } from '../electron/types';
+import type { BrowserSettings, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
@@ -169,6 +169,10 @@ export function installPreviewApi(): void {
   }
   state.downloadHistory = savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
   state.downloadFolder = { ask: true, available: true };
+  let managedUpdate: ManagedUpdateStatus | undefined = params.get('managedUpdate') === 'installed'
+    ? { phase: 'installed', version: '0.5.7' }
+    : params.get('managedUpdate') === 'sample' ? { phase: 'idle' } : undefined;
+  state.managedUpdate = managedUpdate;
   const workspaceSettings: Partial<Record<WorkspaceId, BrowserSettings>> = {};
   const siteZoom = new Map<string, number>();
   const siteZoomKey = (account: string, url: string) => JSON.stringify([account, new URL(url).origin]);
@@ -215,6 +219,7 @@ export function installPreviewApi(): void {
       ? previewPanelTools.get(state.activeAccountSpaceId) ?? (regularPanel ? commonPanelTool : 'privacy')
       : commonPanelTool;
     state.sidePanelPins = regularPanel ? [...(previewPanelPins.get(state.activeAccountSpaceId) ?? [])] : undefined;
+    state.managedUpdate = state.activeWorkspaceId === 'banking' ? undefined : managedUpdate;
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
     state.bookmarkUndo = undo ? { kind: undo.kind, count: undo.before.length } : undefined;
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
@@ -254,14 +259,20 @@ export function installPreviewApi(): void {
   const agentState: AgentUiStatus = { enabled: false, paused: false, active: false, clients: [], spaces: [], tabs: [], audit: [],
     command: 'node', commandArgs: ['packages/agent-mcp/dist/cli.js'] };
   const agentTabId = 'aeddf71a-49cd-4ab5-b36f-2244a9258852';
-  if (params.get('preview') === 'agent-action') {
+  const previewAgentAction = params.get('preview') === 'agent-action';
+  const previewSiteApproval = params.get('preview') === 'agent-site-approval';
+  if (previewAgentAction || previewSiteApproval) {
     Object.assign(agentState, {
       enabled: true, active: true, selectedTab: agentTabId,
+      clients: [{ id: agentTabId, name: 'Codex', active: true, expiresAt: Date.now() + 60 * 60_000,
+        policy: { profile: 'develop', outside: 'observe', session: '1h', origins: [] } }],
       tabs: [{ id: agentTabId, name: 'http://localhost:3000', client: 'Codex', space: 'Agent Account Space', manual: false }],
       current: { client: 'Codex', step: 'click', tabId: agentTabId },
       pending: { id: '9c7757bc-bf61-4685-9a31-9d38499f4ca0', client: 'Codex', tab: 'Agent Account Space',
-        origin: 'http://localhost:3000', action: 'click', target: 'button: Save', formTarget: 'http://localhost:3000/save',
-        expiresAt: Date.now() + 120_000, canAllowSession: false },
+        origin: 'http://localhost:3000', action: previewSiteApproval ? 'tab open' : 'click',
+        target: previewSiteApproval ? undefined : 'button: Save',
+        formTarget: previewSiteApproval ? undefined : 'http://localhost:3000/save',
+        expiresAt: Date.now() + 120_000, canAllowSession: previewSiteApproval, canAllowAlways: previewSiteApproval },
     });
   }
   const agentChange = () => agentListeners.forEach((listener) => listener());
@@ -369,6 +380,30 @@ export function installPreviewApi(): void {
     configureUpdateService: desktopOnly,
     clearUpdateService: desktopOnly,
     openUpdatePage: desktopOnly,
+    downloadManagedUpdate: async (version, sha256) => {
+      if (!managedUpdate || state.activeWorkspaceId === 'banking') throw new Error('Download the installer using the desktop app.');
+      const result = await handlers.checkForUpdates();
+      if (result.state !== 'available' || version !== result.latest.version || sha256 !== result.latest.sha256) throw new Error('Check for updates again.');
+      const { sizeBytes } = result.latest;
+      const pending: ManagedUpdateStatus = { phase: 'downloading', version, receivedBytes: sizeBytes / 2, totalBytes: sizeBytes };
+      managedUpdate = pending;
+      publish();
+      window.setTimeout(() => {
+        if (managedUpdate !== pending) return;
+        managedUpdate = { phase: 'ready', version, publisher: { state: 'unsigned' } };
+        publish();
+      }, 500);
+    },
+    cancelManagedUpdate: async () => {
+      if (!managedUpdate || state.activeWorkspaceId === 'banking') throw new Error('Cancel the download using the desktop app.');
+      managedUpdate = { phase: 'failed', message: 'Download cancelled.' };
+      publish();
+    },
+    installManagedUpdate: async () => {
+      if (managedUpdate?.phase !== 'ready' || state.activeWorkspaceId === 'banking') throw new Error('Install a verified file using the desktop app.');
+      managedUpdate = { phase: 'launched', version: managedUpdate.version };
+      publish();
+    },
     getState: async () => structuredClone(state),
     controlDownload: async (id, action) => {
       const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);

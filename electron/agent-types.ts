@@ -1,6 +1,6 @@
 import type { AgentPolicy } from './agent-policy.js';
 
-export type AgentDecision = 'allow' | 'session' | 'deny';
+export type AgentDecision = 'allow' | 'session' | 'always' | 'deny';
 
 export interface AgentConfirmationCard {
   id: string;
@@ -13,6 +13,7 @@ export interface AgentConfirmationCard {
   formTarget?: string;
   expiresAt: number;
   canAllowSession: boolean;
+  canAllowAlways: boolean;
 }
 
 export interface AgentAuditRow {
@@ -28,7 +29,7 @@ export interface AgentUiStatus {
   enabled: boolean;
   unavailable?: string;
   pairing?: { code: string; expiresAt: number };
-  clients: { id: string; name: string; policy: AgentPolicy; active: boolean; uploadFolder?: string }[];
+  clients: { id: string; name: string; policy: AgentPolicy; active: boolean; expiresAt?: number; uploadFolder?: string }[];
   spaces: { id: string; name: string }[];
   tabs: { id: string; name: string; client: string; space: string; manual: boolean; label?: string }[];
   selectedTab?: string;

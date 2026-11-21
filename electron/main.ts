@@ -36,6 +36,7 @@ import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type Expec
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { DownloadHistoryStore } from './download-history.js';
 import { availableDownloadFolder, discardDownloadStage, DownloadFolderStore, finishStagedDownload, safeDownloadFilename, stageDownload } from './download-folder.js';
+import { ManagedUpdate } from './managed-update.js';
 import { getDomain } from 'tldts';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
@@ -110,7 +111,7 @@ import type {
   TabBatchScope,
   TabGroup,
 } from './types.js';
-import type { ProjectInfo, ProjectSummary } from '@private-browser/bridge-protocol';
+import { gitRevisionSchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
 import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
 import { MyVaultDiskStore } from './myvault/vault-store.js';
@@ -327,6 +328,14 @@ class BrowserController {
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private readonly googleChecks = new Map<AccountSpaceId, GoogleConnectionHealth>();
   private expectedInstaller?: ExpectedInstaller;
+  private readonly managedUpdate = new ManagedUpdate({
+    directory: join(app.getPath('userData'), 'update-installers'),
+    currentVersion: app.getVersion(),
+    check: () => this.checkForUpdates(),
+    canUse: () => process.platform === 'win32' && Boolean(this.activeDownloadAccount()) && !this.store.isReadOnly(),
+    openInstaller: (path) => shell.openPath(path),
+    notify: () => this.broadcast(),
+  });
   private layout: Layout = { ...DEFAULT_CONTENT_INSETS };
   private readonly closedTabs = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   private readonly bookmarkUndo = new Map<AccountSpaceId, BookmarkUndo<AccountSpaceBookmark>>();
@@ -570,6 +579,7 @@ class BrowserController {
       downloadHistory: !downloadAccount ? undefined : this.downloadHistoryFailures.has(downloadAccount)
         ? 'unavailable' : this.downloadHistory.status(downloadAccount),
       downloadFolder: downloadAccount ? this.downloadFolder.status(downloadAccount) : undefined,
+      managedUpdate: downloadAccount && process.platform === 'win32' && !this.store.isReadOnly() ? this.managedUpdate.snapshot() : undefined,
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
       activeAccountSpaceId,
@@ -2359,9 +2369,21 @@ class BrowserController {
 
   async runBridgeAction(action: DeveloperBridgeAction, payload: Record<string, unknown>): Promise<unknown> {
     this.requireDeveloperWorkspace();
-    const allowed: ReadonlySet<string> = new Set(['project.open', 'source.open', 'server.discover', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
+    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'source.open', 'server.discover', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
     if (!allowed.has(action)) throw new Error('Unsupported VS Code action');
-    const projectId = this.vscodeBridge.status().project?.project.id;
+    const bridge = this.vscodeBridge.status();
+    const projectId = bridge.project?.project.id;
+    if (action === 'project.revision') {
+      if (!projectId) throw new Error('Choose an approved workspace first.');
+      const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+      if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 1))) {
+        throw new Error('Install Private Browser Bridge 0.4.1 or later to view the Git revision.');
+      }
+      const result = await this.vscodeBridge.request(action, { projectId });
+      this.requireDeveloperWorkspace();
+      if (projectId !== this.vscodeBridge.status().project?.project.id) throw new Error('The selected project changed.');
+      return gitRevisionSchema.nullable().parse(result);
+    }
     let safePayload: Record<string, unknown> = { ...payload, ...(projectId ? { projectId } : {}) };
     if (action === 'ai.handoff') {
       const preview = this.consumeAiApproval(String(payload.approvalToken ?? ''));
@@ -3677,6 +3699,12 @@ class BrowserController {
     await this.newTab('development', PUBLIC_UPDATE_ENDPOINT + '/#release-history');
   }
 
+  downloadManagedUpdate(version: string, sha256: string): Promise<void> { return this.managedUpdate.download(version, sha256); }
+
+  cancelManagedUpdate(): void { this.managedUpdate.cancel(); }
+
+  installManagedUpdate(): Promise<void> { return this.managedUpdate.install(); }
+
   async checkForUpdatesInBackground(): Promise<void> {
     if (this.window.isDestroyed()) return;
     try {
@@ -4755,6 +4783,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:clear', () => controller!.clearUpdateService());
   handle('updates:check', () => controller!.checkForUpdates());
   handle('updates:open-page', () => controller!.openUpdatePage());
+  handle('updates:download-installer', (_event, version: string, sha256: string) => controller!.downloadManagedUpdate(version, sha256));
+  handle('updates:cancel-installer', () => controller!.cancelManagedUpdate());
+  handle('updates:install-verified', () => controller!.installManagedUpdate());
   handle('updates:open-history', () => controller!.openReleaseHistory());
 
   await controller.createWindow();
