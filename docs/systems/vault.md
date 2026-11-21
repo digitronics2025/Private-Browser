@@ -96,6 +96,9 @@ memory wiping.
 - `vault-store.ts` — envelope, protected connection state and atomic recovery.
 - `vault-sync.ts` / `sync-controller.ts` — redemption, CAS and dirty scheduling.
 - `secure-dialog.ts` / `secure-preload.cts` — isolated one-shot secret UI.
+  The editor can generate a credential on eligible HTTPS pages. Main binds
+  generation to its exact dialog and the current page. The result stays in the
+  password field until the user presses Save generated login.
 - `fill-capability.ts` / `automatic-fill.ts` / `isolated-fill.ts` — exact-context
   manual and Chrome-style automatic browser operations; `orderFillCandidates` is
   the one ordering both automatic fill and the picker use, and

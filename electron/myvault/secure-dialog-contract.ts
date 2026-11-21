@@ -1,5 +1,15 @@
 export type SecureDialogKind = 'unlock' | 'enroll-hello' | 'edit-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair';
 
+export const SECURE_CREDENTIAL_PRESETS = {
+  password: { label: 'Password, 24 characters with symbols', kind: 'password', length: 24, symbols: true },
+  long: { label: 'Long password, 36 characters with symbols', kind: 'password', length: 36, symbols: true },
+  compatible: { label: 'Password, 24 letters and numbers', kind: 'password', length: 24, symbols: false },
+  passphrase: { label: 'Passphrase, 16 words', kind: 'passphrase', length: 16, symbols: false },
+  pin: { label: 'PIN, 8 digits', kind: 'pin', length: 8, symbols: false },
+} as const;
+
+export type SecureCredentialPreset = keyof typeof SECURE_CREDENTIAL_PRESETS;
+
 export interface UnlockDialogValue { password: string }
 export interface EditLoginDialogValue { title: string; url: string; username: string; password: string; totpSecret?: string }
 export interface ConfirmDeleteDialogValue { confirmed: true }
