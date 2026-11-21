@@ -4,7 +4,7 @@ import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/t
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
-import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
@@ -14,7 +14,7 @@ import { planBookmarkBatch } from '../electron/bookmark-batch';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from '../electron/bookmark-maintenance';
 import { canonicalRoutineUrl, defaultBrowserRoutines, requireBrowserRoutine } from '../electron/browser-routines';
 import { appendTabSetBookmarks, resolveTabSet } from '../electron/tab-sets';
-import type { TabSetInput } from '../electron/types';
+import type { ReferenceSearchInput, TabSetInput } from '../electron/types';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
 import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
@@ -267,6 +267,17 @@ export function installPreviewApi(): void {
       state.bookmarks.push(...added);
       if (added.length) publish();
       return added.length;
+    },
+    openReferenceSearch: async (value) => {
+      const input = value as ReferenceSearchInput;
+      if (state.activeWorkspaceId === 'banking' || input?.accountSpaceId !== state.activeAccountSpaceId
+        || !state.accountSpaces.some((account) => account.id === input.accountSpaceId && !account.locked)) {
+        throw new Error('Return to the original regular Account Space to open the reference.');
+      }
+      const url = referenceSearchUrl(state.settings, input.keyword, input.reference);
+      if (!url || url !== input.reviewedUrl) throw new Error('Review the current search address before opening it.');
+      await handlers.newTab();
+      await handlers.navigate(url);
     },
     deleteRoutine: async (id) => { routines = routines.filter((routine) => routine.id !== id); publish(); },
     markRoutineChecklist: async (id, index, done) => {

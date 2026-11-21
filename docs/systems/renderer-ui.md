@@ -257,7 +257,7 @@ bookmark is renamed or removed.
 | `assistant` | `getAiProvider`, `getLocalAiModels`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi`, `revokeAiContext` |
 | `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview, `copyText`; the Tasks tab ([ControlCenterSection.tsx](../../src/panels/ControlCenterSection.tsx)) uses the `control-center:*` methods ([control-center-link.md](control-center-link.md)) |
 | `vault` | `listVault`, unlock/pair/lock/sync/conflict intents, Windows Hello unlock/enable/disable intents, `openVaultEditor`, `requestSaveFromPage`, migration, generators, `copyPassword`, `copyTotp`, `autofill` |
-| `automations` | `routines:*`; edit targets, preview a tab set, save it as a routine or bookmark folder, run and manually check off steps |
+| `automations` | `routines:*`; edit targets, preview a tab set, save it as a routine or bookmark folder, open a product reference in a saved search site, run and manually check off steps |
 | `downloads` | `openDownload`, `showDownload` |
 | `privacy` | none |
 | `settings` | default browser; Search engine (preset `<select>` or a custom `https://…%s` address), Home page (New Tab page or a web address) and On startup, through `setBrowserSettings`; update service, Chrome import, `setUiPreferences` (theme, bar mode) |

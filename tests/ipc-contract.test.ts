@@ -69,3 +69,20 @@ describe('IPC argument validation covers every channel', () => {
     expect(() => validateIpcArguments('browser:new-tab', [undefined, undefined, undefined])).not.toThrow();
   });
 });
+
+describe('reference search channel', () => {
+  it('requires a bounded reference and exact reviewed HTTPS URL', async () => {
+    const { validateIpcArguments } = await import('../electron/ipc-contracts');
+    const input = {
+      accountSpaceId: '31a6f3a4-7fa6-4447-a6dd-5108de80c3e4', keyword: 'stock', reference: 'LX/3',
+      reviewedUrl: 'https://stock.example.test/search?q=LX%2F3',
+    };
+    for (const value of [
+      { ...input, reviewedUrl: 'http://stock.example.test/search?q=LX%2F3' },
+      { ...input, keyword: 'stock other' },
+      { ...input, reference: 'x'.repeat(121) },
+      { ...input, workspaceId: 'personal' },
+    ]) expect(() => validateIpcArguments('routines:open-reference', [value])).toThrow();
+    expect(() => validateIpcArguments('routines:open-reference', [input])).not.toThrow();
+  });
+});

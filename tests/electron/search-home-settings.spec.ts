@@ -219,3 +219,32 @@ test('search engine, Home page and startup settings work in the real app and sur
     await rm(userData, { recursive: true, force: true }).catch(() => undefined);
   }
 });
+
+test('opens the reviewed reference only for the current Account Space and saved URL', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'private-browser-reference-search-'));
+  const app = await electron.launch({ args: launchArguments(), env: environment(userData) });
+  try {
+    const page = await app.firstWindow();
+    const input = await page.evaluate(async (origin) => {
+      const api = window.privateBrowser;
+      const { activeAccountSpaceId: accountSpaceId } = await api.getState();
+      await api.setBrowserSettings({ siteKeywords: [{ keyword: 'stock', template: origin + '/search?q=%s' }] });
+      return { accountSpaceId, keyword: 'stock', reference: 'LX 34', reviewedUrl: origin + '/search?q=LX%2034' };
+    }, origin);
+    const open = (decision = input) => page.evaluate((value) => window.privateBrowser.openReferenceSearch(value), decision);
+    await expect(open({ ...input, reviewedUrl: origin + '/other?q=LX%2034' })).rejects.toThrow(/Review the current search address/);
+    await open();
+    await expect(page.getByRole('tab', { name: 'Results for LX 34' })).toBeVisible();
+    await page.evaluate((origin) => window.privateBrowser.setBrowserSettings({
+      siteKeywords: [{ keyword: 'stock', template: origin + '/search?q=%s&country=ma' }],
+    }), origin);
+    await expect(open()).rejects.toThrow(/Review the current search address/);
+    await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+    await expect(open()).rejects.toThrow(/original regular Account Space/);
+    const state = await page.evaluate(() => window.privateBrowser.getState());
+    expect(state.tabs.filter((tab) => tab.url === input.reviewedUrl).map((tab) => tab.accountSpaceId)).toEqual([input.accountSpaceId]);
+  } finally {
+    await app.close();
+    await rm(userData, { recursive: true, force: true, maxRetries: 4 });
+  }
+});

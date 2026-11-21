@@ -42,7 +42,7 @@ import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
-import { mergeBrowserSettings, nextZoomPercent, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
+import { mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
@@ -148,7 +148,7 @@ import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
 import { appendTabSetBookmarks, resolveTabSet } from './tab-sets.js';
-import type { TabSetInput } from './types.js';
+import type { ReferenceSearchInput, TabSetInput } from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
@@ -754,6 +754,16 @@ class BrowserController {
 
   private routines(state: RuntimeBrowserStateV2): BrowserRoutine[] {
     return state.routines ?? defaultBrowserRoutines(state.activeAccountSpaceByWorkspace);
+  }
+
+  async openReferenceSearch(input: ReferenceSearchInput): Promise<void> {
+    const state = this.store.get();
+    if (!this.canUseRoutines(state) || this.activeAccountSpaceId(state) !== input?.accountSpaceId) {
+      throw new Error('Return to the original regular Account Space to open the reference.');
+    }
+    const url = referenceSearchUrl(settingsForWorkspace(state, state.activeWorkspaceId), input.keyword, input.reference);
+    if (!url || url !== input.reviewedUrl) throw new Error('Review the current search address before opening it.');
+    await this.newTab(state.activeWorkspaceId, url, input.accountSpaceId);
   }
 
   private updateRoutines(edit: (routines: BrowserRoutine[], state: RuntimeBrowserStateV2) => void): void {
@@ -4090,6 +4100,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('routines:save', (_event, routine: BrowserRoutine) => controller!.saveRoutine(routine));
   handle('routines:save-tabs', (_event, input: TabSetInput) => controller!.saveTabSet(input));
+  handle('routines:open-reference', (_event, input: ReferenceSearchInput) => controller!.openReferenceSearch(input));
   handle('routines:delete', (_event, id: string) => controller!.deleteRoutine(id));
   handle('routines:run', (_event, id: string) => controller!.runRoutine(id));
   handle('routines:mark-checklist', (_event, id: string, index: number, done: boolean) => controller!.updateRoutineChecklist(id, index, done));
