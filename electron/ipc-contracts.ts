@@ -196,6 +196,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if (!Array.isArray(args[1]) || !args[1].length || args[1].length > MAX_BOOKMARK_EDIT_BATCH) throw new Error('Invalid bookmark selection');
       args[1].forEach((id) => requireNonEmptyText(id, 'bookmark identifier', 200));
       if (args[2] !== undefined) requireBookmarkLevel(args[2]); return;
+    case 'bookmarks:import-html':
     case 'bookmarks:undo-many':
       exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'bookmarks:remove':

@@ -42,6 +42,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
   const [chromeImportOpen, setChromeImportOpen] = useState(false);
   const [chromeLoading, setChromeLoading] = useState(false);
   const [chromeResult, setChromeResult] = useState<ChromeImportResult | null>(null);
+  const [bookmarkHtmlResult, setBookmarkHtmlResult] = useState<{ imported: number; skipped: number }>();
   const chromeImportSection = useRef<HTMLDivElement>(null);
   const chromeDestinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && account.workspaceId !== 'banking');
   // null while the first status is still in flight — better than claiming
@@ -147,6 +148,17 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setChromeLoading(false); }
   };
+  const importBookmarkHtml = async () => {
+    setChromeLoading(true);
+    setBookmarkHtmlResult(undefined);
+    try {
+      const result = await window.privateBrowser.importBookmarkHtml(state.activeAccountSpaceId);
+      if (!result) return;
+      setBookmarkHtmlResult(result);
+      onToast('Imported ' + result.imported + (result.imported === 1 ? ' bookmark.' : ' bookmarks.'));
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setChromeLoading(false); }
+  };
   const exitSetup = () => {
     onSetupExit();
     setSettingsPage('overview');
@@ -209,7 +221,11 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
             <label><input type="checkbox" checked={chromeHistory} onChange={(event) => setChromeHistory(event.target.checked)} /> <span><strong>Browsing history</strong><small>Up to 10,000 recent Chrome pages.</small></span></label>
           </div>
           <button className="primary-button full" disabled={chromeLoading || !chromeDestinations.length || (!chromeBookmarks && !chromeHistory)} onClick={() => void importChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Import selected data</button>
-        </> : !chromeLoading ? <p className="import-note">Install or open Chrome once so a local profile exists, then try again.</p> : null}
+        </> : !chromeLoading ? <p className="import-note">Choose a bookmark HTML export below, or open Chrome once to create a local profile.</p> : null}
+        <div className="password-import-row"><div><strong>Bookmark HTML file</strong><small>Imports saved web addresses and folders into the current Account Space.</small></div>
+          <button type="button" disabled={chromeLoading || state.activeWorkspaceId === 'banking'} onClick={() => void importBookmarkHtml()}>Choose HTML</button>
+        </div>
+        {bookmarkHtmlResult && <p className="import-note" role="status">{bookmarkHtmlResult.imported} {bookmarkHtmlResult.imported === 1 ? 'bookmark' : 'bookmarks'} imported · {bookmarkHtmlResult.skipped} skipped</p>}
         <div className="password-import-row"><div><strong>Saved passwords</strong><small>Chrome protects direct access. Export passwords as CSV, then select that file here. Secrets go straight into MyVault and never enter the page.</small></div><button disabled={chromeLoading} onClick={() => void importChromePasswords()}>Choose CSV</button></div>
         <p className="import-limit"><Shield size={13} /> Cookies, signed-in sessions, payment cards, extensions and Chrome account tokens are intentionally not copied.</p>
         {chromeResult && <div className="import-result"><Check size={15} /><div><strong>Import complete</strong><small>{chromeResult.imported.bookmarks} bookmarks · {chromeResult.imported.history} history · {chromeResult.imported.passwords} passwords</small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords > 0 && <small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords} duplicate or unsafe entries skipped</small>}{chromeResult.warnings.map((warning) => <small className="warning" key={warning}>{warning}</small>)}</div></div>}

@@ -39,7 +39,8 @@ import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrd
 import { CHROME, contentBounds, DEFAULT_CONTENT_INSETS, FRAME_COLORS, sanitizeContentInsets, ZERO_INSETS, type ContentInsets } from './chrome-layout.js';
 import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
-import { exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
+import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
+import { readBookmarkHtml } from './bookmark-html.js';
 import { mergeBrowserSettings, resolveHomeUrl, searchTemplateFor, type BrowserSettingsPatch } from './browser-settings.js';
 import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
@@ -1725,6 +1726,31 @@ class BrowserController {
     return true;
   }
 
+  async importBookmarkHtml(accountSpaceId: AccountSpaceId): Promise<{ imported: number; skipped: number } | undefined> {
+    const validateDestination = () => {
+      this.requireEditableBookmarkAccount(accountSpaceId);
+      const account = this.requireAccountMembership(accountSpaceId);
+      if (this.store.isReadOnly() || account.workspaceId === 'banking') throw new Error('Choose an unlocked regular Account Space.');
+      return account;
+    };
+    const account = validateDestination();
+    const choice = await dialog.showOpenDialog(this.window, {
+      title: 'Import browser bookmarks',
+      properties: ['openFile'],
+      filters: [{ name: 'Bookmark HTML files', extensions: ['html', 'htm'] }],
+    });
+    if (choice.canceled || !choice.filePaths[0]) return undefined;
+    validateDestination();
+    const batch = await readBookmarkHtml(choice.filePaths[0], { workspaceId: account.workspaceId, accountSpaceId });
+    validateDestination();
+    let imported = 0;
+    if (batch.bookmarks.length) {
+      this.store.update((state) => { imported = appendImportedBookmarks(state.bookmarks, batch.bookmarks); });
+      this.broadcast();
+    }
+    return { imported, skipped: batch.skipped + batch.bookmarks.length - imported };
+  }
+
   setShortcutTiles(accountSpaceId: AccountSpaceId, tiles: ShortcutTile[] | null): void {
     this.requireAccountMembership(accountSpaceId);
     const sanitized = tiles === null ? undefined : sanitizeShortcutTiles(tiles);
@@ -1746,12 +1772,9 @@ class BrowserController {
     if (account.workspaceId !== options.workspaceId) throw new Error('Chrome imports cannot cross workspace boundaries');
     const data = readChromeProfile(options.profileId, options.workspaceId, options.accountSpaceId, options.bookmarks === true, options.history === true);
     this.store.update((state) => {
-      const bookmarkKeys = new Set(state.bookmarks.map((item) => `${item.accountSpaceId}\u0000${item.location}\u0000${item.folderPath.join('\u0001')}\u0000${item.title}\u0000${item.url}`));
-      for (const bookmark of data.bookmarks) {
-        const key = `${bookmark.accountSpaceId}\u0000${bookmark.location}\u0000${bookmark.folderPath.join('\u0001')}\u0000${bookmark.title}\u0000${bookmark.url}`;
-        if (bookmarkKeys.has(key) || state.bookmarks.length >= 25_000) data.result.skipped.bookmarks += 1;
-        else { state.bookmarks.push(bookmark); bookmarkKeys.add(key); data.result.imported.bookmarks += 1; }
-      }
+      const importedBookmarks = appendImportedBookmarks(state.bookmarks, data.bookmarks);
+      data.result.imported.bookmarks += importedBookmarks;
+      data.result.skipped.bookmarks += data.bookmarks.length - importedBookmarks;
       const historyKeys = new Set(state.history.map((item) => `${item.accountSpaceId}\u0000${item.url}\u0000${item.visitedAt}`));
       for (const entry of data.history) {
         const key = `${entry.accountSpaceId}\u0000${entry.url}\u0000${entry.visitedAt}`;
@@ -3626,6 +3649,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('bookmarks:rename-folder', (_event, level: BookmarkLevelInput, name: string, nextName: string) => controller!.renameBookmarkFolder(level, name, nextName));
   handle('bookmarks:remove-folder', (_event, level: BookmarkLevelInput, name: string) => controller!.removeBookmarkFolder(level, name));
   handle('bookmarks:export', () => controller!.exportBookmarks());
+  handle('bookmarks:import-html', (_event, accountSpaceId: AccountSpaceId) => controller!.importBookmarkHtml(accountSpaceId));
   handle('shortcuts:set', (_event, accountSpaceId: AccountSpaceId, tiles: ShortcutTile[] | null) => controller!.setShortcutTiles(accountSpaceId, tiles));
   handle('app:quit', () => { app.quit(); });
   handle('browser:list-chrome-profiles', () => controller!.listChromeProfiles());

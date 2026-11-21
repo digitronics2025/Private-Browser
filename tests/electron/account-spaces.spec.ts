@@ -76,6 +76,33 @@ test('offers first-launch setup once and keeps a skip after restart', async () =
   expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.ui.offerSetupGuide))).toBe(false);
 });
 
+test('imports standard bookmark HTML into the selected native Account Space', async () => {
+  const page = await application!.firstWindow();
+  const account = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'HTML destination', 'sky'));
+  const path = join(userDataPath, 'fixture-bookmarks.html');
+  writeFileSync(path, '<!DOCTYPE NETSCAPE-Bookmark-file-1><DL><DT><H3 PERSONAL_TOOLBAR_FOLDER="true">Bookmarks bar</H3><DL>'
+    + '<DT><H3>Work &amp; notes</H3><DL><DT><A HREF="https://example.test/catalog">Sample link</A></DL>'
+    + '<DT><A HREF="file:///local-fixture">Unsupported local file</A></DL></DL>');
+  const chooseFixture = () => application!.evaluate(({ dialog }, selected) => {
+    const real = dialog.showOpenDialog;
+    dialog.showOpenDialog = async () => {
+      dialog.showOpenDialog = real;
+      return { canceled: false, filePaths: [selected] };
+    };
+  }, path);
+  const imported = () => page.evaluate((id) => window.privateBrowser.importBookmarkHtml(id), account);
+  await chooseFixture();
+  expect(await imported()).toEqual({ imported: 1, skipped: 1 });
+  await chooseFixture();
+  expect(await imported()).toEqual({ imported: 0, skipped: 2 });
+  const items = await page.evaluate(() => window.privateBrowser.getState().then((state) => state.bookmarks));
+  expect(items.filter((item) => item.accountSpaceId === account)).toMatchObject([
+    { title: 'Sample link', url: 'https://example.test/catalog', location: 'bar', folderPath: ['Work & notes'] },
+  ]);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await expect(imported()).rejects.toThrow(/Account Space changed/i);
+});
+
 test('routes an operating-system link back to the last regular account from Banking', async () => {
   const page = await application!.firstWindow();
   const accountSpaceId = await page.evaluate(async () => {

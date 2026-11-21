@@ -98,6 +98,8 @@ const api = {
   renameBookmarkFolder: (level: BookmarkLevelInput, name: string, nextName: string): Promise<void> => ipcRenderer.invoke('bookmarks:rename-folder', level, name, nextName),
   removeBookmarkFolder: (level: BookmarkLevelInput, name: string): Promise<void> => ipcRenderer.invoke('bookmarks:remove-folder', level, name),
   exportBookmarks: (): Promise<boolean> => ipcRenderer.invoke('bookmarks:export'),
+  importBookmarkHtml: (accountSpaceId: AccountSpaceId): Promise<{ imported: number; skipped: number } | undefined> =>
+    ipcRenderer.invoke('bookmarks:import-html', accountSpaceId),
   setShortcutTiles: (accountSpaceId: AccountSpaceId, tiles: ShortcutTile[] | null): Promise<void> => ipcRenderer.invoke('shortcuts:set', accountSpaceId, tiles),
   quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
   listChromeProfiles: (): Promise<ChromeProfileSource[]> => ipcRenderer.invoke('browser:list-chrome-profiles'),

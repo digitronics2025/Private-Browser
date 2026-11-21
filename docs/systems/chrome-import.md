@@ -7,6 +7,11 @@ verified_at: dcd6823a
 
 # Chrome Import
 
+Settings also accepts standard Netscape bookmark HTML exported by a browser.
+The import reads a local file of up to 16 MB into the active regular Account
+Space. Toolbar placement and nested folder names are kept. Exact duplicates
+and unsupported addresses are counted as skipped.
+
 > Last verified: 2026-09-26
 
 ## Agent Brief

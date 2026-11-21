@@ -30,3 +30,14 @@ test('existing browsers offer setup from Settings without a first-launch banner'
   await panel.getByRole('button', { name: 'Setup guide', exact: true }).click();
   await expect(panel.getByRole('heading', { name: 'Setup guide' })).toBeVisible();
 });
+
+test('offers a bookmark HTML file when there is no Chrome profile', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 820 });
+  await page.goto('/?setup=new&chrome=empty');
+  await page.getByRole('button', { name: 'Open setup guide' }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Choose Chrome data' }).click();
+  await expect(panel.getByText('Choose a bookmark HTML export below', { exact: false })).toBeVisible();
+  await panel.getByRole('button', { name: 'Choose HTML' }).click();
+  await expect(panel.getByRole('status').filter({ hasText: '1 bookmark imported · 1 skipped' })).toBeVisible();
+});

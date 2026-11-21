@@ -444,6 +444,21 @@ export function installPreviewApi(): void {
       return previewProvider;
     },
     clearAiProvider: async () => { previewProvider = { configured: false }; return previewProvider; },
+    importBookmarkHtml: (async (id: unknown) => {
+      const accountSpaceId = state.activeAccountSpaceId;
+      if (state.activeWorkspaceId === 'banking' || id !== accountSpaceId
+        || !state.accountSpaces.some((item) => item.id === accountSpaceId && !item.locked)) throw new Error('Choose an unlocked regular Account Space.');
+      if (params.get('chrome') !== 'empty') return undefined;
+      const itemId = 'sample-html-' + accountSpaceId;
+      if (state.bookmarks.some((item) => item.id === itemId)) return { imported: 0, skipped: 2 };
+      state.bookmarks.push({
+        id: itemId, accountSpaceId, workspaceId: state.activeWorkspaceId, title: 'Sample HTML bookmark',
+        url: 'https://example.test/html-bookmark', folderPath: ['Imported file'], location: 'other', order: 0, orderPath: [0, 0],
+        createdAt: '2026-11-21T12:00:00Z',
+      });
+      publish();
+      return { imported: 1, skipped: 1 };
+    }) satisfies PrivateBrowserApi['importBookmarkHtml'],
     listChromeProfiles: (async () => {
       if (params.get('chrome') === 'error') throw new Error('The sample Chrome profiles could not be read');
       if (params.get('chrome') === 'empty') return [];

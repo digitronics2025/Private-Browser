@@ -1,0 +1,1 @@
+Import a standard bookmark HTML export, including nested folders, when a local Chrome profile is unavailable. The file stays on the device and the current Account Space receives the bookmarks.
