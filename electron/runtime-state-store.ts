@@ -109,6 +109,11 @@ export class RuntimeStateStore {
     return structuredClone(record);
   }
 
+  assistantPreferences(id: AccountSpaceId): { cloudAllowed: boolean; receipts: NonNullable<AccountSpaceRecord['assistantReceipts']> } | undefined {
+    const record = this.records.get(id);
+    return record && { cloudAllowed: record.assistantCloudAllowed !== false, receipts: structuredClone(record.assistantReceipts ?? []) };
+  }
+
   update(mutator: (state: RuntimeBrowserStateV2) => void): RuntimeBrowserStateV2 {
     if (this.readOnly) throw new Error('Browser state is in read-only recovery mode');
     const next = structuredClone(this.state);

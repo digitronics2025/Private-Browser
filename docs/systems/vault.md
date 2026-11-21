@@ -19,6 +19,17 @@ the Windows prompt. Windows 11 shows local passkeys under Settings → Accounts
 → Passkeys. MyVault's Windows Hello unlock opens the vault.
 [Manage passkeys in Windows](https://support.microsoft.com/en-gb/accounts-billing/security/manage-your-saved-passkeys)
 
+MyVault's picker ranks the last manually chosen login for that site within
+the current Account Space. Reset remembered picks clears that account's
+local ordering. The earlier device-wide ciphertext stays on disk. Existing
+users choose a login once in each Account Space to establish the new ordering.
+
+The Vault panel checks sign-in readiness locally. It shares the automatic
+fill form rules and returns the reason and next action. Banking shows its
+manual approval requirement before any form inspection. No field values or
+secrets are read for this status.
+
+
 > Last verified: 2026-09-25
 
 ## Agent Brief
