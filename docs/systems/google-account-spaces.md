@@ -265,6 +265,14 @@ Chrome import, bookmark folders and the bookmark bar are implemented and scoped
 to the explicitly selected Account Space. Chrome Sync is not implemented or
 advertised, and imports intentionally exclude live sessions and Google tokens.
 
+**Import from Chrome** suggests a destination by matching a local profile name
+to an unlocked Account Space in the current workspace. A destination remains
+explicit. Bookmarks and history go to that space. Search engine, Home page,
+and startup settings are separate opt-ins for the workspace. The local
+receipt records an opaque profile key and destination ID so the same detected
+profile does not import twice. A complete undo within the current session
+reopens that profile for import. Changed bookmarks and settings stay in place.
+
 For migration rollback, close the app, keep every timestamped recovery file,
 choose **Restore v1** in the recovery screen, and restart. Never rename an
 encrypted account file across accounts or manually transplant a partition key.

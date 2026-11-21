@@ -54,7 +54,7 @@ import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
-import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettings, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
 import { DEFAULT_UI_PREFERENCES, isPinnablePanelTool, mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
@@ -157,6 +157,7 @@ import { ControlCenterLink, developerEvidence } from './control-center-link.js';
 import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
 import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-status.js';
 import { listChromeProfiles, readChromeProfile, type ChromeProfileData } from './chrome-importer.js';
+import { chromeProfileKey, MAX_CHROME_PROFILE_RECEIPTS } from './chrome-profile-preferences.js';
 import { chromeImportBookmarkStamp, chromeImportKey, planChromeImport } from './chrome-import-review.js';
 import type { ChromeImportReview } from './types.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
@@ -325,8 +326,12 @@ class BrowserController {
   private readonly bookmarkUndo = new Map<AccountSpaceId, BookmarkUndo<AccountSpaceBookmark>>();
   private pendingChromeImport?: {
     id: string; accountSpaceId: AccountSpaceId; initiatingAccount: AccountSpaceId; source: ChromeProfileData; importKey: string; expiresAt: number;
+    profileKey: string; settingsRevision?: string;
   };
-  private readonly chromeImportUndo = new Map<AccountSpaceId, { bookmarks: Map<string, string>; history: Set<string> }>();
+  private readonly chromeImportUndo = new Map<AccountSpaceId, {
+    profileKey: string; bookmarks: Map<string, string>; history: Set<string>;
+    settings?: { workspaceId: WorkspaceId; before: BrowserSettings; after: BrowserSettings };
+  }>();
   private readonly closedTabBatches = new Map<AccountSpaceId, {
     entries: Array<{ tab: AccountSpaceBrowserTab; index: number }>;
     groups: TabGroup[];
@@ -1863,10 +1868,10 @@ class BrowserController {
       }
       return;
     }
-    if (settings.startup !== 'home') return;
+    if (settings.startup !== 'home' && settings.startup !== 'new-tab') return;
     try {
       await this.newTab(state.activeWorkspaceId);
-      await this.goHome();
+      if (settings.startup === 'home') await this.goHome();
     } catch {
       this.addPrivacyEvent('blocked', 'Home page could not open at startup', 'The browser started with the restored tabs');
     }
@@ -2282,7 +2287,26 @@ class BrowserController {
   }
 
   listChromeProfiles(): ChromeProfileSource[] {
-    return listChromeProfiles();
+    const state = this.store.get();
+    if (state.activeWorkspaceId === 'banking' || this.store.isReadOnly()) return [];
+    const destinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && isAvailableRegularAccount(state, account));
+    return listChromeProfiles().map((profile) => {
+      const imported = state.chromeProfileImports?.[chromeProfileKey(profile.id)];
+      const matches = destinations.filter((account) => account.label.localeCompare(profile.name, undefined, { sensitivity: 'accent' }) === 0);
+      return {
+        ...profile, imported: Boolean(imported),
+        importedInto: destinations.find(({ id }) => id === imported)?.id,
+        suggestedAccountSpaceId: imported ? undefined : matches.length === 1 ? matches[0].id
+          : profile.isDefault ? destinations.find(({ id }) => id === this.activeAccountSpaceId(state))?.id : undefined,
+      };
+    });
+  }
+
+  private unimportedChromeProfile(state: RuntimeBrowserStateV2, profileKey: string): void {
+    if (state.chromeProfileImports?.[profileKey]) throw new Error('This Chrome profile has already been imported.');
+    if (Object.keys(state.chromeProfileImports ?? {}).length >= MAX_CHROME_PROFILE_RECEIPTS) {
+      throw new Error('This browser has reached its Chrome import receipt limit.');
+    }
   }
 
   private requireChromeDestination(id: AccountSpaceId, workspaceId?: WorkspaceId) {
@@ -2296,15 +2320,17 @@ class BrowserController {
   previewChromeImport(options: ChromeImportOptions): ChromeImportReview {
     const { accountSpaceId } = options;
     this.requireChromeDestination(accountSpaceId, options.workspaceId);
-    if (!options.bookmarks && !options.history) throw new Error('Choose bookmarks, history or both.');
-    this.pendingChromeImport = undefined;
-    const source = readChromeProfile(options.profileId, options.workspaceId, accountSpaceId, options.bookmarks, options.history);
     const state = this.store.get();
+    const profileKey = chromeProfileKey(options.profileId);
+    this.unimportedChromeProfile(state, profileKey);
+    this.pendingChromeImport = undefined;
+    const source = readChromeProfile(options.profileId, options.workspaceId, accountSpaceId, options.bookmarks, options.history, undefined, options.settings);
     const plan = planChromeImport(state, source);
     const id = randomUUID();
     const expiresIn = 5 * 60_000;
     this.pendingChromeImport = {
       id, accountSpaceId, initiatingAccount: this.activeAccountSpaceId(state), source, importKey: chromeImportKey(plan), expiresAt: Date.now() + expiresIn,
+      profileKey, settingsRevision: source.settingsPatch ? JSON.stringify(settingsForWorkspace(state, options.workspaceId)) : undefined,
     };
     setTimeout(() => this.discardChromeImport(id), expiresIn).unref();
     return { id, accountSpaceId, ...plan.summary };
@@ -2321,24 +2347,38 @@ class BrowserController {
     if (review.expiresAt <= Date.now() || review.initiatingAccount !== this.activeAccountSpaceId(this.store.get())) {
       throw new Error('The import preview expired. Preview this Chrome import again.');
     }
-    this.requireChromeDestination(review.accountSpaceId);
-    const plan = planChromeImport(this.store.get(), review.source);
+    const account = this.requireChromeDestination(review.accountSpaceId);
+    const state = this.store.get();
+    this.unimportedChromeProfile(state, review.profileKey);
+    if (review.settingsRevision !== undefined && review.settingsRevision !== JSON.stringify(settingsForWorkspace(state, account.workspaceId))) {
+      throw new Error('Workspace settings changed. Preview this Chrome import again.');
+    }
+    const plan = planChromeImport(state, review.source);
     if (chromeImportKey(plan) !== review.importKey) throw new Error('Browsing data changed. Preview this Chrome import again.');
-    return this.applyChromeImport(review.accountSpaceId, plan);
+    return this.applyChromeImport(review.accountSpaceId, account.workspaceId, review.profileKey, plan);
   }
 
   importChrome(options: ChromeImportOptions): ChromeImportResult {
     this.requireChromeDestination(options.accountSpaceId, options.workspaceId);
-    return this.applyChromeImport(options.accountSpaceId, planChromeImport(this.store.get(),
+    if (Object.values(options.settings ?? {}).some(Boolean)) throw new Error('Preview Chrome settings before importing them.');
+    const state = this.store.get();
+    const profileKey = chromeProfileKey(options.profileId);
+    this.unimportedChromeProfile(state, profileKey);
+    return this.applyChromeImport(options.accountSpaceId, options.workspaceId, profileKey, planChromeImport(state,
       readChromeProfile(options.profileId, options.workspaceId, options.accountSpaceId, options.bookmarks, options.history)));
   }
 
-  private applyChromeImport(id: AccountSpaceId, plan: ReturnType<typeof planChromeImport>): ChromeImportResult {
-    if (plan.bookmarks.length || plan.history.length) {
+  private applyChromeImport(id: AccountSpaceId, workspaceId: WorkspaceId, profileKey: string, plan: ReturnType<typeof planChromeImport>): ChromeImportResult {
+    const patch = plan.summary.settingsPatch;
+    if (plan.bookmarks.length || plan.history.length || patch) {
+      const before = patch ? settingsForWorkspace(this.store.get(), workspaceId) : undefined;
+      const newSettings = before && patch ? { workspaceId, before, after: mergeBrowserSettings(before, patch) } : undefined;
       this.store.update((state) => {
         state.bookmarks.push(...plan.bookmarks);
         state.history.push(...plan.history);
         state.history.sort((left, right) => right.visitedAt.localeCompare(left.visitedAt));
+        (state.chromeProfileImports ??= {})[profileKey] = id;
+        if (newSettings) (state.workspaceSettings ??= {})[workspaceId] = newSettings.after;
         state.privacyLog.unshift({
           id: randomUUID(), at: new Date().toISOString(), kind: 'local-read', title: 'Chrome data imported',
           detail: `${plan.bookmarks.length} bookmarks and ${plan.history.length} history entries imported locally`,
@@ -2347,6 +2387,7 @@ class BrowserController {
         state.privacyLog = state.privacyLog.slice(0, 100);
       });
       this.chromeImportUndo.set(id, {
+        profileKey, settings: newSettings,
         bookmarks: new Map(plan.bookmarks.map((item) => [item.id, chromeImportBookmarkStamp(item)])),
         history: new Set(plan.history.map((item) => item.id)),
       });
@@ -2360,10 +2401,10 @@ class BrowserController {
     return this.chromeImportUndo.has(id);
   }
 
-  undoChromeImport(id: AccountSpaceId): { bookmarks: number; history: number } {
+  undoChromeImport(id: AccountSpaceId): { bookmarks: number; history: number; settingsRestored?: boolean } {
     this.requireChromeDestination(id);
     const undo = this.chromeImportUndo.get(id);
-    const removed = { bookmarks: 0, history: 0 };
+    const removed: { bookmarks: number; history: number; settingsRestored?: boolean } = { bookmarks: 0, history: 0 };
     if (!undo) return removed;
     this.store.update((state) => {
       state.bookmarks = state.bookmarks.filter((entry) => {
@@ -2377,6 +2418,15 @@ class BrowserController {
         removed.history += 1;
         return false;
       });
+      if (undo.settings) {
+        const { workspaceId, before, after } = undo.settings;
+        removed.settingsRestored = JSON.stringify(settingsForWorkspace(state, workspaceId)) === JSON.stringify(after);
+        if (removed.settingsRestored) (state.workspaceSettings ??= {})[workspaceId] = before;
+      }
+      if (removed.bookmarks === undo.bookmarks.size && removed.history === undo.history.size
+        && (!undo.settings || removed.settingsRestored) && state.chromeProfileImports?.[undo.profileKey] === id) {
+        delete state.chromeProfileImports[undo.profileKey];
+      }
     });
     this.chromeImportUndo.delete(id);
     this.broadcast();

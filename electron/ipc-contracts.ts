@@ -332,6 +332,13 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       requireAccountSpaceId(input.accountSpaceId);
       requireBoolean(input.bookmarks);
       requireBoolean(input.history);
+      if (input.settings !== undefined) {
+        const selection = requireObject(input.settings);
+        for (const [key, value] of Object.entries(selection)) {
+          if (!['search', 'home', 'startup'].includes(key)) throw new Error('Unknown Chrome workspace setting');
+          requireBoolean(value);
+        }
+      }
       return;
     }
     case 'recovery:act':

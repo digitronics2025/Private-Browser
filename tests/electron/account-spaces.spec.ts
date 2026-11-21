@@ -305,6 +305,48 @@ test('previews a native Chrome import and undoes its untouched records only', as
   expect(after).toHaveLength(initial.bookmarks.length + 1);
   expect(after.find((item) => item.id === edited.id)?.title).toBe('I edited this');
   expect(after).toContainEqual(initial.bookmarks[0]);
+  await expect(page.evaluate((value) => window.privateBrowser.previewChromeImport(value), options)).rejects.toThrow(/already been imported/);
+});
+
+test('suggests a Chrome profile destination and persists one settings import per profile', async () => {
+  test.skip(process.platform !== 'win32', 'The fixture uses the Windows Chrome profile path.');
+  const localRoot = join(userDataPath, 'chrome-settings-fixture');
+  const source = join(localRoot, 'Google', 'Chrome', 'User Data');
+  mkdirSync(join(source, 'Profile 1'), { recursive: true });
+  writeFileSync(join(source, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 1': { name: 'Research' } } } }));
+  writeFileSync(join(source, 'Profile 1', 'Preferences'), JSON.stringify({
+    default_search_provider_data: { template_url_data: { url: '{google:baseURL}search?q={searchTerms}' } },
+    homepage_is_newtabpage: false, homepage: 'https://research.example.test/',
+    session: { restore_on_startup: 5 },
+  }));
+  const useFixture = () => application!.evaluate((_electron, directory) => { process.env.LOCALAPPDATA = directory; }, localRoot);
+  await useFixture();
+  let page = await application!.firstWindow();
+  const id = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Research', 'sky'));
+  const profile = () => page.evaluate(() => window.privateBrowser.listChromeProfiles().then((profiles) => profiles.find((item) => item.id === 'Profile 1')));
+  expect(await profile()).toMatchObject({ suggestedAccountSpaceId: id, hasPreferences: true });
+  const options = { profileId: 'Profile 1', workspaceId: 'personal' as const, accountSpaceId: id,
+    bookmarks: false, history: false, settings: { search: true, home: true } };
+  const preview = () => page.evaluate((value) => window.privateBrowser.previewChromeImport(value), options);
+  const old = await preview();
+  expect(old.settingsPatch).toEqual({ searchEngine: 'google', homePage: 'url', homePageUrl: 'https://research.example.test/' });
+  const original = await page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings));
+  expect(original.searchEngine).toBe('duckduckgo');
+  await page.evaluate(() => window.privateBrowser.setBrowserSettings({ searchEngine: 'bing' }, 'personal'));
+  await expect(page.evaluate((value) => window.privateBrowser.confirmChromeImport(value), old.id)).rejects.toThrow(/Workspace settings changed/);
+  const final = await preview();
+  await expect(page.evaluate((value) => window.privateBrowser.confirmChromeImport(value), final.id)).resolves.toMatchObject({ appliedSettings: ['search', 'home'] });
+  expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings)))
+    .toMatchObject({ searchEngine: 'google', homePageUrl: 'https://research.example.test/', startup: original.startup });
+  await application!.close();
+  application = await launchProfile();
+  await useFixture();
+  page = await application.firstWindow();
+  expect(await profile()).toMatchObject({ imported: true, importedInto: id });
+  await expect(preview()).rejects.toThrow(/already been imported/);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
+  expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings.searchEngine))).toBe('duckduckgo');
+  expect(await profile()).toMatchObject({ imported: true, importedInto: undefined });
 });
 
 test('imports standard bookmark HTML into the selected native Account Space', async () => {
