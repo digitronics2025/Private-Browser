@@ -3,12 +3,15 @@ import { join } from 'node:path';
 import { dialog, type BrowserWindow } from 'electron';
 import { generateIdentity, safeEqual, type DeviceIdentity } from '@private-browser/bridge-protocol';
 import {
-  AGENT_ACTIONS_PER_MINUTE, AGENT_IDLE_MS, AGENT_MAX_TABS, AGENT_PROTOCOL_VERSION, AGENT_SESSION_MS,
+  AGENT_ACTIONS_PER_MINUTE, AGENT_IDLE_MS, AGENT_MAX_TABS, AGENT_PROTOCOL_VERSION,
   agentIdentity, type AgentInput, type AgentMethod,
 } from '@private-browser/bridge-protocol/agent';
 import { AgentAudit, agentStorageAvailable, readAgentFile, writeAgentFile } from './agent-audit.js';
 import { AgentPipe, type AgentConnection, type AgentRequest } from './agent-pipe.js';
-import { agentAccess, AgentConfirmation, agentError, AgentError, agentLoopback, agentUrl, consequentialAction, DEFAULT_AGENT_POLICY, exactAgentOrigin, type AgentPolicy } from './agent-policy.js';
+import {
+  agentAccess, AgentConfirmation, agentError, AgentError, agentLoopback, agentSessionMs, agentUrl,
+  consequentialAction, DEFAULT_AGENT_POLICY, exactAgentOrigin, isAgentSessionLength, MAX_AGENT_ORIGINS, type AgentPolicy,
+} from './agent-policy.js';
 import { agentTabUrl, AgentWorkspace, type AgentSpace, type AgentTab } from './agent-workspace.js';
 import { clean, cleanUrl, untrusted, type TargetDetails } from './agent-driver.js';
 import { AgentRecording } from './agent-recording.js';
@@ -17,8 +20,11 @@ import { stageAgentUpload, verifyUploadFolder } from './agent-upload.js';
 import type { AgentConfirmationCard, AgentDecision, AgentUiStatus } from './agent-types.js';
 
 type Device = ReturnType<typeof agentIdentity.parse>['device'];
-type StoredClient = Device & { policy: AgentPolicy; uploadFolder?: string };
+type StoredClient = Device & { policy: AgentPolicy; uploadFolder?: string; rememberedOrigins?: string[] };
 type StoredState = { enabled: boolean; identity: DeviceIdentity; clients: StoredClient[]; spaces: AgentSpace[] };
+type SerializedState = Omit<StoredState, 'clients'> & {
+  clients: (Omit<StoredClient, 'policy'> & { policy: Omit<AgentPolicy, 'session'> & { session?: unknown } })[];
+};
 type Live = {
   connection: AgentConnection;
   selected?: string;
@@ -66,7 +72,14 @@ export class AgentHost {
     this.workspace = new AgentWorkspace(options.chromeUrl, options.preload, join(options.data, 'downloads'), () => this.changed(), () => this.stop());
     try {
       if (!agentStorageAvailable()) throw new Error();
-      this.state = readAgentFile<StoredState>(this.statePath);
+      const stored = readAgentFile<SerializedState>(this.statePath);
+      this.state = stored && {
+        ...stored,
+        clients: stored.clients.map(({ policy, ...client }) => ({
+          ...client,
+          policy: { ...policy, session: isAgentSessionLength(policy.session) ? policy.session : DEFAULT_AGENT_POLICY.session },
+        })),
+      };
       this.audit = new AgentAudit(join(options.data, 'audit.enc'));
     } catch { this.unavailable = 'Agent Mode requires readable operating-system encrypted storage.'; }
   }
@@ -107,7 +120,9 @@ export class AgentHost {
     const pairing = this.pairing && Date.now() < this.pairing.expiresAt ? { code: this.pairing.code, expiresAt: this.pairing.expiresAt } : undefined;
     return {
       enabled: state?.enabled ?? false, unavailable: this.unavailable, pairing, paused: this.paused,
-      clients: (state?.clients ?? []).map(({ id, name, policy, uploadFolder }) => ({ id, name, policy, uploadFolder, active: this.active.has(id) })),
+      clients: (state?.clients ?? []).map(({ id, name, policy, uploadFolder }) => ({
+        id, name, policy, uploadFolder, active: this.active.has(id), expiresAt: this.leases.get(id),
+      })),
       spaces: state?.spaces ?? [], current, pending: this.pending?.card,
       tabs: this.workspace.summaries(), selectedTab: this.workspace.selected,
       active: this.active.size > 0, audit: this.audit?.list() ?? [], command: this.options.command, commandArgs: this.options.commandArgs,
@@ -240,7 +255,12 @@ export class AgentHost {
   }
 
   setPolicy(id: string, policy: AgentPolicy): void {
-    this.replaceClient(id, { policy: { ...policy, origins: [...new Set(policy.origins.map(exactAgentOrigin))] } });
+    const origins = [...new Set(policy.origins.map(exactAgentOrigin))];
+    const client = this.state?.clients.find((candidate) => candidate.id === id);
+    this.replaceClient(id, {
+      policy: { ...policy, origins },
+      rememberedOrigins: client?.rememberedOrigins?.filter((origin) => origins.includes(origin)),
+    });
   }
 
   async grantUploadFolder(id: string): Promise<void> {
@@ -283,7 +303,9 @@ export class AgentHost {
 
   decide(id: string, decision: AgentDecision): void {
     const pending = this.pending;
-    if (!pending || pending.card.id !== id || decision === 'session' && !pending.card.canAllowSession) return;
+    if (!pending || pending.card.id !== id) return;
+    if (decision === 'session' && !pending.card.canAllowSession) return;
+    if (decision === 'always' && !pending.card.canAllowAlways) return;
     pending.finish(decision);
   }
 
@@ -348,10 +370,13 @@ export class AgentHost {
       if (!space || this.resetting.has(space.id)) throw new AgentError('SPACE_UNAVAILABLE', 'Choose an available Agent Account Space.');
       if (this.workspace.forConnection(connection).length >= AGENT_MAX_TABS) throw new AgentError('TAB_LIMIT', 'Close an agent tab before opening another.');
       this.allowNavigation(client.policy, target);
-      await this.confirm(live, request, { destination: target, allowSession: true });
+      // Only an already-loaded copy in this client's space can be reviewed for a permanent grant.
+      const reviewedTab = this.workspace.forConnection(connection).find((tab) => tab.space.id === space.id
+        && !tab.manual && !tab.view.webContents.isDestroyed() && tab.view.webContents.getURL() === target.href);
+      const approvedPolicy = await this.confirm(live, request, { destination: target, allowSession: true, reviewedTab });
       if (this.resetting.has(space.id)) throw new AgentError('SPACE_UNAVAILABLE', 'The Agent Account Space is resetting.');
       if (this.loan?.tab.connection === connection) this.returnLentTab();
-      const tab = await this.workspace.create(space, connection, client.policy, label);
+      const tab = await this.workspace.create(space, connection, approvedPolicy ?? client.policy, label);
       live.selected = tab.id;
       try { await this.workspace.load(tab, target); } catch (error) { this.workspace.close(tab.id); throw error; }
       live.recording?.navigate(target.href);
@@ -519,8 +544,11 @@ export class AgentHost {
   }
 
   private async confirm(
-    live: Live, request: AgentRequest, details: { tab?: AgentTab; destination?: URL; target?: TargetDetails; revision?: string; allowSession?: boolean; dialog?: boolean },
-  ): Promise<void> {
+    live: Live, request: AgentRequest, details: {
+      tab?: AgentTab; destination?: URL; target?: TargetDetails; revision?: string;
+      allowSession?: boolean; dialog?: boolean; reviewedTab?: AgentTab;
+    },
+  ): Promise<AgentPolicy | undefined> {
     const { tab, destination, target, allowSession } = details;
     const origin = destination?.origin ?? tab?.origin;
     if (!origin) throw new AgentError('ORIGIN_REQUIRED', 'The action needs a web origin.');
@@ -534,6 +562,16 @@ export class AgentHost {
       revision: details.revision ?? await readRevision(), method: request.method, input: request.input,
     };
     const proof = new AgentConfirmation(context);
+    const reviewedTab = request.method === 'tab_open' ? details.reviewedTab : undefined;
+    const client = reviewedTab && this.state?.clients.find(({ id }) => id === connection.device.id);
+    const reviewRevision = client && reviewedTab && destination
+      ? await this.siteApprovalRevision(reviewedTab, destination) : null;
+    if (reviewRevision && client?.policy.origins.includes(origin) && client.rememberedOrigins?.includes(origin)) {
+      signal.throwIfAborted();
+      return;
+    }
+    const canAllowAlways = Boolean(reviewRevision && client && origin.length <= 300
+      && (client.policy.origins.includes(origin) || client.policy.origins.length < MAX_AGENT_ORIGINS));
     await this.workspace.show();
     signal.throwIfAborted();
     if (this.pending) throw new AgentError('CONFIRMATION_BUSY', 'The owner is reviewing another action. Try again shortly.');
@@ -552,7 +590,7 @@ export class AgentHost {
       this.pending = { connection, finish, card: {
         id: proof.id, client: connection.device.name, action: request.method.replaceAll('_', ' '),
         tab: loan ? `Lent tab · ${loan.origin}` : tab?.label ?? tab?.origin ?? 'New Agent tab',
-        origin, expiresAt: proof.expiresAt, canAllowSession: Boolean(allowSession),
+        origin, expiresAt: proof.expiresAt, canAllowSession: Boolean(allowSession), canAllowAlways,
         target: target ? clean(`${target.role}: ${target.name}`, 300) : destination ? cleanUrl(destination.href) : undefined,
         input: request.method === 'upload_file' ? clean((request.input as AgentInput<'upload_file'>).path, 500)
           : 'text' in (request.input as object) ? '[typed text hidden]' : undefined,
@@ -567,6 +605,28 @@ export class AgentHost {
       throw new AgentError('PAGE_CHANGED', 'The page changed while awaiting approval. Get a fresh snapshot.');
     }
     if (decision === 'session') live.trustedOrigins.add(origin);
+    if (decision === 'always') {
+      if (!canAllowAlways || !client || !reviewedTab || !destination
+        || await this.siteApprovalRevision(reviewedTab, destination) !== reviewRevision) {
+        throw new AgentError('PAGE_CHANGED', 'The page changed while awaiting approval. Get a fresh snapshot.');
+      }
+      signal.throwIfAborted();
+      const exactOrigin = exactAgentOrigin(origin);
+      const policy = { ...client.policy, origins: [...new Set([...client.policy.origins, exactOrigin])] };
+      const rememberedOrigins = [...new Set([...(client.rememberedOrigins ?? []), exactOrigin])];
+      this.replaceClient(client.id, { policy, rememberedOrigins }, { keepConnection: true });
+      for (const ownedTab of this.workspace.forConnection(connection)) ownedTab.policy = policy;
+      return policy;
+    }
+  }
+
+  private async siteApprovalRevision(tab: AgentTab, destination: URL): Promise<string | null> {
+    const contents = tab.view.webContents;
+    const isCurrent = () => this.workspace.get(tab.id) === tab && !tab.manual && !contents.isDestroyed()
+      && !contents.isLoadingMainFrame() && contents.getURL() === destination.href;
+    if (!isCurrent()) return null;
+    const revision = await tab.driver.run<string | null>('siteApprovalRevision', {}, tab.connection.abort).catch(() => null);
+    return isCurrent() ? revision : null;
   }
 
   private async devServers(signal: AbortSignal): Promise<string[]> {
@@ -596,7 +656,13 @@ export class AgentHost {
       this.pairing = undefined;
       this.persist({ ...this.state, clients: [...this.state.clients, { ...device, policy: DEFAULT_AGENT_POLICY }] });
     }
-    const expiresAt = this.leases.get(device.id) ?? Date.now() + AGENT_SESSION_MS;
+    const now = Date.now();
+    const session = stored?.policy.session ?? DEFAULT_AGENT_POLICY.session;
+    const lease = this.leases.get(device.id);
+    // Preserve the explicit renewal requirement for the original one-hour policy.
+    if (session === '1h' && lease !== undefined && lease <= now) return undefined;
+    const expiresAt = session !== 'open' && lease !== undefined && lease > now
+      ? lease : now + agentSessionMs(session);
     this.leases.set(device.id, expiresAt);
     return expiresAt;
   }
@@ -605,11 +671,13 @@ export class AgentHost {
     if (agentAccess(policy, url) === 'deny') throw new AgentError('ORIGIN_DENIED', 'This origin is outside the client’s allowlist.');
   }
 
-  private replaceClient(id: string, patch: Partial<Pick<StoredClient, 'policy' | 'uploadFolder'>>): void {
+  private replaceClient(
+    id: string, patch: Partial<Pick<StoredClient, 'policy' | 'uploadFolder' | 'rememberedOrigins'>>, options: { keepConnection?: boolean } = {},
+  ): void {
     const state = this.state;
     if (!state?.clients.some((client) => client.id === id)) throw new Error('That client is no longer paired.');
     this.persist({ ...state, clients: state.clients.map((client) => client.id === id ? { ...client, ...patch } : client) });
-    this.disconnect(id);
+    if (!options.keepConnection) this.disconnect(id);
     this.changed();
   }
 
