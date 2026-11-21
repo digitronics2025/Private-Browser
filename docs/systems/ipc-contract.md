@@ -155,6 +155,8 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:control-download` | `controlDownload(id, action)` | current account download and pause, resume, retry or cancel | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
+| `browser:set-download-history` | `setDownloadHistory(accountId, enabled)` | current regular Account Space and whether to retain new finished downloads | `void` |
+| `browser:remove-download-entry` | `removeDownloadEntry(accountId, id)` | current regular Account Space and finished download ID | `void` |
 | `permissions:site` | `getSitePermissions(tabId, origin)` | active tab and exact origin | current policy and grant duration |
 | `permissions:revoke-site` | `revokeSitePermission(tabId, origin, capability)` | active tab, exact origin and supported capability | updated site status |
 | `permissions:list-account` | `listAccountPermissionGrants(id)` | selected Account Space in the active workspace | reusable grants |

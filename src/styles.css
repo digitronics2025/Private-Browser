@@ -793,7 +793,11 @@ kbd { font: inherit; }
 .download-body small { margin-top: 2px; color: var(--text-muted); font-size: var(--fs-xs); }
 .progress { height: 4px; margin-top: 7px; overflow: hidden; border-radius: 2px; background: var(--surface-3); }
 .progress span { display: block; height: 100%; background: var(--accent); }
-.download-actions { display: flex; gap: 6px; margin-top: 8px; }
+.download-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.download-filters { display: grid; gap: 7px; }
+.download-filters input[type="search"], .download-filters select { display: block; width: 100%; min-width: 0; }
+.download-filters p { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); }
+.download-origin { overflow-wrap: anywhere; }
 .browser-preview-marker { position: fixed; inset: auto auto 8px 8px; z-index: 10; padding: 3px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 11px; pointer-events: none; }
 .download-evidence { display: grid; gap: 6px; margin: 10px 0 6px; font-size: var(--fs-xs); }
 .download-evidence > div { display: grid; grid-template-columns: minmax(84px, 0.6fr) minmax(0, 1fr); gap: 6px; }
