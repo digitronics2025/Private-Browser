@@ -390,8 +390,11 @@ non-home page in the Development workspace and must not match
 `isProtectedPage`. `toggleDeveloperTools` applies that gate before opening
 Chromium DevTools docked right, docked bottom, or detached. Leaving a tab or
 workspace closes any open tools; committing a protected navigation does too.
-The page context menu exposes exact `inspectElement(x, y)` only after the same
-gate passes.
+The native page menu opens eligible links in the background of the source
+Account Space and offers copy, paste, spelling and image save in context.
+It requires the same active page and frame at click time. Banking and protected
+pages are excluded. Inspect uses the DevTools gate and image save uses the
+ordinary download permission.
 
 Each Development tab keeps bounded, process-memory-only rings of 100 console
 warnings/errors and 100 failed or HTTP 4xx/5xx requests. Session web-request

@@ -44,6 +44,33 @@ test.afterEach(async () => {
   rmSync(userDataPath, { recursive: true, force: true });
 });
 
+test('bookmark batches reuse tabs only in the active Account Space', async () => {
+  const page = await application!.firstWindow();
+  const read = () => page.evaluate(() => window.privateBrowser.getState());
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  const account = (await read()).activeAccountSpaceId;
+  await page.evaluate((url) => window.privateBrowser.navigate(url), origin + '/fresh');
+  await page.evaluate(() => window.privateBrowser.toggleBookmark());
+  await page.evaluate((url) => window.privateBrowser.navigate(url), origin + '/already');
+  await page.evaluate(() => window.privateBrowser.toggleBookmark());
+  const before = await read();
+  const ids = before.bookmarks.filter((bookmark) => bookmark.accountSpaceId === account).map((item) => item.id);
+  expect(ids).toHaveLength(2);
+
+  const open = () => page.evaluate(({ account, ids }) => window.privateBrowser.openBookmarksInBackground(account, ids), { account, ids });
+  await expect(open()).resolves.toEqual({ opened: 1, reused: 1, skipped: 0 });
+  const after = await read();
+  expect(after.activeTabId).toBe(before.activeTabId);
+  expect(after.tabs.filter((tab) => tab.url === origin + '/fresh')).toMatchObject([{ accountSpaceId: account }]);
+  await expect(open()).resolves.toEqual({ opened: 0, reused: 2, skipped: 0 });
+
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('digitronics'));
+  await expect(open()).rejects.toThrow(/Account Space changed/);
+  const other = (await read()).activeAccountSpaceId;
+  const scoped = await page.evaluate(({ other, ids }) => window.privateBrowser.openBookmarksInBackground(other, ids), { other, ids });
+  expect(scoped).toEqual({ opened: 0, reused: 0, skipped: 2 });
+});
+
 test('a bookmark keeps the icon of a site after its tab closes and across a restart', async () => {
   let page = await application!.firstWindow();
   const state = await page.evaluate(() => window.privateBrowser.getState());

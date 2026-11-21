@@ -71,6 +71,8 @@ const api = {
   clearSideAppData: (id: SideAppId): Promise<void> => ipcRenderer.invoke('side-app:clear-data', id),
   toggleBookmark: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark'),
   openBookmark: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-bookmark', id),
+  openBookmarksInBackground: (accountSpaceId: AccountSpaceId, ids: string[]): Promise<{ opened: number; reused: number; skipped: number }> =>
+    ipcRenderer.invoke('browser:open-bookmarks-in-background', accountSpaceId, ids),
   toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
   setUiPreferences: (patch: UiPreferencesPatch): Promise<void> => ipcRenderer.invoke('ui:set-preferences', patch),
   setBrowserSettings: (patch: BrowserSettingsPatch): Promise<void> => ipcRenderer.invoke('settings:set', patch),

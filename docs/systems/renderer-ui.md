@@ -181,8 +181,9 @@ Entries come from `bookmarkEntries` (imported Chrome order and folders). A hidde
 measuring row gives each entry's width; a `ResizeObserver` decides how many fit
 and the rest go to the » overflow menu. Folders open nested `SubmenuItem` menus.
 Top-level entries drag-reorder (`moveBookmark`). Right-click offers Open in new
-tab, Copy link, Edit name, Delete; folders offer Open all (confirm above 8), Rename
-and Delete; the empty bar offers the visibility modes, the manager, import and
+tab, Copy link, Edit name and Delete. Folders offer a selectable background-opening
+preview that skips addresses already open in the active space, plus Rename and
+Delete. The empty bar offers the visibility modes, the manager, import and
 export. Icons reuse favicons the main process already fetched — live tab icons
 first, then the active space's remembered `bookmarkIcons` — and the bar never
 fetches an icon. The import hint appears only while the bar is empty
@@ -219,9 +220,10 @@ asserts `#root` scrollLeft 0 and no `.app-shell` overflow.
 
 Brand mark and "Private Browser" heading, a search field that calls `navigate`,
 the workspace and Account Space, up to 12 shortcut tiles, recently visited and
-bookmark cards, and a Customize popover (theme, five local gradient backgrounds,
-restore default shortcuts). Tiles default to `defaultShortcutTiles(workspace)`;
-the first edit saves an explicit list with fresh ids through `setShortcutTiles`.
+bookmark cards, and a Customize popover with theme, backgrounds and a recent-visit
+toggle. The Bookmarks menu can pin the current page. Shortcut menus can change
+the order by keyboard. Tiles default to `defaultShortcutTiles(workspace)`;
+the first edit saves an explicit list through `setShortcutTiles`.
 Protection detail is in the shield menu, not on the page.
 
 ## Panels and Their IPC

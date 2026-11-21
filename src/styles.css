@@ -847,6 +847,10 @@ kbd { font: inherit; }
 .prompt-dialog input { height: 38px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--field); color: var(--text); font-size: var(--fs-md); outline: none; }
 .prompt-dialog input:focus { border-color: var(--accent-ring); box-shadow: 0 0 0 1px var(--accent-ring); background: var(--field-focus); }
 .prompt-error { color: var(--danger) !important; }
+.bookmark-batch-dialog { max-height: 95vh; overflow: auto; }
+.bookmark-batch-dialog .startup-tab-list label { flex-direction: row; align-items: flex-start; padding: 6px; }
+.bookmark-batch-dialog .startup-tab-list input { height: auto; }
+.bookmark-batch-dialog .startup-tab-list small { display: block; opacity: .8; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .account-manager { width: min(1040px, 96vw); height: min(720px, 90vh); overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-menu); }
 .account-manager > header { height: 100px; padding: 20px 24px; display: flex; align-items: flex-start; justify-content: space-between; border-bottom: 1px solid var(--border); }

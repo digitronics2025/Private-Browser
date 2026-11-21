@@ -130,6 +130,8 @@ import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupW
 import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
+import { showPageContextMenu } from './page-context-menu.js';
+import { planBookmarkBatch } from './bookmark-batch.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -659,25 +661,17 @@ class BrowserController {
   private addBackgroundTab(workspaceId: WorkspaceId, url: string, accountSpaceId: AccountSpaceId, title?: string): string | undefined {
     const state = this.store.get();
     if (!isAllowedRemoteUrl(url) || !state.accountSpaces.some((account) => account.id === accountSpaceId && account.workspaceId === workspaceId)) return;
-    const id = randomUUID();
-    this.store.update((next) => {
-      next.tabs.push({
-        id,
-        accountSpaceId,
-        workspaceId,
-        title: title ?? new URL(url).hostname,
-        url,
-        isHome: false,
-        loading: false,
-        canGoBack: false,
-        canGoForward: false,
-        developerToolsAllowed: false,
-        developerToolsOpen: false,
-      });
-    });
-    this.runtimeTabs.set(id, this.newRuntimeTab());
+    const tab = this.backgroundTab(workspaceId, url, accountSpaceId, title);
+    this.store.update((next) => { next.tabs.push(tab); });
+    this.runtimeTabs.set(tab.id, this.newRuntimeTab());
     this.broadcast();
-    return id;
+    return tab.id;
+  }
+
+  private backgroundTab(workspaceId: WorkspaceId, url: string, accountSpaceId: AccountSpaceId, title?: string): BrowserTab {
+    return { id: randomUUID(), accountSpaceId, workspaceId, title: title || new URL(url).hostname, url,
+      isHome: false, loading: false, canGoBack: false, canGoForward: false,
+      developerToolsAllowed: false, developerToolsOpen: false };
   }
 
   async newTab(workspaceId?: WorkspaceId, url = 'private://home', accountSpaceId?: AccountSpaceId): Promise<void> {
@@ -789,11 +783,10 @@ class BrowserController {
       } else if (owned.length >= 100) {
         result.skipped.push(index);
       } else {
-        const tabId = randomUUID();
-        tabs.push({ id: tabId, workspaceId: account.workspaceId, accountSpaceId, title: new URL(url).hostname, url, isHome: false,
-          loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false });
+        const tab = this.backgroundTab(account.workspaceId, url, accountSpaceId);
+        tabs.push(tab);
         result.opened += 1;
-        if (index === routine.focusIndex) focusId = tabId;
+        if (index === routine.focusIndex) focusId = tab.id;
       }
     }
     if (result.opened) this.store.update((next) => { next.tabs = tabs; });
@@ -1371,6 +1364,26 @@ class BrowserController {
     const bookmark = this.store.get().bookmarks.find((item) => item.id === id);
     if (!bookmark) return;
     await this.newTab(bookmark.workspaceId, bookmark.url, bookmark.accountSpaceId);
+  }
+
+  openBookmarksInBackground(accountSpaceId: AccountSpaceId, ids: string[]) {
+    const state = this.store.get();
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (this.store.isReadOnly() || this.activeAccountSpaceId(state) !== accountSpaceId || !account
+      || account.locked || state.accountHealth.some((entry) => entry.accountSpaceId === accountSpaceId && entry.status === 'account-corrupt')) {
+      throw new Error('The Account Space changed. Reopen the bookmark preview.');
+    }
+    const { pending, reused, skipped } = planBookmarkBatch(
+      state.bookmarks.filter((item) => item.accountSpaceId === accountSpaceId),
+      state.tabs.filter((tab) => tab.accountSpaceId === accountSpaceId),
+      ids,
+    );
+    const tabs = pending.map(({ bookmark }) => this.backgroundTab(account.workspaceId, bookmark.url, accountSpaceId, bookmark.title));
+    if (tabs.length) {
+      this.store.update((next) => { next.tabs.push(...tabs); });
+      this.broadcast();
+    }
+    return { opened: tabs.length, reused, skipped };
   }
 
   toggleBookmarkBar(): void {
@@ -2851,15 +2864,14 @@ class BrowserController {
     view.webContents.on('devtools-closed', () => this.updateRuntime(tabId, { developerToolsOpen: false }));
     view.webContents.on('console-message', (details) => this.recordConsoleMessage(tabId, details));
     view.webContents.on('context-menu', (_event, params) => {
-      if (!this.developerTarget(tabId)) return;
-      Menu.buildFromTemplate([
-        { label: 'Inspect element', click: () => {
-          view.webContents.inspectElement(params.x, params.y);
-          if (!view.webContents.isDevToolsOpened()) view.webContents.openDevTools({ mode: 'right', activate: true });
-        } },
-        { type: 'separator' },
-        { label: 'Reload', click: () => view.webContents.reload() },
-      ]).popup({ window: this.window });
+      if (tab.workspaceId === 'banking') return;
+      const contents = view.webContents;
+      const generation = runtime.navigationGeneration;
+      showPageContextMenu(this.window, contents, params,
+        () => !this.window.isDestroyed() && !contents.isDestroyed() && view.getVisible()
+          && runtime.navigationGeneration === generation && this.activeTab(this.store.get()).id === tabId,
+        (url) => this.addBackgroundTab(tab.workspaceId, url, tab.accountSpaceId),
+        () => Boolean(this.developerTarget(tabId)));
     });
     view.webContents.on('before-input-event', (event, input) => {
       if (this.handleFillPickerKey(tabId, event, input)) return;
@@ -3474,6 +3486,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('side-app:clear-data', (_event, id: SideAppId) => controller!.clearSideAppData(id));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
+  handle('browser:open-bookmarks-in-background', (_event, account: AccountSpaceId, ids: string[]) => controller!.openBookmarksInBackground(account, ids));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
   handle('ui:set-preferences', (_event, patch: UiPreferencesPatch) => controller!.setUiPreferences(patch));
   handle('settings:set', (_event, patch: BrowserSettingsPatch) => controller!.setBrowserSettings(patch));

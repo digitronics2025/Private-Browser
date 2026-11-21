@@ -144,6 +144,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:toggle-fullscreen` | `toggleFullscreen()` | — | `void` |
 | `browser:toggle-bookmark` | `toggleBookmark()` | — | `void` |
 | `browser:open-bookmark` | `openBookmark(id)` | `id: string` | `void` |
+| `browser:open-bookmarks-in-background` | `openBookmarksInBackground(account, ids)` | active Account Space, 1–20 bookmark IDs | opened, reused, skipped counts |
 | `browser:toggle-bookmark-bar` | `toggleBookmarkBar()` | — | `void` |
 | `browser:list-chrome-profiles` | `listChromeProfiles()` | — | `ChromeProfileSource[]` |
 | `browser:import-chrome` | `importChrome(options)` | `ChromeImportOptions` | `ChromeImportResult` |

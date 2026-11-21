@@ -152,6 +152,27 @@ test('bookmarks bar has folders, nested menus, overflow, context actions and Ctr
   noErrors();
 });
 
+test('previews a folder and opens only selected bookmarks behind the current tab', async ({ page }) => {
+  await page.setViewportSize({ width: 560, height: 770 });
+  await page.goto('/');
+  const read = () => page.evaluate(() => window.privateBrowser.getState());
+  const account = (await read()).activeAccountSpaceId;
+  await page.evaluate(() => window.privateBrowser.navigate('https://billing.example.com/invoices'));
+  const focused = (await read()).activeTabId;
+  await page.getByRole('button', { name: 'Finance', exact: true }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Open bookmarks… (3)' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Open bookmarks in background' });
+  await expect(dialog.getByRole('checkbox', { name: /Invoices.*Already open/ })).toBeDisabled();
+  await dialog.getByRole('checkbox', { name: /Annual reports/ }).uncheck();
+  await dialog.getByRole('button', { name: 'Open selected (1)' }).click();
+  await expect(dialog).toHaveCount(0);
+  const after = await read();
+  expect(after.activeTabId).toBe(focused);
+  expect(after.tabs.filter((tab) => tab.url === 'https://billing.example.com/invoices')).toHaveLength(1);
+  expect(after.tabs.filter((tab) => tab.url === 'https://billing.example.com/payments')).toMatchObject([{ accountSpaceId: account }]);
+  expect(after.tabs.some((tab) => tab.url === 'https://reports.example.com/')).toBe(false);
+});
+
 test('side panel opens from the toolbar, switches tools, resizes and keeps its choice', async ({ page }) => {
   const noErrors = watchErrors(page);
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -257,6 +278,38 @@ test('New Tab page searches, adds a shortcut and keeps privacy detail behind the
   await expect(shield.getByText('Tracker blocking is on')).toBeVisible();
   await expect(shield.getByText('Local protection active')).toBeVisible();
   noErrors();
+});
+
+test('pins the current page, reorders a shortcut and hides recent visits on New Tab', async ({ page }) => {
+  await page.setViewportSize({ width: 520, height: 760 });
+  await page.goto('/');
+  await page.evaluate(() => window.privateBrowser.navigate('https://status.example.test/service'));
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Bookmarks', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Pin current page to New Tab' }).click();
+  const pinDialog = page.getByRole('dialog', { name: 'Pin current page to New Tab' });
+  await expect(pinDialog.getByLabel('URL')).toHaveValue('https://status.example.test/service');
+  await pinDialog.getByLabel('Name').fill('Service status');
+  await pinDialog.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(pinDialog).toHaveCount(0);
+  await page.evaluate(() => window.privateBrowser.newTab());
+
+  const ntp = page.getByRole('main', { name: 'New Tab' });
+  const shortcutMenu = ntp.getByRole('button', { name: 'Edit shortcut Gmail' });
+  await expect(ntp.getByRole('button', { name: 'Service status', exact: true })).toBeVisible();
+  await shortcutMenu.press('Enter');
+  await page.getByRole('menuitem', { name: 'Move later' }).press('Enter');
+  const shortcuts = ntp.getByRole('region', { name: 'Shortcuts' }).getByRole('button', { name: /Edit shortcut/ });
+  await expect(shortcuts.nth(1)).toHaveAccessibleName('Edit shortcut Gmail');
+
+  await expect(ntp.getByRole('heading', { name: 'Recently visited' })).toBeVisible();
+  await ntp.getByRole('button', { name: 'Customize' }).click();
+  const show = page.getByRole('menuitemcheckbox', { name: 'Show recently visited pages' });
+  await expect(show).toHaveAttribute('aria-checked', 'true');
+  await show.click();
+  await expect(show).toHaveAttribute('aria-checked', 'false');
+  await expect(ntp.getByRole('heading', { name: 'Recently visited' })).toHaveCount(0);
+  await expect(ntp.getByRole('heading', { name: 'Bookmarks' })).toBeVisible();
 });
 
 // Ctrl+T and Ctrl+W are reserved by desktop Chrome itself, so they are exercised
