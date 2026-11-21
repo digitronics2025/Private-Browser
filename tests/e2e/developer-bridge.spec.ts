@@ -19,11 +19,15 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
     const project = { project: { id: 'a'.repeat(32), name: 'Fixture workspace', trusted: true }, framework: 'Vite', packageManager: 'npm', types: ['vite-react'] };
     const commit = 'a'.repeat(40);
     let bridge: { state: string; browserVersion: string; extensionVersion?: string; project?: typeof project; pairingCode?: string; pairingExpiresAt?: number; activity?: string; vscodeVersion?: string; instanceId?: string } = connected
-      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: '0.4.2', vscodeVersion: '1.95.3', instanceId: 'abad0000-0000-4000-8000-000000000010', project }
+      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: '0.4.3', vscodeVersion: '1.95.3', instanceId: 'abad0000-0000-4000-8000-000000000010', project }
       : { state: 'disconnected', browserVersion: '0.4.0' };
     let ui: Record<string, unknown> = {};
     let server: Record<string, unknown> = { phase: 'stopped', expectedUrl: 'http://localhost:5173/' };
     let attempts = 0;
+    const reportId = 'feca0000-0000-4000-8000-000000000010';
+    const report = { id: reportId, projectId: project.project.id, title: 'Catalogue report', kind: 'responsive',
+      status: 'failed', finishedAt: '2026-11-21T12:00:00Z', summary: 'Fixture report', findings: [], artifacts: [] };
+    let rejectTest: ((error: Error) => void) | undefined;
     let notify: ((value: ReturnType<typeof getState>) => void) | undefined;
     const getState = () => ({ ...state, ui });
     const api = new Proxy({
@@ -37,8 +41,27 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
       cancelBridgePairing: async () => (bridge = { state: 'disconnected', browserVersion: '0.4.0', activity: 'Pairing cancelled' }),
       listBridgeProjects: async () => [],
       setUiPreferences: async (patch: Record<string, unknown>) => { ui = { ...ui, ...patch }; notify?.(getState()); },
-      runBridgeAction: async (action: string) => {
+      runBridgeAction: async (action: string, payload: Record<string, unknown> = {}) => {
         if (action === 'project.revision') return { branch: 'topic/review', commit, staged: 1, unstaged: 2, untracked: 0, conflicts: 0, githubRepository: 'example/app' };
+        if (action === 'reports.search') {
+          const query = payload.query as { text?: string; status?: string; date?: string; project?: string };
+          const row = { ...report, projectName: project.project.name, route: '/catalogue', findings: 2, artifacts: 1, replayable: true };
+          document.documentElement.dataset.reportQuery = JSON.stringify(query);
+          const visible = (!query.text || '/catalogue'.includes(query.text)) && (!query.status || query.status === row.status)
+            && (!query.project || query.project === row.projectId) && (!query.date || row.finishedAt.startsWith(query.date));
+          return { rows: visible ? [row] : [], total: visible ? 1 : 0, pages: 1, page: 1, projects: [project.project] };
+        }
+        if (action === 'test.rerun') {
+          document.documentElement.dataset.replayedReport = String(payload.reportId);
+          return report;
+        }
+        if (action === 'test.run') return new Promise((_resolve, reject) => { rejectTest = reject; });
+        if (action === 'test.cancel') {
+          if (!rejectTest) return { stopped: false };
+          rejectTest(new Error('Test stopped'));
+          rejectTest = undefined;
+          return { stopped: true };
+        }
         if (action === 'server.status') return server;
         if (action === 'server.start') {
           attempts += 1;
@@ -52,6 +75,7 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
           return { stopped: true };
         }
       },
+      copyText: async (value: string) => { document.documentElement.dataset.reportCopied = value; },
       newTab: async (_workspace: string, url: string) => { document.documentElement.dataset.openedGitHubUrl = url; },
       setLayout: async () => undefined,
     }, { get: (target, property) => property in target ? target[property as keyof typeof target] : async () => undefined });
@@ -102,7 +126,7 @@ test('opens the exact GitHub revision on request from a narrow Developer Bridge 
   await panelToggle.click();
   await page.locator('#side-panel-tab-developer').click();
   const status = page.getByRole('region', { name: 'Connection details' });
-  await expect(status).toContainText('0.4.2 · Protocol matched');
+  await expect(status).toContainText('0.4.3 · Protocol matched');
   await expect(status).toContainText('1.95.3 abad0000');
   await expect(status).toContainText('Fixture workspace · Approved');
   await status.getByRole('button', { name: 'Check connection status' }).click();
@@ -133,4 +157,51 @@ test('shows the selected project port, retries a conflict and stops the verified
   await expect(server).toContainText('http://localhost:5174/');
   await server.getByRole('button', { name: 'Stop server' }).click();
   await expect(server.getByRole('status')).toHaveText('Stopped');
+});
+
+test('filters reports, reuses the selected test settings and copies only the reviewed export', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await installMock(page, 'development', true);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  await page.locator('#side-panel-tab-developer').click();
+  await page.getByRole('tab', { name: 'Test', exact: true }).click();
+  await page.getByRole('button', { name: 'Report history', exact: true }).click();
+  const history = page.getByRole('region', { name: 'Report history' });
+  const root = page.locator('html');
+  await expect(history.getByRole('status')).toHaveText('1 report');
+  await history.getByLabel('Project', { exact: true }).selectOption({ label: 'Fixture workspace' });
+  await history.getByLabel('Report date').fill('2026-11-21');
+  await history.getByLabel('Search title or route').fill('hidden');
+  await expect(history.getByRole('status')).toHaveText('0 reports');
+  await history.getByLabel('Search title or route').fill('/catalogue');
+  await history.getByLabel('Result', { exact: true }).selectOption('failed');
+  await expect(history.getByRole('status')).toHaveText('1 report');
+  await history.getByRole('button', { name: 'Review export' }).click();
+  const review = history.getByRole('region', { name: 'Sanitized export' });
+  const exact = await review.locator('pre').textContent();
+  expect(exact).toContain('"findingCount": 2');
+  expect(exact).not.toContain('/catalogue');
+  expect(exact).not.toContain('Fixture workspace');
+  await expect(root).not.toHaveAttribute('data-report-copied', /./);
+  await review.getByRole('button', { name: 'Copy JSON' }).click();
+  await expect(root).toHaveAttribute('data-report-copied', exact!);
+  await history.getByRole('button', { name: 'Rerun with saved settings' }).click();
+  await expect(root).toHaveAttribute('data-replayed-report', 'feca0000-0000-4000-8000-000000000010');
+  await expect(history.getByLabel('Search title or route')).toHaveValue('/catalogue');
+});
+
+test('stops a test while the report is still pending', async ({ page }) => {
+  await installMock(page, 'development', true);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  await page.locator('#side-panel-tab-developer').click();
+  await page.getByRole('tab', { name: 'Test', exact: true }).click();
+  const stop = page.getByRole('button', { name: 'Stop test' });
+  await expect(stop).toBeDisabled();
+  await page.getByRole('button', { name: 'Quick Test' }).click();
+  await expect(stop).toBeEnabled();
+  await stop.click();
+  await expect(page.getByText('Test stopped', { exact: true })).toBeVisible();
+  await expect(stop).toBeDisabled();
 });

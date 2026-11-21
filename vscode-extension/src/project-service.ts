@@ -3,11 +3,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import * as vscode from 'vscode';
-import type { BridgeMethod, CommandSpec, DevServerStatus, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';
-import { MAX_TASK_OUTPUT_BYTES, localDevelopmentAddress, projectInfoSchema, testKindSchema, testReportSchema } from '@private-browser/bridge-protocol';
+import type { BridgeMethod, CommandSpec, DevServerStatus, ProjectInfo, ProjectSummary, ReportRunParameters, TestKind, TestReport } from '@private-browser/bridge-protocol';
+import { MAX_TASK_OUTPUT_BYTES, localDevelopmentAddress, projectInfoSchema, reportHistoryQuerySchema, reportRunParametersSchema, testReportSchema } from '@private-browser/bridge-protocol';
 import { detectProject } from './adapters.js';
 import { gitRevisionForWorkspace, revisionReportNote, type GitRepositoryView } from './git-revision.js';
 import { ReportStore } from './report-store.js';
+import { canSaveReportParameters, effectiveReportParameters, queryReportHistory, reportRouteHint } from './report-history.js';
 import { spawnCommand } from './spawn-command.js';
 import { developmentPort, isDevelopmentPortListening, matchesPortConflict, reportedDevelopmentAddress } from './dev-server-status.js';
 import { resolveInsideWorkspace, safeLiveOrigin, sanitizeOutput, stableFingerprint } from './security.js';
@@ -28,9 +29,10 @@ export class ProjectService {
   private readonly running = new Map<string, RunningProcess>();
   private readonly serverStates = new Map<string, DevServerStatus>();
   private readonly activeTasks = new Map<string, ChildProcessWithoutNullStreams>();
+  private readonly activeTestRuns = new Map<string, AbortController>();
   private readonly reports: ReportStore;
-  private lastReportId?: string;
-  private lastTestPayload?: Record<string, unknown>;
+  private readonly lastReportByProject = new Map<string, string>();
+  private readonly sessionReportRuns = new Map<string, ReportRunParameters>();
   private readonly commandStarts: number[] = [];
   private liveRunActive = false;
 
@@ -38,6 +40,9 @@ export class ProjectService {
     this.reports = new ReportStore(join(context.globalStorageUri.fsPath, 'reports'), () => {
       const config = vscode.workspace.getConfiguration('privateBrowserBridge');
       return { days: config.get<number>('reportRetentionDays', 30), max: config.get<number>('maxReports', 100) };
+    }, async (id) => {
+      this.sessionReportRuns.delete(id);
+      await this.context.secrets.delete(this.reportParametersKey(id));
     });
   }
 
@@ -59,15 +64,19 @@ export class ProjectService {
       case 'inspect.page': return this.inspectPage(payload);
       case 'inspect.open-source': return this.openSource(payload);
       case 'test.run': return this.runTest(payload);
-      case 'test.rerun': return this.rerun();
+      case 'test.rerun': return this.rerun(payload);
       case 'test.save-artifact': return this.saveTestArtifact(payload);
       case 'test.cancel': return this.cancelTask(String(this.record(payload).projectId ?? ''));
       // The list is a summary: the 20 newest reports with short evidence. Full
       // reports stay in VS Code ("Open in VS Code"); the complete list used to
       // outgrow a bridge frame after about a dozen runs (F-72).
-      case 'reports.list': return (await this.reports.list()).slice(0, 20).map((report) => ({ ...report, findings: report.findings.map((finding) => ({ ...finding, evidence: finding.evidence.slice(0, 200) })) }));
-      case 'reports.get': return this.reports.get(String(this.record(payload).reportId ?? ''));
-      case 'reports.delete': return this.reports.delete(String(this.record(payload).reportId ?? ''));
+      case 'reports.list': return this.listReports();
+      case 'reports.search': return this.searchReports(payload);
+      case 'reports.get': return this.permittedReport(String(this.record(payload).reportId ?? ''));
+      case 'reports.delete': {
+        const report = await this.permittedReport(String(this.record(payload).reportId ?? ''));
+        return this.reports.delete(report.id);
+      }
       case 'reports.clear': return this.reports.clear();
       case 'reports.open': return this.openReport(String(this.record(payload).reportId ?? ''));
       case 'reports.retention': return this.updateRetention(payload);
@@ -86,6 +95,7 @@ export class ProjectService {
 
   private grantKey(projectId: string): string { return `projectGrant:${projectId}`; }
   private approvalKey(projectId: string, fingerprint: string): string { return `commandApproval:${projectId}:${fingerprint}`; }
+  private reportParametersKey(reportId: string): string { return `privateBrowser.reportRun:${reportId}`; }
 
   private async listProjects(): Promise<ProjectSummary[]> {
     return Promise.all((vscode.workspace.workspaceFolders ?? []).filter((folder) => folder.uri.scheme === 'file').map(async (folder) => {
@@ -303,35 +313,92 @@ export class ProjectService {
   }
 
   private async runTest(payloadValue: unknown): Promise<TestReport> {
-    const payload = this.record(payloadValue); const projectId = String(payload.projectId ?? '');
-    const kind = testKindSchema.parse(payload.kind); const info = await this.inspect(projectId);
-    this.lastTestPayload = { ...payload, projectId, kind };
-    const startedAt = new Date().toISOString(); const reportId = randomUUID();
-    const revision = await this.projectRevision(projectId);
-    let report: TestReport;
-    if (kind === 'quick' || kind === 'everything') report = await this.runCommands(info, kind, startedAt, reportId);
-    else report = await this.runPageTest(info, kind, payload, startedAt, reportId);
-    if (revision) {
-      const note = revisionReportNote(revision);
-      const limit = 4_000 - note.length - 2;
-      report.summary = report.summary.slice(0, limit) + '\n\n' + note;
+    const input = this.record(payloadValue);
+    const parameters = effectiveReportParameters(reportRunParametersSchema.parse({
+      projectId: input.projectId, kind: input.kind, url: input.url, liveUrl: input.liveUrl,
+    }));
+    const { projectId, kind } = parameters;
+    if (this.activeTestRuns.has(projectId)) throw new Error('A project test is already running');
+    const run = new AbortController();
+    this.activeTestRuns.set(projectId, run);
+    try {
+      const info = await this.inspect(projectId);
+      const startedAt = new Date().toISOString();
+      const reportId = randomUUID();
+      const revision = await this.projectRevision(projectId);
+      run.signal.throwIfAborted();
+      const report = kind === 'quick' || kind === 'everything'
+        ? await this.runCommands(info, kind, startedAt, reportId, run.signal)
+        : await this.runPageTest(info, parameters, startedAt, reportId, run.signal);
+      run.signal.throwIfAborted();
+      if (revision) {
+        const note = revisionReportNote(revision);
+        report.summary = report.summary.slice(0, 4_000 - note.length - 2) + '\n\n' + note;
+      }
+      await this.saveRunReport(report, parameters);
+      this.emit('task.complete', { projectId, report });
+      return report;
+    } finally {
+      this.activeTestRuns.delete(projectId);
     }
-    this.lastReportId = report.id;
-    await this.reports.save(testReportSchema.parse(report));
-    this.emit('task.complete', { projectId, report });
+  }
+
+  private async saveRunReport(report: TestReport, parameters: ReportRunParameters): Promise<void> {
+    const key = this.reportParametersKey(report.id);
+    let savedParameters = false;
+    if (canSaveReportParameters(parameters)) {
+      try {
+        await this.context.secrets.store(key, JSON.stringify(parameters));
+        savedParameters = true;
+      } catch {
+        // History still works when encrypted per-user storage is unavailable.
+      }
+    }
+    try {
+      const route = reportRouteHint(parameters.kind === 'live-site' ? parameters.liveUrl : parameters.url);
+      await this.reports.save(testReportSchema.parse(report), { route, savedParameters });
+    } catch (error) {
+      if (savedParameters) await this.context.secrets.delete(key);
+      throw error;
+    }
+    this.lastReportByProject.set(report.projectId, report.id);
+    this.sessionReportRuns.set(report.id, parameters);
+    if (this.sessionReportRuns.size > 64) this.sessionReportRuns.delete(this.sessionReportRuns.keys().next().value!);
+  }
+
+  private async searchReports(value: unknown) {
+    const payload = this.record(value);
+    await this.folderFor(String(payload.projectId ?? ''));
+    const query = reportHistoryQuerySchema.parse(payload.query);
+    const projects = (await this.listProjects()).filter((project) => project.trusted && project.authorized);
+    return queryReportHistory(await this.reports.history(), projects, query, new Set(this.sessionReportRuns.keys()));
+  }
+
+  private async listReports(): Promise<TestReport[]> {
+    const projects = new Set((await this.listProjects()).filter((project) => project.trusted && project.authorized).map(({ id }) => id));
+    return (await this.reports.list()).filter(({ projectId }) => projects.has(projectId)).slice(0, 20)
+      .map((report) => ({ ...report, findings: report.findings.map((finding) => ({ ...finding, evidence: finding.evidence.slice(0, 200) })) }));
+  }
+
+  private async permittedReport(reportId: string): Promise<TestReport> {
+    const report = await this.reports.get(reportId);
+    await this.folderFor(report.projectId);
     return report;
   }
 
-  private async runCommands(info: ProjectInfo, kind: TestKind, startedAt: string, reportId: string): Promise<TestReport> {
+  private async runCommands(info: ProjectInfo, kind: TestKind, startedAt: string, reportId: string, signal: AbortSignal): Promise<TestReport> {
     const selected = info.commands.filter((command) => kind === 'everything'
       ? ['typecheck', 'lint', 'test', 'security', 'build', 'package'].includes(command.category)
       : ['typecheck', 'lint', 'test'].includes(command.category)).slice(0, kind === 'everything' ? 20 : 2);
     if (!selected.length) return ReportStore.skipped(info.project.id, kind, 'No configured checks', 'Add a test, lint, typecheck, or build script to package.json.');
     const findings: TestReport['findings'] = [];
     for (const command of selected) {
+      signal.throwIfAborted();
       await this.approveCommand(info.project.id, command);
+      signal.throwIfAborted();
       this.guardCommandStart();
       const result = await this.exec(info.project.id, command);
+      signal.throwIfAborted();
       findings.push({ status: result.code === 0 ? 'passed' : 'failed', title: command.label, cause: result.code === 0 ? 'Command completed successfully' : `Command exited with code ${result.code}`, evidence: result.output.slice(-8_000), location: command.cwd, recommendation: result.code === 0 ? 'No action needed.' : 'Open the output in VS Code, fix the first failure, and re-run verification.' });
     }
     const failed = findings.some((item) => item.status === 'failed');
@@ -350,28 +417,30 @@ export class ProjectService {
     });
   }
 
-  private async runPageTest(info: ProjectInfo, kind: TestKind, payload: Record<string, unknown>, startedAt: string, reportId: string): Promise<TestReport> {
-    const url = String(payload.url ?? '');
+  private async runPageTest(info: ProjectInfo, parameters: ReportRunParameters, startedAt: string, reportId: string, signal: AbortSignal): Promise<TestReport> {
+    const { kind, url, liveUrl: approvedLiveUrl } = parameters;
     if (!url) return ReportStore.skipped(info.project.id, kind, 'No target URL', 'Start the development server or provide a trusted live URL.');
-    const parsed = new URL(url); parsed.username = ''; parsed.password = ''; parsed.search = ''; parsed.hash = '';
+    const parsed = new URL(url);
     const isLive = kind === 'live-site' || kind === 'compare';
     if (kind !== 'live-site' && !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)) throw new Error('Use Live Website for a non-local target');
-    let approvedLiveUrl: string | undefined;
-    if (isLive) {
-      if (this.liveRunActive) throw new Error('Only one live-site test may run at a time');
-      approvedLiveUrl = safeLiveOrigin(String(payload.liveUrl ?? parsed.toString()));
-      await this.approveLiveSite(info.project.id, approvedLiveUrl);
-      this.liveRunActive = true;
-      this.emit('task.progress', { projectId: info.project.id, activity: 'Testing live site', origin: approvedLiveUrl });
-    }
-    const artifactRoot = this.reports.artifactRoot(reportId); await mkdir(artifactRoot, { recursive: true });
-    const runner = join(this.context.extensionPath, 'dist', 'playwright-runner.cjs');
-    const runnerInput = Buffer.from(JSON.stringify({ reportId, projectId: info.project.id, startedAt, kind, url: kind === 'live-site' ? approvedLiveUrl : parsed.toString(), liveUrl: approvedLiveUrl, root: info.project.path, artifactRoot })).toString('base64url');
-    const command: CommandSpec = { id: `playwright:${kind}`, label: `Playwright ${kind}`, executable: process.execPath, args: [runner, runnerInput], cwd: info.project.path, source: 'playwright', category: 'test', fingerprint: stableFingerprint({ runner, kind, root: info.project.path, target: kind === 'live-site' ? approvedLiveUrl : parsed.toString(), liveUrl: approvedLiveUrl }) };
+    if (isLive && this.liveRunActive) throw new Error('Only one live-site test may run at a time');
+    if (isLive) this.liveRunActive = true;
     try {
+      if (approvedLiveUrl) {
+        await this.approveLiveSite(info.project.id, approvedLiveUrl);
+        this.emit('task.progress', { projectId: info.project.id, activity: 'Testing live site', origin: approvedLiveUrl });
+      }
+      signal.throwIfAborted();
+      const artifactRoot = this.reports.artifactRoot(reportId); await mkdir(artifactRoot, { recursive: true });
+      const runner = join(this.context.extensionPath, 'dist', 'playwright-runner.cjs');
+      const target = kind === 'live-site' ? approvedLiveUrl : parsed.toString();
+      const runnerInput = Buffer.from(JSON.stringify({ reportId, projectId: info.project.id, startedAt, kind, url: target, liveUrl: approvedLiveUrl, root: info.project.path, artifactRoot })).toString('base64url');
+      const command: CommandSpec = { id: `playwright:${kind}`, label: `Playwright ${kind}`, executable: process.execPath, args: [runner, runnerInput], cwd: info.project.path, source: 'playwright', category: 'test', fingerprint: stableFingerprint({ runner, kind, root: info.project.path, target, liveUrl: approvedLiveUrl }) };
       await this.approveCommand(info.project.id, command);
+      signal.throwIfAborted();
       this.guardCommandStart();
       const result = await this.exec(info.project.id, command);
+      signal.throwIfAborted();
       if (result.code !== 0) return { id: reportId, projectId: info.project.id, kind, status: 'failed', title: `Playwright ${kind}`, startedAt, finishedAt: new Date().toISOString(), summary: 'The isolated browser test failed.', findings: [{ status: 'failed', title: 'Playwright runner', cause: 'The runner exited unsuccessfully.', evidence: result.output.slice(-8_000), recommendation: 'Install @playwright/test and Chromium in this workspace, then re-run.' }], artifacts: [] };
       try { return testReportSchema.parse(JSON.parse(result.output)); }
       catch { return { id: reportId, projectId: info.project.id, kind, status: 'failed', title: `Playwright ${kind}`, startedAt, finishedAt: new Date().toISOString(), summary: 'The test returned an invalid report.', findings: [{ status: 'failed', title: 'Invalid runner output', cause: 'The Playwright report could not be parsed.', evidence: result.output.slice(-8_000), recommendation: 'Open the output and fix the first runner error.' }], artifacts: [] }; }
@@ -390,17 +459,34 @@ export class ProjectService {
     }
   }
 
-  private async rerun(): Promise<TestReport> {
-    if (!this.lastReportId || !this.lastTestPayload) throw new Error('No previous test is available');
-    await this.reports.get(this.lastReportId);
-    return this.runTest(this.lastTestPayload);
+  private async rerun(value: unknown): Promise<TestReport> {
+    const payload = this.record(value);
+    const projectId = String(payload.projectId ?? '');
+    await this.folderFor(projectId);
+    const reportId = typeof payload.reportId === 'string' ? payload.reportId : this.lastReportByProject.get(projectId);
+    if (!reportId) throw new Error('No previous test is available for the selected project');
+    const report = await this.reports.get(reportId);
+    if (report.projectId !== projectId) throw new Error('Select the report’s project before rerunning');
+    let parameters = this.sessionReportRuns.get(reportId);
+    if (!parameters) {
+      const saved = await this.context.secrets.get(this.reportParametersKey(reportId));
+      if (saved) parameters = reportRunParametersSchema.parse(JSON.parse(saved) as unknown);
+    }
+    if (!parameters || parameters.projectId !== projectId || parameters.kind !== report.kind) {
+      throw new Error('The saved parameters are unavailable. Start a new test for this project.');
+    }
+    return this.runTest(parameters);
   }
 
   private async cancelTask(projectId: string): Promise<{ stopped: boolean }> {
+    const run = this.activeTestRuns.get(projectId);
+    if (!run) return { stopped: false };
+    run.abort(new Error('Test stopped'));
     const task = this.activeTasks.get(projectId);
-    if (!task) return this.stopServer(projectId);
-    await this.terminateProcess(task);
-    this.activeTasks.delete(projectId);
+    if (task) await this.terminateProcess(task);
+    if (task && this.activeTasks.get(projectId) === task) {
+      throw new Error('VS Code could not stop the test process. Check its terminal.');
+    }
     return { stopped: true };
   }
 
@@ -417,7 +503,9 @@ export class ProjectService {
   private async saveTestArtifact(payloadValue: unknown): Promise<{ saved: true; path: string }> {
     const payload = this.record(payloadValue); const projectId = String(payload.projectId ?? '');
     const folder = await this.folderFor(projectId); const reportId = String(payload.reportId ?? ''); const name = String(payload.name ?? '');
-    const report = await this.reports.get(reportId); const artifact = report.artifacts.find((item) => item.name === name && item.kind === 'test');
+    const report = await this.reports.get(reportId);
+    if (report.projectId !== projectId) throw new Error('The report belongs to a different project');
+    const artifact = report.artifacts.find((item) => item.name === name && item.kind === 'test');
     if (!artifact) throw new Error('The selected generated test artifact does not exist');
     const source = await resolveInsideWorkspace(this.reports.artifactRoot(reportId), artifact.name); const text = await readFile(source, 'utf8');
     if (Buffer.byteLength(text) > 512 * 1024) throw new Error('The generated test is too large');
@@ -438,7 +526,7 @@ export class ProjectService {
   }
 
   private async openReport(reportId: string): Promise<{ opened: true }> {
-    const report = await this.reports.get(reportId);
+    const report = await this.permittedReport(reportId);
     const content = `# ${report.title}\n\n**${report.status.toUpperCase()}** — ${report.summary}\n\n${report.findings.map((item) => `## ${item.title}\n\n${item.cause}\n\nEvidence:\n\n\`\`\`text\n${item.evidence}\n\`\`\`\n\nRecommended: ${item.recommendation}`).join('\n\n')}`;
     const document = await vscode.workspace.openTextDocument({ language: 'markdown', content });
     await vscode.window.showTextDocument(document);
