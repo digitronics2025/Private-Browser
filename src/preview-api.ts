@@ -802,6 +802,7 @@ export function installPreviewApi(): void {
     toggleBookmarkBar: async () => { state.ui = mergeUiPreferences(state.ui, { bookmarkBarMode: state.ui.bookmarkBarMode === 'hidden' ? 'always' : 'hidden' }); publish(); },
     activateTab: async (value) => { const tab = state.tabs.find((item) => item.id === value); if (tab) { tab.sleeping = undefined; state.activeTabId = tab.id; publish(); } },
     newTab: async () => { const id = `preview-${crypto.randomUUID()}`; state.tabs.push(homeTab(id, state.activeWorkspaceId, state.activeAccountSpaceId)); state.activeTabId = id; publish(); },
+    openTemporaryBrowsing: desktopOnly,
     closeTab: async (value) => {
       const tab = state.tabs.find((item) => item.id === value);
       if (!tab) return;

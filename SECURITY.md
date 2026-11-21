@@ -58,6 +58,11 @@ The login picker (the list of saved accounts under a focused sign-in field) is d
 
 ## Account Spaces and local browsing data
 
+[Temporary browsing](docs/temporary-browsing.md) uses a new in-memory session
+for each opened window. Remote content runs in a sandboxed view with no preload
+or privileged IPC. Website permissions, pop-ups and downloads are blocked.
+Only an explicit, reviewed bookmark can reach the persistent Account Space.
+
 Optional Windows session and idle locking close live views, clear transient
 credentials, and pause the developer and Agent bindings. The old chrome
 renderer is replaced. While locked, only an empty snapshot and Exit are
