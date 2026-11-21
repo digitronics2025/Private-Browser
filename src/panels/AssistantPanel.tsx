@@ -1,8 +1,25 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Bot, Check, Cloud, Eye, LoaderCircle, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
-import type { AiPagePreview, AiProviderInput, AiProviderStatus } from '../../electron/types';
+import type { AiPagePreview, CloudAiProviderInput, AiProviderStatus, LocalAiModels } from '../../electron/types';
 import { PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
+
+const sentences = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+
+function searchWords(text: string): string[] {
+  return text.normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '').match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+function findPagePassages(text: string, query: string): string[] {
+  const keywords = new Set(searchWords(query));
+  if (!keywords.size) return [];
+  return [...sentences.segment(text)].map(({ segment }) => {
+    const words = new Set(searchWords(segment));
+    const score = [...keywords].filter((keyword) => words.has(keyword)).length;
+    return { text: segment.trim(), score };
+  }).filter(({ score }) => score > 0).sort((left, right) => right.score - left.score)
+    .slice(0, 3).map((passage) => passage.text);
+}
 
 export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [preview, setPreview] = useState<AiPagePreview | null>(null);
@@ -10,14 +27,22 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState<AiProviderStatus>({ configured: false });
   const [showProviderForm, setShowProviderForm] = useState(false);
-  const [providerForm, setProviderForm] = useState<AiProviderInput>({ endpoint: 'https://openrouter.ai/api/v1', model: '', apiKey: '' });
+  const [providerForm, setProviderForm] = useState<CloudAiProviderInput>({ endpoint: 'https://openrouter.ai/api/v1', model: '', apiKey: '' });
+  const [providerMode, setProviderMode] = useState<'local' | 'cloud'>('local');
+  const [local, setLocal] = useState<LocalAiModels>();
+  const [localModel, setLocalModel] = useState('');
+  const isLocal = provider.mode === 'local';
   const [question, setQuestion] = useState('Summarize the important points on this page.');
   const [answer, setAnswer] = useState('');
+  const [passageQuery, setPassageQuery] = useState('');
+  const [passages, setPassages] = useState<string[]>();
   useEffect(() => { void window.privateBrowser.getAiProvider().then(setProvider).catch(() => undefined); }, []);
   const clearContext = async () => {
     setPreview(null);
     setApprovalToken(null);
     setAnswer('');
+    setPassageQuery('');
+    setPassages(undefined);
     // Forgetting the token in the renderer did not invalidate it: the captured
     // page text and the live capability stayed in the main process for the full
     // five minutes. Revoke it for real.
@@ -29,6 +54,8 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
     setLoading(true);
     setApprovalToken(null);
     setAnswer('');
+    setPassageQuery('');
+    setPassages(undefined);
     try { setPreview(await window.privateBrowser.prepareAiPreview()); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
@@ -37,7 +64,7 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
     if (!preview) return;
     setLoading(true);
     try {
-      const approval = await window.privateBrowser.approveAiPreview(preview.id);
+      const approval = await window.privateBrowser.approveAiPreview(preview.id, isLocal ? 'local' : 'cloud');
       setPreview(approval.preview);
       setApprovalToken(approval.token);
       onToast('Sanitized context approved');
@@ -48,9 +75,10 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
     event.preventDefault();
     setLoading(true);
     try {
-      setProvider(await window.privateBrowser.configureAiProvider(providerForm));
+      setProvider(await window.privateBrowser.configureAiProvider(providerMode === 'local' ? { mode: 'local', model: localModel } : providerForm));
+      await clearContext();
       setShowProviderForm(false);
-      onToast('AI provider encrypted and saved');
+      onToast(providerMode === 'local' ? 'Local model saved' : 'AI provider encrypted and saved');
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally {
       setLoading(false);
@@ -59,14 +87,24 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
       setProviderForm((value) => ({ ...value, apiKey: '' }));
     }
   };
+  const checkLocal = async () => {
+    setLoading(true);
+    try {
+      const result = await window.privateBrowser.getLocalAiModels();
+      setLocal(result);
+      setLocalModel((model) => result.models.includes(model) ? model : result.models[0] ?? '');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setLoading(false); }
+  };
   const ask = async () => {
     if (!approvalToken) return;
     setLoading(true);
     try {
       setAnswer(await window.privateBrowser.askAi(approvalToken, question));
-      setApprovalToken(null);
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
-    finally { setLoading(false); }
+    } catch (error) {
+      setPreview(null);
+      onToast(error instanceof Error ? error.message : String(error), 'error');
+    } finally { setApprovalToken(null); setLoading(false); }
   };
   return (
     <div className="side-panel">
@@ -74,21 +112,42 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
       <div className="local-banner"><LockKeyhole size={15} /><div><strong>Private by default</strong><span>Nothing leaves this device without approval.</span></div></div>
       <div className="provider-strip">
         <span className={provider.configured ? 'connected' : ''} />
-        <div><strong>{provider.configured ? provider.model : provider.error === 'provider-corrupt' ? 'Provider recovery required' : 'Cloud AI not connected'}</strong><small>{provider.configured ? domainFromUrl(provider.endpoint ?? '') : provider.error === 'provider-corrupt' ? 'Reset the unreadable configuration' : 'Local tools remain available'}</small></div>
-        <button onClick={() => { setShowProviderForm((value) => !value); setProviderForm((value) => ({ ...value, apiKey: '' })); }}>{provider.configured ? 'Change' : 'Connect'}</button>
+        <div><strong>{provider.configured ? provider.model : provider.error === 'provider-corrupt' ? 'Provider recovery required' : 'AI provider not connected'}</strong><small>{provider.configured ? isLocal ? 'Local · Ollama' : domainFromUrl(provider.endpoint ?? '') : provider.error === 'provider-corrupt' ? 'Reset the unreadable configuration' : 'Choose an installed local model or a cloud provider'}</small></div>
+        <button onClick={() => {
+          setShowProviderForm((value) => !value);
+          setProviderMode(provider.mode ?? 'local');
+          setProviderForm((value) => ({ ...value, apiKey: '' }));
+        }}>{provider.configured ? 'Change' : 'Connect'}</button>
       </div>
       {showProviderForm && <form className="vault-form provider-form" onSubmit={configureProvider}>
-        <input placeholder="OpenAI-compatible endpoint" required value={providerForm.endpoint} onChange={(event) => setProviderForm({ ...providerForm, endpoint: event.target.value })} />
-        <input placeholder="Model ID" required value={providerForm.model} onChange={(event) => setProviderForm({ ...providerForm, model: event.target.value })} />
-        <input placeholder="API key (encrypted)" type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} />
-        <button className="primary-button" type="submit" disabled={loading}><LockKeyhole size={15} /> Save encrypted provider</button>
-        {(provider.configured || provider.error === 'provider-corrupt') && <button className="text-button danger-text" type="button" onClick={() => { if (window.confirm('Remove the saved AI provider configuration?')) void window.privateBrowser.clearAiProvider().then((status) => { setProvider(status); setShowProviderForm(false); onToast('AI provider removed'); }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error')); }}>{provider.error === 'provider-corrupt' ? 'Reset provider configuration' : 'Remove provider'}</button>}
+        <label>Provider type<select value={providerMode} onChange={(event) => {
+          setProviderMode(event.target.value as 'local' | 'cloud');
+          setProviderForm((value) => ({ ...value, apiKey: '' }));
+        }}><option value="local">Local with Ollama</option><option value="cloud">Cloud</option></select></label>
+        {providerMode === 'local' ? <>
+          <button className="text-button" type="button" disabled={loading} onClick={() => void checkLocal()}>Check installed models</button>
+          {local && <p role="status">{local.state === 'cloud-enabled'
+            ? 'Turn off Ollama cloud features, restart Ollama and check again.'
+            : local.state === 'unavailable' ? 'Start a version of Ollama that reports local-only status on this device.'
+              : local.models.length ? 'Ollama is running with cloud features disabled.' : 'No installed local chat models found.'}</p>}
+          {local?.models.length ? <label>Local model<select value={localModel} onChange={(event) => setLocalModel(event.target.value)}>
+            {local.models.map((model) => <option key={model} value={model}>{model}</option>)}
+          </select></label> : null}
+        </> : <>
+          <input placeholder="OpenAI-compatible endpoint" required value={providerForm.endpoint} onChange={(event) => setProviderForm({ ...providerForm, endpoint: event.target.value })} />
+          <input placeholder="Model ID" required value={providerForm.model} onChange={(event) => setProviderForm({ ...providerForm, model: event.target.value })} />
+          <input placeholder="API key (encrypted)" type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} />
+        </>}
+        <button className="primary-button" type="submit" disabled={loading || (providerMode === 'local' && !localModel)}>
+          <LockKeyhole size={15} />{providerMode === 'local' ? 'Save local model' : 'Save encrypted provider'}
+        </button>
+        {(provider.configured || provider.error === 'provider-corrupt') && <button className="text-button danger-text" type="button" onClick={() => { if (window.confirm('Remove the saved AI provider configuration?')) void window.privateBrowser.clearAiProvider().then(async (status) => { setProvider(status); await clearContext(); setShowProviderForm(false); onToast('AI provider removed'); }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error')); }}>{provider.error === 'provider-corrupt' ? 'Reset provider configuration' : 'Remove provider'}</button>}
       </form>}
       {!preview ? (
         <div className="assistant-empty">
           <span className="orb"><Sparkles size={25} /></span>
           <h3>Understand this page</h3>
-          <p>Read visible text locally, remove sensitive patterns, and review it before any cloud use.</p>
+          <p>Read visible text locally, remove sensitive patterns, and review it before using a model.</p>
           <button className="primary-button" onClick={prepare} disabled={loading}>{loading ? <LoaderCircle className="spin" size={16} /> : <Eye size={16} />} Read page locally</button>
         </div>
       ) : (
@@ -101,12 +160,26 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
               ? <><pre className="context-text">{preview.text}</pre><small className="context-size">{preview.text.length.toLocaleString()} characters — scroll the box to read all of it</small></>
               : <p>No readable text was found. Only the title and address above would be sent.</p>}
           </div>
+          {preview.text && <form className="ask-card" onSubmit={(event) => {
+            event.preventDefault();
+            setPassages(findPagePassages(preview.text, passageQuery));
+          }}>
+            <label>Page keywords <input maxLength={120} value={passageQuery} onChange={(event) => {
+              setPassageQuery(event.target.value);
+              setPassages(undefined);
+            }} /></label>
+            <button className="text-button" type="submit" disabled={!passageQuery.trim()}>Find passages locally</button>
+            {passages && <div role="status" className="answer-card">
+              {passages.length ? <ul>{passages.map((passage, index) => <li key={index}>{passage}</li>)}</ul>
+                : <p>No matching passages in this page preview.</p>}
+            </div>}
+          </form>}
           <div className="permission-card">
-            <div><Cloud size={17} /><strong>Cloud permission</strong></div>
-            <p>The title, address and text shown above are the whole of what leaves this machine. Nothing else from the page is sent, and only for the one request you approve.</p>
+            <div>{isLocal ? <LockKeyhole size={17} /> : <Cloud size={17} />}<strong>{isLocal ? 'Local model permission' : 'Cloud permission'}</strong></div>
+            <p>{isLocal ? 'One approved request goes to Ollama on this device. Cloud features must be disabled.' : 'The title, address and text shown above are the whole of what leaves this machine. Nothing else from the page is sent, and only for the one request you approve.'}</p>
             {approvalToken ? <div className="approved"><Check size={15} /> Approved for one request</div> : <button className="primary-button" onClick={approve} disabled={loading || !provider.configured}><ShieldCheck size={16} /> {provider.configured ? 'Approve context' : 'Connect provider first'}</button>}
           </div>
-          {approvalToken && <div className="ask-card"><textarea maxLength={2000} value={question} onChange={(event) => setQuestion(event.target.value)} /><button className="primary-button full" onClick={() => void ask()} disabled={loading || !question.trim()}>{loading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} Ask cloud AI once</button></div>}
+          {approvalToken && <div className="ask-card"><textarea aria-label="Question" maxLength={2000} value={question} onChange={(event) => setQuestion(event.target.value)} /><button className="primary-button full" onClick={() => void ask()} disabled={loading || !question.trim()}>{loading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} {isLocal ? 'Ask local AI once' : 'Ask cloud AI once'}</button></div>}
           {answer && <div className="answer-card"><span>AI ANSWER</span><p>{answer}</p></div>}
           <button className="text-button" onClick={() => void clearContext()}>Clear page context</button>
         </>

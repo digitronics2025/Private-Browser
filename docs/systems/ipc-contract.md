@@ -230,8 +230,9 @@ approved preview in main, never from the renderer. Behaviour:
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
 | `ai:prepare-preview` | `prepareAiPreview()` | — | `AiPagePreview` |
-| `ai:approve-preview` | `approveAiPreview(previewId)` | `previewId: string` | `AiApproval` |
+| `ai:approve-preview` | `approveAiPreview(previewId, mode?)` | preview ID and optional local/cloud destination | `AiApproval` |
 | `ai:provider-status` | `getAiProvider()` | — | `AiProviderStatus` |
+| `ai:local-models` | `getLocalAiModels()` | — | Ollama readiness and installed local model names |
 | `ai:configure-provider` | `configureAiProvider(input)` | `input: AiProviderInput` | `AiProviderStatus` |
 | `ai:clear-provider` | `clearAiProvider()` | — | `AiProviderStatus` |
 | `ai:ask` | `askAi(token, question)` | `token: string`, `question: string` | `string` |

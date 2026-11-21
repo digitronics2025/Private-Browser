@@ -3,19 +3,19 @@ system: ai-consent
 sources:
   - electron/ai-provider.ts
   - electron/ai-account-spaces.ts
+  - electron/ollama-local.ts
 verified_at: dcd6823a
 ---
 
 # AI Consent
 
-> Last verified: 2026-09-25
+> Last verified: 2026-11-21
 
 ## Agent Brief
 
-**Scope.** How page text reaches a cloud model, and everything that has to happen
-first. [electron/ai-provider.ts](../../electron/ai-provider.ts) is
-`AiProviderStore`: the encrypted endpoint/model/key, and the single outbound
-request. The consent protocol that decides whether that request is ever allowed —
+**Scope.** How approved page text reaches an installed Ollama model or a
+configured cloud model. [AiProviderStore](../../electron/ai-provider.ts) stores
+the encrypted provider settings and handles requests. The consent protocol
 `prepareAiPreview`, `approveAiPreview`, `askAi`, `pruneAiCapabilities` — lives in
 `electron/main.ts`, which [browser-shell.md](browser-shell.md) owns for
 source-glob purposes; it is documented here in full because it is the heart of
@@ -58,7 +58,7 @@ renders the preview is [renderer-ui.md](renderer-ui.md).
    that URL never named, after the private-range check has already passed.
    → **The Outbound Request**
 6. **The API key never crosses to the renderer.** `status()` returns
-   `configured`, `endpoint` and `model` — nothing else, on any path.
+   the configuration state, provider mode, model and public cloud endpoint.
    → **Provider Configuration**
 
 ### Where to look
@@ -88,12 +88,12 @@ renders the preview is [renderer-ui.md](renderer-ui.md).
 
 ## Overview
 
-The app ships with no AI vendor configured. A user who wants one supplies an
-OpenAI-compatible base URL, a model name and an API key; all three are encrypted
-at rest. Even then, no page text is transmitted automatically. Reading the page
-is local, redaction is local, and the user approves one sanitised snapshot for
-one question at a time. The design goal is that a person can answer "what did
-this app send, and when did I agree to it?" from the privacy log alone.
+The app ships with AI unconfigured. The user chooses an installed Ollama model
+or supplies an OpenAI-compatible base URL, model name and API key. The app
+encrypts provider settings at rest. Reading and redaction happen locally. The
+user approves one sanitised snapshot for one question at a time.
+Find passages searches that same preview on the device and works without a
+model or network connection. Switching tabs or Account Spaces clears the view.
 
 ## The Consent Protocol
 
@@ -103,8 +103,8 @@ Every preview and approval now binds the opaque Account Space ID, exact tab,
 classified service and a SHA-256 revision of account/tab/source/text. Spending a
 capability re-checks that binding, preventing consent from one account, tab or
 page revision from authorizing another. Google data defaults to local processing.
-Mailbox content is categorically excluded from cloud model input; the existing
-sanitized preview and explicit one-request approval remain required elsewhere.
+Mailbox content is excluded from model input. Every request requires a
+sanitized preview and explicit one-request approval.
 Banking continues to deny before extraction.
 
 Implemented in `electron/main.ts` (owned by
@@ -138,7 +138,7 @@ in-memory maps between them, `pendingAiPreviews` and `aiApprovals`.
    and returned to the renderer, which shows the text alongside "*N* redacted"
    ([src/App.tsx:430](../../src/App.tsx)).
 
-### 2. Approval — `approveAiPreview(previewId)`
+### 2. Approval — `approveAiPreview(previewId, mode)`
 
 1. The pending entry is fetched and **deleted immediately**, before any check. A
    preview id is good for exactly one approval attempt; a failed attempt does not
@@ -148,9 +148,8 @@ in-memory maps between them, `pendingAiPreviews` and `aiApprovals`.
    now protected, it throws `The page changed or is protected`. This is what stops
    a navigation between preview and approval from silently re-pointing the
    approval at a different page.
-4. A **capability token** — a fresh `randomUUID` — is minted and stored as
-   `{ preview, sourceUrl, expiresAt: now + 5 minutes }`.
-5. A `cloud-approved` privacy event records the title and redaction count.
+4. A fresh single-use token binds the preview and provider mode for five minutes.
+5. The privacy log records a local or cloud approval, title and redaction count.
 6. `{ token, preview }` goes back to the renderer, which switches the panel to
    "Approved for one request".
 
@@ -167,8 +166,9 @@ built in step 1, and it is what will be sent verbatim.
 3. Missing or expired → `AI approval expired; approve the page again`.
 4. The active tab is checked against `sourceUrl` and `isProtectedPage` **again** —
    the third protection check, covering the window between approval and send.
-5. `aiProvider.ask(approval.preview, question)` performs the one outbound call.
-6. A second `cloud-approved` event records that the request completed.
+5. The requested provider mode must match the approval. For Ollama, the app
+   rechecks the provider and source after checking the local runtime.
+6. The privacy log records the completed request under its provider mode.
 
 Asking again requires approving again, which requires reading the page again.
 
@@ -183,7 +183,7 @@ capability.
 
 ### Other destinations for an approved preview
 
-The same single-use approval is also spent by the VS Code handoff
+Cloud-mode approvals are also spent by the VS Code handoff
 (`ai.handoff`, [vscode-bridge.md](vscode-bridge.md)) and by the Developer
 panel's Tasks tab, which sends to the AI Development Control Center on this
 computer ([control-center-link.md](control-center-link.md)). The Control Center
@@ -194,8 +194,9 @@ preview verbatim.
 ## Provider Configuration
 
 `AiProviderStore` ([electron/ai-provider.ts](../../electron/ai-provider.ts)),
-constructed once at startup over `userData/ai-provider.enc`. The stored shape is
-`{ version: 1, endpoint, model, apiKey }`.
+constructed once at startup over `userData/ai-provider.enc`. Cloud mode stores
+`{ version: 1, endpoint, model, apiKey }`. Local mode stores
+`{ version: 1, mode: 'local', model }`.
 
 **At rest.** `save()` mirrors the vault exactly: `safeStorage.encryptString` of
 the JSON, written base64 to `${filePath}.tmp` with `{ mode: 0o600 }`, then
@@ -226,8 +227,18 @@ previously-stored endpoint at the next launch rather than grandfathering it.
 thing the renderer ever sees: `{ configured: false, error: 'provider-corrupt' }`
 when the file failed to decrypt, `{ configured: false, error:
 'os-encryption-unavailable' }` when `safeStorage` is unavailable, otherwise
-`{ configured: true, endpoint, model }` or `{ configured: false }`. **The API key
+the configuration state, mode, model and applicable endpoint. **The API key
 is never returned, on any path.**
+
+### Local Ollama
+
+The main process checks Ollama at `127.0.0.1:11434` using bounded HTTP requests.
+The setup check needs a runtime that reports `cloud.disabled` as `true` and an
+installed chat model with a local model manifest. Before a request, the app
+repeats the runtime and model checks, and validates the original tab and
+approval. The Local badge identifies the selected provider. A failed local check
+stops the request. A newer configuration action or Forget invalidates an older
+setup check so a delayed result cannot save over the latest choice.
 
 **`clear()`** drops the in-memory config, resets `corrupt`, and unlinks the file.
 It is the only way out of the corrupt state.

@@ -288,11 +288,18 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if (args[1] !== undefined) requireBoundedText(args[1], 'address', 4096);
       if (args[2] !== undefined) requireAccountSpaceId(args[2]); return;
     case 'ai:approve-preview':
-      exact(args, 1); requireUuid(args[0], 'preview'); return;
+      between(args, 1, 2); requireUuid(args[0], 'preview');
+      if (args[1] !== undefined && args[1] !== 'cloud' && args[1] !== 'local') throw new Error('Invalid AI approval destination');
+      return;
     case 'ai:ask':
       exact(args, 2); requireNonEmptyText(args[0], 'approval', 200); requireBoundedText(args[1], 'question', 2000); return;
     case 'ai:configure-provider': {
-      exact(args, 1); const input = requireExactKeys(args[0], ['endpoint', 'model', 'apiKey']);
+      exact(args, 1);
+      if (requireObject(args[0]).mode === 'local') {
+        const local = requireExactKeys(args[0], ['mode', 'model']);
+        requireNonEmptyText(local.model, 'model', 200); return;
+      }
+      const input = requireExactKeys(args[0], ['endpoint', 'model', 'apiKey']);
       requireBoundedText(input.endpoint, 'provider address', 2048); requireBoundedText(input.model, 'model', 200); requireBoundedText(input.apiKey, 'API key', 4096); return;
     }
     case 'updates:configure': {
@@ -330,7 +337,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
 /** Channels that carry no arguments at all. */
 const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'browser:undo-tab-batch',
-  'ai:clear-provider', 'ai:prepare-preview', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
+  'ai:clear-provider', 'ai:local-models', 'ai:prepare-preview', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
   'browser:import-chrome-passwords', 'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
   'browser:reopen-closed-tab', 'browser:stop', 'browser:stop-find', 'browser:toggle-bookmark', 'browser:toggle-bookmark-bar',

@@ -596,15 +596,23 @@ export interface AiApproval {
 
 export interface AiProviderStatus {
   configured: boolean;
+  mode?: 'cloud' | 'local';
   endpoint?: string;
   model?: string;
   error?: 'provider-corrupt' | 'os-encryption-unavailable';
 }
 
-export interface AiProviderInput {
+export interface CloudAiProviderInput {
   endpoint: string;
   model: string;
   apiKey: string;
+}
+
+export type AiProviderInput = CloudAiProviderInput | { mode: 'local'; model: string };
+
+export interface LocalAiModels {
+  state: 'ready' | 'unavailable' | 'cloud-enabled';
+  models: string[];
 }
 
 export type DevToolsMode = 'right' | 'bottom' | 'detach';
