@@ -6,6 +6,21 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
+    "./workspace-path": {
+      "types": "./dist/workspace-path.d.ts",
+      "import": "./dist/workspace-path.js",
+      "default": "./dist/workspace-path.js"
+    },
+    "./agent-location": {
+      "types": "./dist/agent-location.d.ts",
+      "import": "./dist/agent-location.js",
+      "default": "./dist/agent-location.js"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js",
+      "default": "./dist/agent.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",

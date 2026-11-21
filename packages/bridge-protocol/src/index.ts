@@ -179,6 +179,10 @@ export function deriveSessionKey(input: { privateKey: KeyObject; peerPublicKey: 
 }
 
 export function sealMessage(key: Buffer, sessionId: string, sequence: number, message: BridgeMessage): SecureFrame {
+  return sealPayload(key, sessionId, sequence, message);
+}
+
+export function sealPayload(key: Buffer, sessionId: string, sequence: number, message: unknown): SecureFrame {
   const nonce = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, nonce);
   cipher.setAAD(Buffer.from(`${sessionId}:${sequence}`));
@@ -189,14 +193,7 @@ export function sealMessage(key: Buffer, sessionId: string, sequence: number, me
 }
 
 export function openMessage(key: Buffer, frameValue: unknown, expectedSessionId: string, expectedSequence: number): BridgeMessage {
-  const frame = secureFrameSchema.parse(frameValue);
-  if (frame.sessionId !== expectedSessionId || frame.sequence !== expectedSequence) throw new Error('Bridge frame replay or ordering violation');
-  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(frame.nonce, 'hex'));
-  decipher.setAAD(Buffer.from(`${frame.sessionId}:${frame.sequence}`));
-  decipher.setAuthTag(Buffer.from(frame.tag, 'hex'));
-  const plaintext = Buffer.concat([decipher.update(Buffer.from(frame.ciphertext, 'base64')), decipher.final()]);
-  if (plaintext.byteLength > MAX_FRAME_BYTES) throw new Error('Bridge message exceeds the frame limit');
-  const value = JSON.parse(plaintext.toString('utf8')) as unknown;
+  const value = openPayload(key, frameValue, expectedSessionId, expectedSequence);
   const kind = z.object({ kind: z.string() }).parse(value).kind;
   if (kind === 'request') return requestSchema.parse(value);
   if (kind === 'response') return responseSchema.parse(value);
@@ -204,6 +201,17 @@ export function openMessage(key: Buffer, frameValue: unknown, expectedSessionId:
   if (kind === 'error') return errorEnvelopeSchema.parse(value);
   if (kind === 'progress') return progressEnvelopeSchema.parse(value);
   return chunkEnvelopeSchema.parse(value);
+}
+
+export function openPayload(key: Buffer, frameValue: unknown, expectedSessionId: string, expectedSequence: number): unknown {
+  const frame = secureFrameSchema.parse(frameValue);
+  if (frame.sessionId !== expectedSessionId || frame.sequence !== expectedSequence) throw new Error('Bridge frame replay or ordering violation');
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(frame.nonce, 'hex'));
+  decipher.setAAD(Buffer.from(`${frame.sessionId}:${frame.sequence}`));
+  decipher.setAuthTag(Buffer.from(frame.tag, 'hex'));
+  const plaintext = Buffer.concat([decipher.update(Buffer.from(frame.ciphertext, 'base64')), decipher.final()]);
+  if (plaintext.byteLength > MAX_FRAME_BYTES) throw new Error('Bridge message exceeds the frame limit');
+  return JSON.parse(plaintext.toString('utf8')) as unknown;
 }
 
 export function encodeFrame(value: unknown): Buffer {
