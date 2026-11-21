@@ -12,6 +12,12 @@ The import reads a local file of up to 16 MB into the active regular Account
 Space. Toolbar placement and nested folder names are kept. Exact duplicates
 and unsupported addresses are counted as skipped.
 
+The Chrome profile flow shows the destination, folder counts, history dates
+and skip reasons before any records are saved. Confirmation spends that exact
+preview and requires a new review if the destination or accepted records
+change. Undo is available for the latest import into each Account Space during
+the session. Existing browsing data and edited bookmarks stay.
+
 > Last verified: 2026-09-26
 
 ## Agent Brief

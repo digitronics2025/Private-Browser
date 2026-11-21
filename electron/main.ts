@@ -130,7 +130,9 @@ import { validateIpcArguments } from './ipc-contracts.js';
 import { ControlCenterLink, developerEvidence } from './control-center-link.js';
 import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
 import { googleWebsiteStatus, isKnownGoogleWebHost } from './google-website-status.js';
-import { listChromeProfiles, readChromeProfile } from './chrome-importer.js';
+import { listChromeProfiles, readChromeProfile, type ChromeProfileData } from './chrome-importer.js';
+import { chromeImportBookmarkStamp, chromeImportKey, planChromeImport } from './chrome-import-review.js';
+import type { ChromeImportReview } from './types.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
 import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 import { SideAppHost } from './side-apps.js';
@@ -279,6 +281,10 @@ class BrowserController {
   private layout: Layout = { ...DEFAULT_CONTENT_INSETS };
   private readonly closedTabs = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   private readonly bookmarkUndo = new Map<AccountSpaceId, BookmarkUndo<AccountSpaceBookmark>>();
+  private pendingChromeImport?: {
+    id: string; accountSpaceId: AccountSpaceId; initiatingAccount: AccountSpaceId; source: ChromeProfileData; importKey: string; expiresAt: number;
+  };
+  private readonly chromeImportUndo = new Map<AccountSpaceId, { bookmarks: Map<string, string>; history: Set<string> }>();
   private readonly closedTabBatches = new Map<AccountSpaceId, {
     entries: Array<{ tab: AccountSpaceBrowserTab; index: number }>;
     groups: TabGroup[];
@@ -1382,6 +1388,10 @@ class BrowserController {
   }
 
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
+    if (this.pendingChromeImport?.accountSpaceId === accountSpaceId || this.pendingChromeImport?.initiatingAccount === accountSpaceId) {
+      this.pendingChromeImport = undefined;
+    }
+    this.chromeImportUndo.delete(accountSpaceId);
     this.pendingAiPreviews.clear();
     this.aiApprovals.clear();
     this.permissions.clearAccount(accountSpaceId);
@@ -1885,26 +1895,102 @@ class BrowserController {
     return listChromeProfiles();
   }
 
+  private requireChromeDestination(id: AccountSpaceId, workspaceId?: WorkspaceId) {
+    const account = this.requireAccountMembership(id);
+    if (this.store.isReadOnly() || !isAvailableRegularAccount(this.store.get(), account) || (workspaceId && workspaceId !== account.workspaceId)) {
+      throw new Error('Choose an unlocked Account Space in the current regular workspace.');
+    }
+    return account;
+  }
+
+  previewChromeImport(options: ChromeImportOptions): ChromeImportReview {
+    const { accountSpaceId } = options;
+    this.requireChromeDestination(accountSpaceId, options.workspaceId);
+    if (!options.bookmarks && !options.history) throw new Error('Choose bookmarks, history or both.');
+    this.pendingChromeImport = undefined;
+    const source = readChromeProfile(options.profileId, options.workspaceId, accountSpaceId, options.bookmarks, options.history);
+    const state = this.store.get();
+    const plan = planChromeImport(state, source);
+    const id = randomUUID();
+    const expiresIn = 5 * 60_000;
+    this.pendingChromeImport = {
+      id, accountSpaceId, initiatingAccount: this.activeAccountSpaceId(state), source, importKey: chromeImportKey(plan), expiresAt: Date.now() + expiresIn,
+    };
+    setTimeout(() => this.discardChromeImport(id), expiresIn).unref();
+    return { id, accountSpaceId, ...plan.summary };
+  }
+
+  discardChromeImport(id: string): void {
+    if (this.pendingChromeImport?.id === id) this.pendingChromeImport = undefined;
+  }
+
+  confirmChromeImport(id: string): ChromeImportResult {
+    const review = this.pendingChromeImport;
+    if (!review || review.id !== id) throw new Error('Preview this Chrome import again.');
+    this.pendingChromeImport = undefined;
+    if (review.expiresAt <= Date.now() || review.initiatingAccount !== this.activeAccountSpaceId(this.store.get())) {
+      throw new Error('The import preview expired. Preview this Chrome import again.');
+    }
+    this.requireChromeDestination(review.accountSpaceId);
+    const plan = planChromeImport(this.store.get(), review.source);
+    if (chromeImportKey(plan) !== review.importKey) throw new Error('Browsing data changed. Preview this Chrome import again.');
+    return this.applyChromeImport(review.accountSpaceId, plan);
+  }
+
   importChrome(options: ChromeImportOptions): ChromeImportResult {
-    if (!options || typeof options.profileId !== 'string') throw new Error('Choose a Chrome profile');
-    const account = this.requireAccountMembership(options.accountSpaceId);
-    if (account.workspaceId !== options.workspaceId) throw new Error('Chrome imports cannot cross workspace boundaries');
-    const data = readChromeProfile(options.profileId, options.workspaceId, options.accountSpaceId, options.bookmarks === true, options.history === true);
+    this.requireChromeDestination(options.accountSpaceId, options.workspaceId);
+    return this.applyChromeImport(options.accountSpaceId, planChromeImport(this.store.get(),
+      readChromeProfile(options.profileId, options.workspaceId, options.accountSpaceId, options.bookmarks, options.history)));
+  }
+
+  private applyChromeImport(id: AccountSpaceId, plan: ReturnType<typeof planChromeImport>): ChromeImportResult {
+    if (plan.bookmarks.length || plan.history.length) {
+      this.store.update((state) => {
+        state.bookmarks.push(...plan.bookmarks);
+        state.history.push(...plan.history);
+        state.history.sort((left, right) => right.visitedAt.localeCompare(left.visitedAt));
+        state.privacyLog.unshift({
+          id: randomUUID(), at: new Date().toISOString(), kind: 'local-read', title: 'Chrome data imported',
+          detail: `${plan.bookmarks.length} bookmarks and ${plan.history.length} history entries imported locally`,
+          accountSpaceId: id, service: 'browser',
+        });
+        state.privacyLog = state.privacyLog.slice(0, 100);
+      });
+      this.chromeImportUndo.set(id, {
+        bookmarks: new Map(plan.bookmarks.map((item) => [item.id, chromeImportBookmarkStamp(item)])),
+        history: new Set(plan.history.map((item) => item.id)),
+      });
+      this.broadcast();
+    }
+    return plan.summary.result;
+  }
+
+  canUndoChromeImport(id: AccountSpaceId): boolean {
+    this.requireChromeDestination(id);
+    return this.chromeImportUndo.has(id);
+  }
+
+  undoChromeImport(id: AccountSpaceId): { bookmarks: number; history: number } {
+    this.requireChromeDestination(id);
+    const undo = this.chromeImportUndo.get(id);
+    const removed = { bookmarks: 0, history: 0 };
+    if (!undo) return removed;
     this.store.update((state) => {
-      const importedBookmarks = appendImportedBookmarks(state.bookmarks, data.bookmarks);
-      data.result.imported.bookmarks += importedBookmarks;
-      data.result.skipped.bookmarks += data.bookmarks.length - importedBookmarks;
-      const historyKeys = new Set(state.history.map((item) => `${item.accountSpaceId}\u0000${item.url}\u0000${item.visitedAt}`));
-      for (const entry of data.history) {
-        const key = `${entry.accountSpaceId}\u0000${entry.url}\u0000${entry.visitedAt}`;
-        if (historyKeys.has(key) || state.history.length >= 10_000) data.result.skipped.history += 1;
-        else { state.history.push(entry); historyKeys.add(key); data.result.imported.history += 1; }
-      }
-      state.history.sort((left, right) => right.visitedAt.localeCompare(left.visitedAt));
+      state.bookmarks = state.bookmarks.filter((entry) => {
+        const stamp = entry.accountSpaceId === id ? undo.bookmarks.get(entry.id) : undefined;
+        if (!stamp || stamp !== chromeImportBookmarkStamp(entry)) return true;
+        removed.bookmarks += 1;
+        return false;
+      });
+      state.history = state.history.filter((entry) => {
+        if (entry.accountSpaceId !== id || !undo.history.has(entry.id)) return true;
+        removed.history += 1;
+        return false;
+      });
     });
-    this.addPrivacyEvent('local-read', 'Chrome data imported', `${data.result.imported.bookmarks} bookmarks and ${data.result.imported.history} history entries imported locally`);
+    this.chromeImportUndo.delete(id);
     this.broadcast();
-    return data.result;
+    return removed;
   }
 
   toggleTrackerBlocking(): void {
@@ -3818,6 +3904,11 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('app:quit', () => { app.quit(); });
   handle('browser:list-chrome-profiles', () => controller!.listChromeProfiles());
   handle('browser:import-chrome', (_event, options: ChromeImportOptions) => controller!.importChrome(options));
+  handle('browser:preview-chrome-import', (_event, options: ChromeImportOptions) => controller!.previewChromeImport(options));
+  handle('browser:confirm-chrome-import', (_event, id: string) => controller!.confirmChromeImport(id));
+  handle('browser:discard-chrome-import', (_event, id: string) => controller!.discardChromeImport(id));
+  handle('browser:can-undo-chrome-import', (_event, id: AccountSpaceId) => controller!.canUndoChromeImport(id));
+  handle('browser:undo-chrome-import', (_event, id: AccountSpaceId) => controller!.undoChromeImport(id));
   handle('browser:import-chrome-passwords', () => controller!.importChromePasswords());
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));

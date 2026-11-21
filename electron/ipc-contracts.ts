@@ -243,6 +243,13 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       }
       return;
     }
+    case 'browser:confirm-chrome-import':
+    case 'browser:discard-chrome-import':
+      exact(args, 1); requireNonEmptyText(args[0], 'import preview identifier', 100); return;
+    case 'browser:can-undo-chrome-import':
+    case 'browser:undo-chrome-import':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'browser:preview-chrome-import':
     case 'browser:import-chrome': {
       exact(args, 1);
       const input = requireObject(args[0]);

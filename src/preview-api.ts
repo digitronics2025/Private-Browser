@@ -1,4 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
+import type { ChromeImportOptions } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
@@ -143,6 +144,8 @@ export function installPreviewApi(): void {
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
   const workspaceSettings: Partial<Record<WorkspaceId, BrowserSettings>> = {};
+  let pendingChromeImport: { id: string; options: ChromeImportOptions; owner: AccountSpaceId } | undefined;
+  const chromeUndo = new Map<AccountSpaceId, { bookmark: boolean; history: boolean }>();
   let sampleGrants: PermissionGrantSummary[] = params.get('permissions') === 'sample' ? [
     { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
     { origin: 'https://mail.google.com', capability: 'notifications', duration: 'session' },
@@ -540,6 +543,45 @@ export function installPreviewApi(): void {
       if (params.get('chrome') === 'empty') return [];
       return [{ id: 'Default', name: 'Sample Chrome profile', isDefault: true, hasBookmarks: true, hasHistory: true }];
     }) satisfies PrivateBrowserApi['listChromeProfiles'],
+    previewChromeImport: (async (value: unknown) => {
+      const options = value as ChromeImportOptions;
+      const destination = state.accountSpaces.find((item) => item.id === options.accountSpaceId && item.workspaceId === state.activeWorkspaceId);
+      if (!destination || destination.locked || destination.workspaceId === 'banking' || options.profileId !== 'Default') throw new Error('Choose an available regular Account Space and sample profile');
+      const key = 'preview-import-' + destination.id;
+      const addBookmark = options.bookmarks && !state.bookmarks.some((item) => item.id === key);
+      const addHistory = options.history && !state.history.some((item) => item.id === key);
+      const skipped = { bookmarks: Number(options.bookmarks && !addBookmark), history: Number(options.history && !addHistory), passwords: 0 };
+      const timestamp = '2026-09-12T10:00:00.000Z';
+      const id = crypto.randomUUID();
+      pendingChromeImport = { id, options, owner: state.activeAccountSpaceId };
+      return {
+        id, accountSpaceId: destination.id, result: { imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 }, skipped, warnings: [] },
+        duplicates: skipped.bookmarks + skipped.history, unsupported: 0, overLimit: 0,
+        folders: addBookmark ? [{ location: 'bar', path: ['Sample folder'], count: 1 }] : [], moreFolders: 0,
+        historyRange: addHistory ? { from: timestamp, through: timestamp } : undefined,
+      };
+    }) satisfies PrivateBrowserApi['previewChromeImport'],
+    confirmChromeImport: async (id) => {
+      const pending = pendingChromeImport;
+      if (!pending || pending.id !== id || pending.owner !== state.activeAccountSpaceId) throw new Error('Preview this Chrome import again.');
+      pendingChromeImport = undefined;
+      return handlers.importChrome(pending.options);
+    },
+    discardChromeImport: async (id) => { if (pendingChromeImport?.id === id) pendingChromeImport = undefined; },
+    canUndoChromeImport: async (id) => typeof id === 'string' && chromeUndo.has(id as AccountSpaceId),
+    undoChromeImport: async (id) => {
+      const destination = state.accountSpaces.find((item) => item.id === id && item.workspaceId === state.activeWorkspaceId && item.workspaceId !== 'banking' && !item.locked);
+      if (!destination) throw new Error('Choose an available regular Account Space');
+      const undo = chromeUndo.get(destination.id);
+      const key = 'preview-import-' + destination.id;
+      const bookmarks = state.bookmarks.length;
+      const history = state.history.length;
+      if (undo?.bookmark) state.bookmarks = state.bookmarks.filter((item) => item.id !== key || item.title !== 'Sample imported page');
+      if (undo?.history) state.history = state.history.filter((item) => item.id !== key);
+      chromeUndo.delete(destination.id);
+      publish();
+      return { bookmarks: bookmarks - state.bookmarks.length, history: history - state.history.length };
+    },
     importChrome: (async (value: unknown) => {
       const { profileId, accountSpaceId, workspaceId, bookmarks, history } = value as Parameters<PrivateBrowserApi['importChrome']>[0];
       const destination = state.accountSpaces.find((item) => item.id === accountSpaceId && item.workspaceId === workspaceId);
@@ -553,6 +595,7 @@ export function installPreviewApi(): void {
       const addHistory = history && !state.history.some((item) => item.id === id);
       if (addBookmark) state.bookmarks.push({ id, accountSpaceId, workspaceId, title, url, createdAt: timestamp, location: 'bar', folderPath: ['Sample folder'], order: 500, orderPath: [500, 0] });
       if (addHistory) state.history.push({ id, accountSpaceId, workspaceId, title, url, visitedAt: timestamp });
+      if (addBookmark || addHistory) chromeUndo.set(accountSpaceId, { bookmark: addBookmark, history: addHistory });
       publish();
       return {
         imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 },
