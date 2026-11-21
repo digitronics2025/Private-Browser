@@ -1,6 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -473,7 +473,7 @@ test('saves a batch to its chosen Account Space folder without replacing existin
     });
     source.downloadURL(url);
   }), { url: target, shownPath });
-  expect(dialogPath?.toLowerCase()).toBe(existing.toLowerCase());
+  expect(dialogPath?.toLowerCase()).toBe(realpathSync.native(existing).toLowerCase());
   await expect.poll(() => existsSync(shownPath)).toBe(true);
 });
 
