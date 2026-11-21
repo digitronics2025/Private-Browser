@@ -61,7 +61,7 @@ The login picker (the list of saved accounts under a focused sign-in field) is d
 Saved credentials, Account Space metadata and grants, the AI provider key and the
 download-service token are encrypted with Electron `safeStorage`. Each account
 has an independent encrypted file so corruption is quarantined. **Browsing
-history, bookmarks, open-tab URLs and the privacy log are not encrypted**; they
+history, bookmarks, open-tab URLs, routines and the privacy log are not encrypted**; they
 are split into a minimal v2 manifest and per-account JSON. Anyone running as the
 Windows user may read those URLs and titles. Plaintext state contains only opaque
 account/workspace IDs, never email, Google subject, partition key or OAuth data.

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { BrowserRoutine, RoutineRunResult } from './types.js';
-import type { AddressMatch, HistoryPage, HistoryQuery } from './types.js';
+import type { AddressMatch, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
@@ -18,6 +18,11 @@ const api = {
   back: (): Promise<void> => ipcRenderer.invoke('browser:back'),
   forward: (): Promise<void> => ipcRenderer.invoke('browser:forward'),
   reload: (): Promise<void> => ipcRenderer.invoke('browser:reload'),
+  restoreSelectedTabs: (ids: string[]): Promise<void> => ipcRenderer.invoke('browser:restore-selected-tabs', ids),
+  organizeTab: (action: TabOrganizationAction): Promise<void> => ipcRenderer.invoke('browser:organize-tab', action),
+  duplicateTab: (id: string): Promise<void> => ipcRenderer.invoke('browser:duplicate-tab', id),
+  closeTabBatch: (id: string, scope: TabBatchScope, confirmedIds: string[]): Promise<void> => ipcRenderer.invoke('browser:close-tab-batch', id, scope, confirmedIds),
+  undoTabBatch: (): Promise<void> => ipcRenderer.invoke('browser:undo-tab-batch'),
   stop: (): Promise<void> => ipcRenderer.invoke('browser:stop'),
   newTab: (workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:new-tab', workspaceId, url, accountSpaceId),
   closeTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:close-tab', tabId),
@@ -144,7 +149,8 @@ const api = {
   autofill: (id: string): Promise<void> => ipcRenderer.invoke('vault:autofill', id),
   copyText: (value: string): Promise<void> => ipcRenderer.invoke('system:copy', value),
   getDefaultBrowserStatus: (): Promise<boolean> => ipcRenderer.invoke('system:is-default-browser'),
-  setDefaultBrowser: (): Promise<boolean> => ipcRenderer.invoke('system:set-default-browser'),
+  openDefaultBrowserSettings: (): Promise<void> => ipcRenderer.invoke('system:open-default-browser-settings'),
+  testDefaultBrowser: (): Promise<void> => ipcRenderer.invoke('system:test-default-browser'),
   getUpdateService: (): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:status'),
   configureUpdateService: (input: UpdateServiceInput): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:configure', input),
   clearUpdateService: (): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:clear'),

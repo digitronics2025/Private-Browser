@@ -1,11 +1,12 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
-import type { AccountSpaceId, Bookmark, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AccountSpaceId, Bookmark, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, searchTemplateFor } from '../electron/browser-settings';
 import { parseWebAddress } from '../electron/security';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
 import { canonicalRoutineUrl, defaultBrowserRoutines, requireBrowserRoutine } from '../electron/browser-routines';
+import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
 import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
 
@@ -105,17 +106,31 @@ export function installPreviewApi(): void {
     ...(params.get('permission') === 'prompt' ? { pendingPermission: { id: 'preview-permission', accountSpaceId: ids.personal as AccountSpaceId, workspaceId: 'personal' as const, origin: 'https://meet.google.com', capability: 'notifications' as const, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } } : {}),
   };
   const media = matchMedia('(prefers-color-scheme: dark)');
+  if (params.get('recovery') === 'crashed') {
+    state.activeTabId = 'preview-docs';
+    state.tabs.find((tab) => tab.id === state.activeTabId)!.problem = 'crashed';
+  }
+  if (params.get('recovery') === 'startup') {
+    state.startupTabRecovery = { accountSpaceId: google, failedTabId: 'preview-docs' };
+  }
   const syncDarkMode = () => { state.windowState.darkMode = state.ui.theme === 'system' ? media.matches : state.ui.theme === 'dark'; };
   syncDarkMode();
   const listeners = new Set<(snapshot: BrowserSnapshot) => void>();
   const closedByAccount = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   let routines = defaultBrowserRoutines(Object.fromEntries(accounts.filter((account) => account.id !== google).map((account) => [account.workspaceId, account.id])));
   state.routines = routines;
+  const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
+  const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const publish = () => {
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
     state.canReopenClosedTab = state.recentlyClosedTabs.length > 0;
     state.routines = state.activeWorkspaceId === 'banking' ? [] : routines;
+    state.tabGroups = (groupsByAccount.get(state.activeAccountSpaceId) ?? [])
+      .filter((group) => state.tabs.some((tab) => tab.accountSpaceId === state.activeAccountSpaceId && tab.groupId === group.id));
+    groupsByAccount.set(state.activeAccountSpaceId, state.tabGroups);
+    const batch = batchesByAccount.get(state.activeAccountSpaceId);
+    state.closedTabBatch = batch ? { count: batch.entries.length, groupName: batch.groupName } : undefined;
     listeners.forEach((listener) => listener(structuredClone(state)));
   };
   media.addEventListener('change', () => { syncDarkMode(); publish(); });
@@ -172,7 +187,7 @@ export function installPreviewApi(): void {
           state.tabs.push(tab);
           opened += 1;
         }
-        if (index === routine.focusIndex) focus = tab;
+        if (index === routine.focusIndex && !tab.restorePaused && !tab.problem) focus = tab;
       }
       if (focus) {
         state.activeTabId = focus.id;
@@ -181,6 +196,18 @@ export function installPreviewApi(): void {
       }
       publish();
       return { opened, reused, skipped, focusUnavailable: !focus };
+    },
+    reload: async () => { Object.assign(activeTab(), { problem: undefined, restorePaused: undefined }); publish(); },
+    restoreSelectedTabs: async (value) => {
+      const ids = new Set(value as string[]);
+      for (const tab of state.tabs) {
+        if (tab.accountSpaceId === state.activeAccountSpaceId && !tab.isHome) tab.restorePaused = !ids.has(tab.id);
+      }
+      state.startupTabRecovery = undefined;
+      const first = state.tabs.find((tab) => ids.has(tab.id) && tab.accountSpaceId === state.activeAccountSpaceId);
+      if (first) state.activeTabId = first.id;
+      else await handlers.newTab();
+      publish();
     },
     queryHistory: (async (id: unknown, input: unknown) => {
       const scope = state.activeWorkspaceId === 'banking' || state.activeAccountSpaceId !== id ? [] : state.history;
@@ -237,7 +264,57 @@ export function installPreviewApi(): void {
     },
     reopenClosedTab: async () => reopenPreviewTab(),
     reopenRecentTab: async (id) => reopenPreviewTab(String(id)),
-    moveTab: async (idValue, indexValue) => { state.tabs = moveTabWithinAccountSpace(state.tabs, String(idValue), Number(indexValue)); publish(); },
+    moveTab: async (idValue, indexValue) => {
+      const owned = state.tabs.filter((tab) => tab.accountSpaceId === state.activeAccountSpaceId);
+      const tab = owned.find((item) => item.id === idValue);
+      if (!tab) return;
+      const reordered = moveTabWithinAccountSpace(state.tabs, tab.id, keepTabBlockIndex(owned, tab, Number(indexValue)));
+      state.tabs = replaceAccountTabOrder(reordered, tab.accountSpaceId, orderAccountTabs(reordered.filter((item) => item.accountSpaceId === tab.accountSpaceId)));
+      publish();
+    },
+    organizeTab: async (value) => {
+      const id = state.activeAccountSpaceId;
+      const result = organizeTabs(state.tabs.filter((tab) => tab.accountSpaceId === id), groupsByAccount.get(id) ?? [], value as TabOrganizationAction, crypto.randomUUID());
+      state.tabs = replaceAccountTabOrder(state.tabs, id, result.tabs);
+      groupsByAccount.set(id, result.groups);
+      publish();
+    },
+    duplicateTab: async (value) => {
+      const tab = state.tabs.find((item) => item.id === value && item.accountSpaceId === state.activeAccountSpaceId);
+      if (!tab) return;
+      const id = crypto.randomUUID();
+      state.tabs.push({ ...tab, id, pinned: undefined, groupId: undefined });
+      state.activeTabId = id;
+      publish();
+    },
+    closeTabBatch: async (value, scopeValue, confirmedValue) => {
+      const accountId = state.activeAccountSpaceId;
+      const owned = state.tabs.filter((tab) => tab.accountSpaceId === accountId);
+      const entries = tabBatchTargets(owned, String(value), scopeValue as TabBatchScope);
+      const confirmed = confirmedValue as string[];
+      if (!entries.length || confirmed.length !== entries.length || entries.some((tab, index) => tab.id !== confirmed[index])) throw new Error('The tab selection changed');
+      const groups = (groupsByAccount.get(accountId) ?? []).filter((group) => entries.some((tab) => tab.groupId === group.id));
+      batchesByAccount.set(accountId, { entries, groups, groupName: scopeValue === 'group' ? groups[0]?.name : undefined });
+      const ids = new Set(confirmed);
+      state.tabs = state.tabs.filter((tab) => !ids.has(tab.id));
+      if (ids.has(state.activeTabId)) {
+        const next = state.tabs.find((tab) => tab.id === value) ?? state.tabs.find((tab) => tab.accountSpaceId === accountId);
+        if (next) state.activeTabId = next.id;
+        else await handlers.newTab();
+      }
+      publish();
+    },
+    undoTabBatch: async () => {
+      const accountId = state.activeAccountSpaceId;
+      const batch = batchesByAccount.get(accountId);
+      if (!batch) return;
+      batchesByAccount.delete(accountId);
+      const groups = groupsByAccount.get(accountId) ?? [];
+      groupsByAccount.set(accountId, [...groups, ...batch.groups.filter((group) => !groups.some((item) => item.id === group.id))]);
+      state.tabs.push(...batch.entries);
+      state.tabs = replaceAccountTabOrder(state.tabs, accountId, orderAccountTabs(state.tabs.filter((tab) => tab.accountSpaceId === accountId)));
+      publish();
+    },
     navigate: async (value) => {
       const text = String(value);
       const tab = activeTab();
@@ -331,9 +408,12 @@ export function installPreviewApi(): void {
       return { route: new URL(tab.url).pathname, framework: 'Synthetic preview', viewport: window.innerWidth + ' x ' + window.innerHeight };
     }) satisfies PrivateBrowserApi['inspectDeveloperPage'],
     getDefaultBrowserStatus: async () => false,
-    setDefaultBrowser: (async () => {
+    openDefaultBrowserSettings: (async () => {
       throw new Error('Changing the default browser requires the desktop app');
-    }) satisfies PrivateBrowserApi['setDefaultBrowser'],
+    }) satisfies PrivateBrowserApi['openDefaultBrowserSettings'],
+    testDefaultBrowser: (async () => {
+      throw new Error('Testing the Windows default browser requires the desktop app');
+    }) satisfies PrivateBrowserApi['testDefaultBrowser'],
     getUpdateService: async () => ({ configured: false, currentVersion: '0.5.7', source: 'public' as const, endpoint: 'https://private-browser-downloads.digitronics-electro.workers.dev' }),
     checkForUpdates: async () => {
       const updateMode = new URLSearchParams(location.search).get('update');

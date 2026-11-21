@@ -169,6 +169,7 @@ export class RuntimeStateStore {
       state.bookmarks = state.bookmarks.filter((bookmark) => bookmark.accountSpaceId !== id);
       state.history = state.history.filter((entry) => entry.accountSpaceId !== id);
       if (state.historyTrimmedByAccountSpace) delete state.historyTrimmedByAccountSpace[id];
+      if (state.tabGroupsByAccountSpace) delete state.tabGroupsByAccountSpace[id];
       delete state.activeTabByAccountSpace[id];
       delete state.shortcutsByAccountSpace[id];
       delete state.bookmarkIconsByAccountSpace[id];
@@ -217,11 +218,12 @@ export class RuntimeStateStore {
         version: 2,
         accountSpaceId: account.id,
         workspaceId: account.workspaceId,
-        tabs: tabs.map(({ loading: _loading, canGoBack: _back, canGoForward: _forward, favicon: _favicon, developerToolsAllowed: _tools, developerToolsOpen: _toolsOpen, securityWarning: _warning, audible: _audible, muted: _muted, zoomPercent: _zoom, ...tab }) => tab),
+        tabs: tabs.map(({ loading: _loading, canGoBack: _back, canGoForward: _forward, favicon: _favicon, developerToolsAllowed: _tools, developerToolsOpen: _toolsOpen, securityWarning: _warning, audible: _audible, muted: _muted, zoomPercent: _zoom, problem: _problem, ...tab }) => tab),
         activeTabId: next.activeTabByAccountSpace[account.id],
         bookmarks: next.bookmarks.filter((item) => item.accountSpaceId === account.id),
         history: next.history.filter((item) => item.accountSpaceId === account.id),
         ...(next.historyTrimmedByAccountSpace?.[account.id] ? { historyTrimmed: true } : {}),
+        ...(next.tabGroupsByAccountSpace?.[account.id]?.length ? { tabGroups: next.tabGroupsByAccountSpace[account.id] } : {}),
         ...(next.shortcutsByAccountSpace[account.id] ? { shortcuts: next.shortcutsByAccountSpace[account.id] } : {}),
         ...(next.bookmarkIconsByAccountSpace[account.id] ? { bookmarkIcons: next.bookmarkIconsByAccountSpace[account.id] } : {}),
       };
@@ -278,6 +280,7 @@ function combine(
     bookmarks: accountStates.flatMap((state) => state.bookmarks),
     history: accountStates.flatMap((state) => state.history),
     historyTrimmedByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.historyTrimmed).map((state) => [state.accountSpaceId, true as const])),
+    tabGroupsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.tabGroups?.length).map((state) => [state.accountSpaceId, state.tabGroups!])),
     privacyLog: [...manifest.privacyLog],
     trackerBlocking: manifest.trackerBlocking,
     bookmarkBarVisible: manifest.bookmarkBarVisible,
@@ -359,6 +362,12 @@ function normalizeRuntimeState(state: RuntimeBrowserStateV2, recovering: Readonl
     if (!tabs.some((tab) => tab.id === state.activeTabByAccountSpace[account.id])) state.activeTabByAccountSpace[account.id] = tabs[0].id;
   }
   state.bookmarks = state.bookmarks.filter((item) => accountsById.get(item.accountSpaceId)?.workspaceId === item.workspaceId);
+  if (state.tabGroupsByAccountSpace) {
+    const occupied = new Set(state.tabs.filter((tab) => tab.groupId).map((tab) => tab.accountSpaceId + ':' + tab.groupId));
+    for (const [id, groups] of Object.entries(state.tabGroupsByAccountSpace)) {
+      state.tabGroupsByAccountSpace[id] = groups.filter((group) => occupied.has(id + ':' + group.id));
+    }
+  }
   // An icon outlives neither its Account Space nor the last bookmark on its host.
   const bookmarkIcons: RuntimeBrowserStateV2['bookmarkIconsByAccountSpace'] = {};
   for (const [id, icons] of Object.entries(state.bookmarkIconsByAccountSpace)) {

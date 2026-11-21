@@ -113,6 +113,11 @@ hides the vault entry points; Banking renders only centrally permitted actions.
 
 ## Tab Strip
 
+Pinned tabs scroll separately from regular tabs. A named group header toggles
+its collapsed state. Right-click or Shift+F10 opens the tab action menu. Bulk
+close shows the count and asks for confirmation. The browser menu offers undo
+for the most recent batch in this Account Space.
+
 Only tabs of the active Account Space render (`tab.accountSpaceId ===
 state.activeAccountSpaceId`). A tab is a `role=tab` div (so its close and mute
 buttons are real buttons, not nested inside one) activated on pointer-down.

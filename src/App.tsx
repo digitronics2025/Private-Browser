@@ -6,6 +6,7 @@ import { resolveShortcut } from '../electron/shortcuts';
 import { DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { OverlayContext } from './shell/overlay';
 import { WindowTabStrip } from './shell/TabStrip';
+import { PageRecovery, StartupRecovery } from './shell/PageRecovery';
 import { NavigationToolbar } from './shell/NavigationToolbar';
 import { BookmarkBar, type BookmarkActions } from './shell/BookmarkBar';
 import { FindBar } from './shell/FindBar';
@@ -416,6 +417,7 @@ export default function App() {
           <>
             <WindowTabStrip
               tabs={workspaceTabs}
+              groups={state.tabGroups ?? []}
               activeTabId={activeTab.id}
               shieldButtonRef={shieldButtonRef}
               tabSearchButtonRef={tabSearchButtonRef}
@@ -427,6 +429,22 @@ export default function App() {
               onClose={(id) => void act(() => window.privateBrowser.closeTab(id))}
               onNewTab={() => void act(() => window.privateBrowser.newTab())}
               onMove={(id, index) => void act(() => window.privateBrowser.moveTab(id, index))}
+              onOrganize={(action) => void act(() => window.privateBrowser.organizeTab(action))}
+              onDuplicate={(id) => void act(() => window.privateBrowser.duplicateTab(id))}
+              onCopyAddress={(url) => void act(() => window.privateBrowser.copyText(url), 'Address copied')}
+              onCloseBatch={(id, scope, confirmedIds) => {
+                const count = confirmedIds.length;
+                const label = count === 1 ? '1 tab' : count + ' tabs';
+                if (!window.confirm('Close ' + label + '? Unsaved page input may be lost. Undo restores the tab addresses.')) return;
+                void act(() => window.privateBrowser.closeTabBatch(id, scope, confirmedIds),
+                  'Closed ' + label + '. Reopen them from the browser menu.');
+              }}
+              onCreateGroup={(id) => setPrompt({
+                title: 'Create tab group',
+                confirmLabel: 'Create',
+                fields: [{ name: 'name', label: 'Group name', value: '', maxLength: 48 }],
+                submit: (values) => window.privateBrowser.organizeTab({ kind: 'create-group', tabId: id, name: values.name }),
+              })}
               onMute={(id, muted) => void act(() => window.privateBrowser.setTabMuted(id, muted))}
             />
             <NavigationToolbar
@@ -476,7 +494,12 @@ export default function App() {
         )}
 
         {document.documentElement.dataset.browserPreview === 'synthetic' && <span className="browser-preview-marker">Preview · Synthetic data</span>}
-        {activeTab.isHome ? (
+        {state.startupTabRecovery ? (
+          <StartupRecovery key={state.startupTabRecovery.failedTabId} tabs={workspaceTabs} failedTabId={state.startupTabRecovery.failedTabId}
+            onRestore={(ids) => act(() => window.privateBrowser.restoreSelectedTabs(ids))} />
+        ) : activeTab.restorePaused || activeTab.problem ? (
+          <PageRecovery tab={activeTab} onReload={() => void act(() => window.privateBrowser.reload())} onBack={() => void act(() => window.privateBrowser.back())} />
+        ) : activeTab.isHome ? (
           <NewTabPage
             searchPrompt={searchPrompt}
             workspace={workspace}
@@ -544,6 +567,7 @@ export default function App() {
               newTab: () => void act(() => window.privateBrowser.newTab()),
               reopenClosedTab: () => void act(() => window.privateBrowser.reopenClosedTab()),
               reopenRecentTab: (id) => void act(() => window.privateBrowser.reopenRecentTab(id)),
+              undoTabBatch: () => void act(() => window.privateBrowser.undoTabBatch()),
               switchAccount: (id) => void act(() => window.privateBrowser.switchAccountSpace(id)),
               manageAccounts: () => setAccountManagerOpen(true),
               openTool,

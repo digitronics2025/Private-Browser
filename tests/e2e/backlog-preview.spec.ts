@@ -127,3 +127,68 @@ test('reopens a chosen recently closed tab without stealing focus', async ({ pag
   await expect(input).toHaveValue('');
   await expect(page.getByRole('tab', { name: /Quarterly operations review/i })).toBeVisible();
 });
+
+test('pins tabs separately and collapses named groups at narrow widths', async ({ page }) => {
+  await page.setViewportSize({ width: 620, height: 720 });
+  await page.goto('/');
+  const docs = page.getByRole('tab', { name: /Quarterly operations review/ });
+  await docs.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Pin tab', exact: true }).click();
+  await expect(page.locator('.pinned-tabs').getByRole('tab', { name: /Quarterly operations review/ })).toBeVisible();
+  const video = page.getByRole('tab', { name: /Team update video/ });
+  await video.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Move to group' }).click();
+  await page.getByRole('menuitem', { name: 'New group…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Create tab group' });
+  await dialog.getByLabel('Group name').fill('Research');
+  await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+  const research = page.getByRole('button', { name: 'Research', exact: true });
+  await expect(research).toHaveAttribute('aria-expanded', 'true');
+  await research.click();
+  await expect(research).toHaveAttribute('aria-expanded', 'false');
+  await expect(video).toHaveCount(0);
+  await research.click();
+  await expect(video).toBeVisible();
+});
+
+test('shows Windows default-browser choices and limits OS actions in preview', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Settings' }).click();
+  await expect(page.getByText('Windows uses another browser for web links.')).toBeVisible();
+  await page.getByRole('button', { name: 'Open Windows Default Apps' }).click();
+  await expect(page.getByText('Changing the default browser requires the desktop app')).toBeVisible();
+  await page.getByRole('button', { name: 'Test with a link' }).click();
+  await expect(page.getByText('Testing the Windows default browser requires the desktop app')).toBeVisible();
+});
+
+test('confirms the exact bulk count and restores a closed tab group', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('tab', { name: /Team update video/ })).toBeVisible();
+  const group = await page.evaluate(async () => {
+    await window.privateBrowser.organizeTab({ kind: 'create-group', tabId: 'preview-media', name: 'Review' });
+    const group = (await window.privateBrowser.getState()).tabGroups![0];
+    await window.privateBrowser.organizeTab({ kind: 'move-to-group', tabId: 'preview-intranet', groupId: group.id });
+    return group.name;
+  });
+  await page.getByRole('tab', { name: /Team update video/ }).click({ button: 'right' });
+  const pending = page.waitForEvent('dialog');
+  const click = page.getByRole('menuitem', { name: /Close tab group/ }).click();
+  const confirmation = await pending;
+  expect(confirmation.message()).toContain('Close 2 tabs?');
+  await confirmation.accept();
+  await click;
+  await expect(page.getByRole('tab', { name: /Team update video/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: new RegExp('Reopen group ' + group) }).click();
+  await expect(page.getByRole('tab', { name: /Team update video/ })).toBeVisible();
+  await expect(page.getByRole('tab', { name: /Legacy intranet/ })).toBeVisible();
+});
+
+test('shows a recoverable crash screen at a narrow viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 720 });
+  await page.goto('/?recovery=crashed');
+  await expect(page.getByRole('heading', { name: 'Page crashed' })).toBeVisible();
+  await page.getByRole('button', { name: 'Reload page' }).click();
+  await expect(page.getByRole('heading', { name: 'Page crashed' })).toHaveCount(0);
+});

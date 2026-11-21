@@ -274,11 +274,12 @@ export interface AccountBrowsingStateV2 {
   version: 2;
   accountSpaceId: AccountSpaceId;
   workspaceId: WorkspaceId;
-  tabs: Array<Pick<AccountSpaceBrowserTab, 'id' | 'workspaceId' | 'accountSpaceId' | 'title' | 'url' | 'isHome'>>;
+  tabs: Array<Pick<AccountSpaceBrowserTab, 'id' | 'workspaceId' | 'accountSpaceId' | 'title' | 'url' | 'isHome' | 'restorePaused' | 'pinned' | 'groupId'>>;
   activeTabId: string;
   bookmarks: AccountSpaceBookmark[];
   history: AccountSpaceHistoryEntry[];
   historyTrimmed?: boolean;
+  tabGroups?: TabGroup[];
   /** Absent until the user customises the New Tab shortcuts for this Account Space. */
   shortcuts?: ShortcutTile[];
   /** Remembered icons of bookmarked hosts, host → `data:` URL. See `bookmark-icons.ts`. */
@@ -341,6 +342,31 @@ export interface RoutineRunResult {
   focusUnavailable: boolean;
 }
 
+export type TabProblem = 'crashed' | 'certificate' | 'offline' | 'network';
+
+export interface TabGroup {
+  id: string;
+  name: string;
+  collapsed: boolean;
+}
+
+export type TabOrganizationAction =
+  | { kind: 'pin'; tabId: string; pinned: boolean }
+  | { kind: 'create-group'; tabId: string; name: string }
+  | { kind: 'move-to-group'; tabId: string; groupId: string | null }
+  | { kind: 'collapse-group'; groupId: string; collapsed: boolean };
+export type TabBatchScope = 'other' | 'right' | 'group';
+
+export interface ClosedTabBatchSummary {
+  count: number;
+  groupName?: string;
+}
+
+export interface StartupTabRecovery {
+  accountSpaceId: AccountSpaceId;
+  failedTabId: string;
+}
+
 export interface BrowserTab {
   id: string;
   workspaceId: WorkspaceId;
@@ -352,6 +378,10 @@ export interface BrowserTab {
   canGoBack: boolean;
   canGoForward: boolean;
   isHome: boolean;
+  restorePaused?: boolean;
+  pinned?: boolean;
+  groupId?: string;
+  problem?: TabProblem;
   developerToolsAllowed: boolean;
   developerToolsOpen: boolean;
   securityWarning?: 'insecure' | 'idn';
@@ -463,6 +493,9 @@ export interface BrowserSnapshot {
   canReopenClosedTab: boolean;
   recentlyClosedTabs?: RecentlyClosedTab[];
   routines?: BrowserRoutine[];
+  startupTabRecovery?: StartupTabRecovery;
+  tabGroups?: TabGroup[];
+  closedTabBatch?: ClosedTabBatchSummary;
   /** Web apps docked in the side panel, such as Claude. */
   sideApps: SideAppSnapshot[];
 }
@@ -511,6 +544,7 @@ export interface RuntimeBrowserStateV2 {
   bookmarks: AccountSpaceBookmark[];
   history: AccountSpaceHistoryEntry[];
   historyTrimmedByAccountSpace?: Record<string, true>;
+  tabGroupsByAccountSpace?: Record<string, TabGroup[]>;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
   bookmarkBarVisible: boolean;

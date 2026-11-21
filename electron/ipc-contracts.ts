@@ -119,6 +119,20 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 0); return;
     case 'browser:address-matches':
       exact(args, 2); requireAccountSpaceId(args[0]); requireBoundedText(args[1], 'address search', MAX_ADDRESS_QUERY_LENGTH); return;
+    case 'browser:restore-selected-tabs': {
+      exact(args, 1);
+      if (!Array.isArray(args[0]) || args[0].length > 100) throw new Error('Invalid tab selection');
+      for (const id of args[0]) requireNonEmptyText(id, 'tab identifier', 200);
+      return;
+    }
+    case 'browser:close-tab-batch': {
+      exact(args, 3);
+      requireNonEmptyText(args[0], 'tab identifier', 200);
+      if (args[1] !== 'other' && args[1] !== 'right' && args[1] !== 'group') throw new Error('Invalid tab close scope');
+      if (!Array.isArray(args[2]) || args[2].length > 100) throw new Error('Invalid tab selection');
+      for (const id of args[2]) requireNonEmptyText(id, 'tab identifier', 200);
+      return;
+    }
     case 'browser:query-history': {
       exact(args, 2); requireAccountSpaceId(args[0]);
       const input = requireExactKeys(args[1], ['text', 'site', 'from', 'until', 'page']);
@@ -135,6 +149,28 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       requireNonEmptyText(args[2], 'address result identifier', 200); return;
     case 'browser:move-tab':
       exact(args, 2); requireBoundedText(args[0], 'tab identifier', 200); requireIndex(args[1]); return;
+    case 'browser:organize-tab': {
+      exact(args, 1);
+      const input = requireObject(args[0]);
+      if (input.kind === 'collapse-group') {
+        requireExactKeys(input, ['kind', 'groupId', 'collapsed']);
+        requireNonEmptyText(input.groupId, 'group identifier', 200);
+        requireBoolean(input.collapsed);
+        return;
+      }
+      requireNonEmptyText(input.tabId, 'tab identifier', 200);
+      if (input.kind === 'pin') {
+        requireExactKeys(input, ['kind', 'tabId', 'pinned']);
+        requireBoolean(input.pinned);
+      } else if (input.kind === 'create-group') {
+        requireExactKeys(input, ['kind', 'tabId', 'name']);
+        requireNonEmptyText(input.name, 'group name', 48);
+      } else if (input.kind === 'move-to-group') {
+        requireExactKeys(input, ['kind', 'tabId', 'groupId']);
+        if (input.groupId !== null) requireNonEmptyText(input.groupId, 'group identifier', 200);
+      } else throw new Error('Invalid tab organization action');
+      return;
+    }
     case 'browser:zoom':
       exact(args, 1); if (!['in', 'out', 'reset'].includes(String(args[0]))) throw new Error('Invalid zoom direction'); return;
     case 'browser:find':
@@ -198,6 +234,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     }
     // Channels that take one identifier chosen from state the renderer was given.
     case 'browser:activate-tab':
+    case 'browser:duplicate-tab':
     case 'browser:reopen-recent-tab':
     case 'browser:close-tab':
     case 'browser:open-download':
@@ -261,13 +298,14 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
 
 /** Channels that carry no arguments at all. */
 const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
+  'browser:undo-tab-batch',
   'ai:clear-provider', 'ai:prepare-preview', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
   'browser:import-chrome-passwords', 'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
   'browser:reopen-closed-tab', 'browser:stop', 'browser:stop-find', 'browser:toggle-bookmark', 'browser:toggle-bookmark-bar',
   'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-pair', 'developer:bridge-projects',
   'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',
-  'google:clear-configuration', 'system:is-default-browser', 'system:set-default-browser', 'updates:check', 'updates:clear',
+  'google:clear-configuration', 'system:is-default-browser', 'system:open-default-browser-settings', 'system:test-default-browser', 'updates:check', 'updates:clear',
   'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review',
   'vault:form-shape', 'vault:hello-disable', 'vault:hello-enable', 'vault:hello-unlock', 'vault:list', 'vault:lock',
   'vault:migrate-legacy', 'vault:migration-status', 'vault:reconnect', 'vault:request-pairing', 'vault:request-unlock',

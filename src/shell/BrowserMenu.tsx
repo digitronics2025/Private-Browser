@@ -7,6 +7,7 @@ export interface BrowserMenuActions {
   newTab: () => void;
   reopenClosedTab: () => void;
   reopenRecentTab: (id: string) => void;
+  undoTabBatch: () => void;
   switchAccount: (id: AccountSpaceId) => void;
   manageAccounts: () => void;
   openTool: (tool: SidePanelTool) => void;
@@ -55,6 +56,8 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
     <MenuSurface anchor={anchor} placement="bottom-end" label="Browser menu" className="browser-menu" onClose={onClose}>
       <MenuItem icon={SquarePlus} label="New tab" shortcut="Ctrl+T" onSelect={actions.newTab} />
       <MenuItem icon={RotateCcw} label="Reopen closed tab" shortcut="Ctrl+Shift+T" disabled={!state.canReopenClosedTab} onSelect={actions.reopenClosedTab} />
+      {state.closedTabBatch && <MenuItem icon={RotateCcw} label={state.closedTabBatch.groupName ? 'Reopen group ' + state.closedTabBatch.groupName : 'Undo tab close'}
+        hint={state.closedTabBatch.count + (state.closedTabBatch.count === 1 ? ' tab' : ' tabs')} onSelect={actions.undoTabBatch} />}
       {recentlyClosed.length > 0 && <SubmenuItem id="recently-closed" icon={History} label="Recently closed">
         {recentlyClosed.map((entry) => (
           <MenuItem key={entry.id} label={entry.title || entry.url}

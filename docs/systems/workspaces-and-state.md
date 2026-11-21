@@ -91,7 +91,11 @@ the choices reset to defaults on the next save; nothing else is lost. IPC patche
 use `requireBrowserSettingsPatch`, and the controller normalizes `homePageUrl`
 through `parseWebAddress` before `mergeBrowserSettings`.
 
-Per-account browsing files contain URLs, titles, bookmark hierarchy, and history, along with workspace/account IDs. An optional flag records when the retention limit trimmed visits. The optional `shortcuts` list (≤ 12 HTTP(S)
+Per-account browsing files contain URLs, titles, bookmark hierarchy, and history,
+along with workspace and account IDs. Optional tab metadata covers pins, named
+groups, collapse state, and paused restoration. Older files load with the normal
+tab layout. An optional flag records when the retention limit trimmed visits.
+The optional `shortcuts` list (≤ 12 HTTP(S)
 New Tab tiles, sanitised by `sanitizeShortcutTiles`) that is present only once the
 user customises them. An optional `bookmarkIcons` map (host → image `data:` URL,
 ≤ 300, sanitised by `sanitizeBookmarkIcons` and pruned to hosts that still have a

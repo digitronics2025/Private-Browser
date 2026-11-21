@@ -11,7 +11,7 @@ const HOME_PAGE_OPTIONS = [['new-tab', 'New Tab page'], ['url', 'Web address']] 
 const STARTUP_OPTIONS = [['continue', 'Continue where you left off'], ['home', 'Also open Home page']] as const;
 
 export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { state: BrowserSnapshot; ui: UiPreferences; settings: BrowserSettings; onUiChange: (patch: UiPreferencesPatch) => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
-  const [isDefault, setIsDefault] = useState(false);
+  const [isDefault, setIsDefault] = useState<boolean | null>(null);
   const [settingsPage, setSettingsPage] = useState<'overview' | 'updates'>('overview');
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
@@ -35,7 +35,17 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
   // 'Active' before anything has been checked, which is what it used to do.
   const encryptionAvailable = updateStatus ? updateStatus.error !== 'os-encryption-unavailable' : null;
   useEffect(() => {
-    void window.privateBrowser.getDefaultBrowserStatus().then(setIsDefault).catch(() => undefined);
+    let active = true;
+    const refresh = () => {
+      void window.privateBrowser.getDefaultBrowserStatus().then((status) => {
+        if (active) setIsDefault(status);
+      }).catch(() => { if (active) setIsDefault(null); });
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => { active = false; window.removeEventListener('focus', refresh); };
+  }, []);
+  useEffect(() => {
     void window.privateBrowser.getUpdateService().then((status) => {
       setUpdateStatus(status);
       setUpdateForm((value) => ({ ...value, endpoint: status.endpoint }));
@@ -48,12 +58,9 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
   useEffect(() => {
     if (!chromeDestinations.some((account) => account.id === chromeAccountSpaceId) && chromeDestinations[0]) setChromeAccountSpaceId(chromeDestinations[0].id);
   }, [state.activeWorkspaceId, state.activeAccountSpaceId, state.accountSpaces]);
-  const makeDefault = async () => {
-    try {
-      const result = await window.privateBrowser.setDefaultBrowser();
-      setIsDefault(result);
-      onToast(result ? 'Private Browser is now your default' : 'Windows requires you to choose Private Browser in Default Apps');
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+  const runDefaultBrowserAction = async (action: () => Promise<void>) => {
+    try { await action(); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   const configureUpdates = async (event: FormEvent) => {
     event.preventDefault();
@@ -146,7 +153,14 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
   }
   return <div className="side-panel">
     <PanelHeader icon={Settings} eyebrow="Application" title="Settings" />
-    <div className="settings-card"><div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Default browser</strong><small>{isDefault ? 'Private Browser opens web links.' : 'Use Private Browser for HTTP and HTTPS links.'}</small></div>{isDefault ? <b><Check size={14} /> Set</b> : <button onClick={() => void makeDefault()}>Set default</button>}</div></div>
+    <div className="settings-card">
+      <div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Default browser</strong><small aria-live="polite">{isDefault === null ? 'Checking Windows association…' : isDefault ? 'Private Browser opens web links.' : 'Windows uses another browser for web links.'}</small></div>{isDefault && <b><Check size={14} /> Set</b>}</div>
+      {!isDefault && <p className="import-note">In Windows Default apps, select Private Browser and choose Set default. If Windows lists individual link types, select Private Browser for HTTP and HTTPS.</p>}
+      <div className="panel-actions">
+        <button type="button" onClick={() => void runDefaultBrowserAction(window.privateBrowser.openDefaultBrowserSettings)}>Open Windows Default Apps</button>
+        <button type="button" onClick={() => void runDefaultBrowserAction(window.privateBrowser.testDefaultBrowser)}>Test with a link</button>
+      </div>
+    </div>
     <SearchHomeSettings settings={settings} onToast={onToast} />
     <div className="settings-card chrome-import-settings">
       <div className="settings-row"><span><Upload size={17} /></span><div><strong>Import from Chrome</strong><small>Bookmarks, bookmark folders and browsing history stay on this computer.</small></div><button onClick={() => chromeImportOpen ? setChromeImportOpen(false) : void openChromeImport()}>{chromeImportOpen ? 'Close' : 'Import'}</button></div>
