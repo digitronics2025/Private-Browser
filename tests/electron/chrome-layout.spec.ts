@@ -109,6 +109,15 @@ test('the page view follows the chrome through every layout change', async () =>
     await expect(page.getByRole('complementary', { name: 'Side panel' })).toBeVisible();
     await expectPageAligned(app, page);
 
+    const compact = page.getByRole('button', { name: 'Compact side panel' });
+    await compact.click();
+    await expect(compact).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(async () => (await measure(app, page)).chrome.panel).toBe(272);
+    await expectPageAligned(app, page);
+    await compact.click();
+    await expect(compact).toHaveAttribute('aria-pressed', 'false');
+    await expectPageAligned(app, page);
+
     await page.evaluate(() => window.privateBrowser.setUiPreferences({ sidePanelWidth: 480, sidePanelTool: 'privacy' }));
     await expectPageAligned(app, page);
 

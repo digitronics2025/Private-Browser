@@ -17,17 +17,54 @@ function safeStorage(): SafeStorageAdapter {
   };
 }
 
-async function setup() {
+async function setup(payload = createEmptyVaultPayload()) {
   const root = mkdtempSync(join(tmpdir(), 'pb-myvault-'));
   const store = new MyVaultDiskStore(root, safeStorage());
   const broker = new VaultBroker(store);
   broker.initialize();
-  const { envelope } = await createVault(PASSWORD, createEmptyVaultPayload(), { memorySizeKiB: 8 * 1024, iterations: 1 });
+  const { envelope } = await createVault(PASSWORD, payload, { memorySizeKiB: 8 * 1024, iterations: 1 });
   broker.installEncryptedVault(envelope, { endpoint: 'https://vault.example.test', deviceToken: DEVICE_TOKEN, remoteVersion: 3, dirty: false });
   return { store, broker, envelope };
 }
 
 describe('VaultBroker', () => {
+  it('checks health only while unlocked and returns IDs and issue labels', async () => {
+    const payload = createEmptyVaultPayload();
+    payload.items.push({ id: 'missing', title: 'Website missing', type: 'login', username: 'sample',
+      url: 'file:///fixture', folder: '', vault: 'Personal', favorite: false, tags: [], updatedAt: payload.updatedAt });
+    const { broker } = await setup(payload);
+    expect(() => broker.checkLoginHealth()).toThrow('locked');
+    await broker.unlock(PASSWORD);
+    const input = { title: 'Fixture', username: 'sample', url: 'https://shop.example.test/checkout', password: 'fixture-weak' };
+    const original = await broker.saveLogin(input);
+    const duplicate = await broker.saveLogin(input);
+    const separate = await broker.saveLogin({ ...input, url: 'https://stock.example.test' });
+    const report = broker.checkLoginHealth();
+    expect(report.checked).toBe(4);
+    for (const id of [original.id, duplicate.id]) {
+      expect(report.findings.find((item) => item.id === id)?.issues).toEqual(expect.arrayContaining(['duplicate-login', 'weak-password', 'reused-password']));
+    }
+    expect(report.findings.find((item) => item.id === separate.id)?.issues).toEqual(['weak-password', 'reused-password']);
+    expect(report.findings.find((item) => item.id === 'missing')?.issues).toEqual(['missing-origin']);
+    expect(JSON.stringify(report)).not.toContain(input.password);
+    expect(report.findings.every((item) => Object.keys(item).sort().join(',') === 'id,issues')).toBe(true);
+  });
+
+  it('keeps existing secrets during a metadata edit and rejects stale edits', async () => {
+    const { broker } = await setup();
+    await broker.unlock(PASSWORD);
+    const login = { title: 'Fixture', username: 'sample', url: 'https://example.test', password: 'fixture-unmodified-secret' };
+    const original = await broker.saveLogin(login);
+    const edit = broker.beginLoginEdit(original.id);
+    const stale = broker.beginLoginEdit(original.id);
+    await edit.save({ title: 'Renamed', username: login.username, url: login.url });
+    expect(broker.resolveSecretForTrustedOperation(original.id, 'password')).toBe(login.password);
+    await expect(stale.save(login)).rejects.toThrow(/login changed/i);
+    const removed = broker.beginLoginEdit(original.id);
+    await broker.deleteEntry(original.id);
+    await expect(removed.save(login)).rejects.toThrow(/login changed/i);
+    expect(broker.searchMetadata()).toEqual([]);
+  });
   it('keeps decrypted state unavailable until unlock and releases it on lock', async () => {
     const { broker } = await setup();
     expect(() => broker.searchMetadata()).toThrow('locked');

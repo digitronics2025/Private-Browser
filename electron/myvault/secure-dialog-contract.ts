@@ -1,4 +1,4 @@
-export type SecureDialogKind = 'unlock' | 'enroll-hello' | 'edit-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair';
+export type SecureDialogKind = 'unlock' | 'enroll-hello' | 'edit-login' | 'update-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair';
 
 export const SECURE_CREDENTIAL_PRESETS = {
   password: { label: 'Password, 24 characters with symbols', kind: 'password', length: 24, symbols: true },
@@ -11,7 +11,7 @@ export const SECURE_CREDENTIAL_PRESETS = {
 export type SecureCredentialPreset = keyof typeof SECURE_CREDENTIAL_PRESETS;
 
 export interface UnlockDialogValue { password: string }
-export interface EditLoginDialogValue { title: string; url: string; username: string; password: string; totpSecret?: string }
+export interface EditLoginDialogValue { title: string; url: string; username: string; password?: string; totpSecret?: string }
 export interface ConfirmDeleteDialogValue { confirmed: true }
 export interface PairDialogValue { endpoint: string; enrollmentCode: string; password: string }
 export type SecureDialogValue = UnlockDialogValue | EditLoginDialogValue | ConfirmDeleteDialogValue | PairDialogValue;
@@ -48,15 +48,15 @@ export function normalizeAuthenticatorSecret(value: string | undefined): string 
 export function parseSecureDialogValue(kind: SecureDialogKind, value: unknown): SecureDialogValue {
   const input = record(value);
   if (kind === 'unlock' || kind === 'enroll-hello') return { password: textField(input, 'password', 1024)! };
-  if (kind === 'edit-login') {
+  if (kind === 'edit-login' || kind === 'update-login') {
     const url = textField(input, 'url', 2048)!;
     const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error('Invalid secure dialog submission');
+    if ((parsed.protocol !== 'https:' && parsed.protocol !== 'http:') || parsed.username || parsed.password) throw new Error('Invalid secure dialog submission');
     return {
       title: textField(input, 'title', 200)!.normalize('NFKC').trim(),
       url: parsed.origin,
       username: textField(input, 'username', 500)!.normalize('NFKC').trim(),
-      password: textField(input, 'password', 5000)!,
+      password: textField(input, 'password', 5000, kind === 'edit-login') || undefined,
       totpSecret: normalizeAuthenticatorSecret(textField(input, 'totpSecret', 500, false)),
     };
   }

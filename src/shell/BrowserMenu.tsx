@@ -1,4 +1,4 @@
-import { Asterisk, NotebookPen, Code2, Download, FileDown, History, Info, KeyRound, Link2, LogOut, Maximize2, Minus, Palette, Plus, Printer, RotateCcw, ScrollText, Search, Settings, Shield, Sparkles, SquarePlus, Star, Trash2, Upload, UsersRound, Wrench, Zap } from 'lucide-react';
+import { Asterisk, NotebookPen, Code2, Download, FileDown, History, Info, Keyboard, KeyRound, Link2, LogOut, Maximize2, Minus, Palette, Plus, Printer, RotateCcw, ScrollText, Search, Settings, Shield, Sparkles, SquarePlus, Star, Trash2, Upload, UsersRound, Wrench, Zap } from 'lucide-react';
 import type { AccountSpaceId, BookmarkBarMode, BrowserSnapshot, BrowserTab, SidePanelTool, ThemePreference, UiPreferences } from '../../electron/types';
 import { AccountAvatar } from '../lib/accounts';
 import { MenuItem, MenuSeparator, MenuSurface, SubmenuItem } from './Menu';
@@ -118,6 +118,7 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
         {THEMES.map((theme) => <MenuItem key={theme.id} role="menuitemradio" checked={ui.theme === theme.id} label={theme.label} onSelect={() => actions.setUi({ theme: theme.id })} />)}
       </SubmenuItem>
       <MenuItem icon={Settings} label="Settings" onSelect={() => actions.openTool('settings')} />
+      <MenuItem icon={Keyboard} label="Keyboard shortcuts" shortcut="Ctrl+Shift+K" onSelect={() => actions.openTool('shortcuts')} />
       <MenuItem icon={Info} label="About Private Browser" onSelect={() => actions.openTool('settings')} />
       <MenuSeparator />
       <MenuItem icon={LogOut} label="Exit" onSelect={actions.quit} />

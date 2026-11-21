@@ -28,6 +28,15 @@ describe('chrome layout', () => {
     expect(clampSidePanelWidth(520, 640)).toBe(440);
   });
 
+  it('keeps a compact panel beside the page and uses the saved width when expanded', () => {
+    const panel = { ...base, sidePanelOpen: true, sidePanelWidth: 480 };
+    expect(computeChromeLayout(panel).insets.right).toBe(480);
+    expect(computeChromeLayout({ ...panel, sidePanelCompact: true, windowWidth: 900 }).insets.right).toBe(SIDE_PANEL.compact);
+    const { insets } = computeChromeLayout({ ...panel, sidePanelCompact: true, windowWidth: 430 });
+    expect(insets.right).toBe(430 - MIN_CONTENT_WIDTH);
+    expect(contentBounds(insets, 430, 640).width).toBe(MIN_CONTENT_WIDTH);
+  });
+
   it('gives the page the whole window in full screen', () => {
     expect(computeChromeLayout({ ...base, fullscreen: true, sidePanelOpen: true, findBarOpen: true }).insets).toEqual({ top: 0, left: 0, right: 0, bottom: 0 });
   });

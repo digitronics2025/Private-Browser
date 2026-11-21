@@ -30,6 +30,7 @@ import { PrivacyPanel } from './panels/PrivacyPanel';
 import { SettingsPanel } from './panels/SettingsPanel';
 import { BookmarksPanel } from './panels/BookmarksPanel';
 import { HistoryPanel } from './panels/HistoryPanel';
+import { ShortcutGuide } from './panels/ShortcutGuide';
 import { EmptyState } from './panels/common';
 import { defaultShortcutTiles } from './lib/quick-links';
 import { faviconsByHost } from './lib/format';
@@ -164,6 +165,7 @@ export default function App() {
     findBarOpen: findOpen,
     sidePanelOpen: ui.sidePanelOpen,
     sidePanelWidth: ui.sidePanelWidth,
+    sidePanelCompact: ui.sidePanelCompact,
     fullscreen: windowState.fullscreen,
     windowWidth,
   });
@@ -173,6 +175,7 @@ export default function App() {
     findBarOpen: findOpen,
     sidePanelOpen: ui.sidePanelOpen,
     sidePanelWidth: liveWidth,
+    sidePanelCompact: ui.sidePanelCompact,
     fullscreen: windowState.fullscreen,
     windowWidth,
   });
@@ -295,6 +298,8 @@ export default function App() {
       case 'fullscreen': void act(() => window.privateBrowser.toggleFullscreen()); break;
       case 'browser-menu': setMenu('browser'); break;
       case 'tab-search': setMenu('tab-search'); break;
+      case 'workspace-switcher': setMenu('profile'); break;
+      case 'shortcut-guide': openTool('shortcuts'); break;
       case 'clear-browsing-data': clearBrowsingData(); break;
       case 'next-account-space': cycleAccountSpace(1); break;
       case 'previous-account-space': cycleAccountSpace(-1); break;
@@ -417,6 +422,7 @@ export default function App() {
         ? <EmptyState icon={KeyRound} text="MyVault is isolated from the Development workspace." />
         : <VaultPanel accountId={state.activeAccountSpaceId} workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onOpenFull={() => setVaultFullOpen(true)} onToast={showToast} />;
       case 'automations': return <AutomationPanel state={state} onToast={showToast} />;
+      case 'shortcuts': return <ShortcutGuide />;
       case 'downloads': return <DownloadsPanel state={state} onToast={showToast} />;
       case 'privacy': return <PrivacyPanel state={state} />;
       case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} entry={settingsEntry}
@@ -571,6 +577,8 @@ export default function App() {
           <SidePanel
             tool={ui.sidePanelTool}
             width={liveLayout.sidePanel || ui.sidePanelWidth}
+            compact={Boolean(ui.sidePanelCompact)}
+            onToggleCompact={() => setUi({ sidePanelCompact: !ui.sidePanelCompact })}
             activeDownloads={state.downloads.filter((item) => item.state === 'progressing').length}
             onSelectTool={openTool}
             onClose={() => setUi({ sidePanelOpen: false })}

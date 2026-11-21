@@ -282,6 +282,8 @@ All are intents; the main process opens secure dialogs for anything secret.
 | `vault:resolve-conflict` | `'cloud' | 'local'` | `VaultStatus` |
 | `vault:migration-status`, `vault:migrate-legacy`, `vault:cleanup-legacy` | — | migration status / report / `boolean` |
 | `vault:open-editor` | `origin?: string` | `VaultItemMeta | undefined` |
+| `vault:check-health` | active regular Account Space ID | audited count and login IDs with issue labels |
+| `vault:edit-health-login` | active regular Account Space ID and login ID | whether the isolated editor saved the login |
 | `vault:form-shape` | — | `{ hasUsername, hasPassword }` |
 | `vault:reset-picks` | active Account Space ID | whether remembered picks were cleared |
 | `vault:fill-readiness` | — | current-page `VaultFillReadiness` |

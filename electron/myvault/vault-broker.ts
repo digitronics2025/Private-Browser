@@ -1,4 +1,6 @@
-import { randomInt, randomUUID } from 'node:crypto';
+import { createHmac, randomInt, randomUUID } from 'node:crypto';
+import { isAllowedRemoteUrl } from '../security.js';
+import type { VaultHealthFinding, VaultHealthIssue, VaultHealthReport } from '../types.js';
 import { BiometricUnlockRejectedError, isVaultEnvelope, base64ToBytes, bytesToBase64, decryptWithSession, deriveBiometricUnlockKey, encryptVaultPayload, prepareBiometricWrap, randomBytes, unlockVault, unlockVaultWithBiometricKey, type VaultSession } from './security/vault-crypto.js';
 import type { TotpConfig, VaultEnvelope, VaultItem, VaultPayload } from './types.js';
 import type { PasskeyCredential } from './security/passkeys/types.js';
@@ -79,6 +81,16 @@ function exactOrigin(value?: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function markCollision(seen: Map<string, VaultHealthFinding>, key: string, finding: VaultHealthFinding, issue: VaultHealthIssue): void {
+  const earlier = seen.get(key);
+  if (!earlier) {
+    seen.set(key, finding);
+    return;
+  }
+  if (!earlier.issues.includes(issue)) earlier.issues.push(issue);
+  finding.issues.push(issue);
 }
 
 /** Singleton trusted boundary for decrypted state. Renderer IPC must expose intents, never its secret resolver. */
@@ -269,6 +281,49 @@ export class VaultBroker {
       .filter((item) => !requestedOrigin || exactOrigin(item.url) === requestedOrigin)
       .filter((item) => !needle || [item.title, item.username, item.url ?? '', ...item.tags].some((value) => normalizeSearch(value).includes(needle)))
       .map(metadata);
+  }
+
+  checkLoginHealth(): VaultHealthReport {
+    const logins = this.requireUnlocked().items.filter((item) => item.type === 'login');
+    const byLogin = new Map<string, VaultHealthFinding>();
+    const byPassword = new Map<string, VaultHealthFinding>();
+    const key = randomBytes(32);
+    try {
+      const findings = logins.map((item): VaultHealthFinding => {
+        const finding: VaultHealthFinding = { id: item.id, issues: [] };
+        const origin = item.url && isAllowedRemoteUrl(item.url) ? exactOrigin(item.url) : undefined;
+        if (!origin) finding.issues.push('missing-origin');
+        if (origin && item.username.trim()) {
+          const username = item.username.normalize('NFKC').trim();
+          markCollision(byLogin, JSON.stringify([origin, username]), finding, 'duplicate-login');
+        }
+        if (item.password) {
+          const characters = [...item.password];
+          if (characters.length < 15 || characters.every((character) => character === characters[0])) finding.issues.push('weak-password');
+          const digest = createHmac('sha256', key).update(item.password, 'utf16le').digest('base64url');
+          markCollision(byPassword, digest, finding, 'reused-password');
+        }
+        return finding;
+      }).filter((finding) => finding.issues.length > 0);
+      return { checked: logins.length, findings };
+    } finally {
+      key.fill(0);
+    }
+  }
+
+  beginLoginEdit(id: string) {
+    const original = this.requireUnlocked().items.find((item) => item.id === id && item.type === 'login');
+    if (!original) throw new Error('This login is no longer available.');
+    const session = this.session;
+    return {
+      metadata: metadata(original),
+      save: (input: Omit<BrokerItemInput, 'id'>) => this.exclusive(() => {
+        if (this.session !== session || !this.requireUnlocked().items.includes(original)) {
+          throw new Error('This login changed. Reopen it before saving.');
+        }
+        return this.saveLoginNow({ ...input, id });
+      }),
+    };
   }
 
   saveLogin(input: BrokerItemInput): Promise<VaultEntryMetadata> {
