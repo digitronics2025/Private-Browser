@@ -1,5 +1,33 @@
 import { expect, test } from '@playwright/test';
 
+test('reviews and revokes a current-site grant and filters grants in Account Manager', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/?permissions=sample');
+  await page.evaluate(() => window.privateBrowser.navigate('https://example.test/notes'));
+  await page.getByRole('button', { name: 'View site information' }).click();
+  const site = page.getByRole('dialog', { name: 'Site information' });
+  const summary = site.getByText('Site permissions', { exact: true });
+  await summary.focus();
+  await summary.press('Enter');
+  await expect(site.getByText('Grant allowed · Until revoked')).toBeVisible();
+  await site.getByRole('button', { name: 'Revoke Downloads' }).click();
+  await expect(site.getByRole('status')).toHaveText('Downloads revoked. The site will ask again.');
+  await expect(summary).toBeFocused();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Account Space: Operations' }).click();
+  await page.getByRole('menuitem', { name: /Manage Account Spaces/ }).click();
+  const manager = page.getByRole('dialog', { name: 'Account Spaces' });
+  await manager.getByText('Site permission grants', { exact: true }).click();
+  await expect(manager.getByText('https://mail.google.com', { exact: true })).toBeVisible();
+  await manager.getByLabel('Filter by origin').fill('example.test');
+  await expect(manager.getByText('No grants match your filters.')).toBeVisible();
+  await manager.getByLabel('Filter by origin').fill('mail.google');
+  await manager.getByLabel('Filter by capability').selectOption('camera');
+  await expect(manager.getByText('No grants match your filters.')).toBeVisible();
+  await manager.getByLabel('Filter by capability').selectOption('notifications');
+  await expect(manager.getByText('Notifications · This session')).toBeVisible();
+});
+
 test('switches and manages Account Spaces without leaking visible state', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Account Space: Operations' })).toBeVisible();

@@ -146,6 +146,16 @@ export type PermissionCapability =
 
 export type PermissionDecision = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 
+export type PermissionGrantDuration = 'once' | 'session' | 'until-revoked';
+export interface PermissionGrantSummary {
+  origin: string;
+  capability: PermissionCapability;
+  duration: PermissionGrantDuration;
+}
+export type SitePermissionStatus =
+  | { capability: PermissionCapability; decision: 'allowed'; duration: PermissionGrantDuration }
+  | { capability: PermissionCapability; decision: 'ask' | 'blocked' };
+
 export interface PermissionPrompt {
   id: string;
   accountSpaceId: AccountSpaceId;
@@ -342,6 +352,13 @@ export interface RoutineRunResult {
   focusUnavailable: boolean;
 }
 
+export interface TabSetInput {
+  accountSpaceId: AccountSpaceId;
+  kind: 'routine' | 'bookmarks';
+  name: string;
+  tabs: Array<{ id: string; url: string }>;
+}
+
 export type TabProblem = 'crashed' | 'certificate' | 'offline' | 'network';
 
 export interface TabGroup {
@@ -449,12 +466,18 @@ export interface DownloadEntry {
   receivedBytes: number;
   totalBytes: number;
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
+  paused?: boolean;
+  canPause?: boolean;
+  canResume?: boolean;
+  canCancel?: boolean;
   /** Set once a completed download has been compared against the release manifest. */
   checksum?: 'checking' | 'verified' | 'mismatch' | 'unchecked';
   extension?: string;
   publisher?: { state: 'unsigned' | 'valid' | 'untrusted' | 'unavailable'; name?: string };
   risk: 'ordinary' | 'dangerous' | 'deceptive';
 }
+
+export type DownloadAction = 'pause' | 'resume' | 'retry' | 'cancel';
 
 export interface PrivacyEvent {
   id: string;

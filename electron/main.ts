@@ -71,6 +71,7 @@ import type {
   DeveloperPageInfo,
   DeveloperNetworkIssue,
   DevToolsMode,
+  DownloadAction,
   DownloadEntry,
   AddressMatch,
   HistoryQuery,
@@ -133,6 +134,8 @@ import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupW
 import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
+import { appendTabSetBookmarks, resolveTabSet } from './tab-sets.js';
+import type { TabSetInput } from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
@@ -749,6 +752,29 @@ class BrowserController {
     });
   }
 
+  saveTabSet(input: TabSetInput): number {
+    const state = this.store.get();
+    if (!this.canUseRoutines(state) || this.activeAccountSpaceId(state) !== input.accountSpaceId) {
+      throw new Error('Return to the original regular Account Space to save the tabs.');
+    }
+    const tabs = resolveTabSet(state.tabs, input);
+    if (input.kind === 'routine') {
+      this.saveRoutine({
+        id: randomUUID(), name: input.name,
+        links: tabs.map(({ url, accountSpaceId }) => ({ url, accountSpaceId })),
+        focusIndex: Math.max(0, tabs.findIndex((tab) => tab.id === this.activeTab(state).id)),
+        checklist: [],
+      });
+      return tabs.length;
+    }
+    const added = appendTabSetBookmarks(state.bookmarks, tabs, input);
+    if (added.length) {
+      this.store.update((next) => { next.bookmarks.push(...added); });
+      this.broadcast();
+    }
+    return added.length;
+  }
+
   deleteRoutine(id: string): void {
     this.updateRoutines((routines) => {
       const index = routines.findIndex((item) => item.id === id);
@@ -1134,6 +1160,32 @@ class BrowserController {
       await this.showActiveTab();
       this.activeContents()?.focus();
     }
+  }
+
+  private activePermissionSite(tabId: string, origin: string) {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    if (tab.id !== tabId || tab.isHome || !isAllowedRemoteUrl(tab.url) || safeOrigin(tab.url) !== origin) {
+      throw new Error('The page changed. Open site information again.');
+    }
+    return tab;
+  }
+
+  getSitePermissions(tabId: string, origin: string) {
+    const tab = this.activePermissionSite(tabId, origin);
+    return this.permissions.siteStatus(tab.accountSpaceId, tab.workspaceId, origin);
+  }
+
+  revokeSitePermission(tabId: string, origin: string, capability: PermissionCapability) {
+    const tab = this.activePermissionSite(tabId, origin);
+    if (this.store.isReadOnly() || tab.workspaceId === 'banking') throw new Error('Permission changes are unavailable in this Account Space.');
+    this.permissions.revoke(tab.accountSpaceId, tab.workspaceId, origin, capability);
+    return this.permissions.siteStatus(tab.accountSpaceId, tab.workspaceId, origin);
+  }
+
+  listAccountPermissionGrants(accountSpaceId: AccountSpaceId) {
+    const account = this.requireAccountMembership(accountSpaceId);
+    return account.locked || account.workspaceId === 'banking' ? [] : this.permissions.listGrants(accountSpaceId);
   }
 
   prepareGmailSend(accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) {
@@ -2667,14 +2719,50 @@ class BrowserController {
     return account && isAvailableRegularAccount(state, account) ? id : undefined;
   }
 
-  private requireActiveDownload(id: string) {
+  private requireOwnedDownload(id: string): LocalDownload {
     const item = this.downloads.get(id);
     if (!item || item.accountSpaceId !== this.activeDownloadAccount()) {
       throw new Error('Download is unavailable in this Account Space');
     }
+    return item;
+  }
+
+  private requireActiveDownload(id: string) {
+    const item = this.requireOwnedDownload(id);
     if (item.state !== 'completed' || !item.savePath) throw new Error('This download is incomplete');
     if (!downloadFileStamp(item.savePath)) throw new Error('The downloaded file is missing or unavailable. Download it again.');
     return { ...item, savePath: item.savePath };
+  }
+
+  private updateDownloadProgress(entry: LocalDownload, item: DownloadItem, state: 'progressing' | 'interrupted'): void {
+    const paused = item.isPaused();
+    Object.assign(entry, {
+      state, paused, receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(),
+      canPause: state === 'progressing' && !paused && Boolean(item.getETag() && item.getLastModifiedTime()),
+      canResume: (paused || state === 'interrupted') && item.canResume(),
+      canCancel: true,
+    });
+  }
+
+  controlDownload(id: string, action: DownloadAction): void {
+    const entry = this.requireOwnedDownload(id);
+    const item = this.downloadItems.get(id);
+    if (!item || (entry.state !== 'progressing' && entry.state !== 'interrupted')) {
+      throw new Error('This download has ended. Start it again from the original page.');
+    }
+    this.updateDownloadProgress(entry, item, entry.state);
+    if (action === 'cancel') {
+      item.cancel();
+      return;
+    }
+    const resume = (action === 'resume' && entry.paused) || (action === 'retry' && entry.state === 'interrupted');
+    if (action === 'pause' && entry.canPause) item.pause();
+    else if (resume && entry.canResume) item.resume();
+    else throw new Error('This download cannot be paused or resumed right now.');
+    if (this.downloadItems.get(id) === item) {
+      this.updateDownloadProgress(entry, item, item.getState() === 'interrupted' ? 'interrupted' : 'progressing');
+      this.broadcast();
+    }
   }
 
   async openDownload(id: string): Promise<void> {
@@ -2719,7 +2807,9 @@ class BrowserController {
   }
 
   showDownload(id: string): void {
-    shell.showItemInFolder(this.requireActiveDownload(id).savePath);
+    const item = this.requireActiveDownload(id);
+    if (item.checksum === 'checking') throw new Error('Wait for installer verification to finish.');
+    shell.showItemInFolder(item.savePath);
   }
 
   isDefaultBrowser(): boolean {
@@ -3191,13 +3281,15 @@ class BrowserController {
       };
       this.downloads.set(id, entry);
       this.downloadItems.set(id, item);
+      this.updateDownloadProgress(entry, item, 'progressing');
       item.on('updated', (_downloadEvent, state) => {
-        Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state });
+        this.updateDownloadProgress(entry, item, state);
         this.broadcast();
       });
       item.once('done', (_downloadEvent, state) => {
         this.downloadItems.delete(id);
-        Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath() });
+        Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath(),
+          paused: false, canPause: false, canResume: false, canCancel: false });
         if (entry.savePath) {
           const savedFilename = basename(entry.savePath);
           entry.risk = downloadRisk(savedFilename);
@@ -3563,6 +3655,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('routines:save', (_event, routine: BrowserRoutine) => controller!.saveRoutine(routine));
+  handle('routines:save-tabs', (_event, input: TabSetInput) => controller!.saveTabSet(input));
   handle('routines:delete', (_event, id: string) => controller!.deleteRoutine(id));
   handle('routines:run', (_event, id: string) => controller!.runRoutine(id));
   handle('routines:mark-checklist', (_event, id: string, index: number, done: boolean) => controller!.updateRoutineChecklist(id, index, done));
@@ -3591,6 +3684,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('accounts:clear-data', (_event, id: AccountSpaceId) => controller!.clearAccountSpaceData(id));
   handle('accounts:delete', (_event, id: AccountSpaceId, confirmation: string) => controller!.deleteAccountSpace(id, confirmation));
   handle('permissions:respond', (_event, promptId: string, decision: PermissionDecision, displaySourceId?: string) => controller!.respondToPermissionPrompt(promptId, decision, displaySourceId));
+  handle('permissions:site', (_event, tabId: string, origin: string) => controller!.getSitePermissions(tabId, origin));
+  handle('permissions:revoke-site', (_event, tabId: string, origin: string, capability: PermissionCapability) => controller!.revokeSitePermission(tabId, origin, capability));
+  handle('permissions:list-account', (_event, id: AccountSpaceId) => controller!.listAccountPermissionGrants(id));
   handle('google:configure', (_event, clientId: string) => controller!.configureGoogle(clientId));
   handle('google:clear-configuration', () => controller!.clearGoogleConfiguration());
   handle('google:connect', (_event, id: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) => controller!.connectGoogleAccount(id, modules, browserId));
@@ -3657,6 +3753,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:import-chrome-passwords', () => controller!.importChromePasswords());
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
+  handle('browser:control-download', (_event, id: string, action: DownloadAction) => controller!.controlDownload(id, action));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
   handle('developer:toggle-tools', (_event, mode: DevToolsMode) => controller!.toggleDeveloperTools(mode));
   handle('developer:capture-diagnostics', () => controller!.captureDeveloperDiagnostics());

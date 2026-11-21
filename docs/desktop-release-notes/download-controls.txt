@@ -1,0 +1,1 @@
+Pause, resume, retry or cancel supported transfers from Downloads. The panel shows when an installer is waiting for verification.

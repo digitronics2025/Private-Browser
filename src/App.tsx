@@ -476,6 +476,7 @@ export default function App() {
             />
             <NavigationToolbar
               tab={activeTab}
+              workspace={workspace}
               account={activeAccount}
               address={address}
               addressRef={addressRef}

@@ -447,6 +447,12 @@ in the active workspace, or `null` to return to the defaults.
 
 ## Downloads
 
+The Downloads panel can pause, resume or cancel eligible transfers in the
+active Account Space. Retry resumes an interrupted native transfer when
+Electron can still resume it. A terminal interruption points back to the
+original page. Installers show Waiting for verification while the published
+checksum is checked.
+
 `will-download` is registered per session inside `configureSession`. Each download
 becomes a `DownloadEntry` in an in-memory `Map` keyed by a fresh `randomUUID()`:
 
@@ -535,6 +541,12 @@ Every event is a full `store.update(...)`, which means a synchronous rewrite of
 the whole state file per event.
 
 ## Per-Account-Space Sessions and Permissions
+
+Site information displays the exact active origin's current policy and grant
+duration. Revoking a grant clears the stored and session entries for that
+account, origin and capability. The page requests permission again on its
+next use. Closing the page ends an active capture. Account Manager filters
+grants for the selected, unlocked Account Space.
 
 `ensureView` derives the partition from the tab's **Account Space**
 (`store.partitionFor(accountSpaceId)`): `persist:private-browser-account-<id>`,
