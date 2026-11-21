@@ -743,7 +743,7 @@ signed link inside an older result may already have expired.
   release routes return 404 and `/health` return 503.
 - **The page is string-built.** Escape every new D1 value in `page.ts` and add a
   Worker XSS test.
-- **Installer verification uses the latest in-memory manifest.** Matching `.exe`
-  downloads are hashed and mismatches cannot open; restart clears the expectation.
+- **Installer verification binds the manifest when the download starts.** The
+  installer is hashed again before opening. Windows publisher evidence is separate.
 - **Weak secrets fail silently on release routes.** Check `/health` first when
   every route unexpectedly returns 404.

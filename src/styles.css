@@ -712,9 +712,11 @@ kbd { font: inherit; }
 .progress span { display: block; height: 100%; background: var(--accent); }
 .download-actions { display: flex; gap: 6px; margin-top: 8px; }
 .browser-preview-marker { position: fixed; inset: auto auto 8px 8px; z-index: 10; padding: 3px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 11px; pointer-events: none; }
-.checksum { display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: var(--fs-xs); }
-.checksum.ok { color: var(--ok); }
-.checksum.bad { color: var(--danger); font-weight: 700; }
+.download-evidence { display: grid; gap: 6px; margin: 10px 0 6px; font-size: var(--fs-xs); }
+.download-evidence > div { display: grid; grid-template-columns: minmax(84px, 0.6fr) minmax(0, 1fr); gap: 6px; }
+.download-evidence dt { color: var(--text-muted); }
+.download-evidence dd { margin: 0; overflow-wrap: anywhere; }
+.download-actions button:disabled { opacity: .45; cursor: default; }
 .privacy-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 14px; }
 .privacy-summary > div { display: flex; flex-direction: column; padding: 10px 4px; text-align: center; }
 .privacy-summary strong { color: var(--accent); font-size: var(--fs-lg); }

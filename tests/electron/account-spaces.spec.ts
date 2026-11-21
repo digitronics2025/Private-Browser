@@ -1,5 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,12 +10,19 @@ let userDataPath: string;
 let origin: string;
 let server: Server;
 let documentHeaders: IncomingHttpHeaders | undefined;
+const installerBytes = 'local installer fixture';
 
 test.beforeEach(async () => {
   documentHeaders = undefined;
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
+    if (request.url === '/release-fixture') {
+      response.setHeader('Content-Type', 'application/octet-stream');
+      response.setHeader('Content-Disposition', 'attachment; filename="installer-fixture.exe"');
+      response.end(installerBytes);
+      return;
+    }
     if (request.url === '/account-download') {
       response.setHeader('Content-Type', 'text/plain');
       response.setHeader('Content-Disposition', 'attachment; filename="account-fixture.txt"');
@@ -141,6 +149,52 @@ test('scopes the download list and both file commands to the originating account
   for (const error of errors) expect(error).toContain('Download is unavailable in this Account Space');
   await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), first);
   expect((await getState()).downloads).toEqual([download]);
+});
+
+test('rechecks the installer after a same-size file replacement before it reaches Windows Open', async () => {
+  const page = await application!.firstWindow();
+  const endpoint = 'https://private-browser-downloads.digitronics-electro.workers.dev';
+  const manifest = {
+    schemaVersion: 1, appId: 'private-browser', version: '1.0.0', buildNumber: 5, channel: 'stable', filename: 'installer-fixture.exe',
+    sizeBytes: Buffer.byteLength(installerBytes), sha256: createHash('sha256').update(installerBytes).digest('hex'),
+    commitSha: 'a'.repeat(40), releaseNotes: 'Fixture', publishedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    downloadUrl: endpoint + '/download/latest.exe?expires=1&signature=fixture', downloadPageUrl: endpoint + '/download?expires=1&signature=fixture',
+  };
+  await application!.evaluate(({ shell }, { endpoint, manifest }) => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (input, init) => String(input) === endpoint + '/api/v1/releases/public/latest'
+      ? Promise.resolve(Response.json(manifest)) : originalFetch(input, init);
+    Object.assign(globalThis, { fixtureOpenCount: 0 });
+    shell.openPath = async () => {
+      (globalThis as unknown as { fixtureOpenCount: number }).fixtureOpenCount += 1;
+      return '';
+    };
+  }, { endpoint, manifest });
+  await page.evaluate(() => window.privateBrowser.checkForUpdates());
+  const target = origin + '/release-fixture';
+  await page.evaluate((url) => window.privateBrowser.navigate(url + '/source'), target);
+  const savePath = join(userDataPath, manifest.filename);
+  await application!.evaluate(({ webContents }, { target, savePath }) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === target + '/source')!;
+    contents.session.once('will-download', () => {
+      contents.session.once('will-download', (_event, item) => item.setSavePath(savePath));
+    });
+    contents.downloadURL(target);
+  }, { target, savePath });
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
+  await page.evaluate((id) => window.privateBrowser.respondToPermissionPrompt(id, 'allow-once'), (await getState()).pendingPermission!.id);
+  await expect.poll(async () => (await getState()).downloads[0]?.checksum).toBe('verified');
+  const download = (await getState()).downloads[0];
+  expect(download.publisher).toMatchObject({ state: expect.stringMatching(/unsigned|unavailable/) });
+  expect(download).not.toHaveProperty('expectedInstaller');
+  const open = () => page.evaluate((id) => window.privateBrowser.openDownload(id), download.id);
+  await expect(open()).resolves.toBeUndefined();
+
+  writeFileSync(savePath, Buffer.alloc(manifest.sizeBytes, 0x42));
+  await expect(open()).rejects.toThrow(/changed or could not be verified/);
+  expect((await getState()).downloads[0]).toMatchObject({ checksum: 'mismatch' });
+  expect(await application!.evaluate(() => (globalThis as unknown as { fixtureOpenCount: number }).fixtureOpenCount)).toBe(1);
 });
 
 test('switches to an existing tab through the real address bar bridge', async () => {

@@ -1,5 +1,23 @@
 import { expect, test } from '@playwright/test';
 
+test('separates file type, checksum and publisher and only enables eligible files', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/?downloads=sample');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Downloads' }).click();
+  const downloading = page.locator('.download-card').filter({ hasText: 'sample.pdf' });
+  await expect(downloading.getByRole('button', { name: 'Open', exact: true })).toBeDisabled();
+  const verified = page.locator('.download-card').filter({ hasText: 'installer-sample.exe' });
+  await expect(verified.getByText('EXE · May run code')).toBeVisible();
+  await expect(verified.getByText('Matches the published release')).toBeVisible();
+  await expect(verified.getByText('No Windows signature')).toBeVisible();
+  await verified.getByRole('button', { name: 'Open', exact: true }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'This preview cannot open files' })).toBeVisible();
+  const mismatch = page.locator('.download-card').filter({ hasText: 'invalid-installer.exe' });
+  await expect(mismatch.getByRole('button', { name: 'Open', exact: true })).toBeDisabled();
+  await expect(mismatch.getByRole('button', { name: 'Show folder' })).toBeEnabled();
+});
+
 for (const width of [1280, 390]) {
   test('finds and switches to a local tab at ' + width + 'px', async ({ page }) => {
     await page.setViewportSize({ width, height: 840 });
