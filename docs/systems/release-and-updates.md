@@ -29,9 +29,8 @@ validates before it will show anyone a download link.
 - **The service** — the Worker, its D1 schema, its R2 bucket, and the two GitHub
   workflows that deploy and feed it. Sections: **Worker Routes** through
   **The Windows Installer**.
-- **The desktop client** — one file, [update-service.ts](../../electron/update-service.ts),
-  which fetches and validates a manifest and decides whether an update exists.
-  Sections: **Desktop Update Client** through **Version Comparison and Polling**.
+- **Desktop** — [release checks](#desktop-update-client) and
+  [installer staging](../../electron/managed-update.ts).
 
 **Not covered here:** the Settings panel ([renderer-ui.md](renderer-ui.md)), the
 `updates:*` channels ([ipc-contract.md](ipc-contract.md)), the window/tab/timer
@@ -751,7 +750,8 @@ signed link inside an older result may already have expired.
   release routes return 404 and `/health` return 503.
 - **The page is string-built.** Escape every new D1 value in `page.ts` and add a
   Worker XSS test.
-- **Installer verification binds the manifest when the download starts.** The
-  installer is hashed again before opening. Windows publisher evidence is separate.
+- **Managed updates** verify the staged size and hash, preserve Windows Internet
+  marking, and recheck the release and file on Install. The next launch shows
+  the installed version from the running app. See [SECURITY.md](../../SECURITY.md#release-service).
 - **Weak secrets fail silently on release routes.** Check `/health` first when
   every route unexpectedly returns 404.

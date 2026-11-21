@@ -1,8 +1,50 @@
 import { useEffect, useState } from 'react';
 import { Code2, Copy, FileCode2, LoaderCircle, LockKeyhole, PanelRightClose, PanelRightOpen, Play, ScanSearch, ShieldCheck, Sparkles, Trash2, TriangleAlert } from 'lucide-react';
-import type { AiPagePreview, BridgeStatus, BrowserTab, DeveloperPageInfo, DevToolsMode, ProjectInfo, ProjectSummary, TestKind, TestReport } from '../../electron/types';
+import type { AiPagePreview, BridgeStatus, BrowserTab, DeveloperPageInfo, DevToolsMode, GitRevision, ProjectInfo, ProjectSummary, TestKind, TestReport } from '../../electron/types';
 import { PanelHeader } from './common';
 import { ControlCenterSection } from './ControlCenterSection';
+
+function ProjectRevision({ onOpen, projectId }: { onOpen: (url: string) => void; projectId: string }) {
+  const [revision, setRevision] = useState<GitRevision | null>();
+  const [error, setError] = useState<string>();
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setRevision(undefined);
+    setError(undefined);
+    void window.privateBrowser.runBridgeAction('project.revision', {}).then((result) => {
+      if (active) setRevision(result as GitRevision | null);
+    }, (reason: unknown) => {
+      if (active) setError(reason instanceof Error ? reason.message : 'Git revision is unavailable.');
+    });
+    return () => { active = false; };
+  }, [projectId, attempt]);
+
+  const github = revision?.githubRepository && revision.commit
+    ? 'https://github.com/' + revision.githubRepository + '/commit/' + revision.commit : undefined;
+  const pullRequests = revision?.githubRepository && revision.commit
+    ? 'https://github.com/' + revision.githubRepository + '/pulls?q=' + encodeURIComponent('is:pr ' + revision.commit) : undefined;
+  const hasChanges = revision && revision.staged + revision.unstaged + revision.untracked + revision.conflicts > 0;
+
+  return <section className="project-summary git-revision" aria-label="Git revision">
+    <div><strong>Git revision</strong></div>
+    <button onClick={() => setAttempt((value) => value + 1)} disabled={revision === undefined && !error}>Refresh</button>
+    {revision ? <>
+      <p>{revision.branch ?? (revision.commit ? 'Detached HEAD' : 'Branch unavailable')}</p>
+      <p><code>{revision.commit ?? 'No commit yet'}</code></p>
+      <p>{hasChanges
+        ? `${revision.staged} staged · ${revision.unstaged} unstaged · ${revision.untracked} untracked · ${revision.conflicts} conflicts`
+        : 'Clean working tree'}</p>
+      {github && pullRequests && <div className="bridge-action-row">
+        <button onClick={() => onOpen(github)}>Open commit</button>
+        <button onClick={() => onOpen(pullRequests)}>Find pull requests</button>
+      </div>}
+    </> : <p role="status">{error ?? (revision === null
+      ? 'Git status is unavailable. Check that Source Control in VS Code shows the approved workspace root.'
+      : 'Reading Git status from VS Code…')}</p>}
+  </section>;
+}
 
 export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [tab, setTab] = useState<'project' | 'inspect' | 'test' | 'ai' | 'center'>('project');
@@ -25,7 +67,7 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
   const refresh = async () => {
     const next = await window.privateBrowser.getBridgeStatus();
     setBridge(next);
-    if (next.project) setProject(next.project);
+    setProject(next.state === 'connected' ? next.project ?? null : null);
     if (next.state === 'connected' && activeTab.workspaceId === 'development') setProjects(await window.privateBrowser.listBridgeProjects());
   };
 
@@ -85,6 +127,8 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
       {tab === 'project' && <div className="bridge-pane">{!connected ? <div className="bridge-empty"><Code2 size={26} /><strong>Connect your local editor</strong><p>Install the bundled private extension, then enter the single-use code in VS Code. No TCP port or webpage bridge is opened.</p><button className="primary-button" onClick={() => void run(async () => onToast(await window.privateBrowser.installBridgeExtension()))}>Install VS Code extension</button></div> : <>
         <label className="bridge-label">Workspace folder<select value={project?.project.id ?? ''} onChange={(event) => void selectProject(event.target.value)}><option value="">Choose a workspace</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.trusted ? '' : ' (restricted)'}</option>)}</select></label>
         {project && <div className="project-summary"><div><small>PROJECT</small><strong>{project.project.name}</strong><span>{project.framework} · {project.packageManager}</span></div><button onClick={() => void bridgeAction('project.open')}>Reveal</button><p>{project.types.join(' + ') || 'Generic project'}</p>{project.activeFile && <p>Editing: {project.activeFile}</p>}</div>}
+        {project && <ProjectRevision key={project.project.id} projectId={project.project.id}
+          onOpen={(url) => void run(() => window.privateBrowser.newTab('development', url))} />}
         <div className="bridge-action-row"><button className="primary-button" disabled={!project || loading} onClick={() => void bridgeAction('server.start', {}, 'Development server started')}>Start server</button><button disabled={!project || loading} onClick={() => void bridgeAction('server.restart', {}, 'Server restarted')}>Restart</button><button disabled={!project || loading} onClick={() => void bridgeAction('server.stop', {}, 'Server stopped')}>Stop</button></div>
         <button className="bridge-danger" onClick={() => void run(() => window.privateBrowser.disconnectBridge(true).then(setBridge), 'VS Code identity revoked')}>Revoke this VS Code</button>
       </>}</div>}

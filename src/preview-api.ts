@@ -6,7 +6,7 @@ import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt,
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
-import type { BrowserSettings } from '../electron/types';
+import type { BrowserSettings, ManagedUpdateStatus } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
@@ -161,6 +161,10 @@ export function installPreviewApi(): void {
       receivedBytes: 1920, totalBytes: 1920, extension: 'PDF', risk: 'ordinary', retained: true });
   }
   state.downloadHistory = savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
+  let managedUpdate: ManagedUpdateStatus | undefined = params.get('managedUpdate') === 'installed'
+    ? { phase: 'installed', version: '0.5.7' }
+    : params.get('managedUpdate') === 'sample' ? { phase: 'idle' } : undefined;
+  state.managedUpdate = managedUpdate;
   const workspaceSettings: Partial<Record<WorkspaceId, BrowserSettings>> = {};
   const siteZoom = new Map<string, number>();
   const siteZoomKey = (account: string, url: string) => JSON.stringify([account, new URL(url).origin]);
@@ -192,6 +196,7 @@ export function installPreviewApi(): void {
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     state.downloadHistory = state.activeWorkspaceId === 'banking' ? undefined : savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
+    state.managedUpdate = state.activeWorkspaceId === 'banking' ? undefined : managedUpdate;
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
     state.bookmarkUndo = undo ? { kind: undo.kind, count: undo.before.length } : undefined;
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
@@ -346,6 +351,30 @@ export function installPreviewApi(): void {
     configureUpdateService: desktopOnly,
     clearUpdateService: desktopOnly,
     openUpdatePage: desktopOnly,
+    downloadManagedUpdate: async (version, sha256) => {
+      if (!managedUpdate || state.activeWorkspaceId === 'banking') throw new Error('Download the installer using the desktop app.');
+      const result = await handlers.checkForUpdates();
+      if (result.state !== 'available' || version !== result.latest.version || sha256 !== result.latest.sha256) throw new Error('Check for updates again.');
+      const { sizeBytes } = result.latest;
+      const pending: ManagedUpdateStatus = { phase: 'downloading', version, receivedBytes: sizeBytes / 2, totalBytes: sizeBytes };
+      managedUpdate = pending;
+      publish();
+      window.setTimeout(() => {
+        if (managedUpdate !== pending) return;
+        managedUpdate = { phase: 'ready', version, publisher: { state: 'unsigned' } };
+        publish();
+      }, 500);
+    },
+    cancelManagedUpdate: async () => {
+      if (!managedUpdate || state.activeWorkspaceId === 'banking') throw new Error('Cancel the download using the desktop app.');
+      managedUpdate = { phase: 'failed', message: 'Download cancelled.' };
+      publish();
+    },
+    installManagedUpdate: async () => {
+      if (managedUpdate?.phase !== 'ready' || state.activeWorkspaceId === 'banking') throw new Error('Install a verified file using the desktop app.');
+      managedUpdate = { phase: 'launched', version: managedUpdate.version };
+      publish();
+    },
     getState: async () => structuredClone(state),
     controlDownload: async (id, action) => {
       const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);
