@@ -194,11 +194,13 @@ and until dismissed (per-viewer `localStorage` flag).
 
 ## Side Panel
 
-Closed by default; `ui.sidePanelOpen`, `sidePanelWidth` and `sidePanelTool` are
+Closed by default. `ui.sidePanelOpen`, `sidePanelWidth`, `sidePanelCompact` and `sidePanelTool` are
 persisted through `setUiPreferences`. The header holds compact tool tabs —
 Notes, Claude, AI, DevTools (title "Developer cockpit"), Vault, Flows, Files (active download badge),
 Privacy — and a close button; Ctrl+Shift+Y toggles Notes. Bookmarks, History and Settings open from menus and
-shortcuts. The left-edge separator resizes 320–520 px: pointer drags acquire the
+shortcuts. Compact mode leaves the page beside a panel up to 272 px wide. It
+restores the saved resize width when turned off. The left-edge separator
+resizes 320–520 px in the standard mode. Pointer drags acquire the
 overlay (the page view would otherwise swallow the pointer), update a live width
 that only moves CSS, and commit once on release — so the IPC rate limit is never
 hit. The drag is tracked with window-level `pointermove`/`pointerup` listeners
@@ -285,6 +287,9 @@ App's `keydown` listener resolves the event with `resolveShortcut` and runs
 `runCommand`; `onCommand` delivers commands resolved while a page had focus.
 Ctrl+Shift+Left/Right are ignored inside text fields (word selection). Esc leaves
 window full screen. Menus stop propagation of the keys they handle.
+Ctrl+Shift+U opens the Account Spaces menu for a workspace or account switch.
+The browser menu and Ctrl+Shift+K open the searchable shortcut guide. Its
+entries are checked against the same resolver used by the page and chrome.
 
 ## Main-Process Subscriptions
 

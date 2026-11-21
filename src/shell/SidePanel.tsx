@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { Asterisk, NotebookPen, Code2, Download, KeyRound, ShieldCheck, Sparkles, X, Zap } from 'lucide-react';
+import { Asterisk, NotebookPen, Code2, Download, KeyRound, PanelRightClose, ShieldCheck, Sparkles, X, Zap } from 'lucide-react';
 import type { SidePanelTool } from '../../electron/types';
 import { clampSidePanelWidth, SIDE_PANEL } from '../../electron/chrome-layout';
 import { OverlayContext } from './overlay';
@@ -15,12 +15,14 @@ export const SIDE_PANEL_TABS: Array<{ id: SidePanelTool; label: string; title: s
   { id: 'privacy', label: 'Privacy', title: 'Privacy log', icon: ShieldCheck },
 ];
 
-export function SidePanel({ tool, width, activeDownloads, onSelectTool, onClose, onLiveWidth, onCommitWidth, children }: {
+export function SidePanel({ tool, width, compact, activeDownloads, onSelectTool, onClose, onToggleCompact, onLiveWidth, onCommitWidth, children }: {
   tool: SidePanelTool;
   width: number;
+  compact: boolean;
   activeDownloads: number;
   onSelectTool: (tool: SidePanelTool) => void;
   onClose: () => void;
+  onToggleCompact: () => void;
   onLiveWidth: (width: number | null) => void;
   onCommitWidth: (width: number) => void;
   children: ReactNode;
@@ -104,7 +106,7 @@ export function SidePanel({ tool, width, activeDownloads, onSelectTool, onClose,
 
   return (
     <aside className={`side-panel-shell ${resizing ? 'resizing' : ''}`} aria-label="Side panel">
-      <div
+      {!compact && <div
         className="side-panel-resize"
         role="separator"
         aria-orientation="vertical"
@@ -115,7 +117,7 @@ export function SidePanel({ tool, width, activeDownloads, onSelectTool, onClose,
         tabIndex={0}
         onPointerDown={beginResize}
         onKeyDown={onSeparatorKey}
-      />
+      />}
       <header className="side-panel-header">
         <div className="side-panel-tabs" role="tablist" aria-label="Side panel tools" onKeyDown={onTabKey}>
           {SIDE_PANEL_TABS.map(({ id, label, title, icon: Icon }) => {
@@ -140,6 +142,8 @@ export function SidePanel({ tool, width, activeDownloads, onSelectTool, onClose,
             );
           })}
         </div>
+        <button type="button" className={`toolbar-button small ${compact ? 'selected' : ''}`}
+          aria-label="Compact side panel" title="Compact side panel" aria-pressed={compact} onClick={onToggleCompact}><PanelRightClose size={16} /></button>
         <button type="button" className="toolbar-button small" aria-label="Close side panel" title="Close side panel" onClick={onClose}><X size={16} /></button>
       </header>
       <div className="side-panel-body" role="tabpanel">{children}</div>

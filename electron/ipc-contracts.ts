@@ -440,6 +440,10 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); if (args[0] !== 'cloud' && args[0] !== 'local') throw new Error('Choose the cloud or local vault explicitly'); return;
     case 'vault:open-editor':
       between(args, 0, 1); if (args[0] !== undefined) requireBoundedText(args[0], 'origin', 2048); return;
+    case 'vault:check-health':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'vault:edit-health-login':
+      exact(args, 2); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'vault entry identifier', 128); return;
     default:
       if (NO_ARGUMENT_CHANNELS.has(channel)) { exact(args, 0); return; }
       // Every channel is listed; one that is not is refused rather than

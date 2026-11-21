@@ -292,3 +292,46 @@ test('protects a disposable Windows vault copy and clears it on quit', async () 
   await expect(nativeMarker()).resolves.toBe(false);
   await expect(application.evaluate(async ({ clipboard }, value) => (await clipboard.readText()) === value, FIXTURE_PASSWORD)).resolves.toBe(false);
 });
+
+test('checks vault health, edits in an isolated window and confirms deletion', async () => {
+  const payload = createEmptyVaultPayload();
+  for (const [id, title] of [['health-first', 'Fixture login A'], ['health-second', 'Fixture login B']]) {
+    payload.items.push({ id, title, type: 'login', username: FIXTURE_USERNAME, password: FIXTURE_PASSWORD, url: targetOrigin,
+      folder: '', vault: 'Personal', favorite: false, tags: [], updatedAt: payload.updatedAt });
+  }
+  const { envelope } = await createVault(MASTER_PASSWORD, payload, { memorySizeKiB: 8 * 1024, iterations: 1 });
+  fixtureEnvelope = envelope;
+  application = await launchFixture();
+  const page = await application.firstWindow();
+  await page.getByRole('button', { name: 'Open MyVault' }).click();
+  const pairingWindow = application.waitForEvent('window');
+  await page.getByRole('button', { name: 'Connect with one-time code' }).click();
+  const pairing = await pairingWindow;
+  await pairing.getByLabel('MyVault address').fill(serviceOrigin);
+  await pairing.getByLabel('One-time enrollment code').fill(['mve', fixtureId, 'b'.repeat(43)].join('_'));
+  await pairing.getByLabel('Master password').fill(MASTER_PASSWORD);
+  await pairing.getByRole('button', { name: 'Connect securely' }).click();
+  const health = page.getByRole('region', { name: 'Login health' });
+  await health.getByRole('button', { name: 'Check login health' }).click();
+  await expect(health.getByRole('status')).toHaveText('2 logins to review. 2 checked.');
+  await expect(health.getByText(/Possible duplicate login/)).toHaveCount(2);
+  await expect(health.getByText(/Password reused by another login/)).toHaveCount(2);
+  const editWindow = application.waitForEvent('window');
+  await health.getByRole('button', { name: 'Edit Fixture login A' }).click();
+  const edit = await editWindow;
+  await expect(edit.getByRole('heading', { name: 'Update saved login' })).toBeVisible();
+  await expect(edit.getByLabel('New password (optional)', { exact: true })).toHaveValue('');
+  await expect(edit.getByLabel('New authenticator secret (optional)')).toHaveValue('');
+  await edit.getByLabel('Name', { exact: true }).fill('Edited fixture login');
+  await edit.getByRole('button', { name: 'Encrypt and save' }).click();
+  await expect(health.getByText('Edited fixture login')).toBeVisible();
+  await expect(health.getByText(/Password reused by another login/)).toHaveCount(2);
+  const deleteWindow = application.waitForEvent('window');
+  await health.getByRole('button', { name: 'Delete Fixture login B' }).click();
+  await (await deleteWindow).getByRole('button', { name: 'Delete login' }).click();
+  await expect(health.getByRole('status')).toHaveText('No issues found in 1 login.');
+  const accountId = await page.evaluate(() => window.privateBrowser.getState().then((state) => state.activeAccountSpaceId));
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await expect(health).toHaveCount(0);
+  await expect(page.evaluate((id) => window.privateBrowser.checkVaultHealth(id), accountId)).rejects.toThrow(/unavailable in this Account Space/);
+});

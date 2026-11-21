@@ -4,6 +4,7 @@ import { BrowserWindow, ipcMain, type BrowserWindowConstructorOptions } from 'el
 import { normalizeAuthenticatorSecret, parseSecureDialogValue, SECURE_CREDENTIAL_PRESETS, type SecureCredentialPreset, type SecureDialogKind, type SecureDialogValue } from './secure-dialog-contract.js';
 
 type GenerateCredential = (preset: SecureCredentialPreset) => string;
+interface LoginLabel { title: string; username: string }
 
 interface PendingDialog {
   window: BrowserWindow;
@@ -64,7 +65,7 @@ authenticator.addEventListener('input', () => {
 });
 `;
 
-function fields(kind: SecureDialogKind, origin?: string, generator = false): string {
+function fields(kind: SecureDialogKind, origin?: string, generator = false, label?: LoginLabel): string {
   if (kind === 'enroll-hello') return '<p>Confirm the master password once. Windows Hello will then ask for your face, fingerprint or PIN, and after that it can unlock MyVault on this computer.</p><label>Master password<input name="password" type="password" autocomplete="current-password" maxlength="1024" required autofocus></label>';
   if (kind === 'unlock') return '<label>Master password<input name="password" type="password" autocomplete="current-password" maxlength="1024" required autofocus></label>';
   if (kind === 'pair') return '<label>MyVault address<input name="endpoint" type="url" value="https://myvault.digitronics-electro.workers.dev" maxlength="2048" required></label><label>One-time enrollment code<input name="enrollmentCode" autocomplete="off" maxlength="128" required></label><label>Master password<input name="password" type="password" autocomplete="current-password" maxlength="1024" required></label>';
@@ -73,13 +74,14 @@ function fields(kind: SecureDialogKind, origin?: string, generator = false): str
   if (kind === 'confirm-capture') return `<p>Save the login captured once for:<br><strong>${escapeHtml(origin ?? '')}</strong></p><input name="confirmed" type="hidden" value="true">`;
   if (kind === 'confirm-replace') return `<p class="warning">A changed login already exists. Replace it with the legacy record for:<br><strong>${escapeHtml(origin ?? '')}</strong></p><input name="confirmed" type="hidden" value="true">`;
   if (kind === 'confirm-cleanup') return '<p class="warning">Delete the old OS-encrypted Private Browser vault? The verified migration backup will remain.</p><input name="confirmed" type="hidden" value="true">';
-  return `<label>Name<input name="title" maxlength="200" required autofocus></label><label>Website origin<input name="url" type="url" maxlength="2048" value="${escapeHtml(origin ?? '')}" required></label><label>Username or email<input name="username" maxlength="500" autocomplete="username" required></label><label>Password<input name="password" type="password" maxlength="5000" autocomplete="new-password" required></label>${generator ? generatorFields() : ''}<label>Authenticator secret (optional)<input name="totpSecret" type="password" maxlength="500" autocomplete="off" aria-describedby="authenticator-feedback"><span id="authenticator-feedback" role="status"></span></label>`;
+  const updating = kind === 'update-login';
+  return `<label>Name<input name="title" maxlength="200" value="${escapeHtml(label?.title ?? '')}" required autofocus></label><label>Website origin<input name="url" type="url" maxlength="2048" value="${escapeHtml(origin ?? '')}" required></label><label>Username or email<input name="username" maxlength="500" value="${escapeHtml(label?.username ?? '')}" autocomplete="username" required></label><label>${updating ? 'New password (optional)' : 'Password'}<input name="password" type="password" maxlength="5000" autocomplete="new-password" ${updating ? '' : 'required'}></label>${generator ? generatorFields() : ''}<label>${updating ? 'New authenticator secret (optional)' : 'Authenticator secret (optional)'}<input name="totpSecret" type="password" maxlength="500" autocomplete="off" aria-describedby="authenticator-feedback"><span id="authenticator-feedback" role="status"></span></label>${updating ? '<p>Leave the replacement fields empty to keep the saved password and authenticator secret.</p>' : ''}`;
 }
 
-function html(kind: SecureDialogKind, nonce: string, origin?: string, generator = false): string {
-  const title = kind === 'unlock' ? 'Unlock MyVault' : kind === 'enroll-hello' ? 'Turn on Windows Hello' : kind === 'pair' ? 'Connect MyVault' : kind === 'confirm-delete' ? 'Confirm deletion' : kind === 'confirm-fill' ? 'Confirm Banking fill' : kind === 'confirm-capture' ? 'Confirm captured login' : kind === 'confirm-replace' ? 'Resolve changed login' : kind === 'confirm-cleanup' ? 'Remove legacy vault' : 'Save in MyVault';
+function html(kind: SecureDialogKind, nonce: string, origin?: string, generator = false, label?: LoginLabel): string {
+  const title = kind === 'unlock' ? 'Unlock MyVault' : kind === 'enroll-hello' ? 'Turn on Windows Hello' : kind === 'pair' ? 'Connect MyVault' : kind === 'confirm-delete' ? 'Confirm deletion' : kind === 'confirm-fill' ? 'Confirm Banking fill' : kind === 'confirm-capture' ? 'Confirm captured login' : kind === 'confirm-replace' ? 'Resolve changed login' : kind === 'confirm-cleanup' ? 'Remove legacy vault' : kind === 'update-login' ? 'Update saved login' : 'Save in MyVault';
   const action = kind === 'confirm-delete' ? 'Delete login' : kind === 'confirm-fill' ? 'Fill this origin' : kind === 'confirm-capture' ? 'Encrypt and save' : kind === 'confirm-replace' ? 'Replace login' : kind === 'confirm-cleanup' ? 'Delete old ciphertext' : kind === 'unlock' ? 'Unlock' : kind === 'enroll-hello' ? 'Continue to Windows Hello' : kind === 'pair' ? 'Connect securely' : 'Encrypt and save';
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'none'; base-uri 'none'"><meta name="viewport" content="width=device-width"><title>${title}</title><style nonce="${nonce}">:root{color-scheme:dark;font-family:system-ui;background:#0b0d12;color:#f7f8fb}body{margin:0;padding:28px}h1{font-size:22px;margin:0 0 8px}p{color:#aeb6c8;line-height:1.5}form{display:grid;gap:16px;margin-top:22px}label{display:grid;gap:7px;font-size:13px;color:#c9cfdb}details{border:1px solid #394052;border-radius:8px;padding:9px}details label,details button{margin-top:9px}summary{cursor:pointer}input,select{box-sizing:border-box;width:100%;padding:11px 12px;border-radius:8px;border:1px solid #394052;background:#161a23;color:#fff}input:focus{outline:2px solid #818cf8;outline-offset:2px}.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:8px}button{padding:10px 16px;border-radius:8px;border:0;font-weight:700;background:#252b38;color:#fff}button[type=submit]{background:#4f46e5}.danger button[type=submit]{background:#be123c}.warning{color:#fecdd3}</style></head><body><h1>${title}</h1><p>This isolated window sends its value directly to the trusted vault broker. Browser pages and the main interface cannot read it.</p><form class="${kind === 'confirm-delete' ? 'danger' : ''}">${fields(kind, origin, generator)}<div class="actions"><button id="cancel" type="button">Cancel</button><button type="submit">${action}</button></div></form><script nonce="${nonce}">const form=document.querySelector('form');document.querySelector('#cancel').addEventListener('click',()=>window.secureVault.cancel());form.addEventListener('submit',(event)=>{event.preventDefault();const raw=Object.fromEntries(new FormData(form));if(raw.confirmed==='true')raw.confirmed=true;window.secureVault.submit(raw)});window.addEventListener('beforeunload',()=>window.secureVault.cancel());\n${generator ? generatorScript : ""}${kind === "edit-login" ? authenticatorScript : ""}</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'none'; base-uri 'none'"><meta name="viewport" content="width=device-width"><title>${title}</title><style nonce="${nonce}">:root{color-scheme:dark;font-family:system-ui;background:#0b0d12;color:#f7f8fb}body{margin:0;padding:28px}h1{font-size:22px;margin:0 0 8px}p{color:#aeb6c8;line-height:1.5}form{display:grid;gap:16px;margin-top:22px}label{display:grid;gap:7px;font-size:13px;color:#c9cfdb}details{border:1px solid #394052;border-radius:8px;padding:9px}details label,details button{margin-top:9px}summary{cursor:pointer}input,select{box-sizing:border-box;width:100%;padding:11px 12px;border-radius:8px;border:1px solid #394052;background:#161a23;color:#fff}input:focus{outline:2px solid #818cf8;outline-offset:2px}.actions{display:flex;justify-content:flex-end;gap:10px;margin-top:8px}button{padding:10px 16px;border-radius:8px;border:0;font-weight:700;background:#252b38;color:#fff}button[type=submit]{background:#4f46e5}.danger button[type=submit]{background:#be123c}.warning{color:#fecdd3}</style></head><body><h1>${title}</h1><p>This isolated window sends its value directly to the trusted vault broker. Browser pages and the main interface cannot read it.</p><form class="${kind === 'confirm-delete' ? 'danger' : ''}">${fields(kind, origin, generator, label)}<div class="actions"><button id="cancel" type="button">Cancel</button><button type="submit">${action}</button></div></form><script nonce="${nonce}">const form=document.querySelector('form');document.querySelector('#cancel').addEventListener('click',()=>window.secureVault.cancel());form.addEventListener('submit',(event)=>{event.preventDefault();const raw=Object.fromEntries(new FormData(form));if(raw.confirmed==='true')raw.confirmed=true;window.secureVault.submit(raw)});window.addEventListener('beforeunload',()=>window.secureVault.cancel());\n${generator ? generatorScript : ""}${(kind === "edit-login" || kind === "update-login") ? authenticatorScript : ""}</script></body></html>`;
 }
 
 export class SecureVaultDialogs {
@@ -98,10 +100,10 @@ export class SecureVaultDialogs {
     });
   }
 
-  open(kind: SecureDialogKind, origin?: string, generate?: GenerateCredential): Promise<SecureDialogValue | undefined> {
+  open(kind: SecureDialogKind, origin?: string, generate?: GenerateCredential, label?: LoginLabel): Promise<SecureDialogValue | undefined> {
     const nonce = randomBytes(24).toString('base64url');
     const options: BrowserWindowConstructorOptions = {
-      parent: this.parent(), modal: true, show: false, width: 500, height: kind === 'edit-login' ? 650 : 430,
+      parent: this.parent(), modal: true, show: false, width: 500, height: kind === 'edit-login' || kind === 'update-login' ? 650 : 430,
       resizable: false, minimizable: false, maximizable: false, backgroundColor: '#0b0d12', title: 'MyVault',
       webPreferences: {
         preload: join(import.meta.dirname, 'secure-preload.cjs'), contextIsolation: true, sandbox: true,
@@ -117,7 +119,7 @@ export class SecureVaultDialogs {
       timeout.unref();
       this.pending.set(nonce, { window, kind, resolve, used: false, timeout, generate });
       window.on('closed', () => this.settle(nonce, undefined));
-      void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html(kind, nonce, origin, Boolean(generate)))}`).then(() => window.show());
+      void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html(kind, nonce, origin, Boolean(generate), label))}`).then(() => window.show());
     });
   }
 
