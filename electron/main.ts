@@ -871,6 +871,7 @@ class BrowserController {
   }
 
   sideAppCommand(id: SideAppId, command: SideAppCommand): Promise<void> {
+    if (this.store.get().activeWorkspaceId === 'banking') return Promise.reject(new Error('Side apps are unavailable in Banking'));
     return this.sideApps.command(id, command);
   }
 

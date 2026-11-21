@@ -7,8 +7,11 @@ const STATUS_TEXT: Record<SideAppSnapshot['status'], string> = {
   idle: 'Starting…',
   loading: 'Loading…',
   ready: '',
-  failed: 'Could not load. Check your connection and reload.',
-  crashed: 'The panel stopped working. Reload to start it again.',
+  failed: 'This app could not load.',
+  offline: 'The app could not connect. Check your internet connection.',
+  'certificate-error': 'The app’s site certificate could not be verified.',
+  'redirect-blocked': 'The app tried to redirect to a site outside the side panel.',
+  crashed: 'The panel stopped working.',
 };
 
 /**
@@ -43,6 +46,9 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
   }
 
   const status = STATUS_TEXT[app.status];
+  const recovery = app.status !== 'idle' && app.status !== 'loading' && app.status !== 'ready';
+  const attention = app.attention === 'human-check' ? 'Complete the human check in this panel.'
+    : app.attention === 'sign-in' ? 'Finish signing in here to use this app in the side panel.' : '';
   const HomeIcon = notes ? BookOpen : SquarePen;
   const ClearIcon = notes ? Trash2 : LogOut;
   const AppIcon = notes ? NotebookPen : Asterisk;
@@ -59,6 +65,12 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
       </div>
       {notes && <div className="side-app-status" role="note">Shared Notes library</div>}
       {status && <div className="side-app-status" role="status">{status}</div>}
+      {attention && <div className="side-app-status" role="status">{attention}</div>}
+      {(recovery || app.attention === 'human-check') && <div className="side-app-status panel-actions">
+        {recovery && app.status !== 'redirect-blocked' && <button type="button" onClick={() => run('reload')}>Retry</button>}
+        {recovery && app.canGoBack && <button type="button" onClick={() => run('back')}>Return to previous page</button>}
+        <button type="button" onClick={() => run('open-in-tab')}>Open app in a regular tab</button>
+      </div>}
       <div ref={slot} className="side-app-slot" data-side-app={app.id}>
         {/* Seen only while the native view is hidden: loading, a menu open over the chrome, or a resize. */}
         <div className="side-app-placeholder"><AppIcon size={28} /><span>{app.name}</span></div>

@@ -161,10 +161,11 @@ panel switch. Channels already take the id.
 
 ## Gotchas
 
-- **Cloudflare's human check** appears on claude.ai for a fresh session and
-  needs one click; automated Electron runs keep seeing it.
+- A Cloudflare challenge response shows a prompt to complete the check in the
+  side panel. Sign-in routes show a separate hint.
 - **Sign-in providers other than Google, Apple and email codes** (company SSO)
-  redirect to hosts not on the list and are refused.
+  redirect off the allowlist and are refused. The fallback opens the app home
+  in the active regular Account Space. Load failures and crashes offer Retry.
 - The chrome's screenshots never include the native view; capture its
   `webContents` instead.
 
