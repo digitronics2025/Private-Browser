@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { signValue, verifySignedValue, isLiveExpiry } from '../cloudflare/src/auth';
 import { parseSingleRange, validateReleaseInput } from '../cloudflare/src/protocol';
 import { DEVELOPER_PROFILE, renderDownloadPage } from '../cloudflare/src/page';
-import worker, { type Env } from '../cloudflare/src/index';
 import { parsePublisherReceipt } from '../cloudflare/src/publisher-receipt.mjs';
 
 const release = {
@@ -56,6 +55,8 @@ describe('Cloudflare release protocol', () => {
   });
 
   it('shows only publisher evidence tied to the active installer on both download pages', async () => {
+    const workerPath = '../cloudflare/src/index.ts';
+    const { default: worker } = await import(workerPath) as { default: { fetch: (request: Request, env: unknown) => Promise<Response> } };
     const access = 'temporary-download-fixture-'.repeat(2);
     const prepared = { bind: () => prepared, first: async () => release, all: async () => ({ results: [] }) };
     let receipt = { schemaVersion: 1, sha256: release.sha256, status: 'verified', publisher: 'Publisher <Fixture>' };
@@ -67,7 +68,7 @@ describe('Cloudflare release protocol', () => {
         return { size: 300, json: async () => receipt };
       } },
       DOWNLOAD_ACCESS_TOKEN: access, SIGNING_SECRET: 'fixture-signing-'.repeat(3), ADMIN_API_KEY: 'fixture-admin-'.repeat(3),
-    } as unknown as Env;
+    };
     const get = (path: string) => worker.fetch(new Request('https://downloads.example.test' + path), env);
     for (const path of ['/', '/download/' + access]) {
       const response = await get(path);
