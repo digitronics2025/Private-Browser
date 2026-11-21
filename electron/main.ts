@@ -18,6 +18,7 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  powerMonitor,
   safeStorage,
   screen,
   session,
@@ -38,6 +39,7 @@ import { DownloadHistoryStore } from './download-history.js';
 import { availableDownloadFolder, discardDownloadStage, DownloadFolderStore, finishStagedDownload, safeDownloadFilename, stageDownload } from './download-folder.js';
 import { ManagedUpdate } from './managed-update.js';
 import { canPauseTrackersAt, TRACKER_COMPATIBILITY_MS, TrackerProtection, trackerCategory } from './tracker-protection.js';
+import { BrowserSessionLock } from './browser-session-lock.js';
 import { getDomain } from 'tldts';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
@@ -52,9 +54,9 @@ import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
-import { mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
-import { isPinnablePanelTool, mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
+import { DEFAULT_UI_PREFERENCES, isPinnablePanelTool, mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
   AccountSpaceColor,
@@ -303,6 +305,8 @@ class BrowserController {
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private readonly googleChecks = new Map<AccountSpaceId, GoogleConnectionHealth>();
   private expectedInstaller?: ExpectedInstaller;
+  private readonly sessionLock = new BrowserSessionLock(join(app.getPath('userData'), 'browser-session.lock'));
+  private sessionLockWork = Promise.resolve();
   private readonly managedUpdate = new ManagedUpdate({
     directory: join(app.getPath('userData'), 'update-installers'),
     currentVersion: app.getVersion(),
@@ -521,6 +525,21 @@ class BrowserController {
   }
 
   getSnapshot(): BrowserSnapshot {
+    if (this.sessionLock.reason) return {
+      sessionLock: this.sessionLock.reason,
+      workspaces: WORKSPACES,
+      activeWorkspaceId: 'personal',
+      activeTabId: '',
+      tabs: [], bookmarks: [], history: [], downloads: [], privacyLog: [],
+      trackerBlocking: true,
+      activeAccountSpaceId: '' as AccountSpaceId,
+      accountSpaces: [], accountHealth: [],
+      googleConfiguration: { configured: false }, externalBrowsers: [],
+      bookmarkBarVisible: false, ui: { ...DEFAULT_UI_PREFERENCES }, settings: { ...DEFAULT_BROWSER_SETTINGS },
+      availableSpellcheckLanguages: [], assistantPolicy: { cloud: 'unavailable', receipts: [] },
+      windowState: { maximized: false, fullscreen: false, darkMode: nativeTheme.shouldUseDarkColors },
+      shortcutsByAccountSpace: {}, bookmarkIcons: {}, canReopenClosedTab: false, sideApps: [],
+    };
     const persisted = this.store.get();
     const tabs: BrowserTab[] = persisted.tabs.map((tab) => {
       const runtime = this.runtimeTabs.get(tab.id);
@@ -1044,7 +1063,7 @@ class BrowserController {
 
   /** Side apps show only beside an unprotected workspace, never over a menu or in full screen. */
   private layoutSideApps(): void {
-    if (!this.window || this.window.isDestroyed()) return;
+    if (this.sessionIsLocked || !this.window || this.window.isDestroyed()) return;
     const state = this.store.get();
     const accountId = this.activeDownloadAccount(state);
     const tool = this.sidePanelTool(state, accountId);
@@ -1552,7 +1571,7 @@ class BrowserController {
   }
 
   private sendOperationProgress(operationId: string, accountSpaceId: AccountSpaceId, service: 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup', phase: 'started' | 'completed' | 'cancelled' | 'failed'): void {
-    if (!this.window.isDestroyed()) this.window.webContents.send('google:operation-progress', { operationId, accountSpaceId, service, phase });
+    if (!this.sessionIsLocked && !this.window.isDestroyed()) this.window.webContents.send('google:operation-progress', { operationId, accountSpaceId, service, phase });
   }
 
   private requireAccountMembership(accountSpaceId: AccountSpaceId) {
@@ -1613,6 +1632,58 @@ class BrowserController {
       this.downloadItems.delete(id);
       this.downloads.delete(id);
     }
+  }
+
+  get sessionIsLocked(): boolean { return this.sessionLock.reason !== undefined; }
+
+  startSessionLockMonitoring(): void {
+    if (process.platform !== 'win32') return;
+    const onLock = () => {
+      if (this.sessionLock.onWindowsLock(this.store.sessionPrivacyPreferences().lockOnWindowsSession === true)) this.enforceSessionLock();
+    };
+    if (powerMonitor.getSystemIdleState(1) === 'locked') onLock();
+    powerMonitor.on('lock-screen', onLock);
+    powerMonitor.on('unlock-screen', () => {
+      if (!this.sessionLock.onWindowsUnlock()) return;
+      void this.sessionLockWork.then(async () => {
+        if (this.sessionIsLocked) return;
+        this.refreshSessionChrome();
+        await this.showActiveTab();
+        await openPendingSystemLinks();
+      }).catch(() => undefined);
+    });
+    setInterval(() => {
+      if (this.sessionIsLocked) return;
+      const minutes = this.store.sessionPrivacyPreferences().idleLockMinutes;
+      if (minutes && this.sessionLock.checkIdle(powerMonitor.getSystemIdleTime(), minutes)) this.enforceSessionLock();
+    }, 5_000).unref();
+  }
+
+  private enforceSessionLock(): void {
+    // Hide first. Subsequent IPC cannot reopen content while the lock marker is set.
+    this.hideAllViews();
+    this.sideApps.closeAll();
+    this.managedUpdate.cancelTransfer();
+    agentHost?.stop();
+    const state = this.store.get();
+    for (const account of state.accountSpaces) this.cancelAccountOperations(account.id);
+    for (const runtime of this.runtimeTabs.values()) {
+      if (!runtime.view) continue;
+      this.window?.contentView.removeChildView(runtime.view);
+      runtime.view.webContents.close();
+    }
+    this.runtimeTabs.clear();
+    const availableWindow = this.window && !this.window.isDestroyed();
+    if (availableWindow) this.refreshSessionChrome();
+    this.sessionLockWork = Promise.allSettled([
+      this.lockVault(),
+      this.vscodeBridge.disconnect(false),
+      ...[...this.configuredSessions].map((partition) => session.fromPartition(partition).closeAllConnections()),
+    ]).then(() => undefined);
+  }
+
+  private refreshSessionChrome(): void {
+    if (this.window && !this.window.isDestroyed()) this.window.webContents.reloadIgnoringCache();
   }
 
   private queuePermissionPrompt(prompt: PermissionPrompt, respond: (allowed: boolean, displaySourceId?: string) => void, retainAllowOnce = false): void {
@@ -3478,6 +3549,7 @@ class BrowserController {
   }
 
   private activeDownloadAccount(state = this.store.get()): AccountSpaceId | undefined {
+    if (this.sessionIsLocked) return undefined;
     const id = this.activeAccountSpaceId(state);
     const account = state.accountSpaces.find((candidate) => candidate.id === id);
     return account && isAvailableRegularAccount(state, account) ? id : undefined;
@@ -3724,10 +3796,10 @@ class BrowserController {
   installManagedUpdate(): Promise<void> { return this.managedUpdate.install(); }
 
   async checkForUpdatesInBackground(): Promise<void> {
-    if (this.window.isDestroyed()) return;
+    if (this.sessionIsLocked || this.window.isDestroyed()) return;
     try {
       const result = await this.checkForUpdates();
-      if (result.state === 'available') this.window.webContents.send('updates:available', result);
+      if (!this.sessionIsLocked && result.state === 'available') this.window.webContents.send('updates:available', result);
     } catch {
       // Background checks stay quiet; explicit checks show actionable errors.
     }
@@ -4215,7 +4287,7 @@ class BrowserController {
   }
 
   private async showActiveTab(): Promise<void> {
-    if (this.startingWindow) return;
+    if (this.startingWindow || this.sessionIsLocked) return;
     const state = this.store.get();
     const tab = this.activeTab(state);
     const locked = state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked;
@@ -4459,10 +4531,11 @@ function queueSystemLink(url: string): void {
 }
 
 async function openPendingSystemLinks(): Promise<void> {
-  if (!launchWindowReady || processingLaunchUrls || !controller) return;
+  if (!launchWindowReady || processingLaunchUrls || !controller || controller.sessionIsLocked) return;
   processingLaunchUrls = true;
   try {
-    for (let url = pendingLaunchUrls.shift(); url; url = pendingLaunchUrls.shift()) {
+    while (!controller.sessionIsLocked && pendingLaunchUrls.length) {
+      const url = pendingLaunchUrls.shift()!;
       try {
         await controller.openSystemLink(url);
       } catch {
@@ -4513,6 +4586,9 @@ const ipcGuard = new IpcGuard();
 function handle<TArgs extends unknown[], TResult>(channel: string, callback: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>): void {
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrusted(event, channel);
+    if (controller?.sessionIsLocked && channel !== 'browser:get-state' && channel !== 'app:quit') {
+      throw new Error('Private Browser is locked. Unlock Windows to resume.');
+    }
     ipcGuard.check(event.sender.id, channel, args);
     validateIpcArguments(channel, args);
     return callback(event, ...args as TArgs);
@@ -4813,11 +4889,13 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:install-verified', () => controller!.installManagedUpdate());
   handle('updates:open-history', () => controller!.openReleaseHistory());
 
+  controller.startSessionLockMonitoring();
   await controller.createWindow();
-  await agentHost.start();
+  if (controller.sessionIsLocked) agentHost.stop();
+  else await agentHost.start();
   setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();
   setInterval(() => void controller?.checkForUpdatesInBackground(), 24 * 60 * 60_000).unref();
-  if (!pendingLaunchUrls.length) await controller.openStartupHome();
+  if (!controller.sessionIsLocked && !pendingLaunchUrls.length) await controller.openStartupHome();
   launchWindowReady = true;
   await openPendingSystemLinks();
   app.on('activate', async () => {

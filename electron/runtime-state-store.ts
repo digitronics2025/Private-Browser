@@ -70,6 +70,11 @@ export class RuntimeStateStore {
     return this.state.trackerBlocking;
   }
 
+  sessionPrivacyPreferences(): { lockOnWindowsSession?: boolean; idleLockMinutes?: number } {
+    const { lockOnWindowsSession, idleLockMinutes } = this.state.ui;
+    return { lockOnWindowsSession, idleLockMinutes };
+  }
+
   addressMatches(accountSpaceId: AccountSpaceId, text: string): AddressMatch[] {
     const account = this.activeReadableAccount(accountSpaceId);
     if (!account) return [];

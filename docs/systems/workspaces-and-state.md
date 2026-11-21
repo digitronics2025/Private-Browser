@@ -87,6 +87,11 @@ manifest without `ui` from the legacy `bookmarkBarVisible` flag, which is still
 written (`bookmarkBarMode !== 'hidden'`) so an older build reads the same bar
 state. IPC patches use the stricter `requireUiPreferencesPatch`.
 
+Screen privacy settings can lock the browser on Windows lock or device idle.
+A profile marker holds only the reason and survives a restart. Resuming requires
+an observed Windows lock and unlock. Masked New Tab hides account labels and
+browsing summaries for screen sharing.
+
 The manifest also carries an optional `settings` object (`BrowserSettings`,
 [browser-settings.ts](../../electron/browser-settings.ts)): `searchEngine`
 (`duckduckgo` default, `google`, `bing`, `brave`, `startpage`, `ecosia`,

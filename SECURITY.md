@@ -58,6 +58,13 @@ The login picker (the list of saved accounts under a focused sign-in field) is d
 
 ## Account Spaces and local browsing data
 
+Optional Windows session and idle locking close live views, clear transient
+credentials, and pause the developer and Agent bindings. The old chrome
+renderer is replaced. While locked, only an empty snapshot and Exit are
+available through its IPC. The profile marker contains only the lock reason.
+An observed Windows lock and unlock is required to resume, including after
+restarting the app.
+
 Saved credentials, Account Space metadata and grants, the AI provider key and the
 download-service token are encrypted with Electron `safeStorage`. Each account
 has an independent encrypted file so corruption is quarantined. **Browsing

@@ -1,0 +1,1 @@
+Choose when Private Browser locks with Windows or after inactivity. Locking closes live views and integrations until Windows unlocks. Turn on a masked New Tab view for screen sharing.

@@ -166,7 +166,7 @@ export default function App() {
   }, [windowState.darkMode]);
 
   const committedLayout = computeChromeLayout({
-    bookmarkBarMode: ui.bookmarkBarMode,
+    bookmarkBarMode: activeTab?.isHome && ui.maskTodayIdentity ? 'hidden' : ui.bookmarkBarMode,
     isHome: activeTab?.isHome ?? true,
     findBarOpen: findOpen,
     sidePanelOpen: ui.sidePanelOpen,
@@ -176,7 +176,7 @@ export default function App() {
     windowWidth,
   });
   const liveLayout = liveWidth === null ? committedLayout : computeChromeLayout({
-    bookmarkBarMode: ui.bookmarkBarMode,
+    bookmarkBarMode: activeTab?.isHome && ui.maskTodayIdentity ? 'hidden' : ui.bookmarkBarMode,
     isHome: activeTab?.isHome ?? true,
     findBarOpen: findOpen,
     sidePanelOpen: ui.sidePanelOpen,
@@ -187,9 +187,9 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (!state) return;
-    void window.privateBrowser.setLayout(committedLayout.insets);
-  }, [Boolean(state), committedLayout.insets.top, committedLayout.insets.right, committedLayout.insets.left, committedLayout.insets.bottom]);
+    if (!state || state.sessionLock) return;
+    void window.privateBrowser.setLayout(committedLayout.insets).catch(() => undefined);
+  }, [Boolean(state), state?.sessionLock, committedLayout.insets.top, committedLayout.insets.right, committedLayout.insets.left, committedLayout.insets.bottom]);
 
   const acquireOverlay = useCallback(() => {
     setOverlayCount((count) => count + 1);
@@ -204,6 +204,7 @@ export default function App() {
   // Freeze the page, then hide the live view, so menus and dialogs can draw over
   // the content area. Protected pages come back as null and show a plain backdrop.
   useEffect(() => {
+    if (state?.sessionLock) return;
     let cancelled = false;
     if (overlayOpen) {
       setOverlayReady(false);
@@ -213,15 +214,15 @@ export default function App() {
         setFrozenFrame(frame ?? '');
         await nextPaint();
         if (cancelled) return;
-        await window.privateBrowser.setOverlayOpen(overlayOpen);
+        await window.privateBrowser.setOverlayOpen(overlayOpen).catch(() => undefined);
         if (!cancelled) setOverlayReady(true);
       })();
     } else {
       setOverlayReady(true);
-      void window.privateBrowser.setOverlayOpen(overlayOpen).finally(() => { if (!cancelled) setFrozenFrame(null); });
+      void window.privateBrowser.setOverlayOpen(overlayOpen).catch(() => undefined).finally(() => { if (!cancelled) setFrozenFrame(null); });
     }
     return () => { cancelled = true; };
-  }, [overlayOpen]);
+  }, [overlayOpen, state?.sessionLock]);
 
   useEffect(() => {
     if (!toast) return;
@@ -341,6 +342,15 @@ export default function App() {
 
   const overlayValue = useMemo(() => ({ acquire: acquireOverlay, ready: overlayReady }), [acquireOverlay, overlayReady]);
 
+  if (state?.sessionLock) {
+    return <main className="boot browser-lock-screen">
+      <ShieldCheck size={34} aria-hidden="true" />
+      <h1>Private Browser is locked</h1>
+      <p>Lock and unlock Windows to resume browsing.</p>
+      <p>Press <kbd>Windows + L</kbd>, then sign in to Windows.</p>
+      <button type="button" className="secondary-button" onClick={() => void window.privateBrowser.quit()}>Exit Private Browser</button>
+    </main>;
+  }
   if (!state || !activeTab || !workspace || !activeAccount) {
     return <div className="boot"><ShieldCheck size={34} /><LoaderCircle className="spin" size={22} /> Opening your private workspace</div>;
   }
@@ -492,6 +502,7 @@ export default function App() {
               onReturn={() => void act(() => window.privateBrowser.returnAgentTab())}
             />
             <NavigationToolbar
+              maskAccountIdentity={activeTab.isHome && Boolean(ui.maskTodayIdentity)}
               tab={activeTab}
               workspace={workspace}
               account={activeAccount}
@@ -553,6 +564,7 @@ export default function App() {
             customized={Boolean(customShortcuts)}
             history={recentHistory}
             showRecent={ui.showRecentOnNewTab}
+            maskIdentity={Boolean(ui.maskTodayIdentity)}
             setupGuide={ui.offerSetupGuide && !workspace.protected ? {
               open: () => openTool('settings', 'setup'),
               dismiss: () => setUi({ offerSetupGuide: false }),

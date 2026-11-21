@@ -177,6 +177,10 @@ export class ManagedUpdate {
 
   cancel(): void {
     this.assertUsable();
+    this.cancelTransfer();
+  }
+
+  cancelTransfer(): void {
     this.abort?.abort();
   }
 

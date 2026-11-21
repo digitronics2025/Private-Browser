@@ -184,6 +184,47 @@ test('counts blocked requests for the current page and keeps Banking strict', as
     { id: (await getState()).activeTabId, site: origin })).rejects.toThrow(/unavailable/);
 });
 
+test('locks browser data and native views on Windows lock until its observed unlock', async () => {
+  test.skip(process.platform !== 'win32', 'Exercises the Windows lock event path in an isolated Electron profile.');
+  let page = await application!.firstWindow();
+  const subject = origin + '/locked-window-fixture';
+  await page.evaluate(async (url) => {
+    await window.privateBrowser.switchWorkspace('personal');
+    await window.privateBrowser.navigate(url);
+    await window.privateBrowser.setUiPreferences({ lockOnWindowsSession: true, idleLockMinutes: 5 });
+  }, subject);
+  await application!.evaluate(({ powerMonitor }) => { powerMonitor.emit('lock-screen'); });
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toBeVisible();
+  const snapshot = await page.evaluate(() => window.privateBrowser.getState());
+  expect(snapshot).toMatchObject({ sessionLock: 'windows', accountSpaces: [], tabs: [], history: [], sideApps: [] });
+  expect(await application!.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((view) => view.getURL() === url), subject)).toBe(false);
+  await expect(page.evaluate(() => window.privateBrowser.listVault())).rejects.toThrow(/locked/i);
+  await application!.close();
+  application = await launchProfile();
+  page = await application.firstWindow();
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toBeVisible();
+  await application.evaluate(({ powerMonitor }) => { powerMonitor.emit('unlock-screen'); });
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toBeVisible();
+  await application.evaluate(({ powerMonitor }) => {
+    powerMonitor.emit('lock-screen');
+    powerMonitor.emit('unlock-screen');
+  });
+  await expect.poll(() => application!.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((view) => view.getURL() === url), subject)).toBe(true);
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toHaveCount(0);
+  expect((await page.evaluate(() => window.privateBrowser.getState())).ui.idleLockMinutes).toBe(5);
+});
+
+test('idle auto-lock uses the Windows idle clock without leaving a browser unlock button', async () => {
+  test.skip(process.platform !== 'win32', 'Exercises the Windows idle clock integration.');
+  const page = await application!.firstWindow();
+  await application!.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 301; });
+  await page.evaluate(() => window.privateBrowser.setUiPreferences({ idleLockMinutes: 5 }));
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toBeVisible({ timeout: 10_000 });
+  expect((await page.evaluate(() => window.privateBrowser.getState())).sessionLock).toBe('idle');
+  await expect(page.getByRole('button', { name: /resume|unlock/i })).toHaveCount(0);
+  await expect(page.getByText('Lock and unlock Windows to resume browsing.')).toBeVisible();
+});
+
 test('checks the managed update in its own directory and opens it only on an eligible explicit action', async () => {
   test.skip(process.platform !== 'win32', 'Exercises the Windows installer download marker.');
   const page = await application!.firstWindow();

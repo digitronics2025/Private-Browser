@@ -21,7 +21,7 @@ function tileHue(value: string): number {
   return hash;
 }
 
-export function NewTabPage({ searchPrompt, workspace, account, shortcuts, customized, history, showRecent, setupGuide, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onMoveShortcut, onResetShortcuts, onBackground, onShowRecent, onTheme }: {
+export function NewTabPage({ searchPrompt, workspace, account, shortcuts, customized, history, showRecent, maskIdentity, setupGuide, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onMoveShortcut, onResetShortcuts, onBackground, onShowRecent, onTheme }: {
   searchPrompt: string;
   workspace: Workspace;
   account: AccountSpaceSummary;
@@ -29,6 +29,7 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
   customized: boolean;
   history: HistoryEntry[];
   showRecent: boolean;
+  maskIdentity?: boolean;
   setupGuide?: { open: () => void; dismiss: () => void };
   bookmarks: Bookmark[];
   favicons: Map<string, string>;
@@ -49,8 +50,8 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
   const [tileMenu, setTileMenu] = useState<{ tile: ShortcutTile; anchor: HTMLElement } | null>(null);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const customizeRef = useRef<HTMLButtonElement>(null);
-  const recent = showRecent ? history.slice(0, 6) : [];
-  const saved = bookmarks.slice(0, 6);
+  const recent = showRecent && !maskIdentity ? history.slice(0, 6) : [];
+  const saved = maskIdentity ? [] : bookmarks.slice(0, 6);
   const menuIndex = shortcuts.findIndex((tile) => tile.id === tileMenu?.tile.id);
 
   const submit = (event: FormEvent) => {
@@ -70,8 +71,8 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
           <input aria-label={searchPrompt} placeholder={searchPrompt} value={query} onChange={(event) => setQuery(event.target.value)} spellCheck={false} autoComplete="off" />
         </form>
         <p className="ntp-context">
-          <span className="ntp-space-dot" style={{ '--workspace-color': workspace.color } as CSSProperties} aria-hidden="true" />
-          {account.label === workspace.name ? workspace.name : `${workspace.name} · ${account.label}`}
+          {!maskIdentity && <span className="ntp-space-dot" style={{ '--workspace-color': workspace.color } as CSSProperties} aria-hidden="true" />}
+          {maskIdentity ? 'Today' : account.label === workspace.name ? workspace.name : `${workspace.name} · ${account.label}`}
         </p>
         {setupGuide && <section className="ntp-setup" aria-label="First launch">
           <span>Your browser is ready. Review optional setup whenever you like.</span>
@@ -81,7 +82,7 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
           </div>
         </section>}
 
-        <section className="ntp-shortcuts" aria-label="Shortcuts">
+        {!maskIdentity && <section className="ntp-shortcuts" aria-label="Shortcuts">
           {shortcuts.map((tile) => {
             const icon = favicons.get(domainFromUrl(tile.url));
             return (
@@ -104,7 +105,7 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
               </button>
             </div>
           )}
-        </section>
+        </section>}
 
         {(recent.length > 0 || saved.length > 0) && (
           <div className="ntp-lists">
