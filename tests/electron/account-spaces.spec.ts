@@ -371,6 +371,32 @@ test('retains a named Google setup after restart and keeps Banking out of OAuth'
   expect(denied).toMatchObject({ ok: false, error: { code: 'GOOGLE_POLICY_DENIED' } });
 });
 
+test('reviews a local selection and rejects clipboard replay after cancelling', async () => {
+  const page = await application!.firstWindow();
+  const url = origin + '/selection-excerpt';
+  await page.evaluate((target) => window.privateBrowser.navigate(target), url);
+  await expect.poll(() => application!.evaluate(({ webContents }, target) => {
+    return webContents.getAllWebContents().some((view) => view.getURL() === target && !view.isLoading());
+  }, url)).toBe(true);
+  await application!.evaluate(async ({ webContents }, target) => {
+    const view = webContents.getAllWebContents().find((candidate) => candidate.getURL() === target)!;
+    await view.executeJavaScript(`
+      document.body.textContent = 'Approved catalogue paragraph. token=local-fixture';
+      const range = document.createRange();
+      range.selectNodeContents(document.body);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+    `);
+  }, url);
+  const review = await page.evaluate(() => window.privateBrowser.prepareClaudeExcerpt());
+  expect(review).toMatchObject({ url: origin, text: 'Approved catalogue paragraph. [REDACTED]', redactions: 1 });
+  expect(review).not.toHaveProperty('sourceUrl');
+  await page.evaluate((id) => window.privateBrowser.cancelClaudeExcerpt(id), review.id);
+  await expect(page.evaluate((id) => window.privateBrowser.copyClaudeExcerpt(id), review.id)).rejects.toThrow(/Review the selection again/);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await expect(page.evaluate(() => window.privateBrowser.prepareClaudeExcerpt())).rejects.toThrow(/unavailable/);
+});
+
 test('routes an operating-system link back to the last regular account from Banking', async () => {
   const page = await application!.firstWindow();
   const accountSpaceId = await page.evaluate(async () => {

@@ -709,6 +709,8 @@ export interface AssistantSelectionSource extends AssistantSelectionEdit {
   redactions: number;
 }
 
+export type PageExcerptReview = Pick<AiPagePreview, 'id' | 'url' | 'text' | 'redactions'>;
+
 export interface AssistantReceipt {
   at: string;
   mode: 'local' | 'cloud';
