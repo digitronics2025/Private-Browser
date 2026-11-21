@@ -120,6 +120,15 @@ links, Banking, menus, full screen, tool switching, restart and partition-local
 clearing against isolated local stand-ins. Native tests require a desktop and
 OS-backed encryption; renderer preview tests cannot verify native views.
 
+## Claude excerpts
+
+Select text on a regular webpage, then choose **Copy approved excerpt for
+Claude** in the browser menu. The preview has the exact redacted text and the
+source origin. The selected page and Account Space must still match when
+copying. Cancel and expiry discard the approval. The app copies text to the
+guarded clipboard for 30 seconds. The user pastes and sends it in Claude.
+Banking, protected pages and Google service pages are excluded.
+
 ## Notes workflow and data
 
 Open **Notes** from the side-panel tabs or browser menu, or toggle with

@@ -2,7 +2,7 @@ import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { ChromeImportOptions, ChromePasswordImportReview } from '../electron/types';
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
-import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
+import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource, PageExcerptReview } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
@@ -186,6 +186,7 @@ export function installPreviewApi(): void {
   ] : [];
   let previewProvider: AiProviderStatus = { configured: false };
   let assistantPage: AiPagePreview | undefined;
+  let claudeExcerpt: PageExcerptReview | undefined;
   let assistantReview: { data: AiRequestReview; context: string[]; withEvidence: boolean } | undefined;
   const assistantExtraSources = new Map<string, AssistantSelectionSource>();
   let timeoutFixtureUsed = false;
@@ -941,7 +942,23 @@ export function installPreviewApi(): void {
       }
       publish();
     },
+    prepareClaudeExcerpt: async () => {
+      const tab = state.tabs.find(({ id }) => id === state.activeTabId);
+      if (!tab || tab.isHome || state.activeWorkspaceId === 'banking' || params.get('claudeExcerpt') !== 'sample') {
+        throw new Error('Select visible page text, then try again.');
+      }
+      claudeExcerpt = { id: crypto.randomUUID(), url: new URL(tab.url).origin,
+        ...redactSensitiveText('Selected catalogue paragraph. token=demo-value') };
+      return claudeExcerpt;
+    },
+    cancelClaudeExcerpt: async (id) => { if (claudeExcerpt?.id === id) claudeExcerpt = undefined; },
+    copyClaudeExcerpt: async (id) => {
+      if (claudeExcerpt?.id !== id) throw new Error('Review the selection again before copying.');
+      document.documentElement.dataset.previewClaudeCopy = claudeExcerpt.text;
+      claudeExcerpt = undefined;
+    },
     revokeAiContext: async () => {
+      claudeExcerpt = undefined;
       assistantReview = undefined;
       assistantPage = undefined;
       assistantExtraSources.clear();

@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { BrowserRoutine, LocalAiModels, ReferenceSearchInput, RoutineRunResult, TabSetInput } from './types.js';
 import type { AddressMatch, BrowsingDataInput, BrowsingDataReview, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
 import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
-import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth } from './types.js';
+import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth, PageExcerptReview } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, DownloadFolderMode, FindResult, PinnablePanelTool, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
@@ -194,6 +194,9 @@ const api = {
   clearAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:clear-provider'),
   askAi: (token: string, question: string): Promise<string> => ipcRenderer.invoke('ai:ask', token, question),
   revokeAiContext: (): Promise<void> => ipcRenderer.invoke('ai:revoke'),
+  prepareClaudeExcerpt: (): Promise<PageExcerptReview> => ipcRenderer.invoke('side-app:prepare-claude-excerpt'),
+  cancelClaudeExcerpt: (id: string): Promise<void> => ipcRenderer.invoke('side-app:cancel-claude-excerpt', id),
+  copyClaudeExcerpt: (id: string): Promise<void> => ipcRenderer.invoke('side-app:copy-claude-excerpt', id),
   listVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:list'),
   requestVaultUnlock: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-unlock'),
   unlockVaultWithHello: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:hello-unlock'),

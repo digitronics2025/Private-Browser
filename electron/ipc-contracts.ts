@@ -410,6 +410,9 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       }
       return;
     }
+    case 'side-app:cancel-claude-excerpt':
+    case 'side-app:copy-claude-excerpt':
+      exact(args, 1); requireUuid(args[0], 'page excerpt'); return;
     case 'ai:send-reviewed':
     case 'ai:cancel-reviewed':
       exact(args, 1); requireUuid(args[0], 'review'); return;
@@ -485,6 +488,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
 const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'browser:undo-tab-batch',
   'ai:check-provider', 'ai:clear-provider', 'ai:local-models', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
+  'side-app:prepare-claude-excerpt',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
   'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
   'browser:reopen-closed-tab', 'browser:stop', 'browser:stop-find', 'browser:toggle-bookmark', 'browser:toggle-bookmark-bar',

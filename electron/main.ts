@@ -64,6 +64,7 @@ import type {
   GoogleModule,
   AiApproval,
   AiPagePreview,
+  PageExcerptReview,
   AiPreviewScope,
   AiRequestReview,
   AssistantAnswer,
@@ -305,6 +306,7 @@ class BrowserController {
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
+  private claudeExcerpt?: AssistantCapture & { expiresAt: number };
   private assistantReview?: AssistantCapture & { review: AiRequestReview; question: string; withEvidence: boolean; expiresAt: number; additional: AssistantCapture[]; excerpts: string[] };
   private activeAssistant?: { id: string; mode: 'local' | 'cloud'; controller: AbortController };
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
@@ -2570,6 +2572,34 @@ class BrowserController {
     return 'Private Browser Bridge installed. Reload VS Code if it was already open.';
   }
 
+  async prepareClaudeExcerpt(): Promise<PageExcerptReview> {
+    this.claudeExcerpt = undefined;
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    if (!workspaceVaultPolicy(tab.workspaceId).aiExtraction || classifyAiSource(tab.url) !== 'browser') {
+      throw new Error('Page excerpts are unavailable here.');
+    }
+    const capture = await this.captureAssistantSelection(tab, 'selection', MAX_ASSISTANT_SOURCE_TEXT);
+    this.validateAssistantSource(capture.preview, capture.navigationGeneration);
+    this.claudeExcerpt = { ...capture, expiresAt: Date.now() + 2 * 60_000 };
+    const { id, url, text, redactions } = capture.preview;
+    return { id, url, text, redactions };
+  }
+
+  cancelClaudeExcerpt(id: string): void {
+    if (this.claudeExcerpt?.preview.id === id) this.claudeExcerpt = undefined;
+  }
+
+  async copyClaudeExcerpt(id: string): Promise<void> {
+    const pending = this.claudeExcerpt;
+    if (!pending || pending.preview.id !== id) throw new Error('Review the selection again before copying.');
+    this.claudeExcerpt = undefined;
+    await this.clipboardGuard.copy(pending.preview.text, () => {
+      if (pending.expiresAt <= Date.now()) throw new Error('Review the selection again before copying.');
+      this.validateAssistantSource(pending.preview, pending.navigationGeneration);
+    });
+  }
+
   async prepareAiPreview(scope: AiPreviewScope = 'page'): Promise<AiPagePreview> {
     if (!workspaceVaultPolicy(this.store.get().activeWorkspaceId).aiExtraction) throw new Error('AI extraction is disabled in this workspace');
     this.pruneAiCapabilities();
@@ -2888,6 +2918,7 @@ class BrowserController {
    * had just offered.
    */
   revokeAiContext(): void {
+    this.claudeExcerpt = undefined;
     const had = this.pendingAiPreviews.size + this.aiApprovals.size + Number(Boolean(this.assistantReview));
     this.pendingAiPreviews.clear();
     this.aiApprovals.clear();
@@ -4745,6 +4776,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:clear-provider', () => controller!.clearAiProvider());
   handle('ai:ask', (_event, token: string, question: string) => controller!.askAi(token, question));
   handle('ai:revoke', () => controller!.revokeAiContext());
+  handle('side-app:prepare-claude-excerpt', () => controller!.prepareClaudeExcerpt());
+  handle('side-app:cancel-claude-excerpt', (_event, id: string) => controller!.cancelClaudeExcerpt(id));
+  handle('side-app:copy-claude-excerpt', (_event, id: string) => controller!.copyClaudeExcerpt(id));
   handle('vault:list', () => controller!.listVault());
   handle('vault:request-unlock', () => controller!.requestVaultUnlock());
   handle('vault:hello-unlock', () => controller!.unlockVaultWithHello());

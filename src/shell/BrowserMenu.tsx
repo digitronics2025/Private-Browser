@@ -22,6 +22,7 @@ export interface BrowserMenuActions {
   print: () => void;
   find: () => void;
   copyLink: () => void;
+  reviewClaudeExcerpt?: () => void;
   toggleDeveloperTools: () => void;
   toggleTrackers: () => void;
   quit: () => void;
@@ -114,6 +115,7 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
       <MenuSeparator />
       <MenuItem icon={NotebookPen} label={SIDE_PANEL_NAMES.easynote} shortcut="Ctrl+Shift+Y" onSelect={() => actions.openTool('easynote')} />
       <MenuItem icon={Asterisk} label={SIDE_PANEL_NAMES.claude} onSelect={() => actions.openTool('claude')} />
+      {actions.reviewClaudeExcerpt && <MenuItem icon={Asterisk} label="Copy approved excerpt for Claude…" onSelect={actions.reviewClaudeExcerpt} />}
       <MenuItem icon={Sparkles} label={SIDE_PANEL_NAMES.assistant} onSelect={() => actions.openTool('assistant')} />
       <SubmenuItem id="appearance" icon={Palette} label="Appearance">
         {THEMES.map((theme) => <MenuItem key={theme.id} role="menuitemradio" checked={ui.theme === theme.id} label={theme.label} onSelect={() => actions.setUi({ theme: theme.id })} />)}
