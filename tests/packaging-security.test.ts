@@ -23,6 +23,6 @@ describe('packaged application security', () => {
     const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
     const publish = workflow.split('  publish-cloudflare-release:')[1]?.split('    concurrency:')[0];
     expect(publish).toContain("github.event_name == 'push'");
-    expect(publish).toContain("vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == 'true'");
+    expect(publish).toContain('vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == github.sha');
   });
 });

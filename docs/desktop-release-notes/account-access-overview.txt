@@ -1,0 +1,1 @@
+Account Spaces shows website sessions, Google modules and backup status together, with separate choices for local disconnect, Google revocation, and clearing website data.

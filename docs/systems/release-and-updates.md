@@ -409,8 +409,9 @@ npm cache in every job.
 
 **CI levels.** Draft PR: nothing. Ready PR: `verify` on Ubuntu only. An app change
 on `main` runs verification and the Windows installer job. An owner-approved
-public release also requires `PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED=true`
-in GitHub Actions repository variables. Windows-specific PRs use a manual
+public release also requires the exact approved commit SHA in the
+`PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED` GitHub Actions repository variable.
+Windows-specific PRs use a manual
 dispatch on their branch to verify and package without publishing.
 
 **No job declares secrets.** Every credential is attached to the one step that

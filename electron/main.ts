@@ -47,7 +47,7 @@ import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
-import { mergeBrowserSettings, nextZoomPercent, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
+import { mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
@@ -153,7 +153,7 @@ import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
 import { appendTabSetBookmarks, resolveTabSet } from './tab-sets.js';
-import type { TabSetInput } from './types.js';
+import type { ReferenceSearchInput, TabSetInput } from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
@@ -797,6 +797,16 @@ class BrowserController {
     return state.routines ?? defaultBrowserRoutines(state.activeAccountSpaceByWorkspace);
   }
 
+  async openReferenceSearch(input: ReferenceSearchInput): Promise<void> {
+    const state = this.store.get();
+    if (!this.canUseRoutines(state) || this.activeAccountSpaceId(state) !== input?.accountSpaceId) {
+      throw new Error('Return to the original regular Account Space to open the reference.');
+    }
+    const url = referenceSearchUrl(settingsForWorkspace(state, state.activeWorkspaceId), input.keyword, input.reference);
+    if (!url || url !== input.reviewedUrl) throw new Error('Review the current search address before opening it.');
+    await this.newTab(state.activeWorkspaceId, url, input.accountSpaceId);
+  }
+
   private updateRoutines(edit: (routines: BrowserRoutine[], state: RuntimeBrowserStateV2) => void): void {
     this.store.update((state) => {
       if (!this.canUseRoutines(state)) throw new Error('Routines are unavailable in this Account Space');
@@ -1114,16 +1124,14 @@ class BrowserController {
     await this.showActiveTab();
   }
 
-  configureGoogle(clientId: string) {
-    const status = this.googleConfiguration.configure(clientId);
+  configureGoogle(clientId: string): void {
+    this.googleConfiguration.configure(clientId);
     this.broadcast();
-    return status;
   }
 
-  clearGoogleConfiguration() {
-    const status = this.googleConfiguration.clear();
+  clearGoogleConfiguration(): void {
+    this.googleConfiguration.clear();
     this.broadcast();
-    return status;
   }
 
   async connectGoogleAccount(accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) {
@@ -1197,7 +1205,14 @@ class BrowserController {
     const result = await this.googleOAuth.disconnect(accountSpaceId, revoke);
     const record = this.accounts.require(accountSpaceId);
     this.store.refreshAccount(record);
-    this.addPrivacyEvent('vault', revoke ? 'Google access revoked' : 'Google API disconnected', revoke ? 'Google grant was revoked; local website data was retained' : 'Local browsing data was retained');
+    if (result.ok) {
+      this.addPrivacyEvent('vault', revoke ? 'Google access revoked' : 'Google API disconnected',
+        revoke ? 'Google confirmed removal of the app grant' : 'The browser removed its saved Google tools connection');
+    } else if (record.googleConnection === 'revocation-pending') {
+      this.addPrivacyEvent('blocked', 'Google revocation pending', 'Retry when the network is available');
+    } else {
+      this.broadcast();
+    }
     return result;
   }
 
@@ -1216,6 +1231,7 @@ class BrowserController {
         tab.isHome = true;
       }
     });
+    this.store.refreshAccount(this.accounts.update(accountSpaceId, (record) => { record.websiteStatus = 'not-visited'; }));
     this.addPrivacyEvent('vault', 'Account Space data cleared', `${WORKSPACES.find((item) => item.id === account.workspaceId)?.name ?? 'An'} Account Space: website data and history were removed`);
     await this.showActiveTab();
   }
@@ -4209,6 +4225,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('agents:return-tab', () => agentHost!.returnLentTab());
   handle('routines:save', (_event, routine: BrowserRoutine) => controller!.saveRoutine(routine));
   handle('routines:save-tabs', (_event, input: TabSetInput) => controller!.saveTabSet(input));
+  handle('routines:open-reference', (_event, input: ReferenceSearchInput) => controller!.openReferenceSearch(input));
   handle('routines:delete', (_event, id: string) => controller!.deleteRoutine(id));
   handle('routines:run', (_event, id: string) => controller!.runRoutine(id));
   handle('routines:mark-checklist', (_event, id: string, index: number, done: boolean) => controller!.updateRoutineChecklist(id, index, done));

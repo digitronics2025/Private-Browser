@@ -69,6 +69,9 @@ Account Space deletes its plaintext browsing file.
 The optional routine list holds names, public web addresses entered by the user,
 Account Space IDs, focus positions and manual checklist status. Banking cannot
 view or run routines and cannot be a destination.
+Routines can review a product reference against a saved workspace site keyword.
+The reference stays in the panel until the user opens the reviewed URL in the
+current Account Space. The opened URL follows ordinary browsing history rules.
 
 The manifest contains opaque UUID references, active selection, an optional
 last regular Account Space for external-link routing, tracker

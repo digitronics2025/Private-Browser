@@ -39,7 +39,10 @@ test('switches and manages Account Spaces without leaking visible state', async 
   await page.getByRole('button', { name: 'Account Space: Personal' }).click();
   await page.getByRole('menuitem', { name: /Manage Account Spaces/ }).click();
   await expect(page.getByRole('dialog', { name: 'Account Spaces' })).toBeVisible();
-  await expect(page.getByText('Website status: not visited · API status: disconnected.')).toBeVisible();
+  const access = page.getByRole('region', { name: 'Account access overview' });
+  await expect(access).toContainText('Website session');
+  await expect(access).toContainText('Not visited');
+  await expect(access).toContainText('disconnected');
 });
 
 test('keeps the manager usable at mobile width', async ({ page }) => {

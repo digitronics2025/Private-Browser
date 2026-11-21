@@ -4,6 +4,7 @@ sources:
   - electron/preload.cts
   - electron/types.ts
   - electron/ipc-guard.ts
+  - electron/ipc-contracts.ts
 verified_at: 028b9d2d
 ---
 
@@ -34,12 +35,13 @@ trusted-sender check, the browser methods) and in [vault.md](vault.md),
 
 ### Invariants
 
-1. **Adding or renaming a channel is three edits, not one.** Channel string in
-   `main.ts`, method in `preload.cts`, payload type in `types.ts`. →
-   **The Contract Is Written Three Times**
+1. **The preload defines the exposed contract.** Its method names, arguments,
+   channel strings and result types are compared against main registration in
+   CI. → **Where the Contract Is Checked**
 2. **Types do not enforce runtime input.** The shared handler authenticates the
-   sender and bounds rate and payload size; business methods validate values. →
-   **The Contract Is Written Three Times**
+   sender, bounds rate and payload size, and validates each channel's arguments.
+   Business methods check the requested action against active state. →
+   **Where the Contract Is Checked**
 3. **Only these keys reach the renderer.** `contextBridge` exposes exactly the
    `api` object; nothing else is reachable from page or chrome JavaScript. →
    **The Bridge**
@@ -59,7 +61,7 @@ trusted-sender check, the browser methods) and in [vault.md](vault.md),
 | adding, renaming or retyping a channel | [IPC Channels](#ipc-channels) |
 | pushing something from main into the UI | [Main to Renderer Events](#main-to-renderer-events) |
 | a field on a payload the UI reads | [Shared Payload Types](#shared-payload-types) |
-| a channel that resolves nothing or does not exist | [The Contract Is Written Three Times](#the-contract-is-written-three-times) |
+| a channel that resolves nothing or does not exist | [Where the Contract Is Checked](#where-the-contract-is-checked) |
 | a field on the release manifest, app or Worker side | [ReleaseManifest Is Declared Twice](#releasemanifest-is-declared-twice) |
 | a type error crossing src/ and electron/ | [How the Renderer Gets These Types](#how-the-renderer-gets-these-types) |
 | a payload field that looks unused or wrong | [Gotchas](#gotchas) |
@@ -68,7 +70,8 @@ trusted-sender check, the browser methods) and in [vault.md](vault.md),
 
 ### Before you write
 
-- Grep the channel string in all three files before changing anything.
+- Find the method in `preload.cts`, then check its main handler, runtime validator
+  and preview handler.
 - Prefer a named type in `types.ts` over an inline object literal in the preload.
 - A type used by the Worker as well as the app must be checked at runtime — the
   compilers never see both copies.
@@ -77,10 +80,9 @@ trusted-sender check, the browser methods) and in [vault.md](vault.md),
 
 The renderer has no Node access and no `ipcRenderer`. Everything it can do to the
 outside world goes through one frozen object, `window.privateBrowser`, built in
-the preload and handed over by `contextBridge`. The preload is the only file that
-names both a channel string and a TypeScript type, which makes it the closest
-thing the project has to an interface definition — but it is a description, not an
-enforcement.
+the preload and handed over by `contextBridge`. The preload defines the channel
+and its typed arguments and result in one place. A parity test checks each
+invocation and the type checker requires a matching preview handler.
 
 ## The Bridge
 
@@ -100,8 +102,8 @@ export type PrivateBrowserApi = typeof api;
 ## IPC Channels
 
 Argument and return types below are as **declared in the preload**. The main
-process is what actually produces them; see the caveat in
-[The Contract Is Written Three Times](#the-contract-is-written-three-times).
+process is what actually produces them. See
+[Where the Contract Is Checked](#where-the-contract-is-checked).
 Every method returns a `Promise`, so the "Resolves with" column omits the wrapper.
 
 ### browser: — 20 channels
@@ -167,6 +169,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `routines:run` | `runRoutine(id)` | routine ID | `RoutineRunResult` |
 | `routines:mark-checklist` | `markRoutineChecklist(id, index, done)` | routine ID, item index, boolean | `void` |
 | `routines:save-tabs` | `saveTabSet(input)` | current regular account, up to 20 tab IDs and reviewed URLs, local destination and name | saved count |
+| `routines:open-reference` | `openReferenceSearch(input)` | current regular account, saved site keyword, bounded product reference and reviewed URL | `void` |
 | `routines:reset-checklist` | `resetRoutineChecklist(id)` | routine ID | `void` |
 
 ### ui:, bookmarks:, shortcuts:, app:
@@ -464,31 +467,22 @@ Every `error` and `reason` field is a closed string union with no catch-all
 member, so a new failure mode inside a store means a new literal here **and** a
 new branch in the renderer.
 
-## The Contract Is Written Three Times
+## Where the Contract Is Checked
 
 | File | What it declares |
 | --- | --- |
-| [main.ts](../../electron/main.ts) | the channel string and the handler body |
-| [preload.cts](../../electron/preload.cts) | the method name, its arguments, its declared return type |
-| [types.ts](../../electron/types.ts) | the payload shapes both sides name |
+| [preload.cts](../../electron/preload.cts) | exposed method, arguments, channel and result |
+| [main.ts](../../electron/main.ts) | trusted handler registration and implementation |
+| [ipc-contracts.ts](../../electron/ipc-contracts.ts) | runtime input rules |
+| [preview-api.ts](../../src/preview-api.ts) | typed fixtures or explicit desktop-only errors |
 
-**Nothing enforces that the three agree.**
-
-- `handle(channel: string, callback: (event, ...args: any[]) => unknown)` in
-  `main.ts` takes `any[]`. The parameter annotations on each handler are
-  hand-written assertions about values the compiler treats as `any`.
-- `ipcRenderer.invoke` is typed `(channel: string, ...args: any[]): Promise<any>`,
-  so the preload's `Promise<VaultItemMeta>` is a claim, not a check. A handler that
-  returns something else compiles and ships.
-- The channel strings are string literals in two files with no shared constant. A
-  typo in either becomes a runtime rejection — `No handler registered for
-  'browser:navigat'` — with no build-time signal.
-- `preload.cts` and `main.ts` are in the same tsc program
-  (`tsconfig.electron.json`), which catches a wrong *type* name but nothing about
-  channel identity.
-
-The practical rule: grep the channel string. It appears exactly twice in a healthy
-tree, once per file.
+The [wire parity test](../../tests/ipc-wire-parity.test.ts) starts from each
+preload invocation. It checks one main registration and a runtime input rule
+for every channel. The TypeScript checker verifies that the main callback's
+result fits the declared preload return type. This is a build-time result check.
+The runtime guard rejects unknown channels and invalid arguments before the
+callback runs. The Preview implements the complete exported `PrivateBrowserApi`
+so a new method needs a typed fixture or a clear unsupported response.
 
 ## ReleaseManifest Is Declared Twice
 

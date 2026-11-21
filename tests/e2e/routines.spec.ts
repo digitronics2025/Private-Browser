@@ -1,5 +1,41 @@
 import { expect, test } from '@playwright/test';
 
+test('reviews and opens the same reference in two saved sites on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/');
+  await page.evaluate(() => window.privateBrowser.setBrowserSettings({ siteKeywords: [
+    { keyword: 'seller', template: 'https://seller.example.test/search?q=%s' },
+    { keyword: 'stock', template: 'https://stock.example.test/item/%s' },
+  ] }));
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'More tools' }).click();
+  await page.getByRole('menuitem', { name: 'Automations' }).click();
+  const search = page.getByRole('region', { name: 'Open this reference in…' });
+  const reference = search.getByLabel('Product reference');
+  const site = search.getByLabel('Saved search site');
+  const open = search.getByRole('button', { name: 'Open reviewed search' });
+  await reference.fill('LX/3 & blue');
+  await expect(open).toBeDisabled();
+  await site.selectOption('seller');
+  const seller = 'https://seller.example.test/search?q=LX%2F3%20%26%20blue';
+  const stock = 'https://stock.example.test/item/LX%2F3%20%26%20blue';
+  await expect(search.getByRole('status')).toContainText(seller);
+  const urls = () => page.evaluate(async () => {
+    const state = await window.privateBrowser.getState();
+    return state.tabs.filter((tab) => tab.accountSpaceId === state.activeAccountSpaceId).map((tab) => tab.url);
+  });
+  expect(await urls()).not.toContain(seller);
+  await open.click();
+  await expect.poll(urls).toContain(seller);
+  await site.selectOption('stock');
+  await expect(reference).toHaveValue('LX/3 & blue');
+  await expect(search.getByRole('status')).toContainText(stock);
+  await open.click();
+  await expect.poll(urls).toEqual(expect.arrayContaining([seller, stock]));
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await expect(search).toHaveCount(0);
+});
+
 test('previews and saves only selected tabs as a routine and a bookmark folder', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 810 });
   await page.goto('/');

@@ -158,7 +158,8 @@ export class GoogleOAuthManager {
     const requestId = randomUUID();
     this.clearMemory(accountSpaceId);
     const account = this.accounts.require(accountSpaceId);
-    if (revoke && account.refreshToken) {
+    if (revoke) {
+      if (!account.refreshToken) return failure('GOOGLE_RECONNECT_REQUIRED', 'Use Linked apps in Google Account to revoke a grant after disconnecting here.', requestId);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), TOKEN_TIMEOUT_MS);
       try {

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Play, Plus, Shield, Zap } from 'lucide-react';
-import type { AccountSpaceId, BrowserRoutine, BrowserSnapshot, BrowserTab, RoutineRunResult, TabSetInput } from '../../electron/types';
+import type { AccountSpaceId, BrowserRoutine, BrowserSnapshot, BrowserTab, ReferenceSearchInput, RoutineRunResult, TabSetInput } from '../../electron/types';
+import { MAX_REFERENCE_LENGTH, referenceSearchUrl } from '../../electron/browser-settings';
 import { MAX_ROUTINE_ITEMS } from '../../electron/browser-routines';
 import { canSaveTabInSet } from '../../electron/tab-sets';
 import { EmptyState, PanelHeader } from './common';
@@ -13,6 +14,33 @@ interface TabSetDraft {
   tabs: BrowserTab[];
   selected: Set<string>;
   name: string;
+}
+
+function ReferenceSearch({ state, busy, onOpen }: {
+  state: BrowserSnapshot;
+  busy: boolean;
+  onOpen: (input: ReferenceSearchInput) => void;
+}) {
+  const [reference, setReference] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const sites = state.settings.siteKeywords ?? [];
+  const url = referenceSearchUrl(state.settings, keyword, reference);
+  return <section className="settings-card routine-form reference-search" aria-label="Open this reference in…">
+    <h3>Open this reference in…</h3>
+    {sites.length ? <>
+      <label>Product reference<input maxLength={MAX_REFERENCE_LENGTH} value={reference}
+        onChange={(event) => setReference(event.currentTarget.value)} /></label>
+      <label>Saved search site<select value={sites.some((site) => site.keyword === keyword) ? keyword : ''}
+        onChange={(event) => setKeyword(event.currentTarget.value)}>
+        <option value="">Choose a site</option>
+        {sites.map((site) => <option key={site.keyword} value={site.keyword}>{site.keyword} ({new URL(site.template).host})</option>)}
+      </select></label>
+      {url && <p role="status"><strong>Destination</strong><br />{url}</p>}
+      <div className="panel-actions"><button type="button" disabled={busy || !url} onClick={() => {
+        if (url) onOpen({ accountSpaceId: state.activeAccountSpaceId, keyword, reference, reviewedUrl: url });
+      }}>Open reviewed search</button></div>
+    </> : <p>Add a site keyword in Settings → Search to use it here.</p>}
+  </section>;
 }
 
 export function AutomationPanel({ state, onToast }: {
@@ -149,6 +177,9 @@ export function AutomationPanel({ state, onToast }: {
         <button type="button" disabled={!eligibleTabs.length} onClick={() => previewTabs('routine')}>Save open tabs as a routine</button>
         <button type="button" disabled={!eligibleTabs.length} onClick={() => previewTabs('bookmarks')}>Bookmark this set</button>
       </div>
+      {!state.recovery && state.accountSpaces.some((account) => account.id === state.activeAccountSpaceId && !account.locked)
+        && <ReferenceSearch key={state.activeAccountSpaceId} state={state} busy={busy}
+          onOpen={(input) => void operate(() => window.privateBrowser.openReferenceSearch(input))} />}
       <div className="automation-list">{(state.routines ?? []).map((routine) => <details key={routine.id} className="settings-card routine-details">
         <summary>{routine.name}</summary>
         <ol className="routine-preview">

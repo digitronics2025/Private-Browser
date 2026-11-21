@@ -146,8 +146,10 @@ controls otherwise — then the always-visible security chip, the input, a zoom
 magnifier when not 100 % (opens `ZoomMenu`: −, +, Reset; it stays while that
 bubble is open so Reset does not pull its anchor away), the MyVault key (not in Development) and the bookmark star.
 `SiteInfoMenu` explains the connection state, Account Space and tracker
-blocking. The profile button shows the workspace and account names on wide
-windows and keeps the Banking lock and label visible on narrow windows. The
+blocking, and shows the full host and loaded destination. A local address
+check parses the current or pasted address in the renderer. It never opens
+the destination or calls IPC. The profile button shows the workspace and
+account names on wide windows and keeps the Banking lock and label visible on narrow windows. The
 accessible description names the workspace at every width. The account avatar
 displays an action badge when `accountNeedsAction` reports a problem.
 
@@ -257,7 +259,7 @@ bookmark is renamed or removed.
 | `assistant` | `getAiProvider`, `getLocalAiModels`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi`, `revokeAiContext` |
 | `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview, `copyText`; the Tasks tab ([ControlCenterSection.tsx](../../src/panels/ControlCenterSection.tsx)) uses the `control-center:*` methods ([control-center-link.md](control-center-link.md)) |
 | `vault` | `listVault`, unlock/pair/lock/sync/conflict intents, Windows Hello unlock/enable/disable intents, `openVaultEditor`, `requestSaveFromPage`, migration, generators, `copyPassword`, `copyTotp`, `autofill` |
-| `automations` | `routines:*`; edit targets, preview a tab set, save it as a routine or bookmark folder, run and manually check off steps |
+| `automations` | `routines:*`; edit targets, preview a tab set, save it as a routine or bookmark folder, open a product reference in a saved search site, run and manually check off steps |
 | `downloads` | `openDownload`, `showDownload` |
 | `privacy` | none |
 | `settings` | default browser; Search engine (preset `<select>` or a custom `https://…%s` address), Home page (New Tab page or a web address) and On startup, through `setBrowserSettings`; update service, Chrome import, `setUiPreferences` (theme, bar mode) |

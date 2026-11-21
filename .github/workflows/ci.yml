@@ -282,7 +282,7 @@ jobs:
       !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
       && needs.changes.outputs.app == 'true'
       && needs.windows-installer.result == 'success'
-      && vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == 'true'
+      && vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == github.sha
     # One publish at a time across runs, never cancelled. Main-branch runs are
     # not cancelled at the workflow level either (see the top of this file).
     concurrency:

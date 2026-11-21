@@ -122,6 +122,12 @@ account is in recovery. It never enumerates or clears another partition. Disconn
 API access does not clear website cookies; clearing website data does not revoke
 Google API access.
 
+Account access overview shows the selected space's website session, enabled
+Google modules and backup status. Local disconnect removes its stored Google
+tools connection. Google revocation retries after network failure. Clearing
+website data resets that space's website status to Not visited.
+[Manage linked apps in Google Account](https://support.google.com/accounts/answer/13533235)
+
 ## Desktop OAuth
 
 Configuration accepts a Google Desktop OAuth client ID through
