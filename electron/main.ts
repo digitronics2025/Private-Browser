@@ -40,6 +40,7 @@ import { availableDownloadFolder, discardDownloadStage, DownloadFolderStore, fin
 import { ManagedUpdate } from './managed-update.js';
 import { canPauseTrackersAt, TRACKER_COMPATIBILITY_MS, TrackerProtection, trackerCategory } from './tracker-protection.js';
 import { BrowserSessionLock } from './browser-session-lock.js';
+import { MAX_MEMORY_SAVER_EXCLUSIONS, MEMORY_SAVER_INTERVAL_MS, MEMORY_SAVER_PAGE_CHECK, mayReloadInactivePage, memorySaverOrigin, type MemorySaverPage } from './memory-saver.js';
 import { getDomain } from 'tldts';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
@@ -184,6 +185,9 @@ interface AssistantCapture {
 
 interface RuntimeTab {
   view?: WebContentsView;
+  memorySaver: MemorySaverPage;
+  sleeping?: boolean;
+  sleepPending?: boolean;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -273,6 +277,8 @@ class BrowserController {
   private pendingChromePasswords?: { id: string; accountId: AccountSpaceId; path: string; digest: string; revision: string; expiresAt: number };
   private selectingChromePasswords = false;
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
+  private readonly contentsTabs = new Map<number, RuntimeTab>();
+  private sweepingMemory = false;
   private readonly downloads = new Map<string, LocalDownload>();
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly downloadHistory = new DownloadHistoryStore(join(app.getPath('userData'), 'download-history'), safeStorage);
@@ -384,6 +390,7 @@ class BrowserController {
     const state = this.store.get();
     const active = this.activeTab(state);
     this.runtimeTabs.set(active.id, this.newRuntimeTab());
+    setInterval(() => { void this.sleepInactiveTabs().catch(() => undefined); }, MEMORY_SAVER_INTERVAL_MS).unref();
     this.vaultSync = new VaultSyncController(vault, new MyVaultSyncClient());
     this.vault.subscribe((status) => {
       if (this.window && !this.window.isDestroyed()) this.window.webContents.send('vault:state');
@@ -557,6 +564,7 @@ class BrowserController {
         developerToolsAllowed: canUseDeveloperTools(tab.workspaceId, tab.isHome, tab.url),
         developerToolsOpen: runtime?.developerToolsOpen ?? false,
         problem: runtime?.problem,
+        sleeping: runtime?.sleeping || undefined,
         securityWarning: tab.isHome ? undefined : navigationWarning(tab.url),
         ...this.runtimeMedia(runtime),
       };
@@ -567,6 +575,7 @@ class BrowserController {
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
     const downloadAccount = this.activeDownloadAccount(persisted);
     const activeTab = this.activeTab(persisted);
+    const memorySite = downloadAccount && !activeTab.isHome ? memorySaverOrigin(activeTab.url) : undefined;
     const strictTracking = activeTab.workspaceId === 'banking';
     const trackerSite = !activeTab.isHome && isAllowedRemoteUrl(activeTab.url) && (downloadAccount || strictTracking)
       ? this.trackerProtection.status(activeTab.accountSpaceId, safeOrigin(activeTab.url), {
@@ -591,6 +600,7 @@ class BrowserController {
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: strictTracking || persisted.trackerBlocking,
       trackerSite,
+      memorySaverSite: memorySite && downloadAccount ? { origin: memorySite, keptAwake: this.store.keepsSiteAwake(downloadAccount, memorySite) } : undefined,
       activeAccountSpaceId,
       accountSpaces: persisted.accountSpaces,
       accountHealth: persisted.accountHealth,
@@ -2410,6 +2420,28 @@ class BrowserController {
     this.broadcast();
   }
 
+  setMemorySaverSite(tabId: string, expectedOrigin: string, keepAwake: boolean): void {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const account = this.activeDownloadAccount(state);
+    const origin = !tab.isHome && tab.id === tabId ? memorySaverOrigin(tab.url) : undefined;
+    if (!account || !origin || origin !== expectedOrigin || this.store.isReadOnly()) {
+      throw new Error('The site changed. Open Site information again.');
+    }
+    const record = this.accounts.update(account, (entry) => {
+      const sites = new Set(entry.memorySaverExclusions);
+      if (keepAwake) {
+        if (sites.size >= MAX_MEMORY_SAVER_EXCLUSIONS && !sites.has(origin)) throw new Error('This Account Space already has 64 sites marked to stay awake.');
+        sites.add(origin);
+      } else {
+        sites.delete(origin);
+      }
+      entry.memorySaverExclusions = [...sites];
+    });
+    this.store.refreshAccount(record);
+    this.broadcast();
+  }
+
   private scheduleTrackerBroadcast(): void {
     if (this.trackerBroadcast) return;
     this.trackerBroadcast = setTimeout(() => {
@@ -3942,7 +3974,8 @@ class BrowserController {
   }
 
   private newRuntimeTab(): RuntimeTab {
-    return { loading: false, canGoBack: false, canGoForward: false, developerToolsOpen: false, console: [], network: [], navigationGeneration: 0, certificateError: false, automaticFillPending: false };
+    return { loading: false, canGoBack: false, canGoForward: false, developerToolsOpen: false, console: [], network: [], navigationGeneration: 0, certificateError: false, automaticFillPending: false,
+      memorySaver: { lastVisibleAt: Date.now() } };
   }
 
   markCertificateError(webContentsId: number): void {
@@ -4055,7 +4088,7 @@ class BrowserController {
       runtime = this.newRuntimeTab();
       this.runtimeTabs.set(tabId, runtime);
     }
-    if (runtime.view) return runtime.view;
+    if (runtime.view && !runtime.view.webContents.isDestroyed()) return runtime.view;
     const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId)!;
     // A locked Account Space gets no page view at all: its cookies stay unused
     // until the user unlocks it.
@@ -4076,6 +4109,12 @@ class BrowserController {
       },
     });
     runtime.view = view;
+    runtime.sleeping = undefined;
+    runtime.sleepPending = false;
+    runtime.memorySaver = { lastVisibleAt: Date.now() };
+    const contentsId = view.webContents.id;
+    this.contentsTabs.set(contentsId, runtime);
+    view.webContents.once('destroyed', () => { this.contentsTabs.delete(contentsId); });
     this.window.contentView.addChildView(view);
     // Every guard is attached before anything below that could throw: a view
     // that exists without them would run a hostile page with no popup,
@@ -4163,11 +4202,13 @@ class BrowserController {
         () => Boolean(this.developerTarget(tabId)));
     });
     view.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown') runtime.memorySaver.interacted = true;
       if (!agentHost?.isLentContents(view.webContents.id) && this.handleFillPickerKey(tabId, event, input)) return;
       this.handleShortcut(event, input);
     });
     // Only genuine user input opens the login picker; nothing the page does can.
     view.webContents.on('input-event', (_event, input) => {
+      if (input.type === 'mouseDown' || input.type === 'mouseWheel' || input.type === 'gestureScrollBegin') runtime.memorySaver.interacted = true;
       if (agentHost?.isLentContents(view.webContents.id)) return;
       if (input.type === 'mouseWheel' || input.type === 'gestureScrollBegin') this.fillPicker.close();
       if (input.type !== 'mouseDown') return;
@@ -4298,6 +4339,10 @@ class BrowserController {
     }, { useSystemPicker: false });
     ses.webRequest.onBeforeRequest((details, callback) => {
       if (agentHost?.allowLentRequest(details) === false) { callback({ cancel: true }); return; }
+      if (details.resourceType === 'mainFrame' && details.webContentsId !== undefined) {
+        const tab = this.contentsTabs.get(details.webContentsId);
+        if (tab) tab.memorySaver.request = { url: details.url, method: details.method };
+      }
       const category = trackerCategory(details.url);
       const enabled = this.store.trackerBlockingEnabled();
       if (!category || (!enabled && !protectedWorkspace)) { callback({ cancel: false }); return; }
@@ -4414,6 +4459,8 @@ class BrowserController {
     const locked = state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked;
     if (!locked && !tab.isHome && !tab.restorePaused && !this.runtimeTabs.get(tab.id)?.problem && this.startupTabRecovery?.accountSpaceId !== tab.accountSpaceId && isAllowedRemoteUrl(tab.url)) {
       const view = this.ensureView(tab.id);
+      const runtime = this.runtimeTabs.get(tab.id);
+      if (runtime) runtime.memorySaver.lastVisibleAt = Date.now();
       view.setVisible(true);
       this.applyLayout();
       // A navigation already in flight has no committed URL yet; loading again
@@ -4432,6 +4479,97 @@ class BrowserController {
     this.broadcast();
   }
 
+  private async sleepInactiveTabs(): Promise<void> {
+    const minutes = this.store.memorySaverMinutes();
+    if (!minutes || this.sweepingMemory || this.sessionIsLocked || !this.window || this.window.isDestroyed()) return;
+    const cutoff = Date.now() - minutes * 60_000;
+    if (![...this.runtimeTabs.values()].some((tab) => tab.view && !tab.view.getVisible()
+      && !tab.memorySaver.interacted && tab.memorySaver.lastVisibleAt <= cutoff)) return;
+    this.sweepingMemory = true;
+    try {
+      const initial = this.store.get();
+      const activeId = this.activeTab(initial).id;
+      let checked = 0;
+      for (const tab of initial.tabs) {
+        if (tab.id === activeId || checked >= 4) continue;
+        const runtime = this.runtimeTabs.get(tab.id);
+        const view = runtime?.view;
+        if (!runtime || !view || !this.canSleepTab(tab, initial, runtime, view)) continue;
+        checked += 1;
+        await this.checkAndSleepTab(tab.id, runtime, view);
+      }
+    } finally {
+      this.sweepingMemory = false;
+    }
+  }
+
+  private canSleepTab(tab: BrowserTab, state: RuntimeBrowserStateV2, runtime: RuntimeTab, view: WebContentsView): boolean {
+    const contents = view.webContents;
+    if (this.sessionIsLocked || this.store.isReadOnly() || tab.id === this.activeTab(state).id || tab.workspaceId === 'banking'
+      || tab.isHome || tab.pinned || tab.restorePaused || view.getVisible() || runtime.sleepPending || runtime.problem || runtime.certificateError
+      || contents.isDestroyed() || contents.isLoading() || contents.isDevToolsOpened() || contents.isCurrentlyAudible()
+      || contents.navigationHistory.canGoBack() || contents.navigationHistory.canGoForward()
+      || agentHost?.isLentContents(contents.id)) return false;
+    const origin = memorySaverOrigin(tab.url);
+    if (!origin || this.store.keepsSiteAwake(tab.accountSpaceId, origin)
+      || state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked
+      || state.recovery?.accountSpaceId === tab.accountSpaceId || this.startupTabRecovery?.accountSpaceId === tab.accountSpaceId) return false;
+    if ([...this.downloadItems.keys()].some((id) => this.downloads.get(id)?.accountSpaceId === tab.accountSpaceId)) return false;
+    return mayReloadInactivePage(runtime.memorySaver, contents.getURL(), this.store.memorySaverMinutes(), Date.now()) && contents.getURL() === tab.url;
+  }
+
+  private async checkAndSleepTab(tabId: string, runtime: RuntimeTab, view: WebContentsView): Promise<void> {
+    const contents = view.webContents;
+    const generation = runtime.navigationGeneration;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let safe: unknown;
+    try {
+      safe = await Promise.race([
+        contents.executeJavaScriptInIsolatedWorld(1024, [{ code: MEMORY_SAVER_PAGE_CHECK }]),
+        new Promise<boolean>((resolve) => { timeout = setTimeout(() => resolve(false), 1000); }),
+      ]);
+    } catch {
+      return;
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (runtime.view !== view || runtime.navigationGeneration !== generation) return;
+    if (safe !== true) {
+      runtime.memorySaver.interacted = true;
+      return;
+    }
+    const state = this.store.get();
+    const tab = state.tabs.find((candidate) => candidate.id === tabId);
+    if (!tab || !this.canSleepTab(tab, state, runtime, view)) return;
+    runtime.sleepPending = true;
+    const prevent = () => {
+      runtime.sleepPending = false;
+      runtime.memorySaver.interacted = true;
+      contents.removeListener('destroyed', onClosed);
+    };
+    const onClosed = () => {
+      if (this.runtimeTabs.get(tabId) !== runtime || runtime.view !== view || this.window.isDestroyed()) return;
+      this.window.contentView.removeChildView(view);
+      runtime.view = undefined;
+      runtime.sleepPending = false;
+      if (this.sessionIsLocked) return;
+      runtime.sleeping = true;
+      if (this.activeTab(this.store.get()).id === tabId) {
+        void this.showActiveTab().catch(() => this.broadcast());
+      } else {
+        this.broadcast();
+      }
+    };
+    contents.once('will-prevent-unload', prevent);
+    contents.once('destroyed', onClosed);
+    try {
+      contents.close({ waitForBeforeUnload: true });
+    } catch {
+      contents.removeListener('will-prevent-unload', prevent);
+      prevent();
+    }
+  }
+
   private isBlockedTrackerRequest(url: string): boolean {
     return this.store.trackerBlockingEnabled() && Boolean(trackerCategory(url));
   }
@@ -4439,6 +4577,7 @@ class BrowserController {
   private hideAllViews(): void {
     this.fillPicker.close();
     for (const runtime of this.runtimeTabs.values()) {
+      if (runtime.view?.getVisible()) runtime.memorySaver.lastVisibleAt = Date.now();
       runtime.view?.webContents.closeDevTools();
       runtime.view?.setVisible(false);
     }
@@ -4929,6 +5068,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:discard-chrome-password-review', (_event, id: string) => controller!.discardChromePasswordReview(id));
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
   handle('browser:set-tracker-compatibility', (_event, tabId: string, origin: string, paused: boolean) => controller!.setTrackerCompatibility(tabId, origin, paused));
+  handle('browser:set-memory-saver-site', (_event, tabId: string, origin: string, keepAwake: boolean) => controller!.setMemorySaverSite(tabId, origin, keepAwake));
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:control-download', (_event, id: string, action: DownloadAction) => controller!.controlDownload(id, action));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));

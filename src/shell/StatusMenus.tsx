@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Code2, Globe2, Landmark, Minus, Plus, Layers, LockKeyhole, ScrollText, Search, Settings, Shield, ShieldAlert, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { Code2, Globe2, Landmark, Minus, Moon, Plus, Layers, LockKeyhole, ScrollText, Search, Settings, Shield, ShieldAlert, ShieldCheck, TriangleAlert } from 'lucide-react';
 import type { AccountSpaceSummary, BrowserSnapshot, BrowserTab, TrackerCategory, Workspace } from '../../electron/types';
 import { inspectWebAddress, MAX_ADDRESS_CHECK_LENGTH, type AddressCheck, type AddressClue } from '../../electron/security';
 import { domainFromUrl } from '../lib/format';
@@ -82,11 +82,12 @@ function siteConnectionStatus(tab: BrowserTab, host: string) {
     detail: `${host} is served from this computer without encryption. Use it only for your own development work.` };
 }
 
-export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, onOpenPrivacy, onResetZoom, onToggleDeveloperTools }: {
+export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, keepSiteAwake, onClose, onOpenPrivacy, onResetZoom, onToggleDeveloperTools }: {
   anchor: HTMLElement | null;
   tab: BrowserTab;
   account: AccountSpaceSummary;
   trackerBlocking: boolean;
+  keepSiteAwake?: { enabled: boolean; toggle: () => void };
   onClose: () => void;
   onOpenPrivacy: () => void;
   onResetZoom: () => void;
@@ -113,6 +114,8 @@ export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, o
       <AddressCheckPanel key={'address:' + tab.id + ':' + tab.url} initialAddress={current?.destination ?? ''} />
       {!tab.isHome && <SitePermissions key={tab.id + ':' + tab.url} tab={tab} />}
       <MenuSeparator />
+      {keepSiteAwake && <MenuItem icon={Moon} role="menuitemcheckbox" checked={keepSiteAwake.enabled} keepOpen
+        label="Keep this site awake" onSelect={keepSiteAwake.toggle} />}
       {zoom !== 100 && <MenuItem icon={Globe2} label={`Reset view (${zoom}%)`} onSelect={onResetZoom} />}
       {!tab.isHome && <MenuItem icon={Code2} label="Developer tools" shortcut="F12" disabled={!tab.developerToolsAllowed} onSelect={onToggleDeveloperTools} />}
       <MenuItem icon={ScrollText} label="Privacy log" onSelect={onOpenPrivacy} />
