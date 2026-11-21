@@ -1,4 +1,4 @@
-import type { BrowserSettings } from './browser-settings.js';
+import type { BrowserSettings, SpellcheckLanguage } from './browser-settings.js';
 import type { UiPreferences } from './ui-preferences.js';
 
 export type { SideAppCommand, SideAppId, SideAppRect, SideAppSnapshot, SideAppStatus } from './side-app-registry.js';
@@ -519,6 +519,7 @@ export interface BrowserSnapshot {
   bookmarkBarVisible: boolean;
   ui: UiPreferences;
   settings: BrowserSettings;
+  availableSpellcheckLanguages: SpellcheckLanguage[];
   windowState: WindowState;
   /** Customised New Tab shortcuts keyed by Account Space; a missing key means the defaults. */
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;

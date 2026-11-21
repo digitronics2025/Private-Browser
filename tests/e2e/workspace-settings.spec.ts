@@ -24,3 +24,28 @@ test('chooses a search engine during setup and edits behavior in the current wor
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   await expect(panel.getByLabel('Keywords and search addresses')).toHaveCount(0);
 });
+
+test('chooses supported spellcheck dictionaries without changing another space', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 820 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Settings', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  const spellcheck = panel.getByRole('group', { name: 'Spellcheck', exact: true });
+  const french = spellcheck.getByRole('checkbox', { name: 'French', exact: true });
+  const english = spellcheck.getByRole('checkbox', { name: 'English', exact: true });
+  await expect(spellcheck.getByRole('checkbox', { name: 'Arabic (unavailable on this device)' })).toBeDisabled();
+  await french.check();
+  await english.check();
+  await expect(french).toBeChecked();
+  await expect(english).toBeChecked();
+  const original = await page.evaluate(() => window.privateBrowser.getState().then((state) => state.activeWorkspaceId));
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
+  await expect(french).not.toBeChecked();
+  await expect(english).not.toBeChecked();
+  await page.evaluate((id) => window.privateBrowser.switchWorkspace(id), original);
+  await expect(french).toBeChecked();
+  await spellcheck.getByRole('button', { name: 'Use Windows languages' }).click();
+  await expect(french).not.toBeChecked();
+  await expect(spellcheck.getByText('Using Windows languages')).toBeVisible();
+});

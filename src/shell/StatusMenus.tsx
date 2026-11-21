@@ -82,7 +82,7 @@ export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, o
       </dl>
       {!tab.isHome && <SitePermissions key={tab.id + ':' + tab.url} tab={tab} />}
       <MenuSeparator />
-      {zoom !== 100 && <MenuItem icon={Globe2} label={`Reset zoom (${zoom}%)`} onSelect={onResetZoom} />}
+      {zoom !== 100 && <MenuItem icon={Globe2} label={`Reset view (${zoom}%)`} onSelect={onResetZoom} />}
       {!tab.isHome && <MenuItem icon={Code2} label="Developer tools" shortcut="F12" disabled={!tab.developerToolsAllowed} onSelect={onToggleDeveloperTools} />}
       <MenuItem icon={ScrollText} label="Privacy log" onSelect={onOpenPrivacy} />
     </MenuSurface>
@@ -101,7 +101,7 @@ export function ZoomMenu({ anchor, zoom, onZoom, onClose }: {
         <output className="menu-zoom-label" aria-live="polite">Zoom: {zoom}%</output>
         <button type="button" aria-label="Zoom out" title="Zoom out (Ctrl+-)" onClick={() => onZoom('out')}><Minus size={15} /></button>
         <button type="button" aria-label="Zoom in" title="Zoom in (Ctrl++)" onClick={() => onZoom('in')}><Plus size={15} /></button>
-        <button type="button" className="zoom-reset" title="Reset to 100% (Ctrl+0)" disabled={zoom === 100} onClick={() => onZoom('reset')}>Reset</button>
+        <button type="button" className="zoom-reset" title="Reset to 100% (Ctrl+0)" disabled={zoom === 100} onClick={() => onZoom('reset')}>Reset view</button>
       </div>
     </MenuSurface>
   );

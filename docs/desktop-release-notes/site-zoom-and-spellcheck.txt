@@ -1,0 +1,1 @@
+Reset a site's zoom from the address bar. Choose local English, French or Arabic spellcheck dictionaries where supported in each workspace.
