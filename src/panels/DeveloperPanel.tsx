@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Code2, Copy, FileCode2, LoaderCircle, LockKeyhole, PanelRightClose, PanelRightOpen, Play, ScanSearch, ShieldCheck, Sparkles, Trash2, TriangleAlert } from 'lucide-react';
+import { Code2, Copy, FileCode2, LoaderCircle, LockKeyhole, PanelRightClose, PanelRightOpen, Play, ScanSearch, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react';
 import { BridgePairingGuide } from './BridgePairingGuide';
 import { DevelopmentServer } from './DevelopmentServer';
+import { DeveloperReportHistory } from './DeveloperReportHistory';
 import type { AiPagePreview, BridgeStatus, BrowserTab, DeveloperPageInfo, DevToolsMode, GitRevision, ProjectInfo, ProjectSummary, TestKind, TestReport } from '../../electron/types';
 import { PanelHeader } from './common';
 import { ControlCenterSection } from './ControlCenterSection';
@@ -57,7 +58,9 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
   const [project, setProject] = useState<ProjectInfo | null>(null);
   const [inspection, setInspection] = useState<DeveloperPageInfo | null>(null);
   const [report, setReport] = useState<TestReport | null>(null);
-  const [reports, setReports] = useState<TestReport[]>([]);
+  const [showReportHistory, setShowReportHistory] = useState(false);
+  const [testProject, setTestProject] = useState<string>();
+  const [reportHistoryRevision, setReportHistoryRevision] = useState(0);
   const [aiPreview, setAiPreview] = useState<AiPagePreview | null>(null);
   const [aiAnswer, setAiAnswer] = useState('');
   const [includeDom, setIncludeDom] = useState(false);
@@ -90,11 +93,35 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
   };
 
   const bridgeAction = (action: Parameters<typeof window.privateBrowser.runBridgeAction>[0], payload: Record<string, unknown> = {}, success?: string) => run(async () => {
-    const result = await window.privateBrowser.runBridgeAction(action, payload);
-    if (action === 'test.run' || action === 'test.rerun') setReport(result as TestReport);
-    if (action === 'reports.list') setReports(result as TestReport[]);
+    let result: unknown;
+    try { result = await window.privateBrowser.runBridgeAction(action, payload); }
+    catch (error) {
+      if ((action === 'test.run' || action === 'test.rerun') && error instanceof Error && error.message.endsWith('Test stopped')) return;
+      throw error;
+    }
+    if (action === 'test.run' || action === 'test.rerun') {
+      const completed = result as TestReport;
+      const current = await window.privateBrowser.getBridgeStatus();
+      if (current.project?.project.id === completed.projectId) setReport(completed);
+      setReportHistoryRevision((value) => value + 1);
+    }
     await refresh();
   }, success);
+
+  useEffect(() => { setReport(null); }, [project?.project.id]);
+
+  const runTest = async (action: 'test.run' | 'test.rerun', input: Record<string, unknown>) => {
+    if (!project || testProject) return;
+    setTestProject(project.project.id);
+    try { await bridgeAction(action, input); }
+    finally { setTestProject(undefined); }
+  };
+
+  const stopTest = () => {
+    void window.privateBrowser.runBridgeAction('test.cancel').then((value) => {
+      if ((value as { stopped?: boolean }).stopped) onToast('Test stopped');
+    }, (error: unknown) => onToast(error instanceof Error ? error.message : 'Could not stop the test.', 'error'));
+  };
 
   const selectProject = (projectId: string) => run(async () => {
     const next = await window.privateBrowser.selectBridgeProject(projectId);
@@ -149,10 +176,37 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
         {inspection ? <div className="inspection-result"><small>{inspection.framework} · {inspection.viewport}</small><strong>{inspection.selector ?? inspection.route}</strong><span>{inspection.confidence ? `${inspection.confidence} source match` : 'Page metadata only'}</span>{(inspection.sourcePath || project?.activeFile) && <button onClick={() => void bridgeAction('source.open', { path: inspection.sourcePath ?? project?.activeFile, line: 1 })}>Open {inspection.confidence ?? 'nearest'} location in VS Code</button>}</div> : <div className="developer-tip"><ScanSearch size={16} /><p>Pick an element on the current development page. Only bounded structure and source hints cross the authenticated bridge.</p></div>}
       </div>}
 
-      {tab === 'test' && <div className="bridge-pane"><label className="bridge-label">Optional approved live URL<input value={liveUrl} onChange={(event) => setLiveUrl(event.target.value)} placeholder="https://staging.example.com" /></label><div className="bridge-action-grid test-grid">{tests.map((item) => <button key={item.kind} disabled={!connected || !project || loading || ((item.kind === 'live-site' || item.kind === 'compare') && !liveUrl)} onClick={() => void bridgeAction('test.run', { kind: item.kind, url: item.kind === 'live-site' ? liveUrl : activeTab.url, ...(liveUrl ? { liveUrl } : {}) })}><Play size={14} />{item.label}</button>)}</div><div className="bridge-action-row"><button disabled={!report} onClick={() => void bridgeAction('test.rerun')}>Re-run</button><button onClick={() => void bridgeAction('reports.list')}>Results</button><button disabled={!project} onClick={() => void bridgeAction('test.cancel')}>Cancel</button></div>
+      {tab === 'test' && <div className="bridge-pane">
+        <label className="bridge-label">Optional approved live URL<input value={liveUrl} onChange={(event) => setLiveUrl(event.target.value)} placeholder="https://staging.example.com" /></label>
+        <div className="bridge-action-grid test-grid">
+          {tests.map((item) => <button key={item.kind} disabled={!connected || !project || loading || Boolean(testProject) || ((item.kind === 'live-site' || item.kind === 'compare') && !liveUrl)}
+            onClick={() => void runTest('test.run', { kind: item.kind, url: item.kind === 'live-site' ? liveUrl : activeTab.url, ...(liveUrl ? { liveUrl } : {}) })}><Play size={14} />{item.label}</button>)}
+        </div>
+        <div className="bridge-action-row">
+          <button disabled={!report || Boolean(testProject)} onClick={() => report && void runTest('test.rerun', { reportId: report.id })}>Rerun latest</button>
+          <button disabled={!project} onClick={() => setShowReportHistory((value) => !value)}>{showReportHistory ? 'Hide report history' : 'Report history'}</button>
+          <button disabled={!testProject || testProject !== project?.project.id} onClick={stopTest}>Stop test</button>
+        </div>
         {report && <div className={`test-result ${report.status}`}><small>{report.status === 'attention' ? 'Needs attention' : report.status}</small><strong>{report.title}</strong><p>{report.summary}</p><span>{report.findings.length} findings · {report.artifacts.length} artifacts</span><button onClick={() => void bridgeAction('reports.open', { reportId: report.id })}>Open in VS Code</button>{report.artifacts.filter((item) => item.kind === 'test').map((item) => <button key={item.id} onClick={() => void bridgeAction('test.save-artifact', { reportId: report.id, name: item.name, path: 'tests/e2e/private-browser-recorded.spec.ts' }, 'Generated test saved after VS Code approval')}>Save generated test…</button>)}</div>}
-        {reports.length > 0 && <div className="report-controls"><label>Days<input type="number" min="1" max="365" value={retentionDays} onChange={(event) => setRetentionDays(Number(event.target.value))} /></label><label>Max<input type="number" min="10" max="500" value={retentionMax} onChange={(event) => setRetentionMax(Number(event.target.value))} /></label><button onClick={() => void bridgeAction('reports.retention', { days: retentionDays, max: retentionMax }, 'Report retention updated')}>Save</button><button onClick={() => void bridgeAction('reports.clear', {}, 'Local reports cleared').then(() => setReports([]))}>Clear</button></div>}
-        {reports.slice(0, 4).map((item) => <div className="report-row" key={item.id}><span className={item.status} /><button onClick={() => { setReport(item); void bridgeAction('reports.open', { reportId: item.id }); }}>{item.title}</button><small>{new Date(item.finishedAt).toLocaleDateString()}</small><button aria-label={`Delete ${item.title}`} onClick={() => void bridgeAction('reports.delete', { reportId: item.id }).then(() => setReports((current) => current.filter((entry) => entry.id !== item.id)))}><Trash2 size={12} /></button></div>)}
+        {showReportHistory && project && <>
+          <DeveloperReportHistory key={project.project.id} projectId={project.project.id} revision={reportHistoryRevision}
+            busy={Boolean(testProject)} onReplay={(reportId) => void runTest('test.rerun', { reportId })} onToast={onToast} />
+          <details><summary>Report storage</summary>
+            <div className="report-controls">
+              <label>Keep for days<input type="number" min="1" max="365" value={retentionDays} onChange={(event) => setRetentionDays(Number(event.target.value))} /></label>
+              <label>Maximum reports<input type="number" min="10" max="500" value={retentionMax} onChange={(event) => setRetentionMax(Number(event.target.value))} /></label>
+              <button onClick={() => void bridgeAction('reports.retention', { days: retentionDays, max: retentionMax }, 'Report retention updated').then(() => setReportHistoryRevision((value) => value + 1))}>Save retention</button>
+              <button onClick={() => {
+                if (window.confirm('Clear all local test reports and their saved settings?')) {
+                  void bridgeAction('reports.clear', {}, 'Local reports cleared').then(() => {
+                    setReport(null);
+                    setReportHistoryRevision((value) => value + 1);
+                  });
+                }
+              }}>Clear all reports</button>
+            </div>
+          </details>
+        </>}
       </div>}
 
       {tab === 'ai' && <div className="bridge-pane"><div className="ai-privacy-note"><ShieldCheck size={16} /><p><strong>You control every upload.</strong> Cookies, storage, form values, headers, bodies, URL queries, secrets, and protected pages are always excluded.</p></div><label className="bridge-check"><input type="checkbox" checked={includeDom} onChange={(event) => setIncludeDom(event.target.checked)} /> Include structural DOM metadata</label><label className="bridge-check"><input type="checkbox" checked={includeScreenshot} onChange={(event) => setIncludeScreenshot(event.target.checked)} /> Include a compressed screenshot</label><button className="primary-button full" disabled={!activeTab.developerToolsAllowed || loading} onClick={() => void run(async () => { setAiAnswer(''); setAiPreview(await window.privateBrowser.prepareDeveloperAiPreview({ includeDom, includeScreenshot })); }, 'Sanitized AI context is ready for review')}><Sparkles size={14} /> Preview debugging context</button>
