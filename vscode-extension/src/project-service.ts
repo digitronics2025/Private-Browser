@@ -67,8 +67,16 @@ export class ProjectService {
       case 'inspect.page': return this.inspectPage(payload);
       case 'inspect.open-source': return this.openInspectedSource(payload);
       case 'test.configuration': {
-        const folder = await this.folderFor(String(this.record(payload).projectId ?? ''));
-        return { fixtures: await listTestFixtures(folder.uri.fsPath) };
+        const input = this.record(payload);
+        const folder = await this.folderFor(String(input.projectId ?? ''));
+        const root = folder.uri.fsPath;
+        const fixtures = await listTestFixtures(root);
+        if (input.includeKeyboard !== true) return { fixtures };
+        const keyboardFixtures = await Promise.all(fixtures.map(async (name) => {
+          const content = await loadTestFixture(root, name).catch(() => undefined);
+          return content?.smoke ? name : undefined;
+        }));
+        return { fixtures, keyboardFixtures: keyboardFixtures.filter((name): name is string => name !== undefined) };
       }
       case 'test.run': return this.runTest(payload);
       case 'test.rerun': return this.rerun(payload);

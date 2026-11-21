@@ -1,0 +1,1 @@
+Save a keyboard smoke check in a local development fixture. Rerun its focus and visibility steps and compare measured interaction times across simulated viewports.

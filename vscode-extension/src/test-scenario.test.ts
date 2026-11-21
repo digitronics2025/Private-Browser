@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { effectiveReportParameters } from './report-history.js';
 import { listTestFixtures, loadTestFixture, scenarioKey, scenarioViewports } from './test-scenario.js';
+import { smokeLatency } from './keyboard-smoke.js';
 
 it('reads bounded project fixtures and rejects remaining URL fields and duplicate paths', async () => {
   const root = await mkdtemp(join(tmpdir(), 'private-browser-scenario-'));
@@ -21,6 +22,24 @@ it('reads bounded project fixtures and rejects remaining URL fields and duplicat
     await writeFile(join(folder, 'catalogue.json'), JSON.stringify({ version: 1, responses: paths.map((path) => ({ path, status: 200, json: [] })) }));
     await expect(loadTestFixture(root, 'catalogue.json')).rejects.toThrow(/local paths/);
   }
+});
+
+it('reads a bounded keyboard flow and rejects free-form inputs', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'private-browser-smoke-'));
+  const directory = join(root, 'private-browser-fixtures');
+  await mkdir(directory);
+  const path = join(directory, 'keyboard.json');
+  const visible = { role: 'heading', name: 'Details', state: 'visible' };
+  const smoke = { repeats: 3, budgetMs: 1000, steps: [{ key: 'Enter', expect: visible }] };
+  const write = (value: unknown) => writeFile(path, JSON.stringify({ version: 1, responses: [], smoke: value }));
+  await write(smoke);
+  expect((await loadTestFixture(root, 'keyboard.json')).smoke).toEqual(smoke);
+  for (const bad of [{ ...smoke, repeats: 1 }, { ...smoke, budgetMs: 100_000 }, { ...smoke, steps: [{ key: 'Control+L', expect: visible }] },
+    { ...smoke, steps: [{ key: 'Enter', expect: { ...visible, name: 'bad\nname' } }] }]) {
+    await write(bad);
+    await expect(loadTestFixture(root, 'keyboard.json')).rejects.toThrow();
+  }
+  expect(smokeLatency([20, 7, 45, 10])).toEqual({ median: 15, p90: 45 });
 });
 
 it('matches baselines only for the same project, route, fixture version and viewport set', () => {
