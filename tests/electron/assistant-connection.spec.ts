@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 
-type Fixture = { mode: 'ok' | 'quota' | 'oversize' | 'evidence'; bodies: string[] };
+type Fixture = { mode: 'ok' | 'quota' | 'oversize' | 'evidence' | 'waiting' | 'timeout'; bodies: string[] };
 
 test('checks the provider with a built-in sample and sends only the separately approved page request', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'private-browser-ai-check-'));
@@ -29,6 +29,12 @@ test('checks the provider with a built-in sample and sends only the separately a
         fixture.bodies.push(String(init?.body ?? ''));
         if (fixture.mode === 'quota') return new Response('provider details', { status: 429 });
         if (fixture.mode === 'oversize') return new Response('x'.repeat(256 * 1024 + 1));
+        if (fixture.mode === 'timeout') throw new DOMException('Fixture timed out', 'TimeoutError');
+        if (fixture.mode === 'waiting') {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+          });
+        }
         if (fixture.mode === 'evidence') return Response.json({ choices: [{ message: { content: JSON.stringify({ findings: [
           { claim: 'The catalogue lists a brass kettle.', quote: 'A brass kettle sits on the shelf.' },
           { claim: 'It also lists other items.', quote: 'Other catalogue items.' },
@@ -83,6 +89,20 @@ test('checks the provider with a built-in sample and sends only the separately a
     await expect(send(evidence.id)).resolves.toEqual({ kind: 'sources', items: [
       { claim: 'The catalogue lists a brass kettle.', quote: 'A brass kettle sits on the shelf.' },
     ] });
+
+    const retryPreview = await page.evaluate(() => window.privateBrowser.prepareAiPreview('selection'));
+    const makeReview = () => page.evaluate(({ id, text }) => window.privateBrowser.reviewAssistantRequest(id, text, 'What is listed?'), retryPreview);
+    await app.evaluate(() => { (globalThis as typeof globalThis & { __pbAiConnection?: Fixture }).__pbAiConnection!.mode = 'timeout'; });
+    const firstAttempt = await makeReview();
+    await expect(send(firstAttempt.id)).resolves.toEqual({ kind: 'timeout' });
+    await expect(send(firstAttempt.id)).rejects.toThrow(/review the request/i);
+    await app.evaluate(() => { (globalThis as typeof globalThis & { __pbAiConnection?: Fixture }).__pbAiConnection!.mode = 'waiting'; });
+    const retry = await makeReview();
+    expect(retry.id).not.toBe(firstAttempt.id);
+    const pending = send(retry.id);
+    await expect.poll(async () => (await readBodies()).length).toBe(7);
+    await page.evaluate((id) => window.privateBrowser.cancelReviewedAssistant(id), retry.id);
+    await expect(pending).resolves.toEqual({ kind: 'cancelled' });
     await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
     await expect(check()).rejects.toThrow(/unavailable in this Account Space/i);
   } finally {

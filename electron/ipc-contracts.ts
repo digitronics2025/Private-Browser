@@ -18,6 +18,7 @@ import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
 import { MAX_BOOKMARK_EDIT_BATCH } from './bookmark-maintenance.js';
+import { MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION } from './ai-prompt.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
@@ -314,10 +315,11 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if (args[0] !== undefined && args[0] !== 'page' && args[0] !== 'selection') throw new Error('Choose a page or selection to read');
       return;
     case 'ai:review-request':
-      between(args, 3, 4); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', 12000); requireBoundedText(args[2], 'question', 2000);
+      between(args, 3, 4); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', MAX_ASSISTANT_CONTEXT); requireBoundedText(args[2], 'question', MAX_ASSISTANT_QUESTION);
       if (args[3] !== undefined && typeof args[3] !== 'boolean') throw new Error('Invalid source passage option');
       return;
     case 'ai:send-reviewed':
+    case 'ai:cancel-reviewed':
       exact(args, 1); requireUuid(args[0], 'review'); return;
     case 'ai:approve-preview':
       between(args, 1, 2); requireUuid(args[0], 'preview');

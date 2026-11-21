@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Bot, Cloud, Eye, LoaderCircle, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
 import type { AiPagePreview, AiPreviewScope, AiProviderCheckState, AiRequestReview, AssistantAnswer, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
-import { ASSISTANT_PRESETS, type AssistantPresetId, type AssistantPresetOverrides } from '../../electron/ai-prompt';
+import { ASSISTANT_PRESETS, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION, type AssistantPresetId, type AssistantPresetOverrides } from '../../electron/ai-prompt';
 import { PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
 
@@ -41,6 +41,7 @@ export function AssistantPanel({ workspace, presets, onToast }: {
   const [review, setReview] = useState<AiRequestReview | null>(null);
   const [contextText, setContextText] = useState('');
   const [loading, setLoading] = useState(false);
+  const [requestInFlight, setRequestInFlight] = useState<Pick<AiRequestReview, 'id' | 'mode'> | null>(null);
   const [provider, setProvider] = useState<AiProviderStatus>({ configured: false });
   const [showProviderForm, setShowProviderForm] = useState(false);
   const [providerCheck, setProviderCheck] = useState<AiProviderCheckState>();
@@ -129,14 +130,19 @@ export function AssistantPanel({ workspace, presets, onToast }: {
   const ask = async () => {
     if (!review) return;
     setLoading(true);
+    setRequestInFlight(review);
     setReview(null);
-    setPreview(null);
-    setContextText('');
+    setAnswer(null);
     try {
-      setAnswer(await window.privateBrowser.sendReviewedAssistant(review.id));
+      const result = await window.privateBrowser.sendReviewedAssistant(review.id);
+      if (result.kind !== 'timeout' && result.kind !== 'cancelled') {
+        setPreview(null);
+        setContextText('');
+      }
+      setAnswer(result);
     } catch (error) {
       onToast(error instanceof Error ? error.message : String(error), 'error');
-    } finally { setLoading(false); }
+    } finally { setRequestInFlight(null); setLoading(false); }
   };
   const savePreset = async (id: AssistantPresetId, changes: AssistantPresetOverrides, message: string) => {
     setLoading(true);
@@ -208,10 +214,11 @@ export function AssistantPanel({ workspace, presets, onToast }: {
             <div className="context-heading"><span>PAGE CONTEXT</span><b>{preview.redactions} redacted</b></div>
             <h3>{preview.title || 'Untitled page'}</h3>
             <small className="context-origin">{preview.url}</small>
-            <label>Page text<textarea aria-label="Page text" className="context-text" value={contextText} maxLength={12000} disabled={loading} onChange={(event) => {
+            <label>Page text<textarea aria-label="Page text" className="context-text" value={contextText} maxLength={MAX_ASSISTANT_CONTEXT} disabled={loading} onChange={(event) => {
               setContextText(event.target.value);
               setReview(null);
             }} /></label>
+            <small className="context-size">{contextText.length.toLocaleString()} of {MAX_ASSISTANT_CONTEXT.toLocaleString()} page characters</small>
           </div>
           {preview.text && <form className="ask-card" onSubmit={(event) => {
             event.preventDefault();
@@ -238,7 +245,8 @@ export function AssistantPanel({ workspace, presets, onToast }: {
               <option value="">Custom question</option>
               {Object.entries(ASSISTANT_PRESETS).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}
             </select></label>
-            <label>Question<textarea aria-label="Question" maxLength={2000} value={question} disabled={loading} onChange={(event) => { setQuestion(event.target.value); setReview(null); }} /></label>
+            <label>Question<textarea aria-label="Question" maxLength={MAX_ASSISTANT_QUESTION} value={question} disabled={loading} onChange={(event) => { setQuestion(event.target.value); setReview(null); }} /></label>
+            <small className="context-size">{question.length.toLocaleString()} of {MAX_ASSISTANT_QUESTION.toLocaleString()} question characters</small>
             {preset && <div className="panel-actions preset-actions">
               <button type="button" disabled={loading || !question.trim() || question.trim() === (presets?.[preset] ?? ASSISTANT_PRESETS[preset].question)} onClick={() => void savePreset(preset, { ...presets, [preset]: question.trim() }, 'Prompt preset saved')}>Save preset</button>
               {presets?.[preset] && <button type="button" disabled={loading} onClick={() => {
@@ -251,22 +259,31 @@ export function AssistantPanel({ workspace, presets, onToast }: {
               setWithEvidence(event.target.checked);
               setReview(null);
             }} /> Include source passages</label>
-            <button className="primary-button full" type="submit" disabled={loading || !provider.configured || !question.trim()}><ShieldCheck size={16} /> {provider.configured ? 'Review request' : 'Connect provider first'}</button>
+            <button className="primary-button full" type="submit" disabled={loading || !provider.configured || !question.trim()}><ShieldCheck size={16} /> {provider.configured ? answer?.kind === 'timeout' ? 'Review retry' : 'Review request' : 'Connect provider first'}</button>
           </form>
           {review && <section className="permission-card request-review" aria-label="Request review">
             <div>{review.mode === 'local' ? <LockKeyhole size={17} /> : <Cloud size={17} />}<strong>{review.mode === 'local' ? 'Send to local model' : 'Send to cloud provider'}</strong></div>
             <p>{review.destination}</p><p>{review.model} · {review.redactions} redacted</p>
             <details><summary>System instruction</summary><pre className="context-text">{review.systemPrompt}</pre></details>
             <pre className="context-text">{review.userPrompt}</pre>
+            {review.mode === 'cloud' && <RequestCostEstimate review={review} />}
             <button className="primary-button full" type="button" onClick={() => void ask()} disabled={loading}>Approve and ask once</button>
           </section>}
-          <button className="text-button" onClick={() => void clearContext()}>Clear page context</button>
+          {requestInFlight && <div className="permission-card">
+            <p role="status">{requestInFlight.mode === 'local' ? 'Waiting for the local model…' : 'Waiting for the cloud provider…'}</p>
+            <button type="button" className="text-button" onClick={() => {
+              void window.privateBrowser.cancelReviewedAssistant(requestInFlight.id).catch((error) => onToast(error instanceof Error ? error.message : 'Could not cancel the request.', 'error'));
+            }}>Cancel request</button>
+          </div>}
+          <button className="text-button" onClick={() => void clearContext()} disabled={loading}>Clear page context</button>
         </>
       )}
       {answer && <div className="answer-card">
-        <span>AI ANSWER</span>
+        {(answer.kind === 'answer' || answer.kind === 'sources') && <span>AI ANSWER</span>}
         {answer.kind === 'answer' && <p>{answer.text}</p>}
         {answer.kind === 'insufficient' && <p role="status">Insufficient page information. The reply included no source passage from the approved text.</p>}
+        {answer.kind === 'cancelled' && <p role="status">Request cancelled.</p>}
+        {answer.kind === 'timeout' && <p role="status">The provider timed out. Review the request before retrying.</p>}
         {answer.kind === 'sources' && <ul className="source-findings">{answer.items.map(({ claim, quote }) => <li key={claim}>
           <p>{claim}</p><blockquote aria-label="Source passage">{quote}</blockquote>
         </li>)}</ul>}
@@ -276,4 +293,23 @@ export function AssistantPanel({ workspace, presets, onToast }: {
       </div>}
     </div>
   );
+}
+
+function RequestCostEstimate({ review }: { review: AiRequestReview }) {
+  const [inputRate, setInputRate] = useState('');
+  const [outputRate, setOutputRate] = useState('');
+  const [outputTokens, setOutputTokens] = useState('256');
+  const inputBytes = new TextEncoder().encode(review.systemPrompt + review.userPrompt).byteLength;
+  const estimatedInputTokens = Math.ceil(inputBytes / 4);
+  const estimate = (estimatedInputTokens * Number(inputRate) + Number(outputTokens) * Number(outputRate)) / 1_000_000;
+  const hasEstimate = [inputRate, outputRate, outputTokens].every((value) => value.trim() && Number.isFinite(Number(value)) && Number(value) >= 0);
+
+  return <details className="request-cost">
+    <summary>Estimate cost locally</summary>
+    <p>Enter your provider’s prices per million tokens in USD. This estimate uses prompt size and your expected answer length.</p>
+    <label>Input price per million<input type="number" min={0} step="any" inputMode="decimal" value={inputRate} onChange={(event) => setInputRate(event.target.value)} /></label>
+    <label>Output price per million<input type="number" min={0} step="any" inputMode="decimal" value={outputRate} onChange={(event) => setOutputRate(event.target.value)} /></label>
+    <label>Estimated output tokens<input type="number" min={0} step={1} inputMode="numeric" value={outputTokens} onChange={(event) => setOutputTokens(event.target.value)} /></label>
+    {hasEstimate && Number.isFinite(estimate) && <p role="status">Estimated cost: {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 6 }).format(estimate)}</p>}
+  </details>;
 }

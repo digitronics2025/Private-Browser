@@ -30,7 +30,7 @@ import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { AiProviderStore } from './ai-provider.js';
-import { AI_SYSTEM_PROMPT, assistantQuestion, aiUserPrompt, readAssistantAnswer } from './ai-prompt.js';
+import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, readAssistantAnswer } from './ai-prompt.js';
 import { WORKSPACES } from './state-store.js';
 import { AccountStore } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
@@ -269,6 +269,7 @@ class BrowserController {
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number }>();
   private assistantReview?: { review: AiRequestReview; preview: AiPagePreview; question: string; withEvidence: boolean; expiresAt: number; navigationGeneration: number };
+  private activeAssistant?: { id: string; controller: AbortController };
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
   private readonly developerPreviewIds = new Set<string>();
@@ -1401,6 +1402,7 @@ class BrowserController {
     this.pendingAiPreviews.clear();
     this.aiApprovals.clear();
     this.assistantReview = undefined;
+    this.activeAssistant?.controller.abort();
     this.permissions.clearAccount(accountSpaceId);
     this.googleOAuth.clearMemory(accountSpaceId);
     this.googleServices.clearAccount(accountSpaceId);
@@ -2339,7 +2341,7 @@ class BrowserController {
     if (scope === 'selection' && !rawText.trim()) throw new Error('Select visible page text, then try again.');
     const result = redactSensitiveText(rawText);
     const safeTitle = redactSensitiveText(tab.title);
-    const text = result.text.slice(0, 12000);
+    const text = result.text.slice(0, MAX_ASSISTANT_CONTEXT);
     const preview: AiPagePreview = {
       id: randomUUID(),
       accountSpaceId: tab.accountSpaceId,
@@ -2388,10 +2390,10 @@ class BrowserController {
   }
 
   async askReviewedAssistant(id: string): Promise<AssistantAnswer> {
+    if (this.activeAssistant) throw new Error('An Assistant request is already running.');
     const pending = this.assistantReview;
     if (pending?.review.id !== id) throw new Error('Review the request before sending it.');
     this.assistantReview = undefined;
-    this.pendingAiPreviews.delete(pending.preview.id);
     if (pending.expiresAt < Date.now()) throw new Error('The review expired. Read the page again.');
     const validate = () => {
       this.validateAssistantSource(pending.preview, pending.navigationGeneration);
@@ -2404,9 +2406,27 @@ class BrowserController {
     validate();
     const kind = pending.review.mode === 'local' ? 'local-read' : 'cloud-approved';
     this.addPrivacyEvent(kind, 'Assistant request approved', `${pending.review.redactions} redaction(s)`);
-    const answer = await this.aiProvider.ask(pending.preview, pending.question, validate);
-    this.addPrivacyEvent(kind, 'Assistant request completed', pending.preview.title);
-    return readAssistantAnswer(answer, pending.withEvidence, pending.preview.text);
+    const controller = new AbortController();
+    this.activeAssistant = { id, controller };
+    try {
+      const answer = await this.aiProvider.ask(pending.preview, pending.question, validate, controller.signal);
+      controller.signal.throwIfAborted();
+      this.pendingAiPreviews.delete(pending.preview.id);
+      this.addPrivacyEvent(kind, 'Assistant request completed', pending.preview.title);
+      return readAssistantAnswer(answer, pending.withEvidence, pending.preview.text);
+    } catch (error) {
+      if (controller.signal.aborted) return { kind: 'cancelled' };
+      if (error instanceof Error && (error.name === 'TimeoutError' || (error.cause instanceof Error && error.cause.name === 'TimeoutError'))) {
+        return { kind: 'timeout' };
+      }
+      throw error;
+    } finally {
+      this.activeAssistant = undefined;
+    }
+  }
+
+  cancelReviewedAssistant(id: string): void {
+    if (this.activeAssistant?.id === id) this.activeAssistant.controller.abort();
   }
 
   private validateAssistantSource(preview: AiPagePreview, navigationGeneration: number): void {
@@ -2516,6 +2536,7 @@ class BrowserController {
     this.pendingAiPreviews.clear();
     this.aiApprovals.clear();
     this.assistantReview = undefined;
+    this.activeAssistant?.controller.abort();
     if (had) this.addPrivacyEvent('blocked', 'AI context revoked', 'The approved page text was discarded before it was used');
   }
 
@@ -4050,6 +4071,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:prepare-preview', (_event, scope?: AiPreviewScope) => controller!.prepareAiPreview(scope));
   handle('ai:review-request', (_event, id: string, text: string, question: string, withEvidence?: boolean) => controller!.reviewAssistantRequest(id, text, question, withEvidence));
   handle('ai:send-reviewed', (_event, id: string) => controller!.askReviewedAssistant(id));
+  handle('ai:cancel-reviewed', (_event, id: string) => controller!.cancelReviewedAssistant(id));
   handle('ai:approve-preview', (_event, previewId: string, mode?: 'local' | 'cloud') => controller!.approveAiPreview(previewId, mode));
   handle('ai:provider-status', () => controller!.getAiProvider());
   handle('ai:check-provider', () => controller!.checkAiProvider());

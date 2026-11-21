@@ -117,3 +117,39 @@ test('reports insufficient information when the reply quotes text outside the ap
   await expect(panel.getByRole('status').filter({ hasText: 'Insufficient page information' })).toBeVisible();
   await expect(panel.getByRole('button', { name: 'Copy answer' })).toHaveCount(0);
 });
+
+test('requires another review and approval after a timeout', async ({ page }) => {
+  await page.goto('/?localAi=sample&aiRequest=timeout-once');
+  await page.evaluate(() => window.privateBrowser.configureAiProvider({ mode: 'local', model: 'preview-small:latest' }));
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Read selection locally' }).click();
+  await expect(panel.getByText(/of 12,000 page characters/)).toBeVisible();
+  await expect(panel.getByText(/of 2,000 question characters/)).toBeVisible();
+  await panel.getByRole('button', { name: 'Review request' }).click();
+  await panel.getByRole('button', { name: 'Approve and ask once' }).click();
+  await expect(panel.getByText(/The provider timed out/)).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Approve and ask once' })).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Review retry' }).click();
+  await panel.getByRole('button', { name: 'Approve and ask once' }).click();
+  await expect(panel.getByText('The sample shows a brass kettle on the shelf.')).toBeVisible();
+});
+
+test('estimates cloud price locally and cancels a pending request on demand', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 820 });
+  await page.goto('/?localAi=sample&aiRequest=waiting');
+  await page.evaluate(() => window.privateBrowser.configureAiProvider({ endpoint: 'https://ai-fixture.example.com/v1', model: 'fixture', apiKey: '' }));
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Read selection locally' }).click();
+  await panel.getByRole('button', { name: 'Review request' }).click();
+  await panel.getByText('Estimate cost locally', { exact: true }).click();
+  await panel.getByRole('spinbutton', { name: 'Input price per million' }).fill('2');
+  await panel.getByRole('spinbutton', { name: 'Output price per million' }).fill('5');
+  await expect(panel.getByText(/Estimated cost: \$0\.00/)).toBeVisible();
+  await panel.getByRole('button', { name: 'Approve and ask once' }).click();
+  await expect(panel.getByText('Waiting for the cloud provider…')).toBeVisible();
+  await panel.getByRole('button', { name: 'Cancel request' }).click();
+  await expect(panel.getByText('Request cancelled.')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Approve and ask once' })).toHaveCount(0);
+});

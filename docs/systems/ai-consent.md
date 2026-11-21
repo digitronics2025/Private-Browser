@@ -159,6 +159,13 @@ can choose this for other prompts. Each displayed finding includes a quote
 matched against the exact approved excerpt. If the provider returns no
 matching passage, the app displays Insufficient page information.
 
+The Assistant shows the current input counts and the active provider while a
+request runs. Cancellation aborts the browser's request to Ollama or the cloud
+provider. A timeout consumes approval. Users can review and approve a new
+request against the retained excerpt while its five-minute read is valid.
+The cloud cost estimate uses user-entered prices and expected output length.
+It runs locally and the prices stay in the review panel's memory.
+
 ### Developer approval — `approveAiPreview(previewId, mode)`
 
 1. The pending entry is fetched and **deleted immediately**, before any check. A

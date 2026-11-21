@@ -1,4 +1,6 @@
 export const AI_SYSTEM_PROMPT = 'Answer only from the user-approved webpage context. Clearly say when the context is insufficient. Never request or expose credentials.';
+export const MAX_ASSISTANT_CONTEXT = 12000;
+export const MAX_ASSISTANT_QUESTION = 2000;
 
 export const ASSISTANT_PRESETS = {
   darija: { label: 'Short Darija reply', question: 'Write a short, polite reply in Moroccan Darija using Arabic script. Keep the facts and commitments in the selected text.' },

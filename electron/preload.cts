@@ -143,6 +143,7 @@ const api = {
   prepareAiPreview: (scope?: AiPreviewScope): Promise<AiPagePreview> => ipcRenderer.invoke('ai:prepare-preview', scope),
   reviewAssistantRequest: (id: string, text: string, question: string, withEvidence?: boolean): Promise<AiRequestReview> => ipcRenderer.invoke('ai:review-request', id, text, question, withEvidence),
   sendReviewedAssistant: (id: string): Promise<AssistantAnswer> => ipcRenderer.invoke('ai:send-reviewed', id),
+  cancelReviewedAssistant: (id: string): Promise<void> => ipcRenderer.invoke('ai:cancel-reviewed', id),
   approveAiPreview: (previewId: string, mode?: 'cloud' | 'local'): Promise<AiApproval> => ipcRenderer.invoke('ai:approve-preview', previewId, mode),
   getAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:provider-status'),
   checkAiProvider: (): Promise<AiProviderCheckResult> => ipcRenderer.invoke('ai:check-provider'),

@@ -648,7 +648,7 @@ export interface AiRequestReview {
 export type AssistantAnswer =
   | { kind: 'answer'; text: string }
   | { kind: 'sources'; items: { claim: string; quote: string }[] }
-  | { kind: 'insufficient' };
+  | { kind: 'insufficient' | 'cancelled' | 'timeout' };
 
 export interface AiProviderStatus {
   configured: boolean;

@@ -1,7 +1,7 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { ChromeImportOptions } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
-import type { AiPagePreview, AiRequestReview } from '../electron/types';
+import type { AiPagePreview, AiRequestReview, AssistantAnswer } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
@@ -158,6 +158,8 @@ export function installPreviewApi(): void {
   let previewProvider: AiProviderStatus = { configured: false };
   let assistantPage: AiPagePreview | undefined;
   let assistantReview: { data: AiRequestReview; context: string; withEvidence: boolean } | undefined;
+  let timeoutFixtureUsed = false;
+  let previewRequest: { id: string; finish: (answer: AssistantAnswer) => void } | undefined;
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
     state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
@@ -561,8 +563,15 @@ export function installPreviewApi(): void {
     sendReviewedAssistant: async (id) => {
       if (!assistantPage || assistantPage.accountSpaceId !== state.activeAccountSpaceId || assistantPage.tabId !== state.activeTabId
         || !assistantReview || assistantReview.data.id !== id) throw new Error('Review the request before sending it.');
-      const { context, withEvidence } = assistantReview;
+      const { data, context, withEvidence } = assistantReview;
       assistantReview = undefined;
+      if (params.get('aiRequest') === 'timeout-once' && !timeoutFixtureUsed) {
+        timeoutFixtureUsed = true;
+        return { kind: 'timeout' };
+      }
+      if (params.get('aiRequest') === 'waiting') {
+        return new Promise<AssistantAnswer>((finish) => { previewRequest = { id: data.id, finish }; });
+      }
       assistantPage = undefined;
       const answer = 'The sample shows a brass kettle on the shelf.';
       const fixture = withEvidence ? JSON.stringify({ findings: [{
@@ -570,7 +579,18 @@ export function installPreviewApi(): void {
       }] }) : answer;
       return readAssistantAnswer(fixture, withEvidence, context);
     },
-    revokeAiContext: async () => { assistantReview = undefined; assistantPage = undefined; },
+    cancelReviewedAssistant: async (id) => {
+      if (previewRequest && previewRequest.id === id) {
+        previewRequest.finish({ kind: 'cancelled' });
+        previewRequest = undefined;
+      }
+    },
+    revokeAiContext: async () => {
+      assistantReview = undefined;
+      assistantPage = undefined;
+      previewRequest?.finish({ kind: 'cancelled' });
+      previewRequest = undefined;
+    },
     getLocalAiModels: async () => {
       if (state.activeWorkspaceId === 'banking') throw new Error('AI is unavailable in this workspace');
       return params.get('localAi') === 'sample'

@@ -113,7 +113,7 @@ export class AiProviderStore {
     }
   }
 
-  async ask(context: { title: string; url: string; text: string; dom?: string; screenshotDataUrl?: string }, question: string, checkSource: () => void): Promise<string> {
+  async ask(context: { title: string; url: string; text: string; dom?: string; screenshotDataUrl?: string }, question: string, checkSource: () => void, cancellation?: AbortSignal): Promise<string> {
     const provider = this.config;
     if (!provider) throw new Error('Configure an AI provider first');
     const prompt = aiUserPrompt(context, question);
@@ -122,12 +122,13 @@ export class AiProviderStore {
       return this.local.ask(provider.model, AI_SYSTEM_PROMPT, prompt, () => {
         if (this.config !== provider) throw new Error('The AI provider changed; approve the context again');
         checkSource();
-      });
+      }, cancellation);
     }
     const content = context.screenshotDataUrl
       ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: context.screenshotDataUrl } }]
       : prompt;
     checkSource();
+    const timeout = AbortSignal.timeout(10_000);
     const response = await fetch(`${provider.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -143,7 +144,7 @@ export class AiProviderStore {
         ],
       }),
       redirect: 'error',
-      signal: AbortSignal.timeout(10_000),
+      signal: cancellation ? AbortSignal.any([cancellation, timeout]) : timeout,
     });
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
