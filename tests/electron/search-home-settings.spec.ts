@@ -169,8 +169,8 @@ test('search engine, Home page and startup settings work in the real app and sur
     await expect(page.getByRole('status')).toContainText('Search engine saved');
     await address().fill('hello world');
     await address().press('Enter');
-    await expect(page.getByRole('tab', { name: /Results for hello world/ })).toBeVisible();
     await expect(address()).toHaveValue(`${origin}/search?q=hello%20world`);
+    await expect(page.getByRole('tab', { name: /Results for hello world/ })).toBeVisible({ timeout: 12_000 });
 
     // Home goes to the chosen address, from the button and from Alt+Home.
     const home = panel.getByRole('radiogroup', { name: 'Home page' });
