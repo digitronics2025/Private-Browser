@@ -110,6 +110,11 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | --- | --- | --- | --- |
 | `browser:get-state` | `getState()` | — | `BrowserSnapshot` |
 | `browser:address-matches` | `addressMatches(accountSpaceId, text)` | Expected active space and query up to 256 characters | Up to eight `AddressMatch` entries |
+| `browser:organize-tab` | `organizeTab(action)` | Pin, create group, move, or collapse action for the active Account Space | `void` |
+| `browser:duplicate-tab` | `duplicateTab(id)` | Tab ID in the active Account Space | `void` |
+| `browser:close-tab-batch` | `closeTabBatch(id, scope, confirmedIds)` | Anchor ID, close scope, and exact tab IDs confirmed by the user | `void` |
+| `browser:undo-tab-batch` | `undoTabBatch()` | — | `void` |
+| `browser:restore-selected-tabs` | `restoreSelectedTabs(ids)` | Up to 100 tab IDs from the startup recovery Account Space | `void` |
 | `browser:reopen-recent-tab` | `reopenRecentTab(id)` | Closed tab ID from the current space | `void` |
 | `browser:query-history` | `queryHistory(accountSpaceId, input)` | Expected active space, text, hostname, UTC range boundaries and page | `HistoryPage` |
 | `browser:open-address-match` | `openAddressMatch(accountSpaceId, source, id)` | Expected active space, result type and record ID | `void` |
@@ -250,7 +255,8 @@ the main process; `VaultItemMeta` carries `hasTotp`, never the secret.
 | --- | --- | --- | --- |
 | `system:copy` | `copyText(value)` | `value: string` | `void` |
 | `system:is-default-browser` | `getDefaultBrowserStatus()` | — | `boolean` |
-| `system:set-default-browser` | `setDefaultBrowser()` | — | `boolean` |
+| `system:open-default-browser-settings` | `openDefaultBrowserSettings()` | — | `void` |
+| `system:test-default-browser` | `testDefaultBrowser()` | — | `void` |
 
 ### updates: — 5 channels
 

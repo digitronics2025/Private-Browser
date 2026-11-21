@@ -203,6 +203,10 @@ views; their webContents stay alive and keep running timers, media and network.
 
 ## Navigation and History
 
+Tab actions are scoped to the active Account Space. Bulk close validates the
+confirmed tab IDs, skips pins, and is disabled in Banking. Undo restores the
+last batch, including group membership, for the current session.
+
 The Recently closed submenu lists up to 25 pages from the active Account Space
 with their close times. Choosing a page adds a background tab. Reopen closed tab
 and Ctrl+Shift+T still restore the most recent page to the foreground. The list
@@ -240,6 +244,11 @@ with; only when there is none does it call `openStartupHome()`. That runs when
 `settings.startup === 'home'` and no recovery is pending: it adds one tab in the
 active Account Space and sends it Home. Restored tabs are never closed. A failure
 is recorded as a `blocked` privacy event without the URL and startup carries on.
+
+Crashes and main-frame load failures hide the native view and show Reload and
+Back. Cancelled loads are ignored. An opaque tab ID and attempt count are
+journaled during startup. Two failures open the tab chooser. Unselected tabs
+stay saved and paused until the user resumes them.
 
 - `private://home` is a branch, not a load: it rewrites the tab record to the home
   state, stops any load in flight, hides the view without destroying it,
@@ -607,27 +616,17 @@ there is not reported anywhere.
 
 ## Launch, Single Instance and Deep Links
 
-- `pendingLaunchUrl` starts as the first `process.argv` entry that passes
-  `isAllowedRemoteUrl`, so a cold start with a URL argument opens it.
-- `app.requestSingleInstanceLock()` decides everything else. Without the lock the
-  process calls `app.quit()` and registers no handlers; the whole
-  `app.whenReady()` block is separately guarded by the same flag.
-- `second-instance` takes the first allowed URL from the new command line, opens
-  it as a tab in the current workspace, then calls `focus()` (restore if
-  minimised, show, focus).
-- `open-url` (macOS) calls `preventDefault()`, then either opens a tab or parks
-  the URL in `pendingLaunchUrl` when the controller does not exist yet.
-  `whenReady` consumes it after `createWindow()`.
-- Default browser: `isDefaultBrowser()` requires **both** `http` and `https`;
-  `setDefaultBrowser()` returns the AND of the two `setAsDefaultProtocolClient`
-  calls.
-- **Update bootstrap runs once, between the stores and the controller.** After
-  the four stores are constructed, `whenReady` reads
-  `private-browser-update.json` from `process.resourcesPath`, passes it to
-  `updates.bootstrap(...)`, and deletes the file on success. The whole block sits
-  in a `try/catch` that logs `update_bootstrap_invalid` and continues, so a
-  malformed bundled config can never stop the app launching. Owned by
-  [release-and-updates.md](release-and-updates.md).
+- `app.requestSingleInstanceLock()` leaves one process responsible for the
+  window. Launch arguments and OS callbacks queue allowed links until its
+  chrome is ready. See [Navigation and History](#navigation-and-history).
+- Default browser status checks both HTTP and HTTPS associations. Settings
+  rereads the status when the window regains focus. **Open Windows Default Apps**
+  launches the documented Windows Settings page, and **Test with a link** opens
+  Example Domain through the operating system. The NSIS installer registers
+  Private Browser as a candidate for the two protocols. Windows owns the choice.
+- `whenReady` consumes the optional update bootstrap before creating the
+  controller. Invalid bootstrap data is logged and startup continues.
+  [Release and Updates](release-and-updates.md) owns the bootstrap contract.
 - Background update checks run once 10 s after launch and then every 24 h. Both
   timers are `.unref()`ed so neither keeps the process alive.
 - `window-all-closed` quits everywhere except darwin; `activate` rebuilds the

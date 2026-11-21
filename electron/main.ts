@@ -33,6 +33,8 @@ import { WORKSPACES } from './state-store.js';
 import { AccountStore } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
 import { RuntimeStateStore } from './runtime-state-store.js';
+import { problemForFailedLoad, StartupRestoreJournal } from './startup-restore.js';
+import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from './tab-organization.js';
 import { CHROME, contentBounds, DEFAULT_CONTENT_INSETS, FRAME_COLORS, sanitizeContentInsets, ZERO_INSETS, type ContentInsets } from './chrome-layout.js';
 import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
@@ -42,6 +44,7 @@ import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
   AccountSpaceColor,
+  AccountSpaceBrowserTab,
   AccountSpaceId,
   ExternalBrowserId,
   GoogleModule,
@@ -76,6 +79,11 @@ import type {
   UpdateServiceInput,
   WorkspaceId,
   StateRecoveryAction,
+  StartupTabRecovery,
+  TabProblem,
+  TabOrganizationAction,
+  TabBatchScope,
+  TabGroup,
 } from './types.js';
 import type { ProjectInfo, ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
@@ -131,6 +139,8 @@ interface RuntimeTab {
   network: Array<DeveloperNetworkIssue & { redactions: number }>;
   navigationGeneration: number;
   certificateError: boolean;
+  problem?: TabProblem;
+  failedUrl?: string;
   automaticFillGeneration?: number;
   automaticFillPending: boolean;
 }
@@ -251,6 +261,14 @@ class BrowserController {
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { ...DEFAULT_CONTENT_INSETS };
   private readonly closedTabs = new Map<AccountSpaceId, RecentlyClosedTab[]>();
+  private readonly closedTabBatches = new Map<AccountSpaceId, {
+    entries: Array<{ tab: AccountSpaceBrowserTab; index: number }>;
+    groups: TabGroup[];
+    groupName?: string;
+  }>();
+  private startingWindow = true;
+  private startupTabRecovery?: StartupTabRecovery;
+  private readonly startupRestoreJournal = new StartupRestoreJournal(join(app.getPath('userData'), 'startup-restore.json'));
   private htmlFullscreenOwner?: string;
   private settleLayoutTimer?: NodeJS.Timeout;
   private settleBroadcast = false;
@@ -319,6 +337,7 @@ class BrowserController {
   }
 
   async createWindow(): Promise<void> {
+    this.startingWindow = true;
     nativeTheme.themeSource = this.store.get().ui.theme;
     const frame = this.frameColors();
     this.appliedFrame = frame;
@@ -388,7 +407,45 @@ class BrowserController {
     this.window.maximize();
     await this.window.loadURL(devUrl ?? productionUrl);
     if (!this.window.isDestroyed() && !this.window.isVisible()) this.window.show();
+    this.startingWindow = false;
+    await this.restoreStartupTab();
+  }
+
+  private async restoreStartupTab(): Promise<void> {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    if (this.store.isReadOnly() || tab.isHome || tab.restorePaused || state.recovery?.accountSpaceId === tab.accountSpaceId
+      || state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked) {
+      this.startupRestoreJournal.clear();
+      await this.showActiveTab();
+      return;
+    }
+    if (!this.startupRestoreJournal.begin(tab.id)) {
+      this.startupTabRecovery = { accountSpaceId: tab.accountSpaceId, failedTabId: tab.id };
+      this.broadcast();
+      return;
+    }
     await this.showActiveTab();
+    if (!this.window.isDestroyed() && !this.runtimeTabs.get(tab.id)?.problem) this.startupRestoreJournal.clear();
+  }
+
+  async restoreSelectedTabs(ids: string[]): Promise<void> {
+    const recovery = this.startupTabRecovery;
+    const state = this.store.get();
+    if (!recovery || this.activeAccountSpaceId(state) !== recovery.accountSpaceId) throw new Error('Tab recovery is unavailable');
+    const tabs = state.tabs.filter((tab) => tab.accountSpaceId === recovery.accountSpaceId);
+    const selected = new Set(ids);
+    if (selected.size !== ids.length || ids.some((id) => !tabs.some((tab) => tab.id === id))) throw new Error('Choose tabs in this Account Space');
+    this.store.update((next) => {
+      for (const tab of next.tabs) {
+        if (tab.accountSpaceId === recovery.accountSpaceId && !tab.isHome) tab.restorePaused = !selected.has(tab.id);
+      }
+    });
+    this.startupTabRecovery = undefined;
+    this.startupRestoreJournal.clear();
+    const first = tabs.find((tab) => selected.has(tab.id));
+    if (first) await this.activateTab(first.id);
+    else await this.newTab();
   }
 
   getSnapshot(): BrowserSnapshot {
@@ -403,11 +460,13 @@ class BrowserController {
         favicon: runtime?.favicon,
         developerToolsAllowed: canUseDeveloperTools(tab.workspaceId, tab.isHome, tab.url),
         developerToolsOpen: runtime?.developerToolsOpen ?? false,
+        problem: runtime?.problem,
         securityWarning: tab.isHome ? undefined : navigationWarning(tab.url),
         ...this.runtimeMedia(runtime),
       };
     });
     const activeAccountSpaceId = this.activeAccountSpaceId(persisted);
+    const closedBatch = this.closedTabBatches.get(activeAccountSpaceId);
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
     return {
       workspaces: WORKSPACES,
@@ -427,6 +486,9 @@ class BrowserController {
       accountSpaces: persisted.accountSpaces,
       accountHealth: persisted.accountHealth,
       recovery: persisted.recovery,
+      startupTabRecovery: this.startupTabRecovery?.accountSpaceId === activeAccountSpaceId ? this.startupTabRecovery : undefined,
+      tabGroups: persisted.tabGroupsByAccountSpace?.[activeAccountSpaceId] ?? [],
+      closedTabBatch: closedBatch ? { count: closedBatch.entries.length, groupName: closedBatch.groupName } : undefined,
       pendingPermission: this.pendingPermission?.prompt,
       googleConfiguration: this.googleConfiguration.status(),
       externalBrowsers: this.externalBrowsers.discover().map(({ id, name }) => ({ id, name })),
@@ -539,10 +601,16 @@ class BrowserController {
     const state = this.store.get();
     const url = normalizeNavigationInput(value, searchTemplateFor(state.settings));
     const tab = this.activeTab(state);
+    if (this.startupTabRecovery?.accountSpaceId === tab.accountSpaceId) {
+      this.startupTabRecovery = undefined;
+      this.startupRestoreJournal.clear();
+    }
+    const current = this.runtimeTabs.get(tab.id);
+    if (current) Object.assign(current, { problem: undefined, failedUrl: undefined });
     if (url === 'private://home') {
       this.store.update((next) => {
         const target = next.tabs.find((candidate) => candidate.id === tab.id);
-        if (target) Object.assign(target, { url, title: 'New tab', isHome: true });
+        if (target) Object.assign(target, { url, title: 'New tab', isHome: true, restorePaused: undefined });
       });
       const runtime = this.runtimeTabs.get(tab.id);
       // A page still loading would otherwise commit after this and take the tab
@@ -556,7 +624,7 @@ class BrowserController {
     if (!isAllowedRemoteUrl(url)) throw new Error('Only HTTP and HTTPS pages are allowed');
     this.store.update((next) => {
       const target = next.tabs.find((candidate) => candidate.id === tab.id);
-      if (target) Object.assign(target, { url, isHome: false });
+      if (target) Object.assign(target, { url, isHome: false, restorePaused: undefined });
     });
     const view = this.ensureView(tab.id);
     view.setVisible(true);
@@ -1116,6 +1184,7 @@ class BrowserController {
     }
     for (const key of [...this.faviconCache.keys()]) if (key.startsWith(`${accountSpaceId}:`)) this.faviconCache.delete(key);
     this.closedTabs.delete(accountSpaceId);
+    this.closedTabBatches.delete(accountSpaceId);
   }
 
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
@@ -1164,7 +1233,17 @@ class BrowserController {
     if (contents?.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
   }
 
-  reload(): void {
+  async reload(): Promise<void> {
+    const tab = this.activeTab(this.store.get());
+    const runtime = this.runtimeTabs.get(tab.id);
+    if (runtime?.problem || tab.restorePaused) {
+      try {
+        await this.navigate(runtime?.failedUrl ?? tab.url);
+      } catch (error) {
+        if (!runtime?.problem && !this.runtimeTabs.get(tab.id)?.problem) throw error;
+      }
+      return;
+    }
     this.activeContents()?.reload();
   }
 
@@ -1213,7 +1292,7 @@ class BrowserController {
    */
   async openStartupHome(): Promise<void> {
     const state = this.store.get();
-    if (state.settings.startup !== 'home' || state.recovery) return;
+    if (state.settings.startup !== 'home' || state.recovery || this.startupTabRecovery) return;
     try {
       await this.newTab(state.activeWorkspaceId);
       await this.goHome();
@@ -1274,7 +1353,92 @@ class BrowserController {
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab || tab.accountSpaceId !== this.activeAccountSpaceId(state)) throw new Error('Only tabs in the active Account Space can be moved');
-    this.store.update((next) => { next.tabs = moveTabWithinAccountSpace(next.tabs, tabId, toIndex); });
+    const owned = state.tabs.filter((candidate) => candidate.accountSpaceId === tab.accountSpaceId);
+    const index = keepTabBlockIndex(owned, tab, toIndex);
+    this.store.update((next) => {
+      const reordered = moveTabWithinAccountSpace(next.tabs, tabId, index);
+      next.tabs = replaceAccountTabOrder(reordered, tab.accountSpaceId, orderAccountTabs(reordered.filter((candidate) => candidate.accountSpaceId === tab.accountSpaceId)));
+    });
+    this.broadcast();
+  }
+
+  organizeTab(action: TabOrganizationAction): void {
+    this.store.update((state) => {
+      const accountSpaceId = this.activeAccountSpaceId(state);
+      if (state.accountSpaces.find((account) => account.id === accountSpaceId)?.locked || state.recovery?.accountSpaceId === accountSpaceId) throw new Error('Account Space is unavailable');
+      const bySpace = state.tabGroupsByAccountSpace ??= {};
+      const result = organizeTabs(state.tabs.filter((tab) => tab.accountSpaceId === accountSpaceId), bySpace[accountSpaceId] ?? [], action, randomUUID());
+      bySpace[accountSpaceId] = result.groups;
+      state.tabs = replaceAccountTabOrder(state.tabs, accountSpaceId, result.tabs);
+    });
+    this.broadcast();
+  }
+
+  async duplicateTab(id: string): Promise<void> {
+    const state = this.store.get();
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    const tab = state.tabs.find((candidate) => candidate.id === id && candidate.accountSpaceId === accountSpaceId);
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!tab || !account || account.locked || state.accountHealth.some((health) => health.accountSpaceId === accountSpaceId && health.status === 'account-corrupt')) {
+      throw new Error('Tab is unavailable in this Account Space');
+    }
+    await this.newTab(tab.workspaceId, tab.url, tab.accountSpaceId);
+  }
+
+  async closeTabBatch(id: string, scope: TabBatchScope, confirmedIds: string[]): Promise<void> {
+    const state = this.store.get();
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!account || !isAvailableRegularAccount(state, account)) throw new Error('Bulk tab closing is unavailable in this Account Space');
+    const owned = state.tabs.filter((tab) => tab.accountSpaceId === accountSpaceId);
+    const batch = tabBatchTargets(owned, id, scope);
+    if (!batch.length || batch.length !== confirmedIds.length || batch.some((tab, index) => tab.id !== confirmedIds[index])) {
+      throw new Error('The tabs changed. Open the tab menu and review the selection again.');
+    }
+    const ids = new Set(confirmedIds);
+    const groups = state.tabGroupsByAccountSpace?.[accountSpaceId]?.filter((group) => batch.some((tab) => tab.groupId === group.id)) ?? [];
+    const active = state.activeTabByAccountSpace[accountSpaceId];
+    this.store.update((next) => {
+      next.tabs = next.tabs.filter((tab) => !ids.has(tab.id));
+      if (ids.has(active) && !ids.has(id)) next.activeTabByAccountSpace[accountSpaceId] = id;
+    });
+    this.closedTabBatches.set(accountSpaceId, {
+      entries: batch.map((tab) => ({ tab, index: owned.indexOf(tab) })),
+      groups,
+      groupName: scope === 'group' ? groups[0]?.name : undefined,
+    });
+    for (const tab of batch) {
+      if (this.fillPicker.context?.tabId === tab.id) this.fillPicker.close();
+      this.fillCapabilities.invalidateTab(tab.id);
+      const runtime = this.runtimeTabs.get(tab.id);
+      this.runtimeTabs.delete(tab.id);
+      if (runtime?.view) {
+        this.window.contentView.removeChildView(runtime.view);
+        runtime.view.webContents.close();
+      }
+    }
+    await this.showActiveTab();
+  }
+
+  undoTabBatch(): void {
+    const state = this.store.get();
+    const accountSpaceId = this.activeAccountSpaceId(state);
+    const batch = this.closedTabBatches.get(accountSpaceId);
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!batch || !account || !isAvailableRegularAccount(state, account)) return;
+    this.store.update((next) => {
+      const bySpace = next.tabGroupsByAccountSpace ??= {};
+      const groups = bySpace[accountSpaceId] ??= [];
+      for (const group of batch.groups) if (!groups.some((candidate) => candidate.id === group.id)) groups.push(group);
+      const tabs = next.tabs.filter((tab) => tab.accountSpaceId === accountSpaceId);
+      for (const { tab, index } of batch.entries) {
+        if (tabs.some((candidate) => candidate.id === tab.id)) continue;
+        tabs.splice(index, 0, tab);
+        next.tabs.push(tab);
+      }
+      next.tabs = replaceAccountTabOrder(next.tabs, accountSpaceId, orderAccountTabs(tabs));
+    });
+    this.closedTabBatches.delete(accountSpaceId);
     this.broadcast();
   }
 
@@ -2314,10 +2478,15 @@ class BrowserController {
     return app.isDefaultProtocolClient('http') && app.isDefaultProtocolClient('https');
   }
 
-  setDefaultBrowser(): boolean {
-    const http = app.setAsDefaultProtocolClient('http');
-    const https = app.setAsDefaultProtocolClient('https');
-    return http && https;
+  async openDefaultBrowserSettings(): Promise<void> {
+    if (process.platform !== 'win32') throw new Error('Default Apps requires Windows');
+    try { await shell.openExternal('ms-settings:defaultapps'); }
+    catch { throw new Error('Open Settings, then Apps, then Default apps'); }
+  }
+
+  async testDefaultBrowser(): Promise<void> {
+    try { await shell.openExternal('https://example.com/'); }
+    catch { throw new Error('Windows could not open the test link'); }
   }
 
   getUpdateService() {
@@ -2542,13 +2711,21 @@ class BrowserController {
     guardPageNavigation(view.webContents);
     view.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
       if (!isMainFrame) return;
+      if (runtime.problem && !this.overlayOpen && this.activeTab(this.store.get()).id === tabId) view.setVisible(true);
       runtime.navigationGeneration += 1;
       runtime.certificateError = false;
+      runtime.problem = undefined;
+      runtime.failedUrl = undefined;
       runtime.automaticFillGeneration = undefined;
       runtime.automaticFillPending = false;
       this.fillCapabilities.invalidateTab(tabId);
       if (this.fillPicker.context?.tabId === tabId) this.fillPicker.close();
       this.secureDialogs.closeAll();
+    });
+    view.webContents.on('did-fail-load', (_event, code, _description, url, isMainFrame) => {
+      if (!isMainFrame || !isAllowedRemoteUrl(url)) return;
+      const problem = problemForFailedLoad(code, runtime.certificateError);
+      if (problem) this.markTabProblem(tabId, problem, url);
     });
     view.webContents.on('did-start-loading', () => this.updateRuntime(tabId, { loading: true }));
     view.webContents.on('did-stop-loading', () => this.updateRuntime(tabId, { loading: false }));
@@ -2620,7 +2797,7 @@ class BrowserController {
       this.htmlFullscreenOwner = undefined;
       this.window.setFullScreen(false);
     });
-    view.webContents.on('render-process-gone', () => this.updateRuntime(tabId, { loading: false }));
+    view.webContents.on('render-process-gone', () => this.markTabProblem(tabId, 'crashed'));
     if (canInstallPasskeyProvider(tab.workspaceId, passkeyOriginFor(tab.url), this.passkeyOptIns, false)) {
       void this.passkeyController.installAtDocumentStart(view.webContents).catch(() => this.passkeyController.detach(view.webContents));
     }
@@ -2788,16 +2965,23 @@ class BrowserController {
   }
 
   private async showActiveTab(): Promise<void> {
+    if (this.startingWindow) return;
     const state = this.store.get();
     const tab = this.activeTab(state);
     const locked = state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked;
-    if (!locked && !tab.isHome && isAllowedRemoteUrl(tab.url)) {
+    if (!locked && !tab.isHome && !tab.restorePaused && !this.runtimeTabs.get(tab.id)?.problem && this.startupTabRecovery?.accountSpaceId !== tab.accountSpaceId && isAllowedRemoteUrl(tab.url)) {
       const view = this.ensureView(tab.id);
       view.setVisible(true);
       this.applyLayout();
       // A navigation already in flight has no committed URL yet; loading again
       // would abort it with ERR_ABORTED (-3), so only start one when idle.
-      if (!view.webContents.getURL() && !view.webContents.isLoading()) await view.webContents.loadURL(tab.url);
+      if (!view.webContents.getURL() && !view.webContents.isLoading()) {
+        try { await view.webContents.loadURL(tab.url); }
+        catch (error) {
+          const cancelled = error instanceof Error && 'code' in error && error.code === 'ERR_ABORTED';
+          if (!cancelled && !this.runtimeTabs.get(tab.id)?.problem && !this.window.isDestroyed()) throw error;
+        }
+      }
       this.scheduleAutomaticFill(tab.id);
     }
     // A Home tab skips `applyLayout`, and a switch into Banking must still hide the side app.
@@ -2928,11 +3112,20 @@ class BrowserController {
     const runtime = this.runtimeTabs.get(tabId);
     if (!runtime) return;
     Object.assign(runtime, patch);
-    if (runtime.view) {
+    if (runtime.view && !runtime.view.webContents.isDestroyed()) {
       runtime.canGoBack = runtime.view.webContents.navigationHistory.canGoBack();
       runtime.canGoForward = runtime.view.webContents.navigationHistory.canGoForward();
     }
     this.broadcast();
+  }
+
+  private markTabProblem(tabId: string, problem: TabProblem, failedUrl?: string): void {
+    const runtime = this.runtimeTabs.get(tabId);
+    if (!runtime) return;
+    runtime.view?.setVisible(false);
+    this.fillCapabilities.invalidateTab(tabId);
+    if (this.fillPicker.context?.tabId === tabId) this.fillPicker.close();
+    this.updateRuntime(tabId, { problem, failedUrl, loading: false });
   }
 
   private commitNavigation(tabId: string, url: string, addHistory = true): void {
@@ -2948,7 +3141,9 @@ class BrowserController {
       tab.url = sanitizedUrl;
       if (addHistory && tab.workspaceId !== 'banking') {
         state.history.unshift({ id: randomUUID(), title: tab.title, url: sanitizedUrl, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, visitedAt: new Date().toISOString() });
-        state.history = state.history.slice(0, 2500);
+        for (const removed of state.history.splice(2500)) {
+          (state.historyTrimmedByAccountSpace ??= {})[removed.accountSpaceId] = true;
+        }
       }
     });
     this.updateRuntime(tabId, {});
@@ -3126,6 +3321,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:back', () => controller!.goBack());
   handle('browser:forward', () => controller!.goForward());
   handle('browser:reload', () => controller!.reload());
+  handle('browser:restore-selected-tabs', (_event, ids: string[]) => controller!.restoreSelectedTabs(ids));
   handle('browser:stop', () => controller!.stop());
   handle('browser:new-tab', (_event, workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId) => controller!.newTab(workspaceId, url, accountSpaceId));
   handle('browser:close-tab', (_event, id: string) => controller!.closeTab(id));
@@ -3179,6 +3375,10 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('settings:set', (_event, patch: BrowserSettingsPatch) => controller!.setBrowserSettings(patch));
   handle('browser:freeze-content', () => controller!.freezeContent());
   handle('browser:move-tab', (_event, tabId: string, toIndex: number) => controller!.moveTab(tabId, toIndex));
+  handle('browser:organize-tab', (_event, action: TabOrganizationAction) => controller!.organizeTab(action));
+  handle('browser:duplicate-tab', (_event, id: string) => controller!.duplicateTab(id));
+  handle('browser:close-tab-batch', (_event, id: string, scope: TabBatchScope, ids: string[]) => controller!.closeTabBatch(id, scope, ids));
+  handle('browser:undo-tab-batch', () => controller!.undoTabBatch());
   handle('browser:reopen-closed-tab', () => controller!.reopenClosedTab());
   handle('browser:reopen-recent-tab', (_event, id: string) => controller!.reopenClosedTab(id));
   handle('browser:zoom', (_event, direction: 'in' | 'out' | 'reset') => controller!.zoom(direction));
@@ -3253,7 +3453,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:autofill', (_event, id: string) => controller!.autofill(id));
   handle('system:copy', (_event, value: string) => clipboard.writeText(String(value).slice(0, 100_000)));
   handle('system:is-default-browser', () => controller!.isDefaultBrowser());
-  handle('system:set-default-browser', () => controller!.setDefaultBrowser());
+  handle('system:open-default-browser-settings', () => controller!.openDefaultBrowserSettings());
+  handle('system:test-default-browser', () => controller!.testDefaultBrowser());
   handle('updates:status', () => controller!.getUpdateService());
   handle('updates:configure', (_event, input: UpdateServiceInput) => controller!.configureUpdateService(input));
   handle('updates:clear', () => controller!.clearUpdateService());

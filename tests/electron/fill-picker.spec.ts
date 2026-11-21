@@ -111,11 +111,15 @@ async function clickPickerRow(index: number): Promise<void> {
 async function unlock(page: Page): Promise<void> {
   // After a restart the side panel comes back already open on the vault.
   const unlockButton = page.getByRole('button', { name: 'Unlock in secure window' });
-  if (!await unlockButton.isVisible()) await page.getByRole('button', { name: 'Open MyVault' }).click();
+  const openVault = page.getByRole('button', { name: 'Open MyVault' });
+  await expect(openVault).toBeVisible();
+  const vaultTab = page.getByRole('tab', { name: 'Vault', exact: true });
+  if ((await vaultTab.count()) === 0 || (await vaultTab.getAttribute('aria-selected')) !== 'true') await openVault.click();
+  await expect(unlockButton).toBeVisible();
   const secureWindowPromise = application!.waitForEvent('window', {
     predicate: (candidate) => decodeURIComponent(candidate.url()).includes('<title>Unlock MyVault</title>'),
   });
-  await page.getByRole('button', { name: 'Unlock in secure window' }).click();
+  await unlockButton.click();
   const secureWindow = await secureWindowPromise;
   await secureWindow.getByLabel('Master password').fill(MASTER_PASSWORD);
   await secureWindow.getByRole('button', { name: 'Unlock' }).click();
