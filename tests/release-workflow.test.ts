@@ -20,6 +20,13 @@ describe('release workflow', () => {
     expect(top).not.toMatch(/cancel-in-progress: true/);
   });
 
+  it('requires the owner-approved main commit before production publication', () => {
+    const publish = workflow.slice(workflow.indexOf('  publish-cloudflare-release:'));
+    const eligibility = publish.slice(0, publish.indexOf('\n    concurrency:'));
+    expect(eligibility).toContain("github.event_name == 'push' && github.ref == 'refs/heads/main'");
+    expect(eligibility).toContain('&& vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == github.sha');
+  });
+
   // F-41: an app change whose run never published must still ship with the next push.
   it('decides "docs only" against the commit production runs, not the previous push', () => {
     const changes = step('Detect whether this push changes the application');
