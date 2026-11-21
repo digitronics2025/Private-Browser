@@ -132,6 +132,8 @@ import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupW
 import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
+import { appendTabSetBookmarks, resolveTabSet } from './tab-sets.js';
+import type { TabSetInput } from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
@@ -744,6 +746,29 @@ class BrowserController {
         routines.push(routine);
       }
     });
+  }
+
+  saveTabSet(input: TabSetInput): number {
+    const state = this.store.get();
+    if (!this.canUseRoutines(state) || this.activeAccountSpaceId(state) !== input.accountSpaceId) {
+      throw new Error('Return to the original regular Account Space to save the tabs.');
+    }
+    const tabs = resolveTabSet(state.tabs, input);
+    if (input.kind === 'routine') {
+      this.saveRoutine({
+        id: randomUUID(), name: input.name,
+        links: tabs.map(({ url, accountSpaceId }) => ({ url, accountSpaceId })),
+        focusIndex: Math.max(0, tabs.findIndex((tab) => tab.id === this.activeTab(state).id)),
+        checklist: [],
+      });
+      return tabs.length;
+    }
+    const added = appendTabSetBookmarks(state.bookmarks, tabs, input);
+    if (added.length) {
+      this.store.update((next) => { next.bookmarks.push(...added); });
+      this.broadcast();
+    }
+    return added.length;
   }
 
   deleteRoutine(id: string): void {
@@ -3538,6 +3563,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
 
   handle('browser:get-state', () => controller!.getSnapshot());
   handle('routines:save', (_event, routine: BrowserRoutine) => controller!.saveRoutine(routine));
+  handle('routines:save-tabs', (_event, input: TabSetInput) => controller!.saveTabSet(input));
   handle('routines:delete', (_event, id: string) => controller!.deleteRoutine(id));
   handle('routines:run', (_event, id: string) => controller!.runRoutine(id));
   handle('routines:mark-checklist', (_event, id: string, index: number, done: boolean) => controller!.updateRoutineChecklist(id, index, done));

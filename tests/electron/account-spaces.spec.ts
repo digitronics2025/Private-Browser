@@ -81,6 +81,32 @@ test('routes an operating-system link back to the last regular account from Bank
   expect(after.tabs.filter((tab) => tab.workspaceId === 'banking')).toEqual(before.tabs.filter((tab) => tab.workspaceId === 'banking'));
 });
 
+test('saves reviewed tabs locally and refuses stale or cross-Account Space selections', async () => {
+  const page = await application!.firstWindow();
+  const initial = await page.evaluate(() => window.privateBrowser.getState());
+  const selected = await page.evaluate(async (url) => {
+    const api = window.privateBrowser;
+    await api.navigate(url + '/one');
+    await api.newTab(undefined, url + '/two');
+    const state = await api.getState();
+    return state.tabs.filter((tab) => tab.accountSpaceId === state.activeAccountSpaceId && tab.url.startsWith(url))
+      .map(({ id, url }) => ({ id, url }));
+  }, origin);
+  expect(selected).toHaveLength(2);
+  const reviewed = { accountSpaceId: initial.activeAccountSpaceId, tabs: selected };
+  expect(await page.evaluate((input) => window.privateBrowser.saveTabSet({ ...input, kind: 'routine', name: 'Reviewed local tabs' }), reviewed)).toBe(2);
+  const saveBookmarks = () => page.evaluate((input) => window.privateBrowser.saveTabSet({ ...input, kind: 'bookmarks', name: 'Reviewed pages' }), reviewed);
+  expect(await saveBookmarks()).toBe(2);
+  expect(await saveBookmarks()).toBe(0);
+  const after = await page.evaluate(() => window.privateBrowser.getState());
+  expect(after.routines?.find((routine) => routine.name === 'Reviewed local tabs')?.links).toEqual(selected.map(({ url }) => ({ url, accountSpaceId: initial.activeAccountSpaceId })));
+  expect(after.bookmarks.filter((item) => item.folderPath[0] === 'Reviewed pages').map(({ url }) => url)).toEqual(selected.map(({ url }) => url));
+  await page.evaluate((url) => window.privateBrowser.navigate(url + '/changed'), origin);
+  await expect(saveBookmarks()).rejects.toThrow(/selected tabs changed/i);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await expect(saveBookmarks()).rejects.toThrow(/original regular Account Space/i);
+});
+
 test('runs an ordered routine across isolated accounts and reuses its tabs after restart', async () => {
   let page = await application!.firstWindow();
   const { first, second } = await page.evaluate(async () => ({

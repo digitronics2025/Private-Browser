@@ -28,6 +28,20 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       args[1].forEach((id) => requireNonEmptyText(id, 'bookmark identifier', 128)); return;
     case 'routines:save':
       exact(args, 1); requireBrowserRoutine(args[0]); return;
+    case 'routines:save-tabs': {
+      exact(args, 1);
+      const input = requireExactKeys(args[0], ['accountSpaceId', 'kind', 'name', 'tabs']);
+      requireAccountSpaceId(input.accountSpaceId);
+      if (input.kind !== 'routine' && input.kind !== 'bookmarks') throw new Error('Choose how to save the tabs');
+      requireNonEmptyText(input.name, 'tab set name', 80);
+      if (!Array.isArray(input.tabs) || !input.tabs.length || input.tabs.length > MAX_ROUTINE_ITEMS) throw new Error('Choose between 1 and 20 tabs');
+      for (const item of input.tabs) {
+        const tab = requireExactKeys(item, ['id', 'url']);
+        requireNonEmptyText(tab.id, 'tab identifier', 200);
+        if (!isAllowedRemoteUrl(requireNonEmptyText(tab.url, 'tab address', 4096))) throw new Error('Choose a web page');
+      }
+      return;
+    }
     case 'routines:delete':
     case 'routines:run':
     case 'routines:reset-checklist':

@@ -8,6 +8,8 @@ import { queryHistory } from '../electron/history-query';
 import { planBookmarkBatch } from '../electron/bookmark-batch';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from '../electron/bookmark-maintenance';
 import { canonicalRoutineUrl, defaultBrowserRoutines, requireBrowserRoutine } from '../electron/browser-routines';
+import { appendTabSetBookmarks, resolveTabSet } from '../electron/tab-sets';
+import type { TabSetInput } from '../electron/types';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
 import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
@@ -172,6 +174,26 @@ export function installPreviewApi(): void {
       if (index === -1) routines.push(routine);
       else routines[index] = routine;
       publish();
+    },
+    saveTabSet: async (value) => {
+      const input = value as TabSetInput;
+      if (state.activeWorkspaceId === 'banking' || input.accountSpaceId !== state.activeAccountSpaceId
+        || !state.accountSpaces.some((account) => account.id === input.accountSpaceId && !account.locked)) {
+        throw new Error('Return to the original regular Account Space to save the tabs.');
+      }
+      const tabs = resolveTabSet(state.tabs, input);
+      if (input.kind === 'routine') {
+        await handlers.saveRoutine({
+          id: crypto.randomUUID(), name: input.name, checklist: [],
+          links: tabs.map(({ accountSpaceId, url }) => ({ accountSpaceId, url })),
+          focusIndex: Math.max(0, tabs.findIndex((tab) => tab.id === state.activeTabId)),
+        });
+        return tabs.length;
+      }
+      const added = appendTabSetBookmarks(state.bookmarks, tabs, input);
+      state.bookmarks.push(...added);
+      if (added.length) publish();
+      return added.length;
     },
     deleteRoutine: async (id) => { routines = routines.filter((routine) => routine.id !== id); publish(); },
     markRoutineChecklist: async (id, index, done) => {

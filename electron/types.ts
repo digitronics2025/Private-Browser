@@ -342,6 +342,13 @@ export interface RoutineRunResult {
   focusUnavailable: boolean;
 }
 
+export interface TabSetInput {
+  accountSpaceId: AccountSpaceId;
+  kind: 'routine' | 'bookmarks';
+  name: string;
+  tabs: Array<{ id: string; url: string }>;
+}
+
 export type TabProblem = 'crashed' | 'certificate' | 'offline' | 'network';
 
 export interface TabGroup {
