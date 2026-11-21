@@ -51,6 +51,7 @@ export function VaultPanel({ workspaceId, activeOrigin, onOpenFull, onToast }: {
           <div><dt>Master password forgotten</dt><dd>Try an already enrolled Windows Hello unlock. Keep your encrypted vault and recovery copies while you check recovery options on an authorized MyVault device.</dd></div>
           <div><dt>Offline</dt><dd>Unlock a paired vault in the secure window. When the connection returns, use Sync to send pending encrypted changes.</dd></div>
           <div><dt>Device access revoked</dt><dd>Review this browser’s device authorization from an authorized MyVault device. Preserve the local encrypted vault and any unsynced changes while resolving access.</dd></div>
+          <div><dt>Website passkeys</dt><dd>Start from your account’s security settings on the website. Choose its passkey option and follow the Windows Security prompt for the device, phone or security key where you keep the passkey. On Windows 11, use Settings → Accounts → Passkeys to view passkeys saved to this PC. MyVault’s Windows Hello option unlocks the vault.</dd></div>
         </dl>
       </details>
       {status.lifecycle === 'unconfigured' && <button className="primary-button full" onClick={() => void window.privateBrowser.requestVaultPairing().then((result) => { setStatus(result); setItems(result.items); }).catch((error) => onToast(error.message, 'error'))}><Cloud size={16} /> Connect with one-time code</button>}

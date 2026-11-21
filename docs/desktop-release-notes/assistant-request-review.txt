@@ -1,0 +1,1 @@
+Read selected text, remove sections and review the exact Assistant request and its destination before approving a one-time send.

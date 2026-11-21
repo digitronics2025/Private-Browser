@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { BrowserRoutine, LocalAiModels, RoutineRunResult, TabSetInput } from './types.js';
 import type { AddressMatch, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
 import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
-import type { ChromeImportReview, GoogleConnectionHealth } from './types.js';
+import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, ChromeImportReview, GoogleConnectionHealth } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
@@ -166,9 +166,13 @@ const api = {
   listControlCenterTasks: (): Promise<ControlCenterTask[]> => ipcRenderer.invoke('control-center:tasks'),
   sendToControlCenter: (input: ControlCenterSendInput): Promise<ControlCenterTask> => ipcRenderer.invoke('control-center:send', input),
   recheckControlCenterTask: (input: ControlCenterRecheckInput): Promise<{ name: string }> => ipcRenderer.invoke('control-center:recheck', input),
-  prepareAiPreview: (): Promise<AiPagePreview> => ipcRenderer.invoke('ai:prepare-preview'),
+  prepareAiPreview: (scope?: AiPreviewScope): Promise<AiPagePreview> => ipcRenderer.invoke('ai:prepare-preview', scope),
+  reviewAssistantRequest: (id: string, text: string, question: string, withEvidence?: boolean): Promise<AiRequestReview> => ipcRenderer.invoke('ai:review-request', id, text, question, withEvidence),
+  sendReviewedAssistant: (id: string): Promise<AssistantAnswer> => ipcRenderer.invoke('ai:send-reviewed', id),
+  cancelReviewedAssistant: (id: string): Promise<void> => ipcRenderer.invoke('ai:cancel-reviewed', id),
   approveAiPreview: (previewId: string, mode?: 'cloud' | 'local'): Promise<AiApproval> => ipcRenderer.invoke('ai:approve-preview', previewId, mode),
   getAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:provider-status'),
+  checkAiProvider: (): Promise<AiProviderCheckResult> => ipcRenderer.invoke('ai:check-provider'),
   getLocalAiModels: (): Promise<LocalAiModels> => ipcRenderer.invoke('ai:local-models'),
   configureAiProvider: (input: AiProviderInput): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:configure-provider', input),
   clearAiProvider: (): Promise<AiProviderStatus> => ipcRenderer.invoke('ai:clear-provider'),

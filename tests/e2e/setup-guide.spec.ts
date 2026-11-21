@@ -42,3 +42,17 @@ test('offers a bookmark HTML file when there is no Chrome profile', async ({ pag
   await panel.getByRole('button', { name: 'Choose HTML' }).click();
   await expect(panel.getByRole('status').filter({ hasText: '1 bookmark imported · 1 skipped' })).toBeVisible();
 });
+
+test('shows the add-on migration checklist on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/?setup=new');
+  await page.getByRole('button', { name: 'Open setup guide' }).click();
+  const checklist = page.locator('details').filter({ hasText: 'Chrome add-on checklist' });
+  const summary = checklist.locator('summary');
+  await summary.focus();
+  await summary.press('Enter');
+  await expect(checklist.getByRole('listitem')).toHaveCount(4);
+  await expect(checklist.getByText(/MyVault for login fill, Privacy for tracker protection/)).toBeVisible();
+  await expect(checklist.getByText(/Keep Chrome for workflows that still require an add-on/)).toBeVisible();
+  await expect(checklist.getByRole('button')).toHaveCount(0);
+});

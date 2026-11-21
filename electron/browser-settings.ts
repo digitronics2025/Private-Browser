@@ -1,5 +1,6 @@
-import { DEFAULT_SEARCH_TEMPLATE, isAllowedRemoteUrl, normalizeNavigationInput, parseWebAddress } from './security.js';
+import { DEFAULT_SEARCH_TEMPLATE, isAllowedRemoteUrl, normalizeNavigationInput, parseWebAddress, redactSensitiveText } from './security.js';
 import { WORKSPACE_IDS } from './account-space-validation.js';
+import { ASSISTANT_PRESETS, type AssistantPresetId, type AssistantPresetOverrides } from './ai-prompt.js';
 import type { WorkspaceId } from './types.js';
 
 export type SearchEngineId = 'duckduckgo' | 'google' | 'bing' | 'brave' | 'startpage' | 'ecosia' | 'custom';
@@ -7,6 +8,25 @@ export type PresetSearchEngineId = Exclude<SearchEngineId, 'custom'>;
 export type HomePageMode = 'new-tab' | 'url';
 export type StartupMode = 'continue' | 'home' | 'pages';
 export interface SiteKeyword { keyword: string; template: string }
+export const SPELLCHECK_LANGUAGES = { en: 'English', fr: 'French', ar: 'Arabic' } as const;
+export type SpellcheckLanguage = keyof typeof SPELLCHECK_LANGUAGES;
+export interface SpellcheckSettings { enabled: boolean; languages: SpellcheckLanguage[] }
+export const DEFAULT_SPELLCHECK: SpellcheckSettings = { enabled: true, languages: [] };
+const ZOOM_PERCENTS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
+const ZOOM_PERCENTS_DESCENDING = [...ZOOM_PERCENTS].reverse();
+
+export function nextZoomPercent(current: number, direction: 'in' | 'out' | 'reset'): number {
+  if (direction === 'in') return ZOOM_PERCENTS.find((value) => value > current) ?? ZOOM_PERCENTS.at(-1)!;
+  if (direction === 'out') return ZOOM_PERCENTS_DESCENDING.find((value) => value < current) ?? ZOOM_PERCENTS[0];
+  return 100;
+}
+
+export function spellingDictionary(available: string[], language: string): string | undefined {
+  const normalized = language.toLowerCase();
+  const base = normalized.split('-')[0];
+  return available.find((item) => item.toLowerCase() === normalized)
+    ?? available.find((item) => item.toLowerCase().split('-')[0] === base);
+}
 
 /**
  * Behaviour settings, as opposed to `UiPreferences` (layout and theme). The main
@@ -22,6 +42,8 @@ export interface BrowserSettings {
   startup: StartupMode;
   startupPages?: string[];
   siteKeywords?: SiteKeyword[];
+  spellcheck?: SpellcheckSettings;
+  assistantPrompts?: AssistantPresetOverrides;
 }
 
 export type BrowserSettingsPatch = Partial<BrowserSettings>;
@@ -48,10 +70,32 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   startup: 'continue',
 };
 
-const PATCH_KEYS = new Set(['searchEngine', 'customSearchTemplate', 'homePage', 'homePageUrl', 'startup', 'startupPages', 'siteKeywords']);
+const PATCH_KEYS = new Set(['searchEngine', 'customSearchTemplate', 'homePage', 'homePageUrl', 'startup', 'startupPages', 'siteKeywords', 'spellcheck', 'assistantPrompts']);
 
 function member<T extends string>(values: readonly T[], value: unknown): value is T {
   return typeof value === 'string' && (values as readonly string[]).includes(value);
+}
+
+function requireSpellcheck(value: unknown): SpellcheckSettings {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid spellcheck settings.');
+  const { enabled, languages } = value as Partial<SpellcheckSettings>;
+  if (typeof enabled !== 'boolean' || !Array.isArray(languages) || languages.length > 3
+    || !languages.every((language) => member(Object.keys(SPELLCHECK_LANGUAGES), language))) {
+    throw new Error('Choose a supported spellcheck language.');
+  }
+  return { enabled, languages: [...new Set(languages)] };
+}
+
+function requireAssistantPrompts(value: unknown): AssistantPresetOverrides {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid prompt presets.');
+  const result: AssistantPresetOverrides = {};
+  for (const [key, prompt] of Object.entries(value)) {
+    if (!Object.hasOwn(ASSISTANT_PRESETS, key) || typeof prompt !== 'string' || !prompt.trim() || prompt.length > 2000) {
+      throw new Error('Enter a prompt of up to 2,000 characters.');
+    }
+    result[key as AssistantPresetId] = redactSensitiveText(prompt.trim()).text.slice(0, 2000);
+  }
+  return result;
 }
 
 /**
@@ -142,6 +186,12 @@ export function sanitizeBrowserSettings(value: unknown): BrowserSettings {
       if (keywords.length) settings.siteKeywords = keywords;
     } catch { /* Ignore invalid stored keyword entries. */ }
   }
+  if (input.spellcheck !== undefined) {
+    try { settings.spellcheck = requireSpellcheck(input.spellcheck); } catch { /* Ignore invalid stored spellcheck settings. */ }
+  }
+  if (input.assistantPrompts !== undefined) {
+    try { settings.assistantPrompts = requireAssistantPrompts(input.assistantPrompts); } catch { /* Ignore invalid stored prompt presets. */ }
+  }
   return settings;
 }
 
@@ -177,6 +227,8 @@ export function requireBrowserSettingsPatch(value: unknown): BrowserSettingsPatc
   if ('startup' in input) { if (!member(STARTUP_MODES, input.startup)) throw new Error('Invalid startup choice'); patch.startup = input.startup; }
   if ('startupPages' in input) patch.startupPages = requireStartupPages(input.startupPages);
   if ('siteKeywords' in input) patch.siteKeywords = requireSiteKeywords(input.siteKeywords);
+  if ('spellcheck' in input) patch.spellcheck = requireSpellcheck(input.spellcheck);
+  if ('assistantPrompts' in input) patch.assistantPrompts = requireAssistantPrompts(input.assistantPrompts);
   if (patch.searchEngine === 'custom' && patch.customSearchTemplate === undefined) throw new Error('Enter a search address');
   if (patch.homePage === 'url' && patch.homePageUrl === undefined) throw new Error('Enter a web address');
   if (patch.startup === 'pages' && !patch.startupPages?.length) throw new Error('Add at least one startup page.');

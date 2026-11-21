@@ -25,11 +25,12 @@ describe('local Ollama', () => {
     const { transport, runtime } = mockRuntime(true);
     await expect(runtime.models()).resolves.toEqual({ state: 'ready', models: [name] });
     const checkSource = vi.fn();
-    await expect(runtime.ask(name, 'system', 'Approved fixture', checkSource)).resolves.toBe('Fixture response');
+    const cancellation = new AbortController();
+    await expect(runtime.ask(name, 'system', 'Approved fixture', checkSource, cancellation.signal)).resolves.toBe('Fixture response');
     expect(checkSource).toHaveBeenCalledOnce();
     expect(transport).toHaveBeenLastCalledWith('/api/chat', {
       model: name, stream: false, messages: [{ role: 'system', content: 'system' }, { role: 'user', content: 'Approved fixture' }],
-    });
+    }, cancellation.signal);
   });
 
   it('sends no prompt if Ollama can use the cloud, the selected model is remote, or consent is stale', async () => {
@@ -42,13 +43,18 @@ describe('local Ollama', () => {
     const stale = mockRuntime(true);
     await expect(stale.runtime.ask(name, 'system', 'Private fixture', () => { throw new Error('Page changed'); })).rejects.toThrow('Page changed');
     expect(stale.transport.mock.calls.some(([path]) => path === '/api/chat')).toBe(false);
+
+    const cancelled = mockRuntime(true);
+    const cancellation = new AbortController();
+    await expect(cancelled.runtime.ask(name, 'system', 'Private fixture', () => cancellation.abort(), cancellation.signal)).rejects.toThrow(/abort/i);
+    expect(cancelled.transport.mock.calls.some(([path]) => path === '/api/chat')).toBe(false);
   });
 
   it('reports an unavailable local runtime without attempting another provider', async () => {
     const transport = vi.fn(async () => { throw new Error('Connection failed'); });
     const runtime = new OllamaLocal(transport);
     await expect(runtime.models()).resolves.toEqual({ state: 'unavailable', models: [] });
-    expect(transport).toHaveBeenCalledExactlyOnceWith('/api/status');
+    expect(transport).toHaveBeenCalledExactlyOnceWith('/api/status', undefined, undefined);
 
     const olderRuntime = new OllamaLocal(async () => ({}));
     await expect(olderRuntime.models()).resolves.toEqual({ state: 'unavailable', models: [] });

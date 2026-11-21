@@ -248,9 +248,13 @@ app to fetch fresh status. Agent tab views have no preload.
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
-| `ai:prepare-preview` | `prepareAiPreview()` | — | `AiPagePreview` |
+| `ai:prepare-preview` | `prepareAiPreview(scope?)` | optional page or selection | `AiPagePreview` |
+| `ai:review-request` | `reviewAssistantRequest(id, text, question, withEvidence?)` | preview ID, editable text, question and optional source passages | `AiRequestReview` |
+| `ai:send-reviewed` | `sendReviewedAssistant(id)` | single-use review ID | `AssistantAnswer` |
+| `ai:cancel-reviewed` | `cancelReviewedAssistant(id)` | currently running review ID | — |
 | `ai:approve-preview` | `approveAiPreview(previewId, mode?)` | preview ID and optional local/cloud destination | `AiApproval` |
 | `ai:provider-status` | `getAiProvider()` | — | `AiProviderStatus` |
+| `ai:check-provider` | `checkAiProvider()` | fixed sample, regular Account Space | typed readiness or failure |
 | `ai:local-models` | `getLocalAiModels()` | — | Ollama readiness and installed local model names |
 | `ai:configure-provider` | `configureAiProvider(input)` | `input: AiProviderInput` | `AiProviderStatus` |
 | `ai:clear-provider` | `clearAiProvider()` | — | `AiProviderStatus` |

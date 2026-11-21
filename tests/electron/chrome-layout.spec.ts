@@ -194,12 +194,68 @@ test('Ctrl+wheel zooms the page and the magnifier bubble steps and resets it', a
     const bubble = page.getByRole('dialog', { name: 'Page zoom' });
     await bubble.getByRole('button', { name: 'Zoom in' }).click();
     await expect(bubble.getByText('Zoom: 125%')).toBeVisible();
-    await bubble.getByRole('button', { name: 'Reset' }).click();
+    await bubble.getByRole('button', { name: 'Reset view' }).click();
     await expect(bubble.getByText('Zoom: 100%')).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('button', { name: /^Zoom: / })).toHaveCount(0);
   } finally {
     await app.close();
     await rm(userData, { recursive: true, force: true });
+  }
+});
+
+test('keeps page zoom and writing preferences in the right site and space after a restart', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'private-browser-site-view-'));
+  const launch = () => electron.launch({ args: launchArguments(), env: environment(userData) });
+  let app = await launch();
+  try {
+    let page = await app.firstWindow();
+    await expect(page.getByRole('heading', { name: 'Private Browser' })).toBeVisible();
+    const magnifier = () => page.getByRole('button', { name: 'Zoom: 110%' });
+    const spellcheck = () => page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings.spellcheck));
+    const visibleSpellcheck = () => app.evaluate(({ BrowserWindow }) => {
+      const view = BrowserWindow.getAllWindows()[0].contentView.children.find((child) => child.getVisible()) as Electron.WebContentsView;
+      return { enabled: view.webContents.session.isSpellCheckerEnabled(), languages: view.webContents.session.getSpellCheckerLanguages() };
+    });
+    const navigate = (url: string) => page.evaluate((target) => window.privateBrowser.navigate(target), url);
+    const switchSpace = (id: 'personal' | 'tenten') => page.evaluate((target) => window.privateBrowser.switchWorkspace(target), id);
+
+    await switchSpace('personal');
+    await navigate(`${origin}/one`);
+    await expect(page.getByRole('tab', { name: /Layout fixture/ })).toBeVisible();
+    await page.evaluate(() => window.privateBrowser.zoom('in'));
+    await expect(magnifier()).toBeVisible();
+    await navigate(`${origin}/two`);
+    await expect(magnifier()).toBeVisible();
+    await navigate(origin.replace('layout.example.test', '127.0.0.1'));
+    await expect(page.getByRole('button', { name: /^Zoom: / })).toHaveCount(0);
+    await navigate(`${origin}/one`);
+    await expect(magnifier()).toBeVisible();
+
+    const options = await page.evaluate(() => window.privateBrowser.getState().then((state) => state.availableSpellcheckLanguages));
+    expect(options).toContain('en');
+    const supported = options.includes('fr') ? ['en', 'fr'] as const : ['en'] as const;
+    await page.evaluate((languages) => window.privateBrowser.setBrowserSettings({ spellcheck: { enabled: true, languages: [...languages] } }, 'personal'), supported);
+    const activeDictionaries = (await visibleSpellcheck()).languages;
+    expect(activeDictionaries.map((language) => language.split('-')[0])).toEqual([...supported]);
+    await page.evaluate(() => window.privateBrowser.setBrowserSettings({ spellcheck: { enabled: false, languages: ['en'] } }, 'personal'));
+    await expect.poll(async () => (await visibleSpellcheck()).enabled).toBe(false);
+    await switchSpace('tenten');
+    await navigate(`${origin}/two`);
+    await expect(page.getByRole('tab', { name: /Layout fixture/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Zoom: / })).toHaveCount(0);
+    await expect.poll(spellcheck).toBeUndefined();
+    await expect.poll(async () => (await visibleSpellcheck()).enabled).toBe(true);
+
+    await switchSpace('personal');
+    await app.close();
+    app = await launch();
+    page = await app.firstWindow();
+    await expect(magnifier()).toBeVisible();
+    await expect.poll(spellcheck).toEqual({ enabled: false, languages: ['en'] });
+    await expect.poll(async () => (await visibleSpellcheck()).enabled).toBe(false);
+  } finally {
+    await app.close().catch(() => undefined);
+    await rm(userData, { recursive: true, force: true }).catch(() => undefined);
   }
 });
