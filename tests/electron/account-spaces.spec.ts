@@ -38,6 +38,17 @@ test.beforeEach(async () => {
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
+    if (request.url?.startsWith('/sample-failure?')) {
+      response.writeHead(503, { 'Cache-Control': 'no-store' });
+      response.end('local fixture unavailable');
+      return;
+    }
+    if (request.url === '/inspection.html') {
+      response.setHeader('Content-Type', 'text/html');
+      response.end(`<!doctype html><title>Development inspection fixture</title>
+        <script>void (async () => { await fetch('/sample-failure?fixture=first'); await fetch('/sample-failure?fixture=second'); })()</script>`);
+      return;
+    }
     if (request.url === '/slow-download') {
       const size = 20 * 1024 * 1024;
       const match = /^bytes=(\d+)-$/.exec(request.headers.range ?? '');
@@ -129,6 +140,24 @@ test('restores selected side-panel tools and pins only for their owning Account 
   expect((await state()).sidePanelPins).toEqual(['downloads']);
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   expect((await state()).sidePanelPins).toBeUndefined();
+});
+
+test('groups repeated native network failures without query values', async () => {
+  const page = await application!.firstWindow();
+  await page.evaluate((url) => window.privateBrowser.newTab('development', url), origin + '/inspection.html');
+  await expect.poll(() => page.evaluate(async () => {
+    try {
+      const info = await window.privateBrowser.inspectDeveloperPage(false);
+      return info.failures?.find((issue) => issue.url.endsWith('/sample-failure'))?.count;
+    } catch {
+      return undefined;
+    }
+  })).toBe(2);
+  const info = await page.evaluate(() => window.privateBrowser.inspectDeveloperPage(false));
+  const failures = info.failures?.filter((issue) => issue.url.endsWith('/sample-failure'));
+  expect(failures).toMatchObject([{ status: 503, count: 2, url: origin + '/sample-failure' }]);
+  expect(Date.parse(failures![0].firstAt!)).toBeLessThanOrEqual(Date.parse(failures![0].at));
+  expect(info.sourceReference).toBeUndefined();
 });
 
 test('offers first-launch setup once and keeps a skip after restart', async () => {
