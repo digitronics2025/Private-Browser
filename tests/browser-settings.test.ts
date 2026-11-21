@@ -4,6 +4,7 @@ import {
   mergeBrowserSettings,
   requireBrowserSettingsPatch,
   requireSearchTemplate,
+  referenceSearchUrl,
   resolveHomeUrl,
   resolveWorkspaceNavigation,
   sanitizeBrowserSettings,
@@ -93,5 +94,18 @@ describe('browser settings', () => {
     expect(() => requireBrowserSettingsPatch({ startup: 'pages', startupPages: [] })).toThrow();
     expect(() => requireBrowserSettingsPatch({ startupPages: ['file:///fixture'] })).toThrow();
     expect(() => requireBrowserSettingsPatch({ siteKeywords: [{ keyword: 'gh', template: 'http://example.test?q=%s' }] })).toThrow();
+  });
+
+  it('previews the exact normalized URL for a saved reference search without a fallback', () => {
+    const settings = mergeBrowserSettings(DEFAULT_BROWSER_SETTINGS, {
+      siteKeywords: [{ keyword: 'stock', template: 'https://inventory.example.test/search?q=%s&utm_source=portal' }],
+    });
+    const url = referenceSearchUrl(settings, 'stock', '  LX/3 & blue #5  ');
+    expect(url).toBe('https://inventory.example.test/search?q=LX%2F3+%26+blue+%235');
+    expect(new URL(url!).searchParams.get('q')).toBe('LX/3 & blue #5');
+    expect(referenceSearchUrl(settings, 'missing', 'LX/3')).toBeUndefined();
+    expect(referenceSearchUrl(settings, 'stock', '  ')).toBeUndefined();
+    expect(referenceSearchUrl(settings, 'stock', 'x'.repeat(121))).toBeUndefined();
+    expect(referenceSearchUrl(settings, 'stock', String.fromCharCode(0xd800))).toBeUndefined();
   });
 });

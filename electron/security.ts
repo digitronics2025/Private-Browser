@@ -70,6 +70,34 @@ export function navigationWarning(value: string): 'insecure' | 'idn' | undefined
   }
 }
 
+export const MAX_ADDRESS_CHECK_LENGTH = 4096;
+export type AddressClue = 'unencrypted' | 'international' | 'ip-address' | 'custom-port';
+export type AddressCheck =
+  | { issue: 'invalid' | 'credentials' }
+  | { host: string; destination: string; clues: AddressClue[] };
+
+/** Parse only. This check never resolves DNS, visits the address or sends it anywhere. */
+export function inspectWebAddress(value: string): AddressCheck {
+  const input = value.trim();
+  if (!input || input.length > MAX_ADDRESS_CHECK_LENGTH) return { issue: 'invalid' };
+  let url: URL;
+  try {
+    const address = /^https?:/i.test(input) ? input : parseWebAddress(input);
+    if (!address) return { issue: 'invalid' };
+    url = new URL(address);
+  } catch {
+    return { issue: 'invalid' };
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return { issue: 'invalid' };
+  if (url.username || url.password) return { issue: 'credentials' };
+  const clues: AddressClue[] = [];
+  if (url.protocol === 'http:') clues.push('unencrypted');
+  if (url.hostname.split('.').some((label) => label.startsWith('xn--'))) clues.push('international');
+  if (url.hostname.startsWith('[') || /^\d+(\.\d+){3}$/.test(url.hostname)) clues.push('ip-address');
+  if (url.port) clues.push('custom-port');
+  return { host: url.host, destination: url.href, clues };
+}
+
 export function isAllowedSitePermission(permission: string, requestingUrl: string, protectedWorkspace: boolean, isMainFrame: boolean): boolean {
   if (protectedWorkspace || !isMainFrame) return false;
   try {
@@ -116,7 +144,7 @@ export function downloadRisk(filename: string): 'ordinary' | 'dangerous' | 'dece
 
 function isLocalDevelopmentHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
-  return host === 'localhost' || host === '::1' || /^127\./.test(host);
+  return host === 'localhost' || host === '::1' || /^127\.(\d+\.){2}\d+$/.test(host);
 }
 
 export function isAllowedRemoteUrl(value: string): boolean {

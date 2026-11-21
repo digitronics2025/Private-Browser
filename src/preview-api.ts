@@ -4,7 +4,7 @@ import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/t
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
-import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
@@ -14,7 +14,7 @@ import { planBookmarkBatch } from '../electron/bookmark-batch';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from '../electron/bookmark-maintenance';
 import { canonicalRoutineUrl, defaultBrowserRoutines, requireBrowserRoutine } from '../electron/browser-routines';
 import { appendTabSetBookmarks, resolveTabSet } from '../electron/tab-sets';
-import type { TabSetInput } from '../electron/types';
+import type { ReferenceSearchInput, TabSetInput } from '../electron/types';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
 import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
@@ -210,7 +210,72 @@ export function installPreviewApi(): void {
     if (!id) state.activeTabId = tab.id;
     publish();
   };
-  const handlers: Record<string, (...args: unknown[]) => unknown> = {
+  const desktopOnly = async (): Promise<never> => { throw new Error('This action is available in the desktop app.'); };
+  const handlers: PrivateBrowserApi = {
+    // A browser preview has no native pages, file dialogs, secure windows,
+    // account tokens or local developer bridge. Make those limits explicit.
+    back: desktopOnly,
+    forward: desktopOnly,
+    stop: async () => undefined,
+    print: desktopOnly,
+    findInPage: desktopOnly,
+    stopFindInPage: async () => undefined,
+    setTabMuted: desktopOnly,
+    hardReload: async () => handlers.reload(),
+    renameBookmarkFolder: desktopOnly,
+    removeBookmarkFolder: desktopOnly,
+    exportBookmarks: desktopOnly,
+    quit: desktopOnly,
+    deleteAccountSpace: desktopOnly,
+    clearGoogleConfiguration: desktopOnly,
+    cancelGoogleConnection: async () => false,
+    gmailOverview: desktopOnly,
+    searchGmail: desktopOnly,
+    prepareGmailSend: desktopOnly,
+    sendGmail: desktopOnly,
+    listDriveFiles: desktopOnly,
+    createDriveFile: desktopOnly,
+    prepareDriveShare: desktopOnly,
+    shareDriveFile: desktopOnly,
+    listCalendarEvents: desktopOnly,
+    prepareCalendarWrite: desktopOnly,
+    writeCalendarEvent: desktopOnly,
+    listContacts: desktopOnly,
+    restoreBackup: desktopOnly,
+    disableBackup: desktopOnly,
+    cancelOperation: async () => false,
+    performRecoveryAction: desktopOnly,
+    captureDeveloperDiagnostics: desktopOnly,
+    clearDeveloperDiagnostics: async () => undefined,
+    disconnectBridge: desktopOnly,
+    selectBridgeProject: desktopOnly,
+    runBridgeAction: desktopOnly,
+    prepareDeveloperAiPreview: desktopOnly,
+    pairControlCenter: desktopOnly,
+    disconnectControlCenter: desktopOnly,
+    approveAiPreview: desktopOnly,
+    askAi: desktopOnly,
+    requestVaultUnlock: desktopOnly,
+    unlockVaultWithHello: desktopOnly,
+    enableVaultHello: desktopOnly,
+    disableVaultHello: desktopOnly,
+    requestVaultPairing: desktopOnly,
+    lockVault: desktopOnly,
+    syncVaultNow: desktopOnly,
+    getVaultConflictReview: async () => ({ local: [], cloud: [] }),
+    resolveVaultConflict: desktopOnly,
+    migrateLegacyVault: desktopOnly,
+    cleanupLegacyVault: desktopOnly,
+    openVaultEditor: desktopOnly,
+    requestSaveFromPage: desktopOnly,
+    requestVaultDelete: desktopOnly,
+    acknowledgeVaultRecovery: desktopOnly,
+    copyPassword: desktopOnly,
+    copyTotp: desktopOnly,
+    autofill: desktopOnly,
+    configureUpdateService: desktopOnly,
+    clearUpdateService: desktopOnly,
+    openUpdatePage: desktopOnly,
     getState: async () => structuredClone(state),
     controlDownload: async (id, action) => {
       const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);
@@ -268,6 +333,17 @@ export function installPreviewApi(): void {
       state.bookmarks.push(...added);
       if (added.length) publish();
       return added.length;
+    },
+    openReferenceSearch: async (value) => {
+      const input = value as ReferenceSearchInput;
+      if (state.activeWorkspaceId === 'banking' || input?.accountSpaceId !== state.activeAccountSpaceId
+        || !state.accountSpaces.some((account) => account.id === input.accountSpaceId && !account.locked)) {
+        throw new Error('Return to the original regular Account Space to open the reference.');
+      }
+      const url = referenceSearchUrl(state.settings, input.keyword, input.reference);
+      if (!url || url !== input.reviewedUrl) throw new Error('Review the current search address before opening it.');
+      await handlers.newTab();
+      await handlers.navigate(url);
     },
     deleteRoutine: async (id) => { routines = routines.filter((routine) => routine.id !== id); publish(); },
     markRoutineChecklist: async (id, index, done) => {
@@ -542,7 +618,26 @@ export function installPreviewApi(): void {
     setAccountSpaceLocked: async (idValue, lockedValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.locked = Boolean(lockedValue); selected.googleConnection = selected.locked ? 'locked' : 'disconnected'; publish(); } },
     configureGoogle: async () => { state.googleConfiguration = { configured: true, source: 'encrypted-settings' }; publish(); },
     connectGoogleAccount: async (idValue, modulesValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.kind = 'google'; selected.email = selected.email ?? 'account@example.com'; selected.googleConnection = 'connected'; selected.enabledModules = [...modulesValue as typeof selected.enabledModules]; publish(); } return { ok: true }; },
-    disconnectGoogleAccount: async (idValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.googleConnection = 'disconnected'; publish(); } return { ok: true }; },
+    disconnectGoogleAccount: async (idValue, revoke) => {
+      const selected = state.accountSpaces.find((item) => item.id === idValue && item.workspaceId === state.activeWorkspaceId);
+      if (!selected) throw new Error('Choose an Account Space in the current workspace.');
+      document.documentElement.dataset.previewGoogleAccess = revoke ? 'revoke' : 'disconnect';
+      selected.googleConnection = 'disconnected';
+      selected.enabledModules = [];
+      selected.grantedScopes = [];
+      publish();
+      return { ok: true };
+    },
+    clearAccountSpaceData: async (id) => {
+      const selected = state.accountSpaces.find((item) => item.id === id && item.workspaceId === state.activeWorkspaceId);
+      if (!selected) throw new Error('Choose an Account Space in the current workspace.');
+      selected.websiteStatus = 'not-visited';
+      state.history = state.history.filter((item) => item.accountSpaceId !== selected.id);
+      for (const tab of state.tabs.filter((item) => item.accountSpaceId === selected.id)) {
+        Object.assign(tab, homeTab(tab.id, selected.workspaceId, selected.id));
+      }
+      publish();
+    },
     createBackupRecoveryCode: async () => `PB1-${'A'.repeat(43)}`,
     verifyAndEnableBackup: async (idValue, _code, includeOpenTabsValue, includeHistoryValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.backupEnabled = true; selected.backupIncludesOpenTabs = Boolean(includeOpenTabsValue); selected.backupIncludesHistory = Boolean(includeHistoryValue); publish(); } },
     uploadBackup: async () => ({ status: 'uploaded', etag: 'preview-etag' }),
@@ -830,10 +925,10 @@ export function installPreviewApi(): void {
       if (params.has('vaultGuide')) return 'locked';
       if (state.activeWorkspaceId === 'banking') return 'manual';
       const value = params.get('vaultFill');
-      return value && ['connect', 'locked', 'no-match', 'unsupported', 'ready', 'choose-login'].includes(value) ? value : 'unsupported';
+      return (['connect', 'locked', 'no-match', 'unsupported', 'ready', 'choose-login'] as const)
+        .find((candidate) => candidate === value) ?? 'unsupported';
     },
   };
-  const api = new Proxy(handlers, { get(target, property) { return target[String(property)] ?? (async () => undefined); } });
-  Object.defineProperty(window, 'privateBrowser', { value: api as unknown as PrivateBrowserApi, configurable: true });
+  Object.defineProperty(window, 'privateBrowser', { value: handlers, configurable: true });
   document.documentElement.dataset.browserPreview = 'synthetic';
 }

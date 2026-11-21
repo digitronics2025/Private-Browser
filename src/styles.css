@@ -492,6 +492,13 @@ kbd { font: inherit; }
 .google-health-card small, .google-health-card p { color: var(--text-muted); font-size: var(--fs-sm); }
 .google-health-card p { margin: 3px 0 0; }
 .site-info-url { overflow-wrap: anywhere; font-size: var(--fs-xs); color: var(--text-muted); }
+.site-info-facts bdi { overflow-wrap: anywhere; }
+.site-address-check { margin: 0 10px 6px; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.site-address-check summary { cursor: pointer; padding: 6px 0; }
+.site-address-check form, .site-address-check label { display: grid; gap: 5px; }
+.site-address-check input { min-width: 0; width: 100%; }
+.site-address-check button { justify-self: start; }
+.site-address-check .site-info-facts, .site-address-check p { margin: 0; }
 
 /* Profile menu */
 .profile-menu { width: 340px; }
@@ -759,6 +766,7 @@ kbd { font: inherit; }
 .routine-preview small, .routine-checklist small { display: block; color: var(--text-muted); }
 .routine-form, .routine-form fieldset, .routine-form-row, .routine-checklist { display: grid; gap: 8px; min-width: 0; }
 .routine-form label { display: grid; gap: 4px; }
+.reference-search h3, .reference-search p { margin: 0; overflow-wrap: anywhere; }
 .routine-form input, .routine-form select { width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
 .routine-form fieldset, .routine-checklist { border: 1px solid var(--border); }
 .routine-checklist label { display: flex; align-items: start; gap: 6px; }
@@ -962,6 +970,12 @@ kbd { font: inherit; }
 .account-identity p { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); }
 .manager-section { padding: 18px 0; border-top: 1px solid var(--border); }
 .manager-section-heading { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.account-access dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 0 0 12px; }
+.account-access dt { font-size: var(--fs-sm); color: var(--text-muted); }
+.account-access dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.account-access summary { cursor: pointer; font-weight: 600; }
+.account-access details > div { margin: 10px 0 0; }
+.account-access details p { margin: 4px 0 0; overflow-wrap: anywhere; }
 .manager-section h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
 .manager-section p { margin: 4px 0 0; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.55; }
 .reorder-actions { display: flex; gap: 6px; }

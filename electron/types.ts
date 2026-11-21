@@ -367,6 +367,13 @@ export interface TabSetInput {
   tabs: Array<{ id: string; url: string }>;
 }
 
+export interface ReferenceSearchInput {
+  accountSpaceId: AccountSpaceId;
+  keyword: string;
+  reference: string;
+  reviewedUrl: string;
+}
+
 export type TabProblem = 'crashed' | 'certificate' | 'offline' | 'network';
 
 export interface TabGroup {

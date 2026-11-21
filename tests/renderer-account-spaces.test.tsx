@@ -42,7 +42,7 @@ describe('Account Space renderer contract', () => {
   });
 
   it('has explicit connection, permission, destructive and recovery states', () => {
-    expect(renderer).toContain('Website status:');
+    expect(renderer).toContain('Website session');
     expect(renderer).toContain("onRespond('allow-once'");
     expect(renderer).toContain('DELETE_ACCOUNT_SPACE');
     expect(renderer).toContain('performRecoveryAction');

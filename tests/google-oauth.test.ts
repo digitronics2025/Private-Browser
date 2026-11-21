@@ -32,7 +32,7 @@ class FakeLauncher extends ExternalBrowserLauncher {
 const ACCOUNT_ID = '122b503d-a1b3-497a-a610-e193af8d0702' as AccountSpaceId;
 const CLIENT_ID = `${'1'.repeat(40)}.apps.googleusercontent.com`;
 
-function oauthFixture(payloadPatch: Record<string, unknown> = {}) {
+function oauthFixture(payloadPatch: Record<string, unknown> = {}, request: typeof fetch = fetch) {
   const root = mkdtempSync(join(tmpdir(), 'google-oauth-'));
   const encryption = new TestEncryption();
   const accounts = new AccountStore(join(root, 'accounts'), encryption, () => new Date('2026-09-12T10:00:00Z'));
@@ -71,13 +71,33 @@ function oauthFixture(payloadPatch: Record<string, unknown> = {}) {
     launcher,
     () => client,
     () => receiver,
-    fetch,
+    request,
     () => new Date('2026-09-12T10:00:00Z'),
   );
   return { root, accounts, launcher, client, receiver, manager, getAuthorizationOptions: () => authorizationOptions };
 }
 
 describe('secure Google desktop OAuth', () => {
+  it('disconnects locally without contacting Google and keeps a failed revocation retryable', async () => {
+    const request = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
+    const fixture = oauthFixture({}, request);
+    const connect = () => fixture.manager.connect(ACCOUNT_ID, ['gmail-metadata'], 'edge', () => [ACCOUNT_ID]);
+    await expect(connect()).resolves.toMatchObject({ ok: true });
+    fixture.accounts.update(ACCOUNT_ID, (record) => { record.websiteStatus = 'session-data-present'; });
+    await expect(fixture.manager.disconnect(ACCOUNT_ID, false)).resolves.toMatchObject({ ok: true, data: { googleConnection: 'disconnected', websiteStatus: 'session-data-present' } });
+    expect(request).not.toHaveBeenCalled();
+    await expect(fixture.manager.disconnect(ACCOUNT_ID, true)).resolves.toMatchObject({ ok: false, error: { code: 'GOOGLE_RECONNECT_REQUIRED' } });
+    expect(request).not.toHaveBeenCalled();
+
+    await expect(connect()).resolves.toMatchObject({ ok: true });
+    await expect(fixture.manager.disconnect(ACCOUNT_ID, true)).resolves.toMatchObject({ ok: false, data: { googleConnection: 'revocation-pending' } });
+    expect(Boolean(fixture.accounts.require(ACCOUNT_ID).refreshToken)).toBe(true);
+    request.mockResolvedValueOnce(new Response(null, { status: 200 }));
+    await expect(fixture.manager.disconnect(ACCOUNT_ID, true)).resolves.toMatchObject({ ok: true, data: { googleConnection: 'disconnected', websiteStatus: 'session-data-present' } });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.every(([url, options]) => url === 'https://oauth2.googleapis.com/revoke' && options?.method === 'POST')).toBe(true);
+    expect(Boolean(fixture.accounts.require(ACCOUNT_ID).refreshToken)).toBe(false);
+  });
   it('generates RFC 7636 S256 material with independent state and nonce', () => {
     const first = createPkceMaterial();
     const second = createPkceMaterial();

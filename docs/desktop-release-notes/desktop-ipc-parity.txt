@@ -1,0 +1,1 @@
+Browser preview actions now report when they require the desktop app. Release checks catch missing desktop commands, input rules and mismatched result types.

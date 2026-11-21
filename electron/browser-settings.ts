@@ -63,6 +63,7 @@ export const STARTUP_MODES: readonly StartupMode[] = ['continue', 'home', 'pages
 export const MAX_SETTING_URL_LENGTH = 2048;
 export const MAX_STARTUP_PAGES = 8;
 export const MAX_SITE_KEYWORDS = 8;
+export const MAX_REFERENCE_LENGTH = 120;
 
 export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   searchEngine: 'duckduckgo',
@@ -259,6 +260,17 @@ export function resolveWorkspaceNavigation(value: string, settings: BrowserSetti
     if (match && keyword) return keyword.template.replace('%s', encodeURIComponent(match[2].trim()));
   }
   return normalizeNavigationInput(value, searchTemplateFor(settings));
+}
+
+/** Resolve a saved site explicitly, without falling back to a general search engine. */
+export function referenceSearchUrl(settings: BrowserSettings, keyword: string, reference: string): string | undefined {
+  const site = settings.siteKeywords?.find((entry) => entry.keyword === keyword);
+  if (!site || typeof reference !== 'string' || !reference.trim() || reference.length > MAX_REFERENCE_LENGTH) return;
+  try {
+    return parseWebAddress(site.template.replace('%s', () => encodeURIComponent(reference.trim())));
+  } catch {
+    return undefined;
+  }
 }
 
 /** What Home means for a tab. Protected workspaces (Banking) always get the New Tab page. */

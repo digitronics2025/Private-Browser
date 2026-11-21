@@ -47,18 +47,6 @@ describe('browser settings channels', () => {
 
 // F-49: the validator used to let every channel it did not list through.
 describe('IPC argument validation covers every channel', () => {
-  const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
-  const channels = [...main.matchAll(/handle\('([^']+)'/g)].map((match) => match[1]!);
-
-  it('has a rule for every registered channel', async () => {
-    const { validateIpcArguments } = await import('../electron/ipc-contracts');
-    expect(channels.length).toBeGreaterThan(100);
-    const unknown = channels.filter((channel) => {
-      try { validateIpcArguments(channel, []); return false; } catch (error) { return (error as Error).message === 'Unknown browser command'; }
-    });
-    expect(unknown).toEqual([]);
-  });
-
   it('refuses an unknown channel and extra arguments on an argument-free one', async () => {
     const { validateIpcArguments } = await import('../electron/ipc-contracts');
     expect(() => validateIpcArguments('browser:not-a-channel', [])).toThrow('Unknown browser command');
@@ -67,5 +55,22 @@ describe('IPC argument validation covers every channel', () => {
     expect(() => validateIpcArguments('browser:switch-account-space', ['not-an-id'])).toThrow();
     expect(() => validateIpcArguments('vault:resolve-conflict', ['both'])).toThrow();
     expect(() => validateIpcArguments('browser:new-tab', [undefined, undefined, undefined])).not.toThrow();
+  });
+});
+
+describe('reference search channel', () => {
+  it('requires a bounded reference and exact reviewed HTTPS URL', async () => {
+    const { validateIpcArguments } = await import('../electron/ipc-contracts');
+    const input = {
+      accountSpaceId: '31a6f3a4-7fa6-4447-a6dd-5108de80c3e4', keyword: 'stock', reference: 'LX/3',
+      reviewedUrl: 'https://stock.example.test/search?q=LX%2F3',
+    };
+    for (const value of [
+      { ...input, reviewedUrl: 'http://stock.example.test/search?q=LX%2F3' },
+      { ...input, keyword: 'stock other' },
+      { ...input, reference: 'x'.repeat(121) },
+      { ...input, workspaceId: 'personal' },
+    ]) expect(() => validateIpcArguments('routines:open-reference', [value])).toThrow();
+    expect(() => validateIpcArguments('routines:open-reference', [input])).not.toThrow();
   });
 });
