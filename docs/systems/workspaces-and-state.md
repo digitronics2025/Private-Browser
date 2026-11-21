@@ -147,6 +147,11 @@ input. Banking does not write ordinary browsing history.
   label). The renderer receives account summaries — label, email, display name,
   avatar — but never partition names, Google subjects or tokens, which resolve
   exclusively in the main process.
+- Trusted chrome receives tabs, bookmarks and recent history for the active
+  Account Space only. The main process filters those collections before cloning
+  a snapshot or broadcasting it. Switching spaces fetches that space's records.
+  Account summaries still populate the switcher. History and address queries
+  validate the active Account Space before returning records.
 - The bookmark bar filters by both workspace and active Account Space.
 - Do not remove `state-store.ts`: it remains the v1 parser and workspace source of
   truth until the supported migration window is intentionally retired.

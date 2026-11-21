@@ -595,6 +595,12 @@ export type DownloadFolderMode = 'ask' | 'automatic' | 'default';
 export interface DownloadFolderStatus { ask: boolean; available: boolean; name?: string }
 export interface DownloadBatchStatus { active: number; completed: number; stopped: number }
 
+export interface DownloadByteProgress {
+  accountSpaceId: AccountSpaceId;
+  revision: number;
+  entries: Pick<DownloadEntry, 'id' | 'receivedBytes' | 'totalBytes'>[];
+}
+
 export type DownloadAction = 'pause' | 'resume' | 'retry' | 'cancel';
 
 export interface PrivacyEvent {
@@ -613,6 +619,7 @@ export interface BrowserSnapshot {
   workspaces: Workspace[];
   activeWorkspaceId: WorkspaceId;
   activeTabId: string;
+  splitView?: { leftTabId: string; rightTabId: string; suspended: boolean };
   tabs: BrowserTab[];
   bookmarks: Bookmark[];
   bookmarkFolders?: BookmarkFolder[];
@@ -621,6 +628,7 @@ export interface BrowserSnapshot {
   downloadHistory?: DownloadHistoryStatus;
   downloadFolder?: DownloadFolderStatus;
   downloadBatch?: DownloadBatchStatus;
+  downloadProgressRevision?: number;
   sidePanelPins?: PinnablePanelTool[];
   managedUpdate?: ManagedUpdateStatus;
   privacyLog: PrivacyEvent[];

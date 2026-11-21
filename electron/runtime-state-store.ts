@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { chromeCollections } from './chrome-collections.js';
 import type {
   AccountBrowsingStateV2,
   AccountSpaceHealth,
+  AccountSpaceBrowserTab,
   AccountSpaceId,
   AccountSpaceSummary,
   AddressMatch,
@@ -60,6 +62,21 @@ export class RuntimeStateStore {
 
   get(): RuntimeBrowserStateV2 {
     return structuredClone(this.state);
+  }
+
+  getTab(tabId: string): AccountSpaceBrowserTab | undefined {
+    const tab = this.state.tabs.find(({ id }) => id === tabId);
+    return tab && { ...tab };
+  }
+
+  /** Clone only the browsing collections that the active chrome can display. */
+  getChromeState(): RuntimeBrowserStateV2 {
+    const state = this.state;
+    const accountSpaceId = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+    if (!accountSpaceId) throw new Error('The active workspace has no Account Space');
+    const icons = state.bookmarkIconsByAccountSpace[accountSpaceId];
+    return structuredClone({ ...state, ...chromeCollections(state, accountSpaceId, state.activeWorkspaceId),
+      bookmarkIconsByAccountSpace: icons ? { [accountSpaceId]: icons } : {} });
   }
 
   isReadOnly(): boolean {
