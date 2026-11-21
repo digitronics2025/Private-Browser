@@ -507,6 +507,18 @@ Activation, publishing and live prompt verification await owner approval at
 G2. The shipping revision still requires Phase 8 verification, including the
 four-hour unattended run, applicable CI and the SHA-bound installer approval.
 
+### Upstream integration before release
+
+The local runtime revision is `6fefb5d`. During implementation, `main`
+advanced to `b90b7cc`. A merge preview found nine conflicting files. The
+overlap includes PR #112, which added automatic lease renewal and a 24-hour
+mode, plus the option to remember an exact-site approval. The approved
+autonomy design specifies a 12-hour hard cap and owner-only renewal.
+An owner decision is pending on that behavior conflict before integration.
+The proposed resolution is to keep the G1 lease rules and preserve remembered
+approvals for exact, already-listed Work origins. Run verification against
+the integrated release candidate.
+
 Execute the entire plan end-to-end in full autopilot. Make independent decisions, always choosing the best long-term solutions for security, reliability, scalability, and maintainability.
 
 Investigate, implement, fix, test, and verify everything autonomously. Do not pause for routine questions. Seek approval only for unavoidable blockers, irreversible high-risk actions, or significant costs. Continue until fully verified, then provide a concise completion report.
