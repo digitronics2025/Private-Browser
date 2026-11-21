@@ -1,8 +1,7 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
 import { desktopReleaseNotes } from './desktop-release-notes.mjs';
+import { verifyReleaseCandidate } from './verify-release-candidate.mjs';
 
 const [installerPath, objectKey] = process.argv.slice(2);
 const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
@@ -13,25 +12,15 @@ if (!installerPath || !objectKey || !endpoint || !adminKey || !commitSha || !Num
   throw new Error('Release publisher is missing an argument or environment variable');
 }
 const packageJson = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
-const bytes = readFileSync(installerPath);
-const sha256 = createHash('sha256').update(bytes).digest('hex');
-// The build job recorded the installer's hash before handing it over. Publishing
-// a file that differs from what was built — altered in the artifact or on this
-// runner — is refused (F-55).
-const sums = join(dirname(installerPath), 'SHA256SUMS.txt');
-if (!existsSync(sums)) throw new Error('SHA256SUMS.txt from the build job is missing');
-const built = readFileSync(sums, 'utf8').replace(/^﻿/, '').trim().split(/\s+/)[0]?.toLowerCase();
-if (built !== sha256) throw new Error(`Installer hash ${sha256} does not match the build job's ${built}`);
+const installer = await verifyReleaseCandidate(installerPath);
 const metadata = {
   id: `stable-${packageJson.version}-${buildNumber}`,
   version: packageJson.version,
   buildNumber,
   channel: 'stable',
   objectKey,
-  filename: basename(installerPath),
   contentType: 'application/vnd.microsoft.portable-executable',
-  sizeBytes: statSync(installerPath).size,
-  sha256,
+  ...installer,
   commitSha,
   releaseNotes: desktopReleaseNotes(commitSha, process.env.PREVIOUS_RELEASE_REVISION),
   publishedAt: new Date().toISOString(),

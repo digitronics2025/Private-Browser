@@ -34,6 +34,7 @@ import { externalLinkAccounts, isAvailableRegularAccount, preferredExternalLinkA
 import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
+import { DownloadHistoryStore } from './download-history.js';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
 import { WORKSPACES } from './state-store.js';
@@ -274,12 +275,14 @@ const TRACKER_HOSTS = [
   'mc.yandex.ru',
 ];
 
-type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string };
+type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string; retainedFileStamp?: string };
 
 class BrowserController {
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
   private readonly downloads = new Map<string, LocalDownload>();
   private readonly downloadItems = new Map<string, DownloadItem>();
+  private readonly downloadHistory = new DownloadHistoryStore(join(app.getPath('userData'), 'download-history'), safeStorage);
+  private readonly downloadHistoryFailures = new Set<AccountSpaceId>();
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
@@ -521,6 +524,7 @@ class BrowserController {
     const bookmarkUndo = this.bookmarkUndo.get(activeAccountSpaceId);
     const closedBatch = this.closedTabBatches.get(activeAccountSpaceId);
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
+    const downloadAccount = this.activeDownloadAccount(persisted);
     return {
       workspaces: WORKSPACES,
       activeWorkspaceId: persisted.activeWorkspaceId,
@@ -529,11 +533,9 @@ class BrowserController {
       bookmarks: persisted.bookmarks,
       bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
       history: persisted.history.slice(0, 100),
-      downloads: this.activeDownloadAccount(persisted)
-        ? [...this.downloads.values()]
-          .filter((entry) => entry.accountSpaceId === activeAccountSpaceId)
-          .map(({ savePath: _path, expectedInstaller: _expected, verifiedStamp: _stamp, ...entry }) => entry)
-        : [],
+      downloads: downloadAccount ? this.downloadEntries(downloadAccount) : [],
+      downloadHistory: !downloadAccount ? undefined : this.downloadHistoryFailures.has(downloadAccount)
+        ? 'unavailable' : this.downloadHistory.status(downloadAccount),
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
       activeAccountSpaceId,
@@ -1252,6 +1254,8 @@ class BrowserController {
     }
     await clearAndVerifyAccountSession(session.fromPartition(partition));
     this.configuredSessions.delete(partition);
+    this.downloadHistory.forgetAccount(accountSpaceId);
+    this.downloadHistoryFailures.delete(accountSpaceId);
     this.store.removeAccount(accountSpaceId);
     for (const [id, entry] of this.downloads) {
       if (entry.accountSpaceId === accountSpaceId) this.downloads.delete(id);
@@ -3255,10 +3259,38 @@ class BrowserController {
 
   private requireOwnedDownload(id: string): LocalDownload {
     const item = this.downloads.get(id);
-    if (!item || item.accountSpaceId !== this.activeDownloadAccount()) {
-      throw new Error('Download is unavailable in this Account Space');
+    const accountId = this.activeDownloadAccount();
+    if (accountId && item?.accountSpaceId === accountId) return item;
+    const retained = accountId && this.downloadHistory.entries(accountId).find(({ entry }) => entry.id === id);
+    if (retained) {
+      return { ...retained.entry, savePath: retained.file?.path, retainedFileStamp: retained.file?.stamp };
     }
-    return item;
+    throw new Error('Download is unavailable in this Account Space');
+  }
+
+  private downloadEntries(accountId: AccountSpaceId): DownloadEntry[] {
+    const live = [...this.downloads.values()].filter((entry) => entry.accountSpaceId === accountId);
+    const retained = this.downloadHistory.entries(accountId).filter(({ entry }) => !this.downloads.has(entry.id));
+    return [
+      ...live.map(({ savePath: _path, expectedInstaller: _expected, verifiedStamp: _stamp, retainedFileStamp: _retained, ...entry }) => entry),
+      ...retained.map(({ entry }) => entry),
+    ];
+  }
+
+  setDownloadHistory(accountId: AccountSpaceId, enabled: boolean): void {
+    if (accountId !== this.activeDownloadAccount() || this.store.isReadOnly()) throw new Error('Download history is unavailable in this Account Space');
+    this.downloadHistory.setEnabled(accountId, enabled);
+    this.downloadHistoryFailures.delete(accountId);
+    this.broadcast();
+  }
+
+  removeDownloadEntry(accountId: AccountSpaceId, id: string): void {
+    if (accountId !== this.activeDownloadAccount() || this.store.isReadOnly()) throw new Error('Download history is unavailable in this Account Space');
+    const entry = this.requireOwnedDownload(id);
+    if (this.downloadItems.has(id) || entry.checksum === 'checking') throw new Error('Wait until this download finishes.');
+    if (this.downloadHistory.entries(accountId).some(({ entry }) => entry.id === id)) this.downloadHistory.remove(accountId, id);
+    this.downloads.delete(id);
+    this.broadcast();
   }
 
   private requireActiveDownload(id: string) {
@@ -3301,6 +3333,9 @@ class BrowserController {
 
   async openDownload(id: string): Promise<void> {
     const item = this.requireActiveDownload(id);
+    if (item.retainedFileStamp && item.retainedFileStamp !== downloadFileStamp(item.savePath)) {
+      throw new Error('The saved file changed after download. Download a fresh copy or use Show folder to inspect it.');
+    }
     // Judge the file that will be opened, not the name the site suggested.
     const blocked = downloadOpenBlock({ ...item, risk: downloadRisk(basename(item.savePath)) });
     if (blocked) throw new Error(blocked);
@@ -3814,6 +3849,7 @@ class BrowserController {
         id,
         accountSpaceId,
         filename,
+        origin: isAllowedRemoteUrl(item.getURL()) ? new URL(item.getURL()).origin : undefined,
         receivedBytes: 0,
         totalBytes: item.getTotalBytes(),
         state: 'progressing',
@@ -3830,12 +3866,23 @@ class BrowserController {
       });
       item.once('done', (_downloadEvent, state) => {
         this.downloadItems.delete(id);
+        if (this.downloads.get(id) !== entry) return;
         Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath(),
-          paused: false, canPause: false, canResume: false, canCancel: false });
+          finishedAt: new Date().toISOString(), paused: false, canPause: false, canResume: false, canCancel: false });
         if (entry.savePath) {
           const savedFilename = basename(entry.savePath);
           entry.risk = downloadRisk(savedFilename);
           entry.extension = downloadExtension(savedFilename);
+        }
+        if (!this.store.isReadOnly()) {
+          const path = state === 'completed' ? entry.savePath : undefined;
+          const stamp = path ? downloadFileStamp(path) : undefined;
+          try {
+            entry.retained = this.downloadHistory.record(accountSpaceId, { entry, file: path && stamp ? { path, stamp } : undefined });
+            this.downloadHistoryFailures.delete(accountSpaceId);
+          } catch {
+            this.downloadHistoryFailures.add(accountSpaceId);
+          }
         }
         if (state === 'completed' && entry.savePath && entry.expectedInstaller) void this.verifyInstallerDownload(entry, entry.savePath);
         else this.broadcast();
@@ -4362,6 +4409,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:control-download', (_event, id: string, action: DownloadAction) => controller!.controlDownload(id, action));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
+  handle('browser:set-download-history', (_event, accountId: AccountSpaceId, enabled: boolean) => controller!.setDownloadHistory(accountId, enabled));
+  handle('browser:remove-download-entry', (_event, accountId: AccountSpaceId, id: string) => controller!.removeDownloadEntry(accountId, id));
   handle('developer:toggle-tools', (_event, mode: DevToolsMode) => controller!.toggleDeveloperTools(mode));
   handle('developer:capture-diagnostics', () => controller!.captureDeveloperDiagnostics());
   handle('developer:clear-diagnostics', () => controller!.clearDeveloperDiagnostics());

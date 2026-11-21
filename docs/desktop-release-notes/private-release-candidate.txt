@@ -1,0 +1,1 @@
+Installer bytes are checked from private storage before publishing. The release workflow records the candidate and live installer verification.

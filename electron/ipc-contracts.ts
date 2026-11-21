@@ -333,6 +333,12 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if (typeof input.taskId !== 'string' || !/^TASK-\d{1,8}$/.test(input.taskId)) throw new Error('Invalid Control Center task'); return;
     }
     // Channels that take one identifier chosen from state the renderer was given.
+    case 'browser:set-download-history':
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (typeof args[1] !== 'boolean') throw new Error('Choose whether to keep download history');
+      return;
+    case 'browser:remove-download-entry':
+      exact(args, 2); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'download identifier', 128); return;
     case 'browser:control-download':
       exact(args, 2); requireNonEmptyText(args[0], 'download identifier', 200);
       if (args[1] !== 'pause' && args[1] !== 'resume' && args[1] !== 'retry' && args[1] !== 'cancel') throw new Error('Invalid download action');

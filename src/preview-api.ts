@@ -151,6 +151,14 @@ export function installPreviewApi(): void {
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
+  const savedDownloadHistory = new Set<AccountSpaceId>();
+  if (params.get('downloadHistory') === 'sample') {
+    savedDownloadHistory.add(google);
+    sampleDownloads.push({ id: 'preview-download-history', accountSpaceId: google, filename: 'Statement.pdf',
+      origin: 'https://billing.example.test', finishedAt: '2026-11-20T16:00:00Z', state: 'completed',
+      receivedBytes: 1920, totalBytes: 1920, extension: 'PDF', risk: 'ordinary', retained: true });
+  }
+  state.downloadHistory = savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
   const workspaceSettings: Partial<Record<WorkspaceId, BrowserSettings>> = {};
   const siteZoom = new Map<string, number>();
   const siteZoomKey = (account: string, url: string) => JSON.stringify([account, new URL(url).origin]);
@@ -179,6 +187,7 @@ export function installPreviewApi(): void {
     };
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
+    state.downloadHistory = state.activeWorkspaceId === 'banking' ? undefined : savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
     state.bookmarkUndo = undo ? { kind: undo.kind, count: undo.before.length } : undefined;
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
@@ -479,6 +488,19 @@ export function installPreviewApi(): void {
     sideAppCommand: async () => undefined,
     openDownload: async () => { throw new Error('This preview cannot open files. Use the desktop Downloads panel.'); },
     showDownload: async () => { throw new Error('This preview cannot open folders. Use the desktop Downloads panel.'); },
+    setDownloadHistory: async (id, enabled) => {
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking') throw new Error('Download history is unavailable in this Account Space');
+      if (enabled) savedDownloadHistory.add(id);
+      else savedDownloadHistory.delete(id);
+      publish();
+    },
+    removeDownloadEntry: async (id, downloadId) => {
+      const index = sampleDownloads.findIndex((item) => item.id === downloadId && item.accountSpaceId === id
+        && !item.canCancel && item.state !== 'progressing' && item.checksum !== 'checking');
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking' || index < 0) throw new Error('Download is unavailable in this Account Space');
+      sampleDownloads.splice(index, 1);
+      publish();
+    },
     clearSideAppData: async () => undefined,
     respondToPermissionPrompt: async (_id, decision) => { document.documentElement.dataset.previewPermission = String(decision); state.pendingPermission = undefined; publish(); },
     freezeContent: async () => null,

@@ -1,5 +1,25 @@
 import { expect, test } from '@playwright/test';
 
+test('filters retained downloads and removes only the selected list entry', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/?downloadHistory=sample');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Downloads' }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await expect(panel.getByLabel('Keep download history')).toBeChecked();
+  await panel.getByRole('searchbox', { name: 'Search downloads' }).fill('billing');
+  const file = panel.locator('.download-card').filter({ hasText: 'Statement.pdf' });
+  await expect(file.getByText('https://billing.example.test')).toBeVisible();
+  await expect(file.locator('time')).toHaveAttribute('datetime', '2026-11-20T16:00:00Z');
+  const filter = panel.getByRole('combobox', { name: 'Download status' });
+  await filter.selectOption('interrupted');
+  await expect(panel.getByText('No downloads match these filters.')).toBeVisible();
+  await filter.selectOption('completed');
+  await file.getByRole('button', { name: 'Remove from list' }).click();
+  await expect(file).toHaveCount(0);
+  await expect(panel.getByText('Downloaded files will appear here.')).toBeVisible();
+});
+
 test('reports unavailable desktop actions without fabricating successful results', async ({ page }) => {
   await page.goto('/');
   const status = await page.evaluate(async () => {
