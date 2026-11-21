@@ -116,7 +116,7 @@ import type {
   TabBatchScope,
   TabGroup,
 } from './types.js';
-import { devServerStatusSchema, gitRevisionSchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
+import { devServerStatusSchema, gitRevisionSchema, reportHistoryPageSchema, reportHistoryQuerySchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
 import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
 import { MyVaultDiskStore } from './myvault/vault-store.js';
@@ -2567,10 +2567,24 @@ class BrowserController {
 
   async runBridgeAction(action: DeveloperBridgeAction, payload: Record<string, unknown>): Promise<unknown> {
     this.requireDeveloperWorkspace();
-    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'source.open', 'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
+    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'source.open', 'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
     if (!allowed.has(action)) throw new Error('Unsupported VS Code action');
     const bridge = this.vscodeBridge.status();
     const projectId = bridge.project?.project.id;
+    if ((action.startsWith('test.') || action.startsWith('reports.')) && !projectId) throw new Error('Choose an approved workspace first.');
+    if (action === 'reports.search' || action === 'test.cancel' || (action === 'test.rerun' && payload.reportId)) {
+      const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+      if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 3))) {
+        throw new Error('Install Private Browser Bridge 0.4.3 or later for report history and test controls.');
+      }
+    }
+    if (action === 'reports.search') {
+      const query = reportHistoryQuerySchema.parse(payload.query);
+      const result = await this.vscodeBridge.request(action, { projectId, query });
+      this.requireDeveloperWorkspace();
+      if (this.sessionIsLocked || projectId !== this.vscodeBridge.status().project?.project.id) throw new Error('The selected project changed.');
+      return reportHistoryPageSchema.parse(result);
+    }
     if (action === 'project.revision') {
       if (!projectId) throw new Error('Choose an approved workspace first.');
       const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);

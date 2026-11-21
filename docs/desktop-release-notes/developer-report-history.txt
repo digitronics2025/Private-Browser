@@ -1,0 +1,1 @@
+Filter local test reports by project, route, date or result. Stop a running test, rerun a chosen report with its saved inputs, or review a sanitized JSON summary before copying.

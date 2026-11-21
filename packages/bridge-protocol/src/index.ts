@@ -30,7 +30,7 @@ export const bridgeMethodSchema = z.enum([
   'inspect.page', 'inspect.open-source',
   'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact',
   'ai.handoff', 'ai.apply-edits',
-  'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention',
+  'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention',
 ]);
 export type BridgeMethod = z.infer<typeof bridgeMethodSchema>;
 
@@ -107,6 +107,34 @@ export const testReportSchema = z.object({
   artifacts: z.array(z.object({ id: z.string().uuid(), name: z.string().min(1).max(300).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/), kind: z.enum(['screenshot', 'trace', 'diff', 'test', 'log']), size: z.number().int().nonnegative().max(MAX_ARTIFACT_BYTES) }).strict()).max(100),
 }).strict();
 export type TestReport = z.infer<typeof testReportSchema>;
+
+export const reportRunParametersSchema = z.object({
+  projectId: z.string().min(8).max(128), kind: testKindSchema,
+  url: z.string().max(4096).optional(), liveUrl: z.string().max(4096).optional(),
+}).strict();
+export type ReportRunParameters = z.infer<typeof reportRunParametersSchema>;
+
+export const reportHistoryQuerySchema = z.object({
+  project: z.string().max(128).optional(), text: z.string().trim().max(160).optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), status: reportStatusSchema.optional(),
+  page: z.number().int().min(1).max(500).default(1),
+}).strict();
+export type ReportHistoryQuery = z.input<typeof reportHistoryQuerySchema>;
+
+export const reportHistoryRowSchema = z.object({
+  id: z.string().uuid(), projectId: z.string().min(8).max(128), projectName: z.string().max(300),
+  title: z.string().max(300), route: z.string().max(300).optional(), kind: testKindSchema, status: reportStatusSchema,
+  finishedAt: z.string().datetime(), findings: z.number().int().min(0).max(200), artifacts: z.number().int().min(0).max(100),
+  replayable: z.boolean(),
+}).strict();
+export type ReportHistoryRow = z.infer<typeof reportHistoryRowSchema>;
+
+export const reportHistoryPageSchema = z.object({
+  page: z.number().int().min(1), total: z.number().int().min(0), pages: z.number().int().min(1),
+  projects: z.array(z.object({ id: z.string().min(8).max(128), name: z.string().max(300) }).strict()).max(50),
+  rows: z.array(reportHistoryRowSchema).max(20),
+}).strict();
+export type ReportHistoryPage = z.infer<typeof reportHistoryPageSchema>;
 
 export const bridgeStatusSchema = z.object({
   state: z.enum(['disconnected', 'pairing', 'connected', 'incompatible', 'error']), browserVersion: z.string().max(50),
