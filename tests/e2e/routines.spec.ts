@@ -1,0 +1,35 @@
+import { expect, test } from '@playwright/test';
+
+test('creates, previews and reruns a routine and resets its checklist', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'More tools' }).click();
+  await page.getByRole('menuitem', { name: 'Automations' }).click();
+  await page.getByRole('button', { name: 'New routine' }).click();
+  await page.getByLabel('Routine name').fill('Morning review');
+  await page.getByLabel('Web address 1').fill('https://example.test/first');
+  await page.getByRole('button', { name: 'Add link', exact: true }).click();
+  await page.getByLabel('Web address 2').fill('https://example.test/second');
+  await page.getByLabel('Account Space 2').selectOption({ label: 'Digitronics / Digitronics' });
+  await page.getByRole('button', { name: 'Move link 2 up' }).click();
+  await expect(page.getByLabel('Web address 1')).toHaveValue('https://example.test/second');
+  await page.getByRole('button', { name: 'Add checklist item' }).click();
+  await page.getByLabel('Checklist item 1', { exact: true }).fill('Check the morning queue');
+  await page.getByRole('button', { name: 'Save routine' }).click();
+  const routine = page.locator('details').filter({ hasText: 'Morning review' });
+  await routine.locator('summary').click();
+  const firstLink = routine.getByRole('listitem').first();
+  await expect(firstLink).toContainText('https://example.test/second');
+  await expect(firstLink).toContainText('Digitronics / Digitronics');
+  await routine.getByRole('button', { name: 'Run routine' }).click();
+  await expect(routine.getByText('2 added · 0 reused · 0 skipped')).toBeVisible();
+  await routine.getByRole('button', { name: 'Run routine' }).click();
+  await expect(routine.getByText('0 added · 2 reused · 0 skipped')).toBeVisible();
+  const checkbox = routine.getByRole('checkbox', { name: /Check the morning queue/ });
+  await checkbox.check();
+  await expect(routine.getByText(/Last done /)).toBeVisible();
+  await routine.getByRole('button', { name: 'Reset checklist' }).click();
+  await expect(checkbox).not.toBeChecked();
+  await expect(routine.getByText(/Last done /)).toBeVisible();
+});

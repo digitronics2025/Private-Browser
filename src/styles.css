@@ -661,6 +661,16 @@ kbd { font: inherit; }
 .vault-full-close { position: absolute; top: 16px; right: 16px; }
 .vault-full-shell .side-panel { max-width: 760px; margin: 0 auto; height: auto; }
 .credential-list, .automation-list, .download-list, .privacy-events { display: flex; flex-direction: column; gap: 8px; }
+.routine-details > summary { cursor: pointer; font-weight: 650; }
+.routine-preview { padding-inline-start: 22px; }
+.routine-preview li { padding: 4px 0; overflow-wrap: anywhere; }
+.routine-preview small, .routine-checklist small { display: block; color: var(--text-muted); }
+.routine-form, .routine-form fieldset, .routine-form-row, .routine-checklist { display: grid; gap: 8px; min-width: 0; }
+.routine-form label { display: grid; gap: 4px; }
+.routine-form input, .routine-form select { width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); }
+.routine-form fieldset, .routine-checklist { border: 1px solid var(--border); }
+.routine-checklist label { display: flex; align-items: start; gap: 6px; }
+.routine-result { color: var(--text-muted); overflow-wrap: anywhere; }
 .credential-card, .download-card { padding: 11px 12px; }
 .credential-top { display: flex; gap: 10px; align-items: center; }
 .credential-top > div { min-width: 0; display: flex; flex-direction: column; }

@@ -230,7 +230,7 @@ bookmark is renamed or removed.
 | `assistant` | `getAiProvider`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi`, `revokeAiContext` |
 | `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview, `copyText`; the Tasks tab ([ControlCenterSection.tsx](../../src/panels/ControlCenterSection.tsx)) uses the `control-center:*` methods ([control-center-link.md](control-center-link.md)) |
 | `vault` | `listVault`, unlock/pair/lock/sync/conflict intents, Windows Hello unlock/enable/disable intents, `openVaultEditor`, `requestSaveFromPage`, migration, generators, `copyPassword`, `copyTotp`, `autofill` |
-| `automations` | `newTab(workspaceId, url)` only |
+| `automations` | `routines:*`; edit targets, choose focus, run and manually check off steps |
 | `downloads` | `openDownload`, `showDownload` |
 | `privacy` | none |
 | `settings` | default browser; Search engine (preset `<select>` or a custom `https://…%s` address), Home page (New Tab page or a web address) and On startup, through `setBrowserSettings`; update service, Chrome import, `setUiPreferences` (theme, bar mode) |
@@ -245,8 +245,8 @@ like success, and every IPC action has a rejection handler. Decision dialogs
 (permission, recovery, full vault view) use `useModalFocus` (`src/lib/dialog.ts`):
 focus stays inside, Escape denies or closes, focus returns afterwards. The
 permission prompt is keyed by prompt id and its Allow buttons arm after 500 ms.
-A page URL change never overwrites an address the user is editing. Automations open tabs and stop — they
-never send, buy, publish or delete.
+A page URL change never overwrites an address the user is editing. Routines preview
+their destinations and open or reuse tabs only after the user presses Run.
 
 ## Keyboard
 

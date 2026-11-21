@@ -54,6 +54,8 @@ import type {
   BookmarkLevelInput,
   BrowserSnapshot,
   BrowserTab,
+  BrowserRoutine,
+  RoutineRunResult,
   ChromeImportOptions,
   ChromeImportResult,
   ChromeProfileSource,
@@ -119,6 +121,7 @@ import { VscodeBridgeServer } from './vscode-bridge.js';
 import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
+import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -442,6 +445,7 @@ class BrowserController {
       bookmarkIcons: persisted.bookmarkIconsByAccountSpace[activeAccountSpaceId] ?? {},
       canReopenClosedTab: (this.closedTabs.get(activeAccountSpaceId)?.length ?? 0) > 0,
       recentlyClosedTabs: (this.closedTabs.get(activeAccountSpaceId) ?? []).slice().reverse(),
+      routines: this.canUseRoutines(persisted) ? this.routines(persisted) : [],
       sideApps: this.sideApps.snapshot(),
     };
   }
@@ -638,6 +642,97 @@ class BrowserController {
     this.runtimeTabs.set(id, this.newRuntimeTab());
     this.broadcast();
     if (url !== 'private://home') await this.navigate(url);
+  }
+
+  private canUseRoutines(state: RuntimeBrowserStateV2): boolean {
+    const account = state.accountSpaces.find((candidate) => candidate.id === this.activeAccountSpaceId(state));
+    return !this.store.isReadOnly() && Boolean(account && isAvailableRegularAccount(state, account));
+  }
+
+  private routines(state: RuntimeBrowserStateV2): BrowserRoutine[] {
+    return state.routines ?? defaultBrowserRoutines(state.activeAccountSpaceByWorkspace);
+  }
+
+  private updateRoutines(edit: (routines: BrowserRoutine[], state: RuntimeBrowserStateV2) => void): void {
+    this.store.update((state) => {
+      if (!this.canUseRoutines(state)) throw new Error('Routines are unavailable in this Account Space');
+      edit(state.routines ??= this.routines(state), state);
+    });
+    this.broadcast();
+  }
+
+  saveRoutine(value: unknown): void {
+    const routine = requireBrowserRoutine(value);
+    this.updateRoutines((routines, state) => {
+      if (routine.links.some(({ accountSpaceId }) => !state.accountSpaces.some((account) => account.id === accountSpaceId && account.workspaceId !== 'banking'))) {
+        throw new Error('Choose a regular Account Space for each routine link');
+      }
+      const index = routines.findIndex((item) => item.id === routine.id);
+      if (index >= 0) routines[index] = routine;
+      else {
+        if (routines.length >= MAX_ROUTINES) throw new Error('You can save up to 30 routines');
+        routines.push(routine);
+      }
+    });
+  }
+
+  deleteRoutine(id: string): void {
+    this.updateRoutines((routines) => {
+      const index = routines.findIndex((item) => item.id === id);
+      if (index >= 0) routines.splice(index, 1);
+    });
+  }
+
+  updateRoutineChecklist(id: string, index?: number, done?: boolean): void {
+    this.updateRoutines((routines) => {
+      const routine = routines.find((item) => item.id === id);
+      if (!routine) throw new Error('Routine is unavailable');
+      if (index === undefined) {
+        for (const item of routine.checklist) item.done = false;
+        return;
+      }
+      const item = routine.checklist[index];
+      if (!item) throw new Error('Checklist item is unavailable');
+      item.done = done === true;
+      if (item.done) item.completedAt = new Date().toISOString();
+    });
+  }
+
+  async runRoutine(id: string): Promise<RoutineRunResult> {
+    const state = this.store.get();
+    if (!this.canUseRoutines(state)) throw new Error('Routines are unavailable in this Account Space');
+    const routine = this.routines(state).find((item) => item.id === id);
+    if (!routine) throw new Error('Routine is unavailable');
+    const result: RoutineRunResult = { reused: 0, opened: 0, skipped: [], focusUnavailable: false };
+    const tabs = [...state.tabs];
+    let focusId: string | undefined;
+    for (const [index, { accountSpaceId, url }] of routine.links.entries()) {
+      const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+      if (!account || !isAvailableRegularAccount(state, account)) {
+        result.skipped.push(index);
+        continue;
+      }
+      const owned = tabs.filter((tab) => tab.accountSpaceId === accountSpaceId);
+      const match = owned.find((tab) => !tab.isHome && isAllowedRemoteUrl(tab.url) && canonicalRoutineUrl(tab.url) === canonicalRoutineUrl(url));
+      if (match) {
+        result.reused += 1;
+        if (index === routine.focusIndex) focusId = match.id;
+      } else if (owned.length >= 100) {
+        result.skipped.push(index);
+      } else {
+        const tabId = randomUUID();
+        tabs.push({ id: tabId, workspaceId: account.workspaceId, accountSpaceId, title: new URL(url).hostname, url, isHome: false,
+          loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false });
+        result.opened += 1;
+        if (index === routine.focusIndex) focusId = tabId;
+      }
+    }
+    if (result.opened) this.store.update((next) => { next.tabs = tabs; });
+    if (focusId) {
+      try { await this.activateTab(focusId); } catch { result.focusUnavailable = true; }
+    } else result.focusUnavailable = true;
+    this.broadcast();
+    return result;
   }
 
   async closeTab(tabId: string): Promise<void> {
@@ -3121,6 +3216,11 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge, controlCenter, fillPreferences);
 
   handle('browser:get-state', () => controller!.getSnapshot());
+  handle('routines:save', (_event, routine: BrowserRoutine) => controller!.saveRoutine(routine));
+  handle('routines:delete', (_event, id: string) => controller!.deleteRoutine(id));
+  handle('routines:run', (_event, id: string) => controller!.runRoutine(id));
+  handle('routines:mark-checklist', (_event, id: string, index: number, done: boolean) => controller!.updateRoutineChecklist(id, index, done));
+  handle('routines:reset-checklist', (_event, id: string) => controller!.updateRoutineChecklist(id));
   handle('browser:navigate', (_event, value: string) => controller!.navigate(value));
   handle('browser:home', () => controller!.goHome());
   handle('browser:back', () => controller!.goBack());

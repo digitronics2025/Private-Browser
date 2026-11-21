@@ -73,6 +73,39 @@ test('routes an operating-system link back to the last regular account from Bank
   expect(after.tabs.filter((tab) => tab.workspaceId === 'banking')).toEqual(before.tabs.filter((tab) => tab.workspaceId === 'banking'));
 });
 
+test('runs an ordered routine across isolated accounts and reuses its tabs after restart', async () => {
+  let page = await application!.firstWindow();
+  const { first, second } = await page.evaluate(async () => ({
+    first: await window.privateBrowser.addLocalAccountSpace('personal', 'Morning first', 'sky'),
+    second: await window.privateBrowser.addLocalAccountSpace('personal', 'Morning second', 'indigo'),
+  }));
+  const routine = {
+    id: 'routine-fixture', name: 'Morning fixture', focusIndex: 0,
+    links: [{ accountSpaceId: first, url: origin }, { accountSpaceId: second, url: origin }],
+    checklist: [{ label: 'Review first account' }],
+  };
+  await page.evaluate((value) => window.privateBrowser.saveRoutine(value), routine);
+  const launchRoutine = () => page.evaluate((id) => window.privateBrowser.runRoutine(id), routine.id);
+  expect(await launchRoutine()).toEqual({ opened: 2, reused: 0, skipped: [], focusUnavailable: false });
+  const current = await page.evaluate(() => window.privateBrowser.getState());
+  expect(current.activeAccountSpaceId).toBe(first);
+  expect(current.tabs.filter((tab) => tab.url === origin + '/').map((tab) => tab.accountSpaceId)).toEqual([first, second]);
+  await page.evaluate((id) => window.privateBrowser.markRoutineChecklist(id, 0, true), routine.id);
+  await application!.close();
+  const env = { ...process.env, NODE_ENV: 'test' } as Record<string, string>;
+  delete env.ELECTRON_RUN_AS_NODE;
+  application = await electron.launch({ args: [join(process.cwd(), 'dist-electron/main.js'), '--user-data-dir=' + userDataPath], env });
+  page = await application.firstWindow();
+  await expect(page.getByRole('button', { name: /Account Space: Morning first/ })).toBeVisible();
+  expect(await launchRoutine()).toEqual({ opened: 0, reused: 2, skipped: [], focusUnavailable: false });
+  await page.evaluate(({ second, id }) => window.privateBrowser.setAccountSpaceLocked(second, true).then(() => window.privateBrowser.resetRoutineChecklist(id)), { second, id: routine.id });
+  expect(await launchRoutine()).toEqual({ opened: 0, reused: 1, skipped: [1], focusUnavailable: false });
+  const saved = await page.evaluate((id) => window.privateBrowser.getState().then((state) => state.routines?.find((item) => item.id === id)), routine.id);
+  expect(saved?.checklist[0]).toMatchObject({ label: 'Review first account', done: false, completedAt: expect.any(String) });
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.routines))).toEqual([]);
+});
+
 test('scopes the download list and both file commands to the originating account', async () => {
   const page = await application!.firstWindow();
   const first = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Download owner', 'sky'));

@@ -323,6 +323,22 @@ export interface BrowserStateManifestV2 {
   ui?: UiPreferences;
   /** Optional: builds before 0.7.0 ignore it and fall back to defaults. */
   settings?: BrowserSettings;
+  routines?: BrowserRoutine[];
+}
+
+export interface RoutineLink { accountSpaceId: AccountSpaceId; url: string }
+export interface BrowserRoutine {
+  id: string;
+  name: string;
+  links: RoutineLink[];
+  focusIndex: number;
+  checklist: Array<{ label: string; done?: boolean; completedAt?: string }>;
+}
+export interface RoutineRunResult {
+  reused: number;
+  opened: number;
+  skipped: number[];
+  focusUnavailable: boolean;
 }
 
 export interface BrowserTab {
@@ -446,6 +462,7 @@ export interface BrowserSnapshot {
   bookmarkIcons: Record<string, string>;
   canReopenClosedTab: boolean;
   recentlyClosedTabs?: RecentlyClosedTab[];
+  routines?: BrowserRoutine[];
   /** Web apps docked in the side panel, such as Claude. */
   sideApps: SideAppSnapshot[];
 }
@@ -499,6 +516,7 @@ export interface RuntimeBrowserStateV2 {
   bookmarkBarVisible: boolean;
   ui: UiPreferences;
   settings: BrowserSettings;
+  routines?: BrowserRoutine[];
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
   bookmarkIconsByAccountSpace: Record<string, Record<string, string>>;
   accountSpaces: AccountSpaceSummary[];
