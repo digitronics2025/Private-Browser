@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Check, KeyRound, LoaderCircle, ShieldCheck, X } from 'lucide-react';
-import type { AccountSpaceId, Bookmark, BookmarkLevelInput, BrowserSnapshot, Shortcut, ShortcutTile, SidePanelTool, UiPreferences, UiPreferencesPatch, WindowState } from '../electron/types';
+import type { AccountSpaceId, Bookmark, BookmarkLevelInput, BrowserSnapshot, PageExcerptReview, Shortcut, ShortcutTile, SidePanelTool, UiPreferences, UiPreferencesPatch, WindowState } from '../electron/types';
 import { CHROME, computeChromeLayout, FRAME_COLORS } from '../electron/chrome-layout';
 import { resolveShortcut } from '../electron/shortcuts';
 import { DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
@@ -18,6 +18,7 @@ import { BrowserMenu } from './shell/BrowserMenu';
 import { ShieldStatusMenu, SiteInfoMenu, TabSearchMenu, ZoomMenu } from './shell/StatusMenus';
 import { PromptDialog, type PromptRequest } from './shell/PromptDialog';
 import { ClearBrowsingDataDialog } from './shell/ClearBrowsingDataDialog';
+import { ClaudeExcerptDialog } from './shell/ClaudeExcerptDialog';
 import { AccountManager } from './panels/AccountManager';
 import { PermissionOverlay, RecoveryOverlay } from './panels/Overlays';
 import { useModalFocus } from './lib/dialog';
@@ -37,7 +38,7 @@ import { defaultShortcutTiles } from './lib/quick-links';
 import { faviconsByHost } from './lib/format';
 import { disposer } from './lib/subscribe';
 import { DEFAULT_BROWSER_SETTINGS, searchEngineLabel, type BrowserSettings } from '../electron/browser-settings';
-import { isAllowedRemoteUrl, stripTrackingParameters } from '../electron/security';
+import { isAllowedRemoteUrl, isProtectedPage, stripTrackingParameters } from '../electron/security';
 import { useAgentStatus } from './panels/AgentsPanel';
 
 type MenuKind = 'browser' | 'profile' | 'shield' | 'tab-search' | 'site-info' | 'zoom';
@@ -63,6 +64,7 @@ export default function App() {
   const [address, setAddress] = useState('');
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
   const [accountManagerOpen, setAccountManagerOpen] = useState(false);
+  const [claudeExcerpt, setClaudeExcerpt] = useState<PageExcerptReview>();
   const [settingsEntry, setSettingsEntry] = useState<'overview' | 'setup'>('overview');
   const [vaultFullOpen, setVaultFullOpen] = useState(false);
   const [menu, setMenu] = useState<MenuKind | null>(null);
@@ -649,6 +651,9 @@ export default function App() {
               print: () => void act(() => window.privateBrowser.print()),
               find: () => { setFindOpen(true); setFindFocus((value) => value + 1); },
               copyLink: () => void act(() => window.privateBrowser.copyText(activeTab.url), 'Link copied'),
+              reviewClaudeExcerpt: !activeTab.isHome && !workspace.protected && !isProtectedPage(activeTab.url)
+                ? () => void act(async () => setClaudeExcerpt(await window.privateBrowser.prepareClaudeExcerpt()))
+                : undefined,
               toggleDeveloperTools: () => void act(() => window.privateBrowser.toggleDeveloperTools('right')),
               toggleTrackers: () => void act(() => window.privateBrowser.toggleTrackerBlocking()),
               quit: () => void window.privateBrowser.quit(),
@@ -661,6 +666,10 @@ export default function App() {
         {accountManagerOpen && <AccountManager state={state} onClose={() => { setAccountManagerOpen(false); profileButtonRef.current?.focus(); }} onToast={showToast} />}
         {vaultFullOpen && <VaultFullView onClose={() => setVaultFullOpen(false)}><VaultPanel accountId={state.activeAccountSpaceId} workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></VaultFullView>}
         {prompt && <PromptDialog request={prompt} onDone={() => setPrompt(null)} />}
+        {claudeExcerpt && <ClaudeExcerptDialog review={claudeExcerpt} onClose={() => setClaudeExcerpt(undefined)} onCopied={() => {
+          setClaudeExcerpt(undefined);
+          showToast('Excerpt copied. Paste it in Claude when ready.');
+        }} />}
         {clearDataFor === activeAccount.id && <ClearBrowsingDataDialog activeId={activeAccount.id} protectedWorkspace={workspace.protected}
           accounts={state.accountSpaces.filter((account) => account.workspaceId === workspace.id)}
           onDone={() => setClearDataFor(undefined)} onCleared={(visits) => {

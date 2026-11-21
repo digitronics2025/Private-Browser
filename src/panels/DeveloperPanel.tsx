@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Code2, Copy, FileCode2, LoaderCircle, LockKeyhole, PanelRightClose, PanelRightOpen, Play, ScanSearch, ShieldCheck, Sparkles, Trash2, TriangleAlert } from 'lucide-react';
+import { BridgePairingGuide } from './BridgePairingGuide';
 import type { AiPagePreview, BridgeStatus, BrowserTab, DeveloperPageInfo, DevToolsMode, GitRevision, ProjectInfo, ProjectSummary, TestKind, TestReport } from '../../electron/types';
 import { PanelHeader } from './common';
 import { ControlCenterSection } from './ControlCenterSection';
@@ -122,11 +123,17 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
   return <div className="side-panel developer-panel">
     <PanelHeader icon={Code2} eyebrow="Secure VS Code companion" title="Developer Bridge" />
     {activeTab.workspaceId !== 'development' ? <div className="developer-locked"><LockKeyhole size={24} /><h3>Protected by workspace policy</h3><p>Switch to Development. Bridge and AI capabilities never attach to Banking, payment, or other protected pages.</p></div> : <>
-      <div className="bridge-status-card"><span className={connected ? 'live' : bridge.state === 'pairing' ? 'pairing' : ''} /><div><strong>{connected ? 'VS Code connected' : bridge.state === 'pairing' ? `Pair with ${bridge.pairingCode}` : 'VS Code disconnected'}</strong><small>Browser {bridge.browserVersion}{bridge.extensionVersion ? ` · Extension ${bridge.extensionVersion}` : ''}</small></div>{connected ? <button onClick={() => void run(() => window.privateBrowser.disconnectBridge(false).then(setBridge), 'VS Code disconnected')}>Disconnect</button> : <button onClick={() => void run(() => window.privateBrowser.beginBridgePairing().then(setBridge))}>Pair</button>}</div>
+      <div className="bridge-status-card"><span className={connected ? 'live' : bridge.state === 'pairing' ? 'pairing' : ''} /><div><strong>{connected ? 'VS Code connected' : bridge.state === 'pairing' ? 'Waiting for VS Code' : 'VS Code disconnected'}</strong><small>Browser {bridge.browserVersion}{bridge.extensionVersion ? ` · Extension ${bridge.extensionVersion}` : ''}</small></div>{connected && <button onClick={() => void run(() => window.privateBrowser.disconnectBridge(false).then(setBridge), 'VS Code disconnected')}>Disconnect</button>}</div>
       {!connected && <SafeDiagnostics reason={bridge.state === 'incompatible' ? 'PB-BRIDGE-VERSION' : 'PB-BRIDGE-CONNECTION'} />}
       <div className="bridge-tabs" role="tablist" aria-label="Developer tools">{(['project', 'inspect', 'test', 'ai', 'center'] as const).map((item) => <button key={item} role="tab" aria-selected={tab === item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item === 'ai' ? 'AI Fix' : item === 'center' ? 'Tasks' : item[0].toUpperCase() + item.slice(1)}</button>)}</div>
 
-      {tab === 'project' && <div className="bridge-pane">{!connected ? <div className="bridge-empty"><Code2 size={26} /><strong>Connect your local editor</strong><p>Install the bundled private extension, then enter the single-use code in VS Code. No TCP port or webpage bridge is opened.</p><button className="primary-button" onClick={() => void run(async () => onToast(await window.privateBrowser.installBridgeExtension()))}>Install VS Code extension</button></div> : <>
+      {tab === 'project' && <div className="bridge-pane">
+        <BridgePairingGuide bridge={bridge} busy={loading}
+          onInstall={() => void run(async () => onToast(await window.privateBrowser.installBridgeExtension()))}
+          onPair={() => void run(() => window.privateBrowser.beginBridgePairing().then(setBridge))}
+          onCancel={() => void run(() => window.privateBrowser.cancelBridgePairing().then(setBridge))}
+          onCheck={() => void run(refresh, 'VS Code connection checked')} />
+        {connected && <>
         <label className="bridge-label">Workspace folder<select value={project?.project.id ?? ''} onChange={(event) => void selectProject(event.target.value)}><option value="">Choose a workspace</option>{projects.map((item) => <option key={item.id} value={item.id}>{item.name}{item.trusted ? '' : ' (restricted)'}</option>)}</select></label>
         {!project && <SafeDiagnostics reason="PB-BRIDGE-PROJECT" />}
         {project && <div className="project-summary"><div><small>PROJECT</small><strong>{project.project.name}</strong><span>{project.framework} · {project.packageManager}</span></div><button onClick={() => void bridgeAction('project.open')}>Reveal</button><p>{project.types.join(' + ') || 'Generic project'}</p>{project.activeFile && <p>Editing: {project.activeFile}</p>}</div>}

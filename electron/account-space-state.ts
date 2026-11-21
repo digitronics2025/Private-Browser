@@ -393,6 +393,9 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
   };
 }
 
+export const MAX_ACCOUNT_TABS = 100;
+export const MAX_ACCOUNT_BOOKMARKS = 25_000;
+
 export function validateAccountState(input: AccountBrowsingStateV2): AccountBrowsingStateV2 {
   if (!input || typeof input !== 'object' || input.version !== 2 || !isAccountSpaceId(input.accountSpaceId)) {
     throw new Error('Invalid Account Space browsing state');
@@ -405,7 +408,7 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
     return [{ id: group.id, name: group.name.trim().slice(0, 48), collapsed: group.collapsed === true }];
   });
   if (!Array.isArray(input.tabs)) throw new Error('Invalid Account Space tabs');
-  const tabs = input.tabs.slice(0, 100).filter((tab) =>
+  const tabs = input.tabs.slice(0, MAX_ACCOUNT_TABS).filter((tab) =>
     tab && tab.accountSpaceId === input.accountSpaceId && tab.workspaceId === workspaceId && typeof tab.id === 'string'
       && (tab.url === 'private://home' || isAllowedRemoteUrl(tab.url)),
   ).map((tab) => ({
@@ -423,7 +426,7 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
     tabs.push({ id: randomUUID(), workspaceId, accountSpaceId: input.accountSpaceId, title: 'New tab', url: 'private://home', isHome: true });
   }
   const activeTabId = tabs.some((tab) => tab.id === input.activeTabId) ? input.activeTabId : tabs[0].id;
-  const bookmarks = sanitizeAccountItems<AccountSpaceBookmark>(input.bookmarks, input.accountSpaceId, workspaceId, 25_000).map((item, index) => ({
+  const bookmarks = sanitizeAccountItems<AccountSpaceBookmark>(input.bookmarks, input.accountSpaceId, workspaceId, MAX_ACCOUNT_BOOKMARKS).map((item, index) => ({
     ...item,
     location: (item.location === 'other' ? 'other' : 'bar') as AccountSpaceBookmark['location'],
     folderPath: Array.isArray(item.folderPath) ? item.folderPath.slice(0, 20).filter((part) => typeof part === 'string').map((part) => part.slice(0, 200)) : [],

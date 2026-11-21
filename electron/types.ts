@@ -203,6 +203,17 @@ export interface GoogleOperationResult<T = unknown> {
   };
 }
 
+interface BackupRestoreCount { added: number; duplicates: number; capacityExceeded: number }
+
+export interface BackupRestorePreview {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  accountLabel: string;
+  workspaceId: WorkspaceId;
+  createdAt: string;
+  counts: { bookmarks: BackupRestoreCount; history: BackupRestoreCount; tabs: BackupRestoreCount };
+}
+
 export type GoogleService = 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup';
 
 export interface GoogleOperationProgress {
@@ -697,6 +708,8 @@ export interface AssistantSelectionSource extends AssistantSelectionEdit {
   url: string;
   redactions: number;
 }
+
+export type PageExcerptReview = Pick<AiPagePreview, 'id' | 'url' | 'text' | 'redactions'>;
 
 export interface AssistantReceipt {
   at: string;
