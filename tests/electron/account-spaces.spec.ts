@@ -392,7 +392,8 @@ test('rechecks the installer after a same-size file replacement before it reache
   const getState = () => page.evaluate(() => window.privateBrowser.getState());
   await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
   await page.evaluate((id) => window.privateBrowser.respondToPermissionPrompt(id, 'allow-once'), (await getState()).pendingPermission!.id);
-  await expect.poll(async () => (await getState()).downloads[0]?.checksum).toBe('verified');
+  // The native publisher check can legitimately use its full 10-second budget.
+  await expect.poll(async () => (await getState()).downloads[0]?.checksum, { timeout: 15_000 }).toBe('verified');
   const download = (await getState()).downloads[0];
   expect(download.publisher).toMatchObject({ state: expect.stringMatching(/unsigned|unavailable/) });
   expect(download).not.toHaveProperty('expectedInstaller');
