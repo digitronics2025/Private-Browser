@@ -8,6 +8,8 @@ import {
   decodeRecoveryCode,
   decryptBackupEnvelope,
   encryptBackupPayload,
+  backupRestoreRevision,
+  planBackupRestore,
   restorableItems,
   type AccountBackupPayload,
   type EncryptedBackupTransport,
@@ -157,5 +159,37 @@ describe('restoring a backup into an Account Space', () => {
   it('refuses a backup from another workspace, and carries no browser-wide settings', () => {
     expect(() => restorableItems(payload, { accountSpaceId: ID, workspaceId: 'banking' })).toThrow('another workspace');
     expect(restorableItems(payload, { accountSpaceId: ID, workspaceId: 'personal' })).not.toHaveProperty('settings');
+  });
+
+  it('plans only new items, leaves current state intact, and detects changes before apply', () => {
+    const localBookmark = { ...payload.bookmarks[0], id: 'local-copy', accountSpaceId: ID };
+    const otherVisit = { ...payload.history![0], accountSpaceId: OTHER };
+    const state = { bookmarks: [localBookmark], history: [otherVisit], tabs: [] };
+    const subject = { accountSpaceId: ID, workspaceId: 'personal' } as const;
+    const before = structuredClone(state);
+    const revision = backupRestoreRevision(ID, state);
+    const preview = planBackupRestore(payload, subject, state);
+    expect(state).toEqual(before);
+    expect(preview.counts).toEqual({
+      bookmarks: { added: 0, duplicates: 1, capacityExceeded: 0 },
+      history: { added: 1, duplicates: 0, capacityExceeded: 0 },
+      tabs: { added: 1, duplicates: 0, capacityExceeded: 0 },
+    });
+    expect(preview.items.history[0]).toMatchObject({ accountSpaceId: ID, url: 'https://docs.example/' });
+    expect(preview.items.history[0]?.id).not.toBe(otherVisit.id);
+    state.bookmarks[0].title = 'Changed since review';
+    expect(backupRestoreRevision(ID, state)).not.toBe(revision);
+  });
+
+  it('refuses an empty backup with a mismatched workspace and respects tab capacity', () => {
+    const target = { accountSpaceId: ID, workspaceId: 'personal' } as const;
+    expect(() => planBackupRestore({
+      ...payload, workspaceId: 'digitronics', bookmarks: [], history: [], openTabs: [],
+    }, target, { bookmarks: [], history: [], tabs: [] })).toThrow('another workspace');
+    const tabs = Array.from({ length: 100 }, (_, index) => ({
+      ...payload.openTabs![0], id: String(index), accountSpaceId: ID, url: 'https://unrelated.example/' + index,
+    }));
+    expect(planBackupRestore(payload, target, { bookmarks: [], history: [], tabs }).counts.tabs)
+      .toEqual({ added: 0, duplicates: 0, capacityExceeded: 1 });
   });
 });

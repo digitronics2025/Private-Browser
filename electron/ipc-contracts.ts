@@ -177,8 +177,11 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'backup:upload':
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation');
       if (args[2] !== undefined && args[2] !== 'merge' && args[2] !== 'overwrite') throw new Error('Invalid backup conflict decision'); return;
-    case 'backup:restore':
+    case 'backup:preview-restore':
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); if (args[2] !== undefined) requireBoundedText(args[2], 'recovery code', 64); return;
+    case 'backup:apply-restore':
+    case 'backup:cancel-restore':
+      exact(args, 1); requireUuid(args[0], 'backup review'); return;
     case 'operations:cancel':
       exact(args, 1); requireUuid(args[0], 'operation'); return;
     case 'browser:set-overlay-open':

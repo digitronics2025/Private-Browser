@@ -1,0 +1,1 @@
+Verify your encrypted backup recovery code and review what will be added before restoring. Existing data stays in place, and restored tabs stay paused until opened.

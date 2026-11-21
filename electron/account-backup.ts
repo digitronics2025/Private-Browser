@@ -1,6 +1,7 @@
-import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto';
-import type { AccountBrowsingStateV2, AccountSpaceBookmark, AccountSpaceHistoryEntry, AccountSpaceId, BrowserTab, HistoryEntry, WorkspaceId } from './types.js';
-import { validateAccountState } from './account-space-state.js';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import type { AccountBrowsingStateV2, AccountSpaceBookmark, AccountSpaceHistoryEntry, AccountSpaceId, BackupRestorePreview, BrowserTab, HistoryEntry, WorkspaceId } from './types.js';
+import { MAX_ACCOUNT_BOOKMARKS, MAX_ACCOUNT_TABS, validateAccountState } from './account-space-state.js';
+import { RETAINED_HISTORY_LIMIT } from './history-query.js';
 import { AccountStore, type SafeStorageAdapter } from './account-store.js';
 
 const BACKUP_AAD = Buffer.from('private-browser-account-space-backup:v1', 'utf8');
@@ -16,6 +17,7 @@ export interface BackupBookmarkFolder {
 export interface AccountBackupPayload {
   version: 1;
   createdAt: string;
+  workspaceId?: WorkspaceId;
   bookmarks: AccountSpaceBookmark[];
   bookmarkFolders: BackupBookmarkFolder[];
   settings: { trackerBlocking: boolean };
@@ -107,6 +109,7 @@ export class AccountBackupManager {
     const payload: AccountBackupPayload = {
       version: 1,
       createdAt: this.now().toISOString(),
+      workspaceId: account.workspaceId,
       bookmarks,
       bookmarkFolders,
       settings: { trackerBlocking: value.trackerBlocking },
@@ -197,7 +200,9 @@ export function restorableItems(
   target: { accountSpaceId: AccountSpaceId; workspaceId: WorkspaceId },
 ): { bookmarks: AccountSpaceBookmark[]; history?: AccountSpaceHistoryEntry[]; openTabs?: AccountBrowsingStateV2['tabs'] } {
   const items: Array<{ workspaceId?: unknown }> = [...payload.bookmarks, ...(payload.history ?? []), ...(payload.openTabs ?? [])];
-  if (items.some((item) => !item || item.workspaceId !== target.workspaceId)) throw new Error('This backup was made in another workspace');
+  if ((payload.workspaceId && payload.workspaceId !== target.workspaceId) || items.some((item) => !item || item.workspaceId !== target.workspaceId)) {
+    throw new Error('This backup was made in another workspace');
+  }
   const restamp = <T extends object>(list: T[] | undefined): T[] => (list ?? []).map((item) => ({ ...item, accountSpaceId: target.accountSpaceId }));
   const clean = validateAccountState({
     version: 2,
@@ -213,6 +218,63 @@ export function restorableItems(
     ...(payload.history ? { history: clean.history } : {}),
     ...(payload.openTabs?.length ? { openTabs: clean.tabs } : {}),
   };
+}
+
+type CurrentBrowsingItems = Pick<AccountBrowsingStateV2, 'bookmarks' | 'history' | 'tabs'>;
+
+function accountBrowsingItems(accountSpaceId: AccountSpaceId, current: CurrentBrowsingItems): CurrentBrowsingItems {
+  return {
+    bookmarks: current.bookmarks.filter((item) => item.accountSpaceId === accountSpaceId),
+    history: current.history.filter((item) => item.accountSpaceId === accountSpaceId),
+    tabs: current.tabs.filter((item) => item.accountSpaceId === accountSpaceId),
+  };
+}
+
+export function backupRestoreRevision(accountSpaceId: AccountSpaceId, current: CurrentBrowsingItems): string {
+  const { bookmarks, history, tabs } = accountBrowsingItems(accountSpaceId, current);
+  return createHash('sha256').update(JSON.stringify({
+    bookmarks, history, retainedHistoryCount: current.history.length,
+    tabs: tabs.map(({ id, url, title, isHome }) => [id, url, title, isHome]),
+  })).digest('base64url');
+}
+
+export function planBackupRestore(payload: AccountBackupPayload, target: {
+  accountSpaceId: AccountSpaceId; workspaceId: WorkspaceId;
+}, current: CurrentBrowsingItems) {
+  const source = restorableItems(payload, target);
+  const local = accountBrowsingItems(target.accountSpaceId, current);
+  const bookmarkKey = (item: AccountSpaceBookmark) => JSON.stringify([item.location, item.folderPath, item.url]);
+  const historyKey = (item: HistoryEntry) => JSON.stringify([item.visitedAt, item.url]);
+  const tabKey = (item: AccountBrowsingStateV2['tabs'][number]) => item.url;
+  const bookmarks = newBackupItems(source.bookmarks, local.bookmarks, bookmarkKey, MAX_ACCOUNT_BOOKMARKS - local.bookmarks.length);
+  const readableHistory = (source.history ?? []).filter((item) => Number.isFinite(Date.parse(item.visitedAt)));
+  const history = newBackupItems(readableHistory, local.history, historyKey, RETAINED_HISTORY_LIMIT - current.history.length);
+  const tabs = newBackupItems((source.openTabs ?? []).filter((item) => !item.isHome), local.tabs, tabKey, MAX_ACCOUNT_TABS - local.tabs.length);
+  const counts: BackupRestorePreview['counts'] = { bookmarks: bookmarks.counts, history: history.counts, tabs: tabs.counts };
+  return { counts, items: { bookmarks: bookmarks.items, history: history.items, tabs: tabs.items } };
+}
+
+function newBackupItems<T extends { id: string }>(remote: T[], current: T[], key: (item: T) => string, capacity: number) {
+  const ids = new Set(current.map(({ id }) => id));
+  const keys = new Set(current.map(key));
+  const items: T[] = [];
+  let duplicates = 0;
+  let capacityExceeded = 0;
+  for (const item of remote) {
+    const identity = key(item);
+    if (ids.has(item.id) || keys.has(identity)) {
+      duplicates += 1;
+      continue;
+    }
+    ids.add(item.id);
+    keys.add(identity);
+    if (items.length >= capacity) {
+      capacityExceeded += 1;
+      continue;
+    }
+    items.push({ ...item, id: randomUUID() });
+  }
+  return { items, counts: { added: items.length, duplicates, capacityExceeded } };
 }
 
 export function encryptBackupPayload(payload: AccountBackupPayload, key: Uint8Array): EncryptedBackupEnvelope {
@@ -261,7 +323,7 @@ function parseEnvelope(bytes: Uint8Array): EncryptedBackupEnvelope {
 function validatePayload(value: unknown): AccountBackupPayload {
   if (!value || typeof value !== 'object') throw new Error('Invalid backup payload');
   const payload = value as Partial<AccountBackupPayload>;
-  if (payload.version !== 1 || typeof payload.createdAt !== 'string' || !Array.isArray(payload.bookmarks) || !Array.isArray(payload.bookmarkFolders) || !payload.settings || typeof payload.settings.trackerBlocking !== 'boolean') throw new Error('Invalid backup payload');
+  if (payload.version !== 1 || typeof payload.createdAt !== 'string' || !Number.isFinite(Date.parse(payload.createdAt)) || !Array.isArray(payload.bookmarks) || !Array.isArray(payload.bookmarkFolders) || !payload.settings || typeof payload.settings.trackerBlocking !== 'boolean') throw new Error('Invalid backup payload');
   if (payload.openTabs && !Array.isArray(payload.openTabs)) throw new Error('Invalid backup tabs');
   if (payload.history && !Array.isArray(payload.history)) throw new Error('Invalid backup history');
   return payload as AccountBackupPayload;

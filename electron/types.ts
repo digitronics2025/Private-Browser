@@ -203,6 +203,17 @@ export interface GoogleOperationResult<T = unknown> {
   };
 }
 
+interface BackupRestoreCount { added: number; duplicates: number; capacityExceeded: number }
+
+export interface BackupRestorePreview {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  accountLabel: string;
+  workspaceId: WorkspaceId;
+  createdAt: string;
+  counts: { bookmarks: BackupRestoreCount; history: BackupRestoreCount; tabs: BackupRestoreCount };
+}
+
 export type GoogleService = 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup';
 
 export interface GoogleOperationProgress {
