@@ -241,7 +241,7 @@ bookmark is renamed or removed.
 | `downloads` | `openDownload`, `showDownload` |
 | `privacy` | none |
 | `settings` | default browser; Search engine (preset `<select>` or a custom `https://…%s` address), Home page (New Tab page or a web address) and On startup, through `setBrowserSettings`; update service, Chrome import, `setUiPreferences` (theme, bar mode) |
-| `bookmarks` | `openBookmark`, `renameBookmark`, `removeBookmark`, `exportBookmarks` |
+| `bookmarks` | open, rename, edit address, remove and export bookmarks. Duplicate review and confirmed bulk moves/deletions use a bounded per-account Undo. |
 | `history` | `navigate`, `clearAccountSpaceData` (confirmed) |
 
 The two-step AI flow is unchanged: preview locally, approve for a single-use

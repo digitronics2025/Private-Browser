@@ -853,6 +853,11 @@ kbd { font: inherit; }
 .bookmark-batch-dialog .startup-tab-list label { flex-direction: row; align-items: flex-start; padding: 6px; }
 .bookmark-batch-dialog .startup-tab-list input { height: auto; }
 .bookmark-batch-dialog .startup-tab-list small { display: block; opacity: .8; }
+.bookmark-cleanup { display: grid; gap: 8px; }
+.bookmark-cleanup h3, .bookmark-cleanup p { margin: 0; }
+.bookmark-cleanup ul { max-height: 8rem; margin: 0; overflow: auto; overflow-wrap: anywhere; padding-inline-start: 20px; }
+.bookmark-cleanup label { display: grid; gap: 4px; }
+.bookmark-cleanup input, .bookmark-cleanup select { width: 100%; min-width: 0; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .account-manager { width: min(1040px, 96vw); height: min(720px, 90vh); overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--radius-xl); background: var(--surface); box-shadow: var(--shadow-menu); }
 .account-manager > header { height: 100px; padding: 20px 24px; display: flex; align-items: flex-start; justify-content: space-between; border-bottom: 1px solid var(--border); }

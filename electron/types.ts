@@ -493,6 +493,7 @@ export interface BrowserSnapshot {
   /** Remembered bookmark icons of the active Account Space only, host → `data:` URL. */
   bookmarkIcons: Record<string, string>;
   canReopenClosedTab: boolean;
+  bookmarkUndo?: { kind: 'deleted' | 'moved'; count: number };
   recentlyClosedTabs?: RecentlyClosedTab[];
   routines?: BrowserRoutine[];
   startupTabRecovery?: StartupTabRecovery;

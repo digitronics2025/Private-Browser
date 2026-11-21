@@ -71,6 +71,39 @@ test('bookmark batches reuse tabs only in the active Account Space', async () =>
   expect(scoped).toEqual({ opened: 0, reused: 0, skipped: 2 });
 });
 
+test('bookmark edits and undo stay in the owner’s space and preserve intervening edits', async () => {
+  const page = await application!.firstWindow();
+  const read = () => page.evaluate(() => window.privateBrowser.getState());
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  const account = (await read()).activeAccountSpaceId;
+  for (const route of ['/first', '/second']) {
+    await page.evaluate((url) => window.privateBrowser.navigate(url), origin + route);
+    await page.evaluate(() => window.privateBrowser.toggleBookmark());
+  }
+  const original = (await read()).bookmarks.filter((bookmark) => bookmark.accountSpaceId === account);
+  const ids = original.map((bookmark) => bookmark.id);
+  expect(ids).toHaveLength(2);
+  const edit = (address: string) => page.evaluate(({ id, address }) => window.privateBrowser.editBookmarkAddress(id, address), { id: ids[0], address });
+  const change = (operation: 'move' | 'delete') => page.evaluate(({ account, ids, operation }) =>
+    window.privateBrowser.changeBookmarks(account, ids, operation === 'move' ? { location: 'other', path: [] } : undefined), { account, ids, operation });
+  const undo = () => page.evaluate((id) => window.privateBrowser.undoBookmarks(id), account);
+  await expect(change('move')).resolves.toBe(2);
+  await edit(origin + '/edited');
+  await expect(undo()).resolves.toBe(2);
+  expect((await read()).bookmarks.find((bookmark) => bookmark.id === ids[0])).toMatchObject({ url: origin + '/edited', location: 'bar' });
+  await expect(edit('file:///C:/fixture.txt')).rejects.toThrow(/HTTP or HTTPS/);
+  await expect(change('delete')).resolves.toBe(2);
+  expect((await read()).bookmarks.filter((bookmark) => bookmark.accountSpaceId === account)).toHaveLength(0);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('digitronics'));
+  expect((await read()).bookmarkUndo).toBeUndefined();
+  await expect(undo()).rejects.toThrow(/Account Space changed/);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  await expect(undo()).resolves.toBe(2);
+  expect((await read()).bookmarks.filter((bookmark) => bookmark.accountSpaceId === account)).toMatchObject([
+    expect.objectContaining({ id: ids[0], url: origin + '/edited' }), expect.objectContaining({ id: ids[1] }),
+  ]);
+});
+
 test('a bookmark keeps the icon of a site after its tab closes and across a restart', async () => {
   let page = await application!.firstWindow();
   const state = await page.evaluate(() => window.privateBrowser.getState());

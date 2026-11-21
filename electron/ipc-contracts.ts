@@ -16,6 +16,7 @@ import { requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
+import { MAX_BOOKMARK_EDIT_BATCH } from './bookmark-maintenance.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
@@ -186,6 +187,17 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 3); requireBookmarkLevel(args[0]); requireBookmarkKey(args[1]); requireIndex(args[2]); return;
     case 'bookmarks:rename':
       exact(args, 2); requireBoundedText(args[0], 'bookmark identifier', 200); requireNonEmptyText(args[1], 'bookmark name', 500); return;
+    case 'bookmarks:edit-address':
+      exact(args, 2); requireNonEmptyText(args[0], 'bookmark identifier', 200);
+      if (!isAllowedRemoteUrl(requireNonEmptyText(args[1], 'bookmark address', 4096))) throw new Error('Enter an HTTP or HTTPS bookmark address');
+      return;
+    case 'bookmarks:change-many':
+      between(args, 2, 3); requireAccountSpaceId(args[0]);
+      if (!Array.isArray(args[1]) || !args[1].length || args[1].length > MAX_BOOKMARK_EDIT_BATCH) throw new Error('Invalid bookmark selection');
+      args[1].forEach((id) => requireNonEmptyText(id, 'bookmark identifier', 200));
+      if (args[2] !== undefined) requireBookmarkLevel(args[2]); return;
+    case 'bookmarks:undo-many':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'bookmarks:remove':
     case 'browser:open-bookmark':
       exact(args, 1); requireBoundedText(args[0], 'bookmark identifier', 200); return;

@@ -416,7 +416,14 @@ export default function App() {
       case 'downloads': return <DownloadsPanel state={state} onToast={showToast} />;
       case 'privacy': return <PrivacyPanel state={state} />;
       case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} onUiChange={setUi} onToast={showToast} />;
-      case 'bookmarks': return <BookmarksPanel bookmarks={accountBookmarks} favicons={favicons} onOpen={bookmarkActions.open} onRename={bookmarkActions.rename} onRemove={bookmarkActions.remove} onImport={bookmarkActions.importBookmarks} onExport={bookmarkActions.exportBookmarks} />;
+      case 'bookmarks': return <BookmarksPanel key={activeAccount.id} bookmarks={accountBookmarks} favicons={favicons} undo={state.bookmarkUndo}
+        onOpen={bookmarkActions.open} onRename={bookmarkActions.rename} onRemove={bookmarkActions.remove}
+        onImport={bookmarkActions.importBookmarks} onExport={bookmarkActions.exportBookmarks}
+        onEditAddress={(item) => setPrompt({ title: 'Edit bookmark address', confirmLabel: 'Save',
+          fields: [{ name: 'url', label: 'URL', value: item.url, type: 'url', maxLength: 4096 }],
+          submit: ({ url }) => window.privateBrowser.editBookmarkAddress(item.id, shortcutUrl(url)) })}
+        onBatch={(ids, destination) => window.privateBrowser.changeBookmarks(activeAccount.id, ids, destination)}
+        onUndo={() => window.privateBrowser.undoBookmarks(activeAccount.id)} />;
       case 'history': return <HistoryPanel key={activeAccount.id} accountSpaceId={activeAccount.id}
         revision={(recentHistory[0]?.id ?? '') + ':' + recentHistory.length} protectedWorkspace={workspace.protected}
         onOpen={(id) => void act(() => window.privateBrowser.openAddressMatch(activeAccount.id, 'history', id))} onClearData={clearBrowsingData} />;

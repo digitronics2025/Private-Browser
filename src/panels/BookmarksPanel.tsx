@@ -1,24 +1,36 @@
 import { useDeferredValue, useMemo, useState } from 'react';
-import { FileDown, Globe2, Pencil, Search, Star, Trash2, Upload } from 'lucide-react';
-import type { Bookmark } from '../../electron/types';
+import { FileDown, Globe2, Link2, Pencil, Search, Star, Trash2, Upload } from 'lucide-react';
+import { bookmarkFolderKey, bookmarkFolderLabel, bookmarkFolders, duplicateBookmarkIds, MAX_BOOKMARK_EDIT_BATCH } from '../../electron/bookmark-maintenance';
+import type { Bookmark, BookmarkLevelInput, BrowserSnapshot } from '../../electron/types';
 import { domainFromUrl } from '../lib/format';
 import { EmptyState, PanelHeader } from './common';
 
 const PAGE_SIZE = 75;
 const folderOrder = new Intl.Collator();
 
-export function BookmarksPanel({ bookmarks, favicons, onOpen, onRename, onRemove, onImport, onExport }: {
+export function BookmarksPanel({ bookmarks, favicons, undo, onOpen, onRename, onEditAddress, onRemove, onImport, onExport, onBatch, onUndo }: {
   bookmarks: Bookmark[];
   favicons: Map<string, string>;
+  undo: BrowserSnapshot['bookmarkUndo'];
   onOpen: (id: string) => void;
   onRename: (item: Bookmark) => void;
+  onEditAddress: (item: Bookmark) => void;
   onRemove: (item: Bookmark) => void;
   onImport: () => void;
   onExport: () => void;
+  onBatch: (ids: string[], destination?: BookmarkLevelInput) => Promise<number>;
+  onUndo: () => Promise<number>;
 }) {
   const [query, setQuery] = useState('');
   const [folder, setFolder] = useState('');
   const [requestedPage, setRequestedPage] = useState(0);
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
+  const [selected, setSelected] = useState(new Set<string>());
+  const [operation, setOperation] = useState<'move' | 'delete'>();
+  const [folderQuery, setFolderQuery] = useState('');
+  const [destinationKey, setDestinationKey] = useState('');
+  const [pending, setPending] = useState(false);
+  const [notice, setNotice] = useState<{ text: string; error?: boolean }>();
   const needle = useDeferredValue(query.trim().toLocaleLowerCase());
   const folderNeedle = useDeferredValue(folder.trim().toLocaleLowerCase());
   const index = useMemo(() => bookmarks.map((item) => {
@@ -29,10 +41,42 @@ export function BookmarksPanel({ bookmarks, favicons, onOpen, onRename, onRemove
   }).sort((left, right) => (left.item.location === right.item.location ? 0 : left.item.location === 'bar' ? -1 : 1)
     || folderOrder.compare(left.folderPath, right.folderPath)
     || (left.item.orderPath.at(-1) ?? left.item.order) - (right.item.orderPath.at(-1) ?? right.item.order)), [bookmarks]);
-  const matches = useMemo(() => index.filter((entry) =>
-    entry.search.includes(needle) && entry.folderSearch.includes(folderNeedle)), [index, needle, folderNeedle]);
+  const duplicates = useMemo(() => duplicatesOnly ? duplicateBookmarkIds(bookmarks) : undefined, [bookmarks, duplicatesOnly]);
+  const matches = useMemo(() => {
+    const filtered = index.filter((entry) => (!duplicates || duplicates.has(entry.item.id))
+      && entry.search.includes(needle) && entry.folderSearch.includes(folderNeedle));
+    return duplicates ? filtered.sort((left, right) => left.item.url.localeCompare(right.item.url)) : filtered;
+  }, [duplicates, index, needle, folderNeedle]);
+  const selection = bookmarks.filter((item) => selected.has(item.id));
+  const sourceFolders = [...new Set(selection.map((item) => bookmarkFolderLabel({ location: item.location, path: item.folderPath })))].sort(folderOrder.compare);
+  const folders = useMemo(() => operation === 'move' ? bookmarkFolders(bookmarks) : [], [bookmarks, operation]);
+  const destinations = folders.filter((item) => bookmarkFolderLabel(item).toLocaleLowerCase().includes(folderQuery.toLocaleLowerCase())).slice(0, 50);
+  const destination = destinations.find((item) => bookmarkFolderKey(item) === destinationKey);
   const pages = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
   const page = Math.min(requestedPage, pages - 1);
+  const toggle = (id: string, checked: boolean) => {
+    const next = new Set(selection.map((item) => item.id));
+    if (checked && next.size < MAX_BOOKMARK_EDIT_BATCH) next.add(id);
+    else if (!checked) next.delete(id);
+    setSelected(next);
+  };
+  const run = async (action: () => Promise<number>, completed: (count: number) => string) => {
+    setPending(true);
+    setNotice(undefined);
+    try { setNotice({ text: completed(await action()) }); }
+    catch (error) { setNotice({ text: error instanceof Error ? error.message : String(error), error: true }); }
+    finally { setPending(false); }
+  };
+  const confirm = () => {
+    if (!operation || (operation === 'move' && !destination)) return;
+    const verb = operation === 'move' ? 'moved' : 'deleted';
+    void run(async () => {
+      const count = await onBatch(selection.map((item) => item.id), destination);
+      setSelected(new Set());
+      setOperation(undefined);
+      return count;
+    }, (count) => `${count} bookmark${count === 1 ? '' : 's'} ${verb}.`);
+  };
   return (
     <div className="side-panel">
       <PanelHeader icon={Star} eyebrow="This Account Space" title="Bookmarks" />
@@ -41,8 +85,38 @@ export function BookmarksPanel({ bookmarks, favicons, onOpen, onRename, onRemove
       <div className="panel-actions">
         <button type="button" onClick={onImport}><Upload size={14} /> Import</button>
         <button type="button" onClick={onExport} disabled={!bookmarks.length}><FileDown size={14} /> Export</button>
+        <button type="button" aria-pressed={duplicatesOnly} onClick={() => { setDuplicatesOnly(!duplicatesOnly); setRequestedPage(0); }}>Duplicate addresses</button>
       </div>
-      <p className="panel-count">{needle || folderNeedle ? `${matches.length} of ${bookmarks.length} bookmarks` : `${bookmarks.length} bookmarks`}</p>
+      {undo && <div className="settings-card panel-actions">
+        <span>{undo.count} {undo.count === 1 ? 'bookmark' : 'bookmarks'} {undo.kind}</span>
+        <button type="button" disabled={pending} onClick={() => void run(onUndo, (count) => `${count} bookmark${count === 1 ? '' : 's'} restored.`)}>Undo bookmark change</button>
+      </div>}
+      {notice && <p className="panel-count" role={notice.error ? 'alert' : 'status'}>{notice.text}</p>}
+      {selection.length > 0 && <div className="panel-actions">
+        <span className="panel-count">{selection.length} selected</span>
+        <button type="button" disabled={pending} onClick={() => { setFolderQuery(''); setDestinationKey(''); setOperation('move'); }}>Move selected</button>
+        <button type="button" disabled={pending} onClick={() => { setDestinationKey(''); setOperation('delete'); }}>Delete selected</button>
+        <button type="button" disabled={pending} onClick={() => { setSelected(new Set()); setOperation(undefined); }}>Clear selection</button>
+      </div>}
+      {operation && selection.length > 0 && <section className="settings-card bookmark-cleanup" aria-labelledby="bookmark-cleanup-title">
+        <h3 id="bookmark-cleanup-title">{operation === 'delete' ? 'Review bookmark deletion' : 'Choose a bookmark destination'}</h3>
+        <p>{selection.length} {selection.length === 1 ? 'bookmark' : 'bookmarks'} from {sourceFolders.length} {sourceFolders.length === 1 ? 'folder' : 'folders'}</p>
+        <ul>{sourceFolders.map((path) => <li key={path}>{path}</li>)}</ul>
+        {operation === 'move' && <>
+          <label>Find a destination folder <input value={folderQuery} onChange={(event) => { setFolderQuery(event.target.value); setDestinationKey(''); }} /></label>
+          <label>Move to <select value={destinationKey} onChange={(event) => setDestinationKey(event.target.value)}>
+            <option value="" disabled>Select a folder</option>
+            {destinations.map((level) => <option key={bookmarkFolderKey(level)} value={bookmarkFolderKey(level)}>{bookmarkFolderLabel(level)}</option>)}
+          </select></label>
+        </>}
+        <div className="panel-actions">
+          <button type="button" disabled={pending || (operation === 'move' && !destination)} onClick={confirm}>
+            {operation === 'move' ? 'Move' : 'Delete'} {selection.length} {selection.length === 1 ? 'bookmark' : 'bookmarks'}
+          </button>
+          <button type="button" disabled={pending} onClick={() => setOperation(undefined)}>Cancel</button>
+        </div>
+      </section>}
+      <p className="panel-count">{needle || folderNeedle || duplicatesOnly ? `${matches.length} of ${bookmarks.length} bookmarks` : `${bookmarks.length} bookmarks`}</p>
       {pages > 1 && <nav className="panel-actions" aria-label="Bookmark pages">
         <button type="button" disabled={page === 0} onClick={() => setRequestedPage(page - 1)}>Previous</button>
         <button type="button" disabled={page + 1 === pages} onClick={() => setRequestedPage(page + 1)}>Next</button>
@@ -53,17 +127,20 @@ export function BookmarksPanel({ bookmarks, favicons, onOpen, onRename, onRemove
           const icon = favicons.get(domainFromUrl(item.url));
           return (
             <li key={item.id} className="item-row">
+              <input type="checkbox" aria-label={`Select ${item.title || domainFromUrl(item.url)}`} checked={selected.has(item.id)}
+                disabled={pending || (!selected.has(item.id) && selection.length >= MAX_BOOKMARK_EDIT_BATCH)} onChange={(event) => toggle(item.id, event.target.checked)} />
               <button type="button" className="item-row-main" title={item.url} onClick={() => onOpen(item.id)}>
                 <span className="item-row-icon" aria-hidden="true">{icon ? <img src={icon} alt="" /> : <Globe2 size={15} />}</span>
-                <span className="item-row-text"><strong>{item.title || domainFromUrl(item.url)}</strong><small>{domainFromUrl(item.url)} · {place}</small></span>
+                <span className="item-row-text"><strong>{item.title || domainFromUrl(item.url)}</strong><small>{duplicatesOnly ? item.url : domainFromUrl(item.url)} · {place}</small></span>
               </button>
               <button type="button" className="item-row-action" aria-label={`Rename ${item.title}`} title="Edit name" onClick={() => onRename(item)}><Pencil size={14} /></button>
+              <button type="button" className="item-row-action" aria-label={`Edit address for ${item.title || domainFromUrl(item.url)}`} title="Edit address" onClick={() => onEditAddress(item)}><Link2 size={14} /></button>
               <button type="button" className="item-row-action danger" aria-label={`Delete ${item.title}`} title="Delete" onClick={() => onRemove(item)}><Trash2 size={14} /></button>
             </li>
           );
         })}
       </ul>
-      {!matches.length && <EmptyState icon={Star} text={needle || folderNeedle ? 'No bookmark matches those filters.' : 'Star a page to keep it close.'} />}
+      {!matches.length && <EmptyState icon={Star} text={needle || folderNeedle || duplicatesOnly ? 'No bookmark matches those filters.' : 'Star a page to keep it close.'} />}
     </div>
   );
 }
