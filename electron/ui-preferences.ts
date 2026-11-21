@@ -15,6 +15,9 @@ export interface UiPreferences {
   showRecentOnNewTab: boolean;
   offerSetupGuide: boolean;
   importedChromeData: boolean;
+  lockOnWindowsSession?: boolean;
+  idleLockMinutes?: number;
+  maskTodayIdentity?: boolean;
 }
 
 export type UiPreferencesPatch = Partial<UiPreferences>;
@@ -23,6 +26,7 @@ export const THEMES: readonly ThemePreference[] = ['system', 'dark', 'light'];
 export const BOOKMARK_BAR_MODES: readonly BookmarkBarMode[] = ['always', 'new-tab', 'hidden'];
 export const SIDE_PANEL_TOOLS: readonly SidePanelTool[] = ['claude', 'easynote', 'assistant', 'developer', 'vault', 'automations', 'downloads', 'privacy', 'settings', 'bookmarks', 'history', 'shortcuts'];
 export const NEW_TAB_BACKGROUNDS: readonly NewTabBackground[] = ['plain', 'lagoon', 'dusk', 'mist', 'graphite'];
+export const IDLE_LOCK_MINUTES: readonly number[] = [0, 5, 15, 30, 60];
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   theme: 'system',
@@ -34,6 +38,9 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   showRecentOnNewTab: true,
   offerSetupGuide: false,
   importedChromeData: false,
+  lockOnWindowsSession: false,
+  idleLockMinutes: 0,
+  maskTodayIdentity: false,
 };
 
 function member<T extends string>(values: readonly T[], value: unknown): value is T {
@@ -58,6 +65,9 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
     showRecentOnNewTab: typeof input.showRecentOnNewTab === 'boolean' ? input.showRecentOnNewTab : DEFAULT_UI_PREFERENCES.showRecentOnNewTab,
     offerSetupGuide: input.offerSetupGuide === true,
     importedChromeData: input.importedChromeData === true,
+    lockOnWindowsSession: input.lockOnWindowsSession === true,
+    idleLockMinutes: typeof input.idleLockMinutes === 'number' && IDLE_LOCK_MINUTES.includes(input.idleLockMinutes) ? input.idleLockMinutes : 0,
+    maskTodayIdentity: input.maskTodayIdentity === true,
   };
 }
 
@@ -65,7 +75,7 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
 export function requireUiPreferencesPatch(value: unknown): UiPreferencesPatch {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid interface preferences');
   const input = value as Record<string, unknown>;
-  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelCompact', 'sidePanelTool', 'newTabBackground', 'showRecentOnNewTab', 'offerSetupGuide', 'importedChromeData']);
+  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelCompact', 'sidePanelTool', 'newTabBackground', 'showRecentOnNewTab', 'offerSetupGuide', 'importedChromeData', 'lockOnWindowsSession', 'idleLockMinutes', 'maskTodayIdentity']);
   const keys = Object.keys(input);
   if (keys.length === 0 || keys.some((key) => !allowed.has(key))) throw new Error('Invalid interface preferences');
   const patch: UiPreferencesPatch = {};
@@ -83,10 +93,14 @@ export function requireUiPreferencesPatch(value: unknown): UiPreferencesPatch {
     if (typeof input.showRecentOnNewTab !== 'boolean') throw new Error('Invalid New Tab history setting');
     patch.showRecentOnNewTab = input.showRecentOnNewTab;
   }
-  for (const key of ['offerSetupGuide', 'importedChromeData'] as const) {
+  for (const key of ['offerSetupGuide', 'importedChromeData', 'lockOnWindowsSession', 'maskTodayIdentity'] as const) {
     if (!(key in input)) continue;
     if (typeof input[key] !== 'boolean') throw new Error('Invalid setup preference');
     patch[key] = input[key];
+  }
+  if ('idleLockMinutes' in input) {
+    if (typeof input.idleLockMinutes !== 'number' || !IDLE_LOCK_MINUTES.includes(input.idleLockMinutes)) throw new Error('Invalid idle lock time');
+    patch.idleLockMinutes = input.idleLockMinutes;
   }
   return patch;
 }

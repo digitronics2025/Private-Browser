@@ -529,6 +529,7 @@ export interface PrivacyEvent {
 }
 
 export interface BrowserSnapshot {
+  sessionLock?: 'windows' | 'idle';
   workspaces: Workspace[];
   activeWorkspaceId: WorkspaceId;
   activeTabId: string;

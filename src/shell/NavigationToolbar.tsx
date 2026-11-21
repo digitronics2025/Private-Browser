@@ -1,6 +1,6 @@
 import type { FormEvent, RefObject } from 'react';
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Asterisk, ArrowRight, Home, KeyRound, LockKeyhole, MoreVertical, PanelRight, RefreshCw, Search, SlidersHorizontal, Sparkles, Star, TriangleAlert, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeft, Asterisk, ArrowRight, Home, KeyRound, LockKeyhole, MoreVertical, PanelRight, RefreshCw, Search, SlidersHorizontal, Sparkles, Star, TriangleAlert, UserRound, X, ZoomIn, ZoomOut } from 'lucide-react';
 import type { AccountSpaceSummary, AddressMatch, BrowserTab, Workspace } from '../../electron/types';
 import { MAX_ADDRESS_QUERY_LENGTH } from '../../electron/address-matches';
 import { AccountAvatar, accountNeedsAction } from '../lib/accounts';
@@ -12,6 +12,7 @@ export interface NavigationToolbarProps {
   tab: BrowserTab;
   workspace: Workspace;
   account: AccountSpaceSummary;
+  maskAccountIdentity?: boolean;
   address: string;
   addressRef: RefObject<HTMLInputElement>;
   bookmarked: boolean;
@@ -49,17 +50,17 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
   const { tab, account, workspace } = props;
   const zoom = tab.zoomPercent ?? 100;
   const warning = tab.securityWarning;
-  const needsAction = accountNeedsAction(account);
+  const needsAction = !props.maskAccountIdentity && accountNeedsAction(account);
   const [draftTabId, setDraftTabId] = useState<string>();
   const [response, setResponse] = useState<{ tabId: string; query: string; matches: AddressMatch[] }>();
   const [selected, setSelected] = useState(-1);
   const query = props.address.trim();
-  const matches = draftTabId === tab.id && response?.tabId === tab.id && response.query === query ? response.matches : [];
+  const matches = !props.maskAccountIdentity && draftTabId === tab.id && response?.tabId === tab.id && response.query === query ? response.matches : [];
   const ready = useOverlayLayer(matches.length > 0);
   const expanded = matches.length > 0 && ready;
 
   useEffect(() => {
-    if (draftTabId !== tab.id || query.length < 2 || query.length > MAX_ADDRESS_QUERY_LENGTH) return;
+    if (props.maskAccountIdentity || draftTabId !== tab.id || query.length < 2 || query.length > MAX_ADDRESS_QUERY_LENGTH) return;
     let current = true;
     const timer = window.setTimeout(() => {
       void window.privateBrowser.addressMatches?.(account.id, query).then((matches) => {
@@ -70,7 +71,7 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
       }).catch(() => undefined);
     }, 90);
     return () => { current = false; window.clearTimeout(timer); };
-  }, [account.id, draftTabId, query, tab.id]);
+  }, [account.id, draftTabId, props.maskAccountIdentity, query, tab.id]);
 
   useEffect(() => {
     if (expanded && selected >= 0) document.getElementById('address-match-' + selected)?.scrollIntoView({ block: 'nearest' });
@@ -190,19 +191,20 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
       <button
         ref={props.profileButtonRef}
         type="button"
-        className={`profile-button ring-${account.color}${workspace.protected ? ' protected-profile' : ''}${props.profileOpen ? ' open' : ''}`}
-        aria-label={`Account Space: ${account.label}${needsAction ? ', action required' : ''}`}
-        aria-description={`Workspace: ${workspace.name}${workspace.protected ? ', protected' : ''}`}
+        className={`profile-button ring-${props.maskAccountIdentity ? 'slate' : account.color}${workspace.protected ? ' protected-profile' : ''}${props.profileOpen ? ' open' : ''}`}
+        aria-label={props.maskAccountIdentity ? 'Account Space' : `Account Space: ${account.label}${needsAction ? ', action required' : ''}`}
+        aria-description={props.maskAccountIdentity ? undefined : `Workspace: ${workspace.name}${workspace.protected ? ', protected' : ''}`}
         aria-haspopup="menu"
         aria-expanded={props.profileOpen}
-        title={`${workspace.name} / ${account.label}${account.email ? ` · ${account.email}` : ''}`}
+        title={props.maskAccountIdentity ? 'Account Space' : `${workspace.name} / ${account.label}${account.email ? ` · ${account.email}` : ''}`}
         onClick={props.onProfile}
       >
-        {workspace.protected ? <LockKeyhole className="profile-lock" size={18} aria-hidden="true" /> : <AccountAvatar account={account} />}
-        <span className="profile-identity" aria-hidden="true">
+        {workspace.protected ? <LockKeyhole className="profile-lock" size={18} aria-hidden="true" />
+          : props.maskAccountIdentity ? <UserRound size={18} aria-hidden="true" /> : <AccountAvatar account={account} />}
+        {!props.maskAccountIdentity && <span className="profile-identity" aria-hidden="true">
           <small>{workspace.name}</small>
           {account.label !== workspace.name && <strong>{account.label}</strong>}
-        </span>
+        </span>}
         {needsAction && <span className="profile-badge" aria-hidden="true">!</span>}
       </button>
       <button ref={props.menuButtonRef} type="button" className={`toolbar-button ${props.menuOpen ? 'selected' : ''}`} aria-label="Browser menu" aria-haspopup="menu" aria-expanded={props.menuOpen} title="Customize and control Private Browser" onClick={props.onMenu}>
