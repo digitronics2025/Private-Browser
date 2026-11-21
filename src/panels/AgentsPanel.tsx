@@ -3,6 +3,7 @@ import { ArrowLeft, Bot, Copy, ShieldCheck, Square } from 'lucide-react';
 import type { AgentPolicy } from '../../electron/agent-policy';
 import type { AgentDecision, AgentUiStatus } from '../../electron/agent-types';
 import { PanelHeader } from './common';
+import { disposer } from '../lib/subscribe';
 
 export function useAgentStatus() {
   const [status, setStatus] = useState<AgentUiStatus>();
@@ -11,7 +12,7 @@ export function useAgentStatus() {
     if (typeof api?.getAgentStatus !== 'function' || typeof api.onAgentChanged !== 'function') return;
     let current = true;
     const refresh = () => { void api.getAgentStatus().then((value) => { if (current) setStatus(value); }).catch(() => undefined); };
-    const unsubscribe = api.onAgentChanged(refresh);
+    const unsubscribe = disposer(api.onAgentChanged(refresh));
     refresh();
     return () => { current = false; unsubscribe?.(); };
   }, []);
