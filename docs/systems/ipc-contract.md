@@ -153,7 +153,6 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:toggle-bookmark-bar` | `toggleBookmarkBar()` | — | `void` |
 | `browser:list-chrome-profiles` | `listChromeProfiles()` | — | `ChromeProfileSource[]` |
 | `browser:import-chrome` | `importChrome(options)` | `ChromeImportOptions` | `ChromeImportResult` |
-| `browser:import-chrome-passwords` | `importChromePasswords()` | — | `ChromeImportResult` |
 | `browser:toggle-tracker-blocking` | `toggleTrackerBlocking()` | — | `void` |
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:control-download` | `controlDownload(id, action)` | current account download and pause, resume, retry or cancel | `void` |
@@ -287,6 +286,9 @@ All are intents; the main process opens secure dialogs for anything secret.
 | `vault:resolve-conflict` | `'cloud' | 'local'` | `VaultStatus` |
 | `vault:migration-status`, `vault:migrate-legacy`, `vault:cleanup-legacy` | — | migration status / report / `boolean` |
 | `vault:open-editor` | `origin?: string` | `VaultItemMeta | undefined` |
+| `vault:review-chrome-passwords` | native file picker | one-time review with counts and skip metadata |
+| `vault:import-reviewed-chrome-passwords` | approved password review ID | imported count and skips by reason |
+| `vault:discard-chrome-password-review` | password review ID | `void` |
 | `vault:check-health` | active regular Account Space ID | audited count and login IDs with issue labels |
 | `vault:edit-health-login` | active regular Account Space ID and login ID | whether the isolated editor saved the login |
 | `vault:form-shape` | — | `{ hasUsername, hasPassword }` |

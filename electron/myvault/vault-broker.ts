@@ -1,4 +1,4 @@
-import { createHmac, randomInt, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomInt, randomUUID } from 'node:crypto';
 import { isAllowedRemoteUrl } from '../security.js';
 import type { VaultHealthFinding, VaultHealthIssue, VaultHealthReport } from '../types.js';
 import { BiometricUnlockRejectedError, isVaultEnvelope, base64ToBytes, bytesToBase64, decryptWithSession, deriveBiometricUnlockKey, encryptVaultPayload, prepareBiometricWrap, randomBytes, unlockVault, unlockVaultWithBiometricKey, type VaultSession } from './security/vault-crypto.js';
@@ -326,6 +326,13 @@ export class VaultBroker {
     };
   }
 
+  loginRevision(): string {
+    const logins = this.requireUnlocked().items.filter((item) => item.type === 'login')
+      .map(({ id, url, username, updatedAt }) => ({ id, url, username, updatedAt }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    return createHash('sha256').update(JSON.stringify([this.envelope?.vaultId, this.generation, logins])).digest('hex');
+  }
+
   saveLogin(input: BrokerItemInput): Promise<VaultEntryMetadata> {
     return this.exclusive(() => this.saveLoginNow(input));
   }
@@ -334,8 +341,11 @@ export class VaultBroker {
    * Adds many new logins in one encrypted write. An import of thousands of rows
    * would otherwise re-encrypt and fsync the whole vault once per row.
    */
-  importLogins(inputs: readonly BrokerItemInput[]): Promise<VaultEntryMetadata[]> {
+  importLogins(inputs: readonly BrokerItemInput[], expectedRevision?: string): Promise<VaultEntryMetadata[]> {
     return this.exclusive(async () => {
+      if (expectedRevision !== undefined && this.loginRevision() !== expectedRevision) {
+        throw new Error('MyVault changed. Review the password file again.');
+      }
       const payload = this.requireUnlocked();
       const timestamp = new Date().toISOString();
       const added = inputs.map((input): VaultItem => ({

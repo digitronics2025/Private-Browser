@@ -335,3 +335,40 @@ test('checks vault health, edits in an isolated window and confirms deletion', a
   await expect(health).toHaveCount(0);
   await expect(page.evaluate((id) => window.privateBrowser.checkVaultHealth(id), accountId)).rejects.toThrow(/unavailable in this Account Space/);
 });
+
+test('reviews a disposable Chrome CSV before importing into the unlocked vault', async () => {
+  const csvPath = join(userDataPath, 'sample-import.csv');
+  writeFileSync(csvPath, [
+    'name,url,username,password,note',
+    `Already saved,${targetOrigin},${FIXTURE_USERNAME},ignored-fixture-value,`,
+    'Fresh fixture,https://new.example.test,local-fixture,only-fixture-value,only-fixture-note',
+    'App,android://fixture,user,unsupported-fixture-value,',
+  ].join('\n'), 'utf8');
+  application = await launchFixture();
+  const page = await application.firstWindow();
+  await page.getByRole('button', { name: 'Open MyVault' }).click();
+  const pairingWindow = application.waitForEvent('window');
+  await page.getByRole('button', { name: 'Connect with one-time code' }).click();
+  const pairing = await pairingWindow;
+  await pairing.getByLabel('MyVault address').fill(serviceOrigin);
+  await pairing.getByLabel('One-time enrollment code').fill(['mve', fixtureId, 'b'.repeat(43)].join('_'));
+  await pairing.getByLabel('Master password').fill(MASTER_PASSWORD);
+  await pairing.getByRole('button', { name: 'Connect securely' }).click();
+  await application.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] });
+  }, csvPath);
+  await page.getByRole('button', { name: 'Import Chrome password CSV' }).click();
+  const wizard = page.getByRole('region', { name: 'Import Chrome passwords' });
+  await wizard.getByRole('button', { name: 'Choose password CSV' }).click();
+  await expect(wizard.getByRole('status')).toHaveText('1 of 3 entries ready to import into MyVault.');
+  await wizard.getByText('Review skipped entries', { exact: true }).click();
+  await expect(wizard.getByText(/Entry 1 · Already saved/)).toBeVisible();
+  await expect(wizard.getByText(/Entry 3 · Unsupported/)).toBeVisible();
+  await expect(wizard.getByText(/only-fixture-value|only-fixture-note/)).toHaveCount(0);
+  const items = () => page.evaluate(async () => (await window.privateBrowser.listVault()).items);
+  expect((await items()).map((item) => item.label)).toEqual(['Autofill fixture']);
+  await wizard.getByRole('button', { name: 'Import reviewed logins' }).click();
+  await expect(wizard.getByRole('status')).toHaveText('1 login added to MyVault.');
+  await expect.poll(async () => (await items()).map((item) => item.label)).toContain('Fresh fixture');
+  expect(readFileSync(csvPath, 'utf8')).toContain('only-fixture-value');
+});

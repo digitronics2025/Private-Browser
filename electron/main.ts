@@ -156,7 +156,14 @@ import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
 import { appendTabSetBookmarks, resolveTabSet } from './tab-sets.js';
-import type { BrowsingDataInput, BrowsingDataReview, ReferenceSearchInput, TabSetInput } from './types.js';
+import type {
+  BrowsingDataInput,
+  BrowsingDataReview,
+  ChromePasswordImportResult,
+  ChromePasswordImportReview,
+  ReferenceSearchInput,
+  TabSetInput,
+} from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
@@ -281,6 +288,8 @@ type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: Ex
 
 class BrowserController {
   private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
+  private pendingChromePasswords?: { id: string; accountId: AccountSpaceId; path: string; digest: string; revision: string; expiresAt: number };
+  private selectingChromePasswords = false;
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
   private readonly downloads = new Map<string, LocalDownload>();
   private readonly downloadItems = new Map<string, DownloadItem>();
@@ -1550,6 +1559,7 @@ class BrowserController {
   }
 
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
+    if (this.pendingChromePasswords?.accountId === accountSpaceId) this.pendingChromePasswords = undefined;
     if (this.pendingChromeImport?.accountSpaceId === accountSpaceId || this.pendingChromeImport?.initiatingAccount === accountSpaceId) {
       this.pendingChromeImport = undefined;
     }
@@ -2951,17 +2961,46 @@ class BrowserController {
     return this.migration.cleanupLegacyAfterConfirmation(Boolean(confirmation?.confirmed));
   }
 
-  async importChromePasswords(): Promise<ChromeImportResult> {
-    this.assertVaultSurface();
-    const selected = await dialog.showOpenDialog(this.window, { title: 'Import Chrome passwords into MyVault', properties: ['openFile'], filters: [{ name: 'Chrome password CSV', extensions: ['csv'] }] });
-    if (selected.canceled || !selected.filePaths[0]) throw new Error('Password import cancelled');
-    const report = await this.migration.importChromeCsv(selected.filePaths[0]);
-    this.addPrivacyEvent('vault', 'Chrome passwords imported into MyVault', `${report.validatedCount} rows processed; the source CSV was retained`);
-    return {
-      imported: { bookmarks: 0, history: 0, passwords: report.importedCount },
-      skipped: { bookmarks: 0, history: 0, passwords: report.skippedCount },
-      warnings: ['The plaintext Chrome CSV was retained. Delete it explicitly after verifying MyVault.'],
-    };
+  private assertChromePasswordImport(accountId: AccountSpaceId): void {
+    if (accountId !== this.activeAccountSpaceId(this.store.get()) || !this.activeVaultPolicy().saveCapture) {
+      throw new Error('Password import is unavailable in this Account Space.');
+    }
+    if (this.vault.status().lifecycle !== 'unlocked') throw new Error('Unlock MyVault before importing a password file.');
+  }
+
+  async reviewChromePasswords(): Promise<ChromePasswordImportReview | undefined> {
+    const accountId = this.activeAccountSpaceId(this.store.get());
+    this.assertChromePasswordImport(accountId);
+    if (this.selectingChromePasswords) throw new Error('The password file chooser is already open.');
+    this.pendingChromePasswords = undefined;
+    this.selectingChromePasswords = true;
+    try {
+      const selected = await dialog.showOpenDialog(this.window, { title: 'Review Chrome passwords for MyVault', properties: ['openFile'],
+        filters: [{ name: 'Chrome password CSV', extensions: ['csv'] }] });
+      if (selected.canceled || !selected.filePaths[0]) return undefined;
+      this.assertChromePasswordImport(accountId);
+      const path = selected.filePaths[0];
+      const { digest, revision, review } = this.migration.reviewChromeCsv(path);
+      const id = randomUUID();
+      this.pendingChromePasswords = { id, accountId, path, digest, revision, expiresAt: Date.now() + 5 * 60_000 };
+      return { id, ...review };
+    } finally {
+      this.selectingChromePasswords = false;
+    }
+  }
+
+  async importReviewedChromePasswords(id: string): Promise<ChromePasswordImportResult> {
+    const pending = this.pendingChromePasswords;
+    if (!pending || pending.id !== id || pending.expiresAt <= Date.now()) throw new Error('Review the password file again before importing.');
+    this.pendingChromePasswords = undefined;
+    this.assertChromePasswordImport(pending.accountId);
+    const report = await this.migration.importReviewedChromeCsv(pending.path, pending.digest, pending.revision);
+    if (report.imported) this.addPrivacyEvent('vault', 'Chrome passwords imported into MyVault', `${report.imported} encrypted logins added`);
+    return report;
+  }
+
+  discardChromePasswordReview(id: string): void {
+    if (this.pendingChromePasswords?.id === id) this.pendingChromePasswords = undefined;
   }
 
   async openVaultEditor(origin?: string) {
@@ -4490,7 +4529,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:discard-chrome-import', (_event, id: string) => controller!.discardChromeImport(id));
   handle('browser:can-undo-chrome-import', (_event, id: AccountSpaceId) => controller!.canUndoChromeImport(id));
   handle('browser:undo-chrome-import', (_event, id: AccountSpaceId) => controller!.undoChromeImport(id));
-  handle('browser:import-chrome-passwords', () => controller!.importChromePasswords());
+  handle('vault:review-chrome-passwords', () => controller!.reviewChromePasswords());
+  handle('vault:import-reviewed-chrome-passwords', (_event, id: string) => controller!.importReviewedChromePasswords(id));
+  handle('vault:discard-chrome-password-review', (_event, id: string) => controller!.discardChromePasswordReview(id));
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:control-download', (_event, id: string, action: DownloadAction) => controller!.controlDownload(id, action));
