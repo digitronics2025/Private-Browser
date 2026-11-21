@@ -9,11 +9,14 @@ import type {
   GoogleModule,
   GoogleMutationConfirmation,
   GoogleOperationResult,
+  GoogleOverviewItem,
+  GoogleOverviewService,
   GoogleService,
 } from './types.js';
 import { requireBoundedStringArray, requireBoundedText } from './account-space-validation.js';
 import { GoogleMutationConfirmations } from './google-confirmations.js';
 import { GoogleTokenBroker, GoogleTokenError, parseRetryAfter, readBoundedJson } from './google-token-broker.js';
+import { boundedGoogleCursor, calendarOriginal, GOOGLE_OVERVIEW_PAGE_SIZE, googleOverviewModule } from './google-overview.js';
 
 const API_TIMEOUT_MS = 10_000;
 const MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -85,6 +88,63 @@ export class GoogleServices {
       }
       return success({ unreadCount: boundedNumber(label.messagesUnread), recent });
     } catch (error) { return operationFailure(error); }
+  }
+
+  async recentOverviewPage(accountSpaceId: AccountSpaceId, service: GoogleOverviewService, enabled: readonly GoogleModule[],
+    token?: string, timeMin?: string, signal?: AbortSignal,
+  ): Promise<GoogleOperationResult<{ items: GoogleOverviewItem[]; token?: string }>> {
+    const module = googleOverviewModule(service, enabled);
+    if (!module) return { ok: false, error: { code: 'GOOGLE_POLICY_DENIED', message: 'This Google tool is disabled.', requestId: randomUUID() } };
+    const parameters = new URLSearchParams();
+    if (token) parameters.set('pageToken', token);
+    const size = String(GOOGLE_OVERVIEW_PAGE_SIZE);
+    try {
+      if (service === 'gmail') {
+        parameters.set('maxResults', size);
+        parameters.set('labelIds', 'INBOX');
+        parameters.set('fields', 'messages(id),nextPageToken');
+        const list = requireRecord(await this.apiJson(accountSpaceId, module, service,
+          'https://gmail.googleapis.com/gmail/v1/users/me/messages?' + parameters, {}, true, signal));
+        const items: GoogleOverviewItem[] = [];
+        for (const entry of Array.isArray(list.messages) ? list.messages.slice(0, GOOGLE_OVERVIEW_PAGE_SIZE) : []) {
+          signal?.throwIfAborted();
+          const id = requireString(requireRecord(entry).id, 'message id', 512);
+          const header = parseGmailHeader(await this.apiJson(accountSpaceId, module, service,
+            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&fields=id,threadId,payload(headers)`, {}, true, signal));
+          items.push({ id: header.id, title: header.subject || 'No subject', detail: header.from, date: header.date,
+            original: 'https://mail.google.com/mail/#inbox/' + encodeURIComponent(header.threadId) });
+        }
+        return success({ items, token: boundedGoogleCursor(list.nextPageToken) });
+      }
+      if (service === 'drive') {
+        parameters.set('pageSize', size);
+        parameters.set('orderBy', 'modifiedTime desc');
+        parameters.set('q', 'trashed = false');
+        parameters.set('fields', 'nextPageToken,files(id,name,mimeType,modifiedTime)');
+        const list = requireRecord(await this.apiJson(accountSpaceId, module, service,
+          'https://www.googleapis.com/drive/v3/files?' + parameters, {}, true, signal));
+        const items = (Array.isArray(list.files) ? list.files.slice(0, GOOGLE_OVERVIEW_PAGE_SIZE) : []).map((entry) => {
+          const file = parseDriveFile(entry);
+          return { id: file.id, title: file.name, date: file.modifiedTime,
+            original: 'https://drive.google.com/open?id=' + encodeURIComponent(file.id) };
+        });
+        return success({ items, token: boundedGoogleCursor(list.nextPageToken) });
+      }
+      parameters.set('maxResults', size);
+      parameters.set('singleEvents', 'true');
+      parameters.set('orderBy', 'startTime');
+      parameters.set('timeMin', timeMin ?? new Date().toISOString());
+      parameters.set('fields', 'nextPageToken,items(id,summary,start,end,htmlLink)');
+      const list = requireRecord(await this.apiJson(accountSpaceId, module, service,
+        'https://www.googleapis.com/calendar/v3/calendars/primary/events?' + parameters, {}, true, signal));
+      const items = (Array.isArray(list.items) ? list.items.slice(0, GOOGLE_OVERVIEW_PAGE_SIZE) : []).map((entry) => {
+        const event = parseCalendarEvent(entry);
+        return { id: event.id, title: event.summary || 'Untitled event', date: event.start, original: calendarOriginal(event.htmlLink) };
+      });
+      return success({ items, token: boundedGoogleCursor(list.nextPageToken) });
+    } catch (error) {
+      return operationFailure(error);
+    }
   }
 
   async searchGmail(accountSpaceId: AccountSpaceId, queryValue: string, signal?: AbortSignal): Promise<GoogleOperationResult<GmailMessageHeader[]>> {

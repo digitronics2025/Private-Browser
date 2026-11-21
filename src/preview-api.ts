@@ -3,7 +3,7 @@ import type { ChromeImportOptions, ChromePasswordImportReview } from '../electro
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource, PageExcerptReview } from '../electron/types';
-import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, GoogleModule, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings, BrowserSettingsPatch, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
@@ -57,14 +57,18 @@ function bookmark(id: string, title: string, url: string, folderPath: string[], 
 /** Credential-free data so the chrome can be reviewed in a normal browser during development. */
 export function installPreviewApi(): void {
   if (!import.meta.env.DEV || 'privateBrowser' in window || new URLSearchParams(location.search).get('preview') === 'bridge') return;
+  const params = new URLSearchParams(location.search);
+  const overviewFixture = params.get('googleOverview') === 'sample';
+  const googleModules: GoogleModule[] = overviewFixture
+    ? ['identity', 'gmail-metadata', 'drive-files'] : ['identity', 'gmail-metadata', 'drive-files', 'calendar-read'];
   const accounts = [
     account(ids.digitronics, 'digitronics', 'Digitronics', 'indigo'), account(ids.tenten, 'tenten', 'TenTen', 'amber'), account(ids.development, 'development', 'Development', 'violet'),
     account(ids.personal, 'personal', 'Personal', 'emerald'),
-    { ...account(ids.google, 'personal', 'Operations', 'sky', 1), kind: 'google' as const, email: 'operations@example.com', displayName: 'Operations Team', googleConnection: 'connected' as const, websiteStatus: 'session-data-present' as const, enabledModules: ['identity', 'gmail-metadata', 'drive-files', 'calendar-read'] as const, grantedScopes: ['openid', 'email', 'profile'] },
+    { ...account(ids.google, 'personal', 'Operations', 'sky', 1), kind: 'google' as const, email: 'operations@example.com', displayName: 'Operations Team', googleConnection: 'connected' as const, websiteStatus: 'session-data-present' as const, enabledModules: googleModules, grantedScopes: ['openid', 'email', 'profile'] },
     account(ids.banking, 'banking', 'Banking', 'rose'),
   ];
   const google = ids.google as AccountSpaceId;
-  const params = new URLSearchParams(location.search);
+  const overviewCursor = overviewFixture ? crypto.randomUUID() : undefined;
   const vaultHealthFixture = { id: 'preview-vault-health', label: 'Sample login', username: 'sample@example.test',
     url: 'https://shop.example.test', hasTotp: false, updatedAt: '2026-11-21T10:00:00Z' };
   const state: BrowserSnapshot = {
@@ -373,6 +377,18 @@ export function installPreviewApi(): void {
     clearGoogleConfiguration: desktopOnly,
     cancelGoogleConnection: async () => false,
     gmailOverview: desktopOnly,
+    googleOverviewPage: async (id, _operation, service, next) => {
+      if (!overviewCursor || id !== google || id !== state.activeAccountSpaceId || service === 'calendar') return desktopOnly();
+      if (service === 'drive') return { ok: true, data: { page: 1, limited: false, items: [
+        { id: 'file-fixture', title: 'Stock worksheet', original: 'https://drive.google.com/open?id=file-fixture' },
+      ] } };
+      if (next === overviewCursor) return { ok: true, data: { page: 2, limited: false, items: [
+        { id: 'mail-older', title: 'Previous stock update', detail: 'stocks@example.test' },
+      ] } };
+      return { ok: true, data: { page: 1, next: overviewCursor, limited: false, items: [
+        { id: 'mail-current', title: 'New stock update', detail: 'stocks@example.test', original: 'https://mail.google.com/mail/#inbox/mail-current' },
+      ] } };
+    },
     searchGmail: desktopOnly,
     prepareGmailSend: desktopOnly,
     sendGmail: desktopOnly,
@@ -902,7 +918,12 @@ export function installPreviewApi(): void {
     },
     updateAccountSpace: async (idValue, labelValue, colorValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { if (typeof labelValue === 'string') selected.label = labelValue; if (typeof colorValue === 'string') selected.color = colorValue as typeof selected.color; publish(); } },
     reorderAccountSpaces: async (_workspace, orderValue) => { (orderValue as AccountSpaceId[]).forEach((id, order) => { const item = state.accountSpaces.find((candidate) => candidate.id === id); if (item) item.order = order; }); publish(); },
-    openInAccountSpace: async () => undefined,
+    openInAccountSpace: async (id, url) => {
+      if (overviewFixture && id === google && id === state.activeAccountSpaceId) {
+        await handlers.newTab();
+        await handlers.navigate(url);
+      }
+    },
     setAccountSpaceLocked: async (idValue, lockedValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.locked = Boolean(lockedValue); selected.googleConnection = selected.locked ? 'locked' : 'disconnected'; publish(); } },
     configureGoogle: async () => { state.googleConfiguration = { configured: true, source: 'encrypted-settings' }; publish(); },
     connectGoogleAccount: async (idValue, modulesValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.kind = 'google'; delete selected.googleSetupPending; selected.email = selected.email ?? 'account@example.com'; selected.googleConnection = 'connected'; selected.enabledModules = [...modulesValue as typeof selected.enabledModules]; publish(); } return { ok: true }; },

@@ -246,6 +246,23 @@ export interface GmailOverview {
   recent: GmailMessageHeader[];
 }
 
+export type GoogleOverviewService = 'gmail' | 'drive' | 'calendar';
+
+export interface GoogleOverviewItem {
+  id: string;
+  title: string;
+  detail?: string;
+  date?: string;
+  original?: string;
+}
+
+export interface GoogleOverviewPage {
+  items: GoogleOverviewItem[];
+  page: number;
+  next?: string;
+  limited: boolean;
+}
+
 export interface DriveFileSummary {
   id: string;
   name: string;

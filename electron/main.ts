@@ -66,6 +66,9 @@ import type {
   AccountSpaceId,
   ExternalBrowserId,
   GoogleModule,
+  GoogleOperationResult,
+  GoogleOverviewPage,
+  GoogleOverviewService,
   AiApproval,
   AiPagePreview,
   PageExcerptReview,
@@ -149,6 +152,7 @@ import { ExternalBrowserLauncher } from './external-browser.js';
 import { GoogleOAuthManager } from './google-oauth.js';
 import { GoogleTokenBroker } from './google-token-broker.js';
 import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailSendInput } from './google-services.js';
+import { GOOGLE_OVERVIEW_MAX_PAGES, googleOverviewModule } from './google-overview.js';
 import { healthFromGoogleConnection, observeGoogleHealth } from './google-connection-health.js';
 import type { GoogleConnectionHealth } from './types.js';
 import { AccountBackupManager, backupRestoreRevision, planBackupRestore, type BackupWriteResult } from './account-backup.js';
@@ -315,6 +319,10 @@ class BrowserController {
   };
   private readonly faviconCache = new Map<string, string>();
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
+  private readonly googleOverviewCursors = new Map<string, {
+    accountSpaceId: AccountSpaceId; service: GoogleOverviewService; subject: string;
+    token: string; page: number; timeMin: string; expiresAt: number; inUse?: boolean;
+  }>();
   private readonly googleChecks = new Map<AccountSpaceId, GoogleConnectionHealth>();
   private expectedInstaller?: ExpectedInstaller;
   private readonly sessionLock = new BrowserSessionLock(join(app.getPath('userData'), 'browser-session.lock'));
@@ -1475,6 +1483,58 @@ class BrowserController {
     return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.gmailOverview(accountSpaceId, signal));
   }
 
+  async googleOverviewPage(accountSpaceId: AccountSpaceId, operationId: string, service: GoogleOverviewService, cursor?: string):
+    Promise<GoogleOperationResult<GoogleOverviewPage>> {
+    const readCurrent = () => {
+      const state = this.store.get();
+      const account = this.requireAccountMembership(accountSpaceId);
+      const record = this.accounts.require(accountSpaceId);
+      if (this.sessionIsLocked || this.activeAccountSpaceId(state) !== accountSpaceId || account.workspaceId === 'banking'
+        || account.locked || account.googleConnection !== 'connected' || !record.googleIdentity
+        || !googleOverviewModule(service, record.enabledModules)) throw new Error('This Google tool is unavailable in the active Account Space.');
+      return { subject: record.googleIdentity.sub, modules: record.enabledModules };
+    };
+    const before = readCurrent();
+    const now = Date.now();
+    for (const [id, pending] of this.googleOverviewCursors) {
+      if (pending.expiresAt <= now) this.googleOverviewCursors.delete(id);
+    }
+    const previous = cursor ? this.googleOverviewCursors.get(cursor) : undefined;
+    if (cursor && (!previous || previous.accountSpaceId !== accountSpaceId || previous.service !== service
+      || previous.subject !== before.subject || previous.inUse)) throw new Error('This overview expired. Refresh the first page.');
+    if (previous) previous.inUse = true;
+    try {
+      const timeMin = previous?.timeMin ?? new Date(now).toISOString();
+      return await this.runGoogleOperation(accountSpaceId, operationId, service, async (signal) => {
+        const result = await this.googleServices.recentOverviewPage(accountSpaceId, service, before.modules, previous?.token, timeMin, signal);
+        signal.throwIfAborted();
+        const after = readCurrent();
+        if (before.subject !== after.subject || googleOverviewModule(service, before.modules) !== googleOverviewModule(service, after.modules)) {
+          throw new Error('Google access changed. Refresh the first page.');
+        }
+        if (!result.ok || !result.data) return { ok: false, error: result.error };
+        if (cursor) this.googleOverviewCursors.delete(cursor);
+        const page = previous?.page ?? 1;
+        let next: string | undefined;
+        const { items, token } = result.data;
+        const limited = Boolean(token && page >= GOOGLE_OVERVIEW_MAX_PAGES);
+        if (token && !limited) {
+          while (this.googleOverviewCursors.size >= 64) this.googleOverviewCursors.delete(this.googleOverviewCursors.keys().next().value!);
+          next = randomUUID();
+          this.googleOverviewCursors.set(next, {
+            accountSpaceId, service, subject: before.subject, token, timeMin, page: page + 1,
+            expiresAt: Date.now() + 2 * 60_000,
+          });
+          const key = next;
+          setTimeout(() => this.googleOverviewCursors.delete(key), 2 * 60_000).unref();
+        }
+        return { ok: true, data: { items, page, next, limited } };
+      });
+    } finally {
+      if (previous) previous.inUse = false;
+    }
+  }
+
   searchGmail(accountSpaceId: AccountSpaceId, operationId: string, query?: string) {
     return this.runGoogleOperation(accountSpaceId, operationId, 'gmail', (signal) => this.googleServices.searchGmail(accountSpaceId, query ?? '', signal));
   }
@@ -1684,6 +1744,9 @@ class BrowserController {
     this.googleOAuth.clearMemory(accountSpaceId);
     this.googleServices.clearAccount(accountSpaceId);
     this.googleChecks.delete(accountSpaceId);
+    for (const [id, pending] of this.googleOverviewCursors) {
+      if (pending.accountSpaceId === accountSpaceId) this.googleOverviewCursors.delete(id);
+    }
     this.backups.clearAccount(accountSpaceId);
     if (this.backupRestoreReview?.preview.accountSpaceId === accountSpaceId) this.backupRestoreReview = undefined;
     for (const [operationId, operation] of this.operations) {
@@ -5047,6 +5110,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('google:connect', (_event, id: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) => controller!.connectGoogleAccount(id, modules, browserId));
   handle('google:cancel', (_event, id: AccountSpaceId) => controller!.cancelGoogleConnection(id));
   handle('google:gmail-overview-run', (_event, id: AccountSpaceId, operationId: string) => controller!.gmailOverview(id, operationId));
+  handle('google:overview-page', (_event, id: AccountSpaceId, operationId: string, service: GoogleOverviewService, cursor?: string) => controller!.googleOverviewPage(id, operationId, service, cursor));
   handle('google:gmail-search-run', (_event, id: AccountSpaceId, operationId: string, query?: string) => controller!.searchGmail(id, operationId, query));
   handle('google:gmail-prepare-send', (_event, id: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) => controller!.prepareGmailSend(id, input, sourceRevision));
   handle('google:gmail-send', (_event, id: AccountSpaceId, operationId: string, input: GmailSendInput, confirmationToken: string, sourceRevision?: string) => controller!.sendGmail(id, operationId, input, confirmationToken, sourceRevision));
