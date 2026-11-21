@@ -151,6 +151,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:import-chrome-passwords` | `importChromePasswords()` | — | `ChromeImportResult` |
 | `browser:toggle-tracker-blocking` | `toggleTrackerBlocking()` | — | `void` |
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
+| `browser:control-download` | `controlDownload(id, action)` | current account download and pause, resume, retry or cancel | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
 
 ### routines:

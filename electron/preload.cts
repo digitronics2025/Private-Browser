@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { BrowserRoutine, RoutineRunResult } from './types.js';
 import type { LocalAiModels } from './types.js';
 import type { AddressMatch, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
-import type { BookmarkEntryKeyInput, BookmarkLevelInput, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
+import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { BackupWriteResult } from './account-backup.js';
@@ -105,6 +105,7 @@ const api = {
   importChromePasswords: (): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome-passwords'),
   toggleTrackerBlocking: (): Promise<void> => ipcRenderer.invoke('browser:toggle-tracker-blocking'),
   openDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-download', id),
+  controlDownload: (id: string, action: DownloadAction): Promise<void> => ipcRenderer.invoke('browser:control-download', id, action),
   showDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:show-download', id),
   toggleDeveloperTools: (mode: DevToolsMode): Promise<void> => ipcRenderer.invoke('developer:toggle-tools', mode),
   captureDeveloperDiagnostics: (): Promise<DeveloperDiagnosticReport> => ipcRenderer.invoke('developer:capture-diagnostics'),

@@ -449,12 +449,18 @@ export interface DownloadEntry {
   receivedBytes: number;
   totalBytes: number;
   state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
+  paused?: boolean;
+  canPause?: boolean;
+  canResume?: boolean;
+  canCancel?: boolean;
   /** Set once a completed download has been compared against the release manifest. */
   checksum?: 'checking' | 'verified' | 'mismatch' | 'unchecked';
   extension?: string;
   publisher?: { state: 'unsigned' | 'valid' | 'untrusted' | 'unavailable'; name?: string };
   risk: 'ordinary' | 'dangerous' | 'deceptive';
 }
+
+export type DownloadAction = 'pause' | 'resume' | 'retry' | 'cancel';
 
 export interface PrivacyEvent {
   id: string;

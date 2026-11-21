@@ -33,7 +33,7 @@ export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onT
   return <div className="side-panel">
     <PanelHeader icon={FileDown} eyebrow="This session" title="Downloads" />
     <div className="download-list">{state.downloads.map((item) => {
-      const progress = item.totalBytes ? Math.min(100, Math.round(item.receivedBytes / item.totalBytes * 100)) : 0;
+      const progress = item.totalBytes ? Math.min(100, Math.round(item.receivedBytes / item.totalBytes * 100)) : undefined;
       const blocked = downloadOpenBlock(item);
       const type = item.risk === 'deceptive' ? ' · Deceptive double extension'
         : item.risk === 'dangerous' ? ' · May run code' : '';
@@ -41,9 +41,12 @@ export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onT
         <div className="download-icon"><FileDown size={18} /></div>
         <div className="download-body">
           <strong>{item.filename}</strong>
-          <small>{item.state === 'progressing' ? `${humanBytes(item.receivedBytes)} of ${humanBytes(item.totalBytes)}` : statusText[item.state]}</small>
+          <small>{item.checksum === 'checking' ? 'Waiting for verification' : item.paused ? 'Paused' : statusText[item.state]}</small>
+          {item.state === 'progressing' && <small>{item.totalBytes
+            ? `${humanBytes(item.receivedBytes)} of ${humanBytes(item.totalBytes)}`
+            : `${humanBytes(item.receivedBytes)} downloaded`}</small>}
           {item.state === 'progressing' && <div className="progress" role="progressbar" aria-label={item.filename} aria-valuenow={progress}>
-            <span style={{ width: `${progress}%` }} />
+            <span style={{ width: `${progress ?? 0}%` }} />
           </div>}
           <dl className="download-evidence">
             <div><dt>File extension</dt><dd>{item.extension ?? 'Unknown'}{type}</dd></div>
@@ -51,9 +54,14 @@ export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onT
             <div><dt>Windows publisher</dt><dd>{publisherText(item.publisher)}</dd></div>
           </dl>
           {blocked && item.state === 'completed' && <small>{blocked}</small>}
+          {item.state === 'interrupted' && !item.canResume && <small>Start a fresh download from the original page.</small>}
           <div className="download-actions">
             <button disabled={Boolean(blocked)} onClick={() => run(() => window.privateBrowser.openDownload(item.id))}>Open</button>
-            <button disabled={item.state !== 'completed'} onClick={() => run(() => window.privateBrowser.showDownload(item.id))}>Show folder</button>
+            <button disabled={item.state !== 'completed' || item.checksum === 'checking'} onClick={() => run(() => window.privateBrowser.showDownload(item.id))}>Show folder</button>
+            {item.canPause && <button onClick={() => run(() => window.privateBrowser.controlDownload(item.id, 'pause'))}>Pause</button>}
+            {item.paused && item.canResume && <button onClick={() => run(() => window.privateBrowser.controlDownload(item.id, 'resume'))}>Resume</button>}
+            {item.state === 'interrupted' && !item.paused && item.canResume && <button onClick={() => run(() => window.privateBrowser.controlDownload(item.id, 'retry'))}>Retry</button>}
+            {item.canCancel && <button onClick={() => run(() => window.privateBrowser.controlDownload(item.id, 'cancel'))}>Cancel download</button>}
           </div>
         </div>
       </div>;

@@ -17,6 +17,27 @@ test.beforeEach(async () => {
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
+    if (request.url === '/slow-download') {
+      const size = 20 * 1024 * 1024;
+      const match = /^bytes=(\d+)-$/.exec(request.headers.range ?? '');
+      let sent = match ? Number(match[1]) : 0;
+      response.statusCode = match ? 206 : 200;
+      response.setHeader('Content-Type', 'application/octet-stream');
+      response.setHeader('Content-Disposition', 'attachment; filename="slow-fixture.txt"');
+      response.setHeader('Content-Length', String(size - sent));
+      response.setHeader('Accept-Ranges', 'bytes');
+      response.setHeader('ETag', '"slow-fixture"');
+      response.setHeader('Last-Modified', 'Sat, 21 Nov 2026 11:00:00 GMT');
+      if (match) response.setHeader('Content-Range', 'bytes ' + sent + '-' + (size - 1) + '/' + size);
+      const chunk = Buffer.alloc(64 * 1024, 65);
+      const timer = setInterval(() => {
+        sent += chunk.length;
+        if (sent >= size) response.end(chunk);
+        else response.write(chunk);
+      }, 80);
+      response.once('close', () => clearInterval(timer));
+      return;
+    }
     if (request.url === '/release-fixture') {
       response.setHeader('Content-Type', 'application/octet-stream');
       response.setHeader('Content-Disposition', 'attachment; filename="installer-fixture.exe"');
@@ -112,6 +133,40 @@ test('runs an ordered routine across isolated accounts and reuses its tabs after
   expect(saved?.checklist[0]).toMatchObject({ label: 'Review first account', done: false, completedAt: expect.any(String) });
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.routines))).toEqual([]);
+});
+
+test('pauses, resumes and cancels a real download only in its Account Space', async () => {
+  const page = await application!.firstWindow();
+  const owner = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Download controls owner', 'sky'));
+  const target = origin + '/slow-download';
+  const source = origin + '/source';
+  await page.evaluate((url) => window.privateBrowser.navigate(url), source);
+  await application!.evaluate(({ webContents }, { target, source, savePath }) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === source);
+    if (!contents) throw new Error('Download source view is missing');
+    contents.session.once('will-download', () => {
+      contents.session.once('will-download', (_event, item) => item.setSavePath(savePath));
+    });
+    contents.downloadURL(target);
+  }, { target, source, savePath: join(userDataPath, 'slow-fixture.txt') });
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
+  await page.evaluate((id) => window.privateBrowser.respondToPermissionPrompt(id, 'allow-once'), (await getState()).pendingPermission!.id);
+  const current = async () => (await getState()).downloads[0];
+  await expect.poll(async () => (await current())?.canPause).toBe(true);
+  const id = (await current()).id;
+  await page.evaluate((value) => window.privateBrowser.controlDownload(value, 'pause'), id);
+  await expect.poll(async () => (await current())?.paused).toBe(true);
+  const pausedAt = (await current()).receivedBytes;
+  await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Other account', 'indigo'));
+  await expect(page.evaluate((value) => window.privateBrowser.controlDownload(value, 'cancel'), id))
+    .rejects.toThrow(/unavailable in this Account Space/i);
+  await page.evaluate((value) => window.privateBrowser.switchAccountSpace(value), owner);
+  await page.evaluate((value) => window.privateBrowser.controlDownload(value, 'resume'), id);
+  await expect.poll(async () => (await current())?.receivedBytes).toBeGreaterThan(pausedAt);
+  await page.evaluate((value) => window.privateBrowser.controlDownload(value, 'cancel'), id);
+  await expect.poll(async () => (await current())?.state).toBe('cancelled');
+  expect((await current()).canCancel).toBe(false);
 });
 
 test('scopes the download list and both file commands to the originating account', async () => {
