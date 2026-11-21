@@ -2,7 +2,7 @@
   "name": "private-browser-bridge",
   "displayName": "Private Browser Bridge",
   "description": "Private, authenticated project and testing companion for Private Browser.",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "publisher": "digitronics",
   "license": "UNLICENSED",
   "private": true,
