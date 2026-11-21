@@ -120,7 +120,7 @@ import type {
   TabBatchScope,
   TabGroup,
 } from './types.js';
-import { devServerStatusSchema, gitRevisionSchema, inspectionSourcePath, inspectionSourceSchema, localDevelopmentAddress, reportHistoryPageSchema, reportHistoryQuerySchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
+import { devServerStatusSchema, gitRevisionSchema, inspectionSourcePath, inspectionSourceSchema, localDevelopmentAddress, reportHistoryPageSchema, reportHistoryQuerySchema, testConfigurationSchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
 import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
 import { MyVaultDiskStore } from './myvault/vault-store.js';
@@ -2663,7 +2663,7 @@ class BrowserController {
 
   async runBridgeAction(action: DeveloperBridgeAction, payload: Record<string, unknown>): Promise<unknown> {
     this.requireDeveloperWorkspace();
-    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
+    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart', 'inspect.open-source', 'test.configuration', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
     if (!allowed.has(action)) throw new Error('Unsupported VS Code action');
     const bridge = this.vscodeBridge.status();
     const projectId = bridge.project?.project.id;
@@ -2677,6 +2677,19 @@ class BrowserController {
       return this.vscodeBridge.request(action, { projectId, reference: source.reference });
     }
     if ((action.startsWith('test.') || action.startsWith('reports.')) && !projectId) throw new Error('Choose an approved workspace first.');
+    if (action === 'test.configuration' || (action === 'test.run' && (payload.viewports || payload.fixture
+      || payload.kind === 'baseline' || payload.kind === 'baseline-compare'))) {
+      const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+      if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 5))) {
+        throw new Error('Install Private Browser Bridge 0.4.5 or later for test scenarios.');
+      }
+    }
+    if (action === 'test.configuration') {
+      const result = await this.vscodeBridge.request(action, { projectId });
+      this.requireDeveloperWorkspace();
+      if (this.sessionIsLocked || this.vscodeBridge.status().project?.project.id !== projectId) throw new Error('The selected project changed.');
+      return testConfigurationSchema.parse(result);
+    }
     if (action === 'reports.search' || action === 'test.cancel' || (action === 'test.rerun' && payload.reportId)) {
       const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
       if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 3))) {

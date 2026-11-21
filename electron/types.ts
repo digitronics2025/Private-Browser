@@ -842,7 +842,7 @@ export type DeveloperBridgeAction =
   | 'project.open' | 'project.revision' | 'source.open'
   | 'server.discover' | 'server.status' | 'server.start' | 'server.stop' | 'server.restart'
   | 'inspect.page' | 'inspect.open-source'
-  | 'test.run' | 'test.cancel' | 'test.rerun' | 'test.save-artifact'
+  | 'test.configuration' | 'test.run' | 'test.cancel' | 'test.rerun' | 'test.save-artifact'
   | 'ai.handoff' | 'ai.apply-edits'
   | 'reports.list' | 'reports.search' | 'reports.get' | 'reports.delete' | 'reports.clear' | 'reports.open' | 'reports.retention';
 
