@@ -8,7 +8,7 @@ import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiPr
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
-import type { BackupRestorePreview } from './types.js';
+import type { BackupRestorePreview, GoogleOverviewPage, GoogleOverviewService } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
 
@@ -88,6 +88,7 @@ const api = {
   connectGoogleAccount: (accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId): Promise<GoogleOperationResult> => ipcRenderer.invoke('google:connect', accountSpaceId, modules, browserId),
   cancelGoogleConnection: (accountSpaceId: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('google:cancel', accountSpaceId),
   gmailOverview: (accountSpaceId: AccountSpaceId, operationId: string): Promise<GoogleOperationResult<GmailOverview>> => ipcRenderer.invoke('google:gmail-overview-run', accountSpaceId, operationId),
+  googleOverviewPage: (accountSpaceId: AccountSpaceId, operationId: string, service: GoogleOverviewService, cursor?: string): Promise<GoogleOperationResult<GoogleOverviewPage>> => ipcRenderer.invoke('google:overview-page', accountSpaceId, operationId, service, cursor),
   searchGmail: (accountSpaceId: AccountSpaceId, operationId: string, query = ''): Promise<GoogleOperationResult<GmailMessageHeader[]>> => ipcRenderer.invoke('google:gmail-search-run', accountSpaceId, operationId, query),
   prepareGmailSend: (accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string): Promise<GoogleMutationConfirmation> => ipcRenderer.invoke('google:gmail-prepare-send', accountSpaceId, input, sourceRevision),
   sendGmail: (accountSpaceId: AccountSpaceId, operationId: string, input: GmailSendInput, confirmationToken: string, sourceRevision?: string): Promise<GoogleOperationResult<{ id: string; threadId?: string }>> => ipcRenderer.invoke('google:gmail-send', accountSpaceId, operationId, input, confirmationToken, sourceRevision),
@@ -158,7 +159,7 @@ const api = {
   confirmChromeImport: (id: string): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:confirm-chrome-import', id),
   discardChromeImport: (id: string): Promise<void> => ipcRenderer.invoke('browser:discard-chrome-import', id),
   canUndoChromeImport: (id: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('browser:can-undo-chrome-import', id),
-  undoChromeImport: (id: AccountSpaceId): Promise<{ bookmarks: number; history: number }> => ipcRenderer.invoke('browser:undo-chrome-import', id),
+  undoChromeImport: (id: AccountSpaceId): Promise<{ bookmarks: number; history: number; settingsRestored?: boolean }> => ipcRenderer.invoke('browser:undo-chrome-import', id),
   reviewChromePasswords: (): Promise<ChromePasswordImportReview | undefined> => ipcRenderer.invoke('vault:review-chrome-passwords'),
   importReviewedChromePasswords: (id: string): Promise<ChromePasswordImportResult> => ipcRenderer.invoke('vault:import-reviewed-chrome-passwords', id),
   discardChromePasswordReview: (id: string): Promise<void> => ipcRenderer.invoke('vault:discard-chrome-password-review', id),

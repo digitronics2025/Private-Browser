@@ -94,6 +94,54 @@ describe('narrow resilient Google services', () => {
     expect(request.mock.calls.some(([input]) => String(input).includes('format=metadata'))).toBe(true);
   });
 
+  it('pages only enabled overview modules and confines original links to Google', async () => {
+    const request = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'gmail.googleapis.com') {
+        if (url.pathname.endsWith('/messages')) {
+          expect(url.searchParams.get('maxResults')).toBe('10');
+          expect(url.searchParams.get('labelIds')).toBe('INBOX');
+          expect(url.searchParams.get('pageToken')).toBe('requested+/next');
+          return json({ messages: [{ id: 'm1' }], nextPageToken: 'mail-next' });
+        }
+        expect(url.searchParams.get('format')).toBe('metadata');
+        expect(url.searchParams.getAll('metadataHeaders')).toEqual(['From', 'Subject', 'Date']);
+        return json({ id: 'm1', threadId: 't1', payload: { headers: [{ name: 'Subject', value: 'Inbox subject' }], body: 'not displayed' } });
+      }
+      if (url.hostname === 'www.googleapis.com') {
+        expect(url.searchParams.get('q')).toBe('trashed = false');
+        expect(url.searchParams.get('orderBy')).toBe('modifiedTime desc');
+        return json({ files: [{ id: 'f1', name: 'Approved file', mimeType: 'application/pdf' }], nextPageToken: 'x'.repeat(2049) });
+      }
+      throw new Error('Unexpected overview request');
+    });
+    const { services } = fixture(request);
+    await expect(services.recentOverviewPage(ID, 'gmail', ['gmail-send'])).resolves.toMatchObject({ ok: false, error: { code: 'GOOGLE_POLICY_DENIED' } });
+    expect(request).not.toHaveBeenCalled();
+    await expect(services.recentOverviewPage(ID, 'gmail', ['gmail-metadata'], 'requested+/next')).resolves.toMatchObject({
+      ok: true, data: { token: 'mail-next', items: [{ id: 'm1', title: 'Inbox subject', original: 'https://mail.google.com/mail/#inbox/t1' }] },
+    });
+    await expect(services.recentOverviewPage(ID, 'drive', ['drive-files'])).resolves.toMatchObject({
+      ok: true, data: { token: undefined, items: [{ id: 'f1', title: 'Approved file', original: 'https://drive.google.com/open?id=f1' }] },
+    });
+    request.mockImplementationOnce(async (input) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe('/calendar/v3/calendars/primary/events');
+      expect(url.searchParams.get('timeMin')).toBe('2026-11-21T10:00:00.000Z');
+      expect(url.searchParams.get('orderBy')).toBe('startTime');
+      return json({ items: [
+        { id: 'e1', summary: 'Planning', start: { date: '2026-11-22' }, htmlLink: 'https://www.google.com/calendar/event?eid=abc_123&ignored=one' },
+        { id: 'e2', summary: 'Review', start: { date: '2026-11-23' }, htmlLink: 'https://outside.example.test/?eid=abc' },
+      ] });
+    });
+    await expect(services.recentOverviewPage(ID, 'calendar', ['calendar-read'], undefined, '2026-11-21T10:00:00.000Z')).resolves.toMatchObject({
+      ok: true, data: { items: [
+        { id: 'e1', title: 'Planning', date: '2026-11-22', original: 'https://calendar.google.com/calendar/event?eid=abc_123' },
+        { id: 'e2', title: 'Review', original: undefined },
+      ] },
+    });
+  });
+
   it('requires a payload-bound one-use confirmation before Gmail send', async () => {
     const request = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { raw: string };

@@ -40,6 +40,7 @@ export function planChromeImport(current: BrowsingData, source: ChromeProfileDat
       history: source.result.skipped.history + duplicateHistory + historyOverLimit,
     },
     warnings: source.result.warnings,
+    appliedSettings: source.result.appliedSettings,
   };
   return {
     bookmarks: planned.accepted,
@@ -51,6 +52,7 @@ export function planChromeImport(current: BrowsingData, source: ChromeProfileDat
       overLimit: planned.overLimit + historyOverLimit,
       folders: [...folders.values()].slice(0, 50), moreFolders: Math.max(0, folders.size - 50),
       historyRange: range.length ? { from: range[0], through: range.at(-1)! } : undefined,
+      settingsPatch: source.settingsPatch,
     },
   };
 }

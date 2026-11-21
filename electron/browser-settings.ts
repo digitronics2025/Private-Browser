@@ -6,7 +6,7 @@ import type { WorkspaceId } from './types.js';
 export type SearchEngineId = 'duckduckgo' | 'google' | 'bing' | 'brave' | 'startpage' | 'ecosia' | 'custom';
 export type PresetSearchEngineId = Exclude<SearchEngineId, 'custom'>;
 export type HomePageMode = 'new-tab' | 'url';
-export type StartupMode = 'continue' | 'home' | 'pages';
+export type StartupMode = 'continue' | 'home' | 'new-tab' | 'pages';
 export interface SiteKeyword { keyword: string; template: string }
 export const SPELLCHECK_LANGUAGES = { en: 'English', fr: 'French', ar: 'Arabic' } as const;
 export type SpellcheckLanguage = keyof typeof SPELLCHECK_LANGUAGES;
@@ -59,7 +59,7 @@ export const SEARCH_ENGINES: Record<PresetSearchEngineId, { label: string; templ
 
 export const SEARCH_ENGINE_IDS: readonly SearchEngineId[] = [...Object.keys(SEARCH_ENGINES) as PresetSearchEngineId[], 'custom'];
 export const HOME_PAGE_MODES: readonly HomePageMode[] = ['new-tab', 'url'];
-export const STARTUP_MODES: readonly StartupMode[] = ['continue', 'home', 'pages'];
+export const STARTUP_MODES: readonly StartupMode[] = ['continue', 'home', 'new-tab', 'pages'];
 export const MAX_SETTING_URL_LENGTH = 2048;
 export const MAX_STARTUP_PAGES = 8;
 export const MAX_SITE_KEYWORDS = 8;

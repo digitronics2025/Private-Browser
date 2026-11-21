@@ -185,6 +185,13 @@ cancellation, `Retry-After`, and jittered exponential retry. Token refresh is
 coalesced per account. Writes use single-use capabilities bound to account,
 service, normalized payload and optional AI source revision.
 
+The Account Space manager offers an on-demand overview in the active, unlocked
+Google space. It shows only enabled read modules. Gmail displays recent inbox
+headers, Drive displays allowed files, and Calendar displays upcoming primary
+calendar events. Each section loads up to 10 items per page and 50 per visit.
+Results and paging state stay in memory. Original links open in the same space.
+This view uses the existing grants and does not request expanded access.
+
 ## Permissions
 
 Decisions key on Account Space UUID, exact HTTPS origin and capability. `once`
@@ -264,6 +271,14 @@ No live-Google success claim is valid without completing step 6 privately.
 Chrome import, bookmark folders and the bookmark bar are implemented and scoped
 to the explicitly selected Account Space. Chrome Sync is not implemented or
 advertised, and imports intentionally exclude live sessions and Google tokens.
+
+**Import from Chrome** suggests a destination by matching a local profile name
+to an unlocked Account Space in the current workspace. A destination remains
+explicit. Bookmarks and history go to that space. Search engine, Home page,
+and startup settings are separate opt-ins for the workspace. The local
+receipt records an opaque profile key and destination ID so the same detected
+profile does not import twice. A complete undo within the current session
+reopens that profile for import. Changed bookmarks and settings stay in place.
 
 For migration rollback, close the app, keep every timestamped recovery file,
 choose **Restore v1** in the recovery screen, and restart. Never rename an

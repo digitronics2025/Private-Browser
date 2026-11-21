@@ -281,6 +281,7 @@ export class RuntimeStateStore {
       ui: next.ui,
       settings: next.settings,
       workspaceSettings: next.workspaceSettings,
+      chromeProfileImports: next.chromeProfileImports,
       routines: next.routines,
     };
     const tabsByAccount = byAccount(next.tabs);
@@ -382,6 +383,7 @@ function combine(
     ui: sanitizeUiPreferences(manifest.ui, manifest.bookmarkBarVisible),
     settings: sanitizeBrowserSettings(manifest.settings),
     workspaceSettings: sanitizeWorkspaceSettings(manifest.workspaceSettings),
+    chromeProfileImports: manifest.chromeProfileImports,
     routines: manifest.routines ?? defaultBrowserRoutines(manifest.activeAccountSpaceByWorkspace),
     shortcutsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.shortcuts).map((state) => [state.accountSpaceId, state.shortcuts!])),
     bookmarkIconsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.bookmarkIcons).map((state) => [state.accountSpaceId, state.bookmarkIcons!])),

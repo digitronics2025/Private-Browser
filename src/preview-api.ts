@@ -3,10 +3,10 @@ import type { ChromeImportOptions, ChromePasswordImportReview } from '../electro
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource, PageExcerptReview } from '../electron/types';
-import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, GoogleModule, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
-import type { BrowserSettings, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
+import type { BrowserSettings, BrowserSettingsPatch, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { canPauseTrackersAt, TrackerProtection } from '../electron/tracker-protection';
 import { memorySaverOrigin } from '../electron/memory-saver';
@@ -57,14 +57,18 @@ function bookmark(id: string, title: string, url: string, folderPath: string[], 
 /** Credential-free data so the chrome can be reviewed in a normal browser during development. */
 export function installPreviewApi(): void {
   if (!import.meta.env.DEV || 'privateBrowser' in window || new URLSearchParams(location.search).get('preview') === 'bridge') return;
+  const params = new URLSearchParams(location.search);
+  const overviewFixture = params.get('googleOverview') === 'sample';
+  const googleModules: GoogleModule[] = overviewFixture
+    ? ['identity', 'gmail-metadata', 'drive-files'] : ['identity', 'gmail-metadata', 'drive-files', 'calendar-read'];
   const accounts = [
     account(ids.digitronics, 'digitronics', 'Digitronics', 'indigo'), account(ids.tenten, 'tenten', 'TenTen', 'amber'), account(ids.development, 'development', 'Development', 'violet'),
     account(ids.personal, 'personal', 'Personal', 'emerald'),
-    { ...account(ids.google, 'personal', 'Operations', 'sky', 1), kind: 'google' as const, email: 'operations@example.com', displayName: 'Operations Team', googleConnection: 'connected' as const, websiteStatus: 'session-data-present' as const, enabledModules: ['identity', 'gmail-metadata', 'drive-files', 'calendar-read'] as const, grantedScopes: ['openid', 'email', 'profile'] },
+    { ...account(ids.google, 'personal', 'Operations', 'sky', 1), kind: 'google' as const, email: 'operations@example.com', displayName: 'Operations Team', googleConnection: 'connected' as const, websiteStatus: 'session-data-present' as const, enabledModules: googleModules, grantedScopes: ['openid', 'email', 'profile'] },
     account(ids.banking, 'banking', 'Banking', 'rose'),
   ];
   const google = ids.google as AccountSpaceId;
-  const params = new URLSearchParams(location.search);
+  const overviewCursor = overviewFixture ? crypto.randomUUID() : undefined;
   const vaultHealthFixture = { id: 'preview-vault-health', label: 'Sample login', username: 'sample@example.test',
     url: 'https://shop.example.test', hasTotp: false, updatedAt: '2026-11-21T10:00:00Z' };
   const state: BrowserSnapshot = {
@@ -199,7 +203,17 @@ export function installPreviewApi(): void {
   let pendingChromeImport: { id: string; options: ChromeImportOptions; owner: AccountSpaceId } | undefined;
   let clearDataReview: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string> } | undefined;
   let passwordReview: { review: ChromePasswordImportReview; accountId: AccountSpaceId } | undefined;
-  const chromeUndo = new Map<AccountSpaceId, { bookmark: boolean; history: boolean }>();
+  const chromeUndo = new Map<AccountSpaceId, { profileId: string; bookmark: boolean; history: boolean; settings?: BrowserSettings }>();
+  const importedChromeProfiles = new Map<string, AccountSpaceId>();
+  const chromeSettingsFixture = (options: ChromeImportOptions) => {
+    const selected = options.settings ?? {};
+    const patch: BrowserSettingsPatch = {
+      ...(selected.search ? { searchEngine: 'google' } : {}), ...(selected.home ? { homePage: 'url', homePageUrl: 'https://reference.example.test/' } : {}),
+      ...(selected.startup ? { startup: 'new-tab' } : {}),
+    };
+    const appliedSettings = (['search', 'home', 'startup'] as const).filter((key) => selected[key]);
+    return { patch: appliedSettings.length ? patch : undefined, appliedSettings };
+  };
   let sampleGrants: PermissionGrantSummary[] = params.get('permissions') === 'sample' ? [
     { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
     { origin: 'https://mail.google.com', capability: 'notifications', duration: 'session' },
@@ -384,6 +398,18 @@ export function installPreviewApi(): void {
     clearGoogleConfiguration: desktopOnly,
     cancelGoogleConnection: async () => false,
     gmailOverview: desktopOnly,
+    googleOverviewPage: async (id, _operation, service, next) => {
+      if (!overviewCursor || id !== google || id !== state.activeAccountSpaceId || service === 'calendar') return desktopOnly();
+      if (service === 'drive') return { ok: true, data: { page: 1, limited: false, items: [
+        { id: 'file-fixture', title: 'Stock worksheet', original: 'https://drive.google.com/open?id=file-fixture' },
+      ] } };
+      if (next === overviewCursor) return { ok: true, data: { page: 2, limited: false, items: [
+        { id: 'mail-older', title: 'Previous stock update', detail: 'stocks@example.test' },
+      ] } };
+      return { ok: true, data: { page: 1, next: overviewCursor, limited: false, items: [
+        { id: 'mail-current', title: 'New stock update', detail: 'stocks@example.test', original: 'https://mail.google.com/mail/#inbox/mail-current' },
+      ] } };
+    },
     searchGmail: desktopOnly,
     prepareGmailSend: desktopOnly,
     sendGmail: desktopOnly,
@@ -933,7 +959,12 @@ export function installPreviewApi(): void {
     },
     updateAccountSpace: async (idValue, labelValue, colorValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { if (typeof labelValue === 'string') selected.label = labelValue; if (typeof colorValue === 'string') selected.color = colorValue as typeof selected.color; publish(); } },
     reorderAccountSpaces: async (_workspace, orderValue) => { (orderValue as AccountSpaceId[]).forEach((id, order) => { const item = state.accountSpaces.find((candidate) => candidate.id === id); if (item) item.order = order; }); publish(); },
-    openInAccountSpace: async () => undefined,
+    openInAccountSpace: async (id, url) => {
+      if (overviewFixture && id === google && id === state.activeAccountSpaceId) {
+        await handlers.newTab();
+        await handlers.navigate(url);
+      }
+    },
     setAccountSpaceLocked: async (idValue, lockedValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.locked = Boolean(lockedValue); selected.googleConnection = selected.locked ? 'locked' : 'disconnected'; publish(); } },
     configureGoogle: async () => { state.googleConfiguration = { configured: true, source: 'encrypted-settings' }; publish(); },
     connectGoogleAccount: async (idValue, modulesValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.kind = 'google'; delete selected.googleSetupPending; selected.email = selected.email ?? 'account@example.com'; selected.googleConnection = 'connected'; selected.enabledModules = [...modulesValue as typeof selected.enabledModules]; publish(); } return { ok: true }; },
@@ -1112,21 +1143,31 @@ export function installPreviewApi(): void {
     listChromeProfiles: (async () => {
       if (params.get('chrome') === 'error') throw new Error('The sample Chrome profiles could not be read');
       if (params.get('chrome') === 'empty') return [];
-      return [{ id: 'Default', name: 'Sample Chrome profile', isDefault: true, hasBookmarks: true, hasHistory: true }];
+      const profiles = [{ id: 'Default', name: 'Sample Chrome profile', isDefault: true, hasBookmarks: true, hasHistory: true, hasPreferences: true }];
+      if (params.get('chrome') === 'mapping') profiles.push({ id: 'Profile 1', name: 'Research', isDefault: false, hasBookmarks: true, hasHistory: false, hasPreferences: true });
+      return profiles.map((profile) => ({
+        ...profile,
+        suggestedAccountSpaceId: profile.isDefault && state.activeWorkspaceId !== 'banking' ? state.activeAccountSpaceId : undefined,
+        imported: importedChromeProfiles.has(profile.id),
+        importedInto: importedChromeProfiles.get(profile.id),
+      }));
     }) satisfies PrivateBrowserApi['listChromeProfiles'],
     previewChromeImport: (async (value: unknown) => {
       const options = value as ChromeImportOptions;
       const destination = state.accountSpaces.find((item) => item.id === options.accountSpaceId && item.workspaceId === state.activeWorkspaceId);
-      if (!destination || destination.locked || destination.workspaceId === 'banking' || options.profileId !== 'Default') throw new Error('Choose an available regular Account Space and sample profile');
-      const key = 'preview-import-' + destination.id;
+      if (!destination || destination.locked || destination.workspaceId === 'banking') throw new Error('Choose an available regular Account Space and sample profile');
+      if (importedChromeProfiles.has(options.profileId)) throw new Error('This Chrome profile has already been imported.');
+      const key = 'preview-import-' + options.profileId + '-' + destination.id;
       const addBookmark = options.bookmarks && !state.bookmarks.some((item) => item.id === key);
       const addHistory = options.history && !state.history.some((item) => item.id === key);
       const skipped = { bookmarks: Number(options.bookmarks && !addBookmark), history: Number(options.history && !addHistory), passwords: 0 };
       const timestamp = '2026-09-12T10:00:00.000Z';
       const id = crypto.randomUUID();
       pendingChromeImport = { id, options, owner: state.activeAccountSpaceId };
+      const { patch, appliedSettings } = chromeSettingsFixture(options);
       return {
-        id, accountSpaceId: destination.id, result: { imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 }, skipped, warnings: [] },
+        id, accountSpaceId: destination.id, settingsPatch: patch,
+        result: { imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 }, skipped, warnings: [], appliedSettings },
         duplicates: skipped.bookmarks + skipped.history, unsupported: 0, overLimit: 0,
         folders: addBookmark ? [{ location: 'bar', path: ['Sample folder'], count: 1 }] : [], moreFolders: 0,
         historyRange: addHistory ? { from: timestamp, through: timestamp } : undefined,
@@ -1144,34 +1185,45 @@ export function installPreviewApi(): void {
       const destination = state.accountSpaces.find((item) => item.id === id && item.workspaceId === state.activeWorkspaceId && item.workspaceId !== 'banking' && !item.locked);
       if (!destination) throw new Error('Choose an available regular Account Space');
       const undo = chromeUndo.get(destination.id);
-      const key = 'preview-import-' + destination.id;
+      const key = 'preview-import-' + undo?.profileId + '-' + destination.id;
       const bookmarks = state.bookmarks.length;
       const history = state.history.length;
       if (undo?.bookmark) state.bookmarks = state.bookmarks.filter((item) => item.id !== key || item.title !== 'Sample imported page');
       if (undo?.history) state.history = state.history.filter((item) => item.id !== key);
+      if (undo?.settings) workspaceSettings[destination.workspaceId] = undo.settings;
+      if (undo && !state.bookmarks.some((item) => item.id === key) && !state.history.some((item) => item.id === key)) {
+        importedChromeProfiles.delete(undo.profileId);
+      }
       chromeUndo.delete(destination.id);
       publish();
-      return { bookmarks: bookmarks - state.bookmarks.length, history: history - state.history.length };
+      return { bookmarks: bookmarks - state.bookmarks.length, history: history - state.history.length, settingsRestored: undo?.settings ? true : undefined };
     },
     importChrome: (async (value: unknown) => {
       const { profileId, accountSpaceId, workspaceId, bookmarks, history } = value as Parameters<PrivateBrowserApi['importChrome']>[0];
       const destination = state.accountSpaces.find((item) => item.id === accountSpaceId && item.workspaceId === workspaceId);
       if (!destination || destination.locked || workspaceId === 'banking') throw new Error('Choose an available regular Account Space');
-      if (profileId !== 'Default') throw new Error('The sample Chrome profile is unavailable');
+      if (importedChromeProfiles.has(profileId)) throw new Error('This Chrome profile has already been imported.');
       const url = 'https://example.test/chrome-import';
       const title = 'Sample imported page';
       const timestamp = '2026-09-12T10:00:00.000Z';
-      const id = 'preview-import-' + accountSpaceId;
+      const id = 'preview-import-' + profileId + '-' + accountSpaceId;
       const addBookmark = bookmarks && !state.bookmarks.some((item) => item.id === id);
       const addHistory = history && !state.history.some((item) => item.id === id);
       if (addBookmark) state.bookmarks.push({ id, accountSpaceId, workspaceId, title, url, createdAt: timestamp, location: 'bar', folderPath: ['Sample folder'], order: 500, orderPath: [500, 0] });
       if (addHistory) state.history.push({ id, accountSpaceId, workspaceId, title, url, visitedAt: timestamp });
-      if (addBookmark || addHistory) chromeUndo.set(accountSpaceId, { bookmark: addBookmark, history: addHistory });
+      const { patch, appliedSettings } = chromeSettingsFixture(value as ChromeImportOptions);
+      const before = patch ? settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, workspaceId) : undefined;
+      if (before && patch) workspaceSettings[workspaceId] = mergeBrowserSettings(before, patch);
+      if (addBookmark || addHistory || patch) {
+        importedChromeProfiles.set(profileId, accountSpaceId);
+        chromeUndo.set(accountSpaceId, { profileId, bookmark: addBookmark, history: addHistory, settings: before });
+      }
       publish();
       return {
         imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 },
         skipped: { bookmarks: Number(bookmarks && !addBookmark), history: Number(history && !addHistory), passwords: 0 },
         warnings: [],
+        appliedSettings,
       };
     }) satisfies PrivateBrowserApi['importChrome'],
     reviewChromePasswords: async () => {
