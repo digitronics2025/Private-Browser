@@ -1,0 +1,1 @@
+Preview safe diagnostics in Setup, Recovery, Updates, side apps, and Developer Bridge before copying. The report includes the app version, a reason code and the next action.

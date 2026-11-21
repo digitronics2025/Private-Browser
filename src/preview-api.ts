@@ -132,7 +132,10 @@ export function installPreviewApi(): void {
     shortcutsByAccountSpace: {},
     bookmarkIcons: {},
     canReopenClosedTab: false,
-    sideApps: ['claude', 'easynote'].map((id) => ({ id: id as 'claude' | 'easynote', name: id === 'claude' ? 'Claude' : 'Notes', status: 'ready', canGoBack: false, canGoForward: false })),
+    sideApps: [
+      { id: 'claude', name: 'Claude', status: 'ready', canGoBack: false, canGoForward: false },
+      { id: 'easynote', name: 'Notes', status: params.get('notes') === 'offline' ? 'offline' : 'ready', canGoBack: false, canGoForward: false },
+    ],
     // ?permission=prompt shows a pending site-permission prompt for the e2e suite.
     ...(params.get('permission') === 'prompt' ? { pendingPermission: { id: 'preview-permission', accountSpaceId: ids.personal as AccountSpaceId, workspaceId: 'personal' as const, origin: 'https://meet.google.com', capability: 'notifications' as const, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() } } : {}),
   };
@@ -367,7 +370,7 @@ export function installPreviewApi(): void {
     },
     cancelManagedUpdate: async () => {
       if (!managedUpdate || state.activeWorkspaceId === 'banking') throw new Error('Cancel the download using the desktop app.');
-      managedUpdate = { phase: 'failed', message: 'Download cancelled.' };
+      managedUpdate = { phase: 'failed', failure: 'cancelled', message: 'Download cancelled.' };
       publish();
     },
     installManagedUpdate: async () => {

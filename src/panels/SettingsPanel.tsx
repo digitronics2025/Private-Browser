@@ -9,6 +9,8 @@ import { DEFAULT_SPELLCHECK, MAX_SETTING_URL_LENGTH, MAX_SITE_KEYWORDS, MAX_STAR
 import type { Workspace } from '../../electron/types';
 import { SetupGuide } from './SetupGuide';
 import { AgentsPanel } from './AgentsPanel';
+import { SafeDiagnostics } from './SafeDiagnostics';
+import type { DiagnosticReason } from '../lib/safe-diagnostics';
 import { Bot } from 'lucide-react';
 
 const THEME_OPTIONS = [['system', 'Match Windows'], ['light', 'Light'], ['dark', 'Dark']] as const;
@@ -371,6 +373,8 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
         ? managed ? 'Download the installer here and choose when to open it.'
           : 'A newer Windows installer is ready on the download page. Its checksum is checked before Private Browser will open it.'
         : `Version ${result?.currentVersion ?? status?.currentVersion ?? '—'} is the latest stable release.`;
+  const installerFailure = managed?.phase === 'failed' ? managed.failure : undefined;
+  const updateDiagnostic = state === 'error' ? 'PB-UPDATE-CHECK' : installerFailure && installerDiagnostics[installerFailure];
 
   return <div className="side-panel updates-page" data-testid="updates-page">
     <button className="updates-back" aria-label="Back to Settings" onClick={onBack}><ArrowLeft size={14} /> Settings</button>
@@ -386,6 +390,7 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
         <span><small>Latest stable</small><strong>{latest ? `v${latest.version}` : 'Checking…'}</strong></span>
       </div>
       {managed && <ManagedInstallerStatus status={managed} />}
+      {updateDiagnostic && <SafeDiagnostics reason={updateDiagnostic} />}
       <div className="updates-primary-actions">
         {state === 'available' && !managed && <button className="updates-primary" onClick={onOpenDownload}><Download size={15} /> Open verified download</button>}
         {state === 'available' && managed && latest && <>
@@ -441,6 +446,14 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
     </section>
   </div>;
 }
+
+const installerDiagnostics = {
+  release: 'PB-UPDATE-RELEASE',
+  verification: 'PB-UPDATE-VERIFY',
+  storage: 'PB-UPDATE-SAVE',
+  launch: 'PB-UPDATE-OPEN',
+  cancelled: undefined,
+} satisfies Record<NonNullable<ManagedUpdateStatus['failure']>, DiagnosticReason | undefined>;
 
 function ManagedInstallerStatus({ status }: { status: ManagedUpdateStatus }) {
   switch (status.phase) {

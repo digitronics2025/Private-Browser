@@ -147,6 +147,10 @@ Account Space's download permission.
 
 Developer diagnostics are process-memory-only, bounded per tab, and collect only console warnings/errors, failed-request method/status/type, sanitized source URLs, and aggregate document counts. They never collect page text, input values, cookies, local or session storage, headers, request or response bodies. URL credentials, queries and fragments are removed, high-entropy path segments and sensitive text patterns are redacted, and the user explicitly copies the resulting report before it can reach another tool.
 
+The support report in Setup, Recovery, Updates, side apps and Developer Bridge
+uses an allowlist of reason codes and next actions plus the app version. The
+preview and clipboard use the same text, with no live error string or page data.
+
 ## VS Code bridge
 
 The VS Code companion does not expose TCP, remote debugging, a renderer socket,

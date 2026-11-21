@@ -880,6 +880,7 @@ export interface ManagedUpdateStatus {
   totalBytes?: number;
   publisher?: DownloadEntry['publisher'];
   message?: string;
+  failure?: 'release' | 'verification' | 'storage' | 'launch' | 'cancelled';
 }
 export type { BridgeStatus, GitRevision, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';
 
