@@ -40,6 +40,8 @@ export type ShortcutCommand =
   | 'clear-browsing-data'
   | 'next-account-space'
   | 'previous-account-space'
+  | 'workspace-switcher'
+  | 'shortcut-guide'
   /** No key: sent by the login picker's "Manage logins…" row. */
   | 'open-vault'
   | 'toggle-notes';
@@ -59,7 +61,43 @@ export interface ShortcutInput {
 }
 
 /** Commands whose result is a focused control in the chrome, so page focus must move there first. */
-const CHROME_FOCUS_COMMANDS = new Set<ShortcutCommand>(['toggle-notes', 'focus-address', 'find', 'browser-menu', 'tab-search', 'bookmark-manager', 'history', 'downloads', 'clear-browsing-data']);
+const CHROME_FOCUS_COMMANDS = new Set<ShortcutCommand>(['toggle-notes', 'focus-address', 'find', 'browser-menu', 'tab-search', 'bookmark-manager', 'history', 'downloads', 'clear-browsing-data', 'workspace-switcher', 'shortcut-guide']);
+
+export const SHORTCUT_GUIDE = {
+  'focus-address': ['Focus address and search', 'Ctrl+L'],
+  'new-tab': ['New tab', 'Ctrl+T'],
+  'close-tab': ['Close tab', 'Ctrl+W'],
+  'reopen-closed-tab': ['Reopen closed tab', 'Ctrl+Shift+T'],
+  'next-tab': ['Next tab', 'Ctrl+Tab'],
+  'previous-tab': ['Previous tab', 'Ctrl+Shift+Tab'],
+  'select-tab': ['Select tab 1 through 8', 'Ctrl+1–8'],
+  'last-tab': ['Select last tab', 'Ctrl+9'],
+  'tab-search': ['Search open tabs', 'Ctrl+Shift+A'],
+  'workspace-switcher': ['Switch workspace or Account Space', 'Ctrl+Shift+U'],
+  'next-account-space': ['Next Account Space in this workspace', 'Ctrl+Shift+Right'],
+  'previous-account-space': ['Previous Account Space in this workspace', 'Ctrl+Shift+Left'],
+  'back': ['Go back', 'Alt+Left'],
+  'forward': ['Go forward', 'Alt+Right'],
+  'home': ['Go to home page', 'Alt+Home'],
+  'reload': ['Reload page', 'Ctrl+R'],
+  'hard-reload': ['Reload page and bypass cache', 'Ctrl+Shift+R'],
+  'bookmark-page': ['Bookmark current page', 'Ctrl+D'],
+  'toggle-bookmark-bar': ['Toggle bookmarks bar', 'Ctrl+Shift+B'],
+  'bookmark-manager': ['Open bookmark manager', 'Ctrl+Shift+O'],
+  'history': ['Open history', 'Ctrl+H'],
+  'downloads': ['Open downloads', 'Ctrl+J'],
+  'find': ['Find text on page', 'Ctrl+F'],
+  'print': ['Print page', 'Ctrl+P'],
+  'zoom-in': ['Zoom in', 'Ctrl+='],
+  'zoom-out': ['Zoom out', 'Ctrl+-'],
+  'zoom-reset': ['Reset zoom', 'Ctrl+0'],
+  'fullscreen': ['Toggle full screen', 'F11'],
+  'browser-menu': ['Open browser menu', 'Alt+F'],
+  'clear-browsing-data': ['Delete browsing data', 'Ctrl+Shift+Delete'],
+  'toggle-notes': ['Toggle Notes panel', 'Ctrl+Shift+Y'],
+  'developer-tools': ['Open Developer Tools where available', 'F12'],
+  'shortcut-guide': ['Open keyboard shortcuts', 'Ctrl+Shift+K'],
+} satisfies Record<Exclude<ShortcutCommand, 'open-vault'>, readonly [string, string]>;
 
 export function needsChromeFocus(command: ShortcutCommand): boolean {
   return CHROME_FOCUS_COMMANDS.has(command);
@@ -94,6 +132,8 @@ export function resolveShortcut(input: ShortcutInput): Shortcut | undefined {
       case 'o': return { command: 'bookmark-manager' };
       case 't': return { command: 'reopen-closed-tab' };
       case 'a': return { command: 'tab-search' };
+      case 'u': return { command: 'workspace-switcher' };
+      case 'k': return { command: 'shortcut-guide' };
       case 'Delete': return { command: 'clear-browsing-data' };
       case 'Tab': return { command: 'previous-tab' };
       case 'ArrowRight': return { command: 'next-account-space' };

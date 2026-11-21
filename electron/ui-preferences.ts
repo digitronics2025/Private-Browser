@@ -1,7 +1,7 @@
 import { clampSidePanelWidth, SIDE_PANEL, type BookmarkBarMode } from './chrome-layout.js';
 
 export type ThemePreference = 'system' | 'dark' | 'light';
-export type SidePanelTool = 'claude' | 'easynote' | 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings' | 'bookmarks' | 'history';
+export type SidePanelTool = 'claude' | 'easynote' | 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings' | 'bookmarks' | 'history' | 'shortcuts';
 export type NewTabBackground = 'plain' | 'lagoon' | 'dusk' | 'mist' | 'graphite';
 
 export interface UiPreferences {
@@ -9,6 +9,7 @@ export interface UiPreferences {
   bookmarkBarMode: BookmarkBarMode;
   sidePanelOpen: boolean;
   sidePanelWidth: number;
+  sidePanelCompact?: boolean;
   sidePanelTool: SidePanelTool;
   newTabBackground: NewTabBackground;
   showRecentOnNewTab: boolean;
@@ -20,7 +21,7 @@ export type UiPreferencesPatch = Partial<UiPreferences>;
 
 export const THEMES: readonly ThemePreference[] = ['system', 'dark', 'light'];
 export const BOOKMARK_BAR_MODES: readonly BookmarkBarMode[] = ['always', 'new-tab', 'hidden'];
-export const SIDE_PANEL_TOOLS: readonly SidePanelTool[] = ['claude', 'easynote', 'assistant', 'developer', 'vault', 'automations', 'downloads', 'privacy', 'settings', 'bookmarks', 'history'];
+export const SIDE_PANEL_TOOLS: readonly SidePanelTool[] = ['claude', 'easynote', 'assistant', 'developer', 'vault', 'automations', 'downloads', 'privacy', 'settings', 'bookmarks', 'history', 'shortcuts'];
 export const NEW_TAB_BACKGROUNDS: readonly NewTabBackground[] = ['plain', 'lagoon', 'dusk', 'mist', 'graphite'];
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
@@ -51,6 +52,7 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
     bookmarkBarMode: member(BOOKMARK_BAR_MODES, input.bookmarkBarMode) ? input.bookmarkBarMode : legacyBookmarkBarVisible ? 'always' : 'hidden',
     sidePanelOpen: typeof input.sidePanelOpen === 'boolean' ? input.sidePanelOpen : DEFAULT_UI_PREFERENCES.sidePanelOpen,
     sidePanelWidth: typeof input.sidePanelWidth === 'number' ? clampSidePanelWidth(input.sidePanelWidth) : DEFAULT_UI_PREFERENCES.sidePanelWidth,
+    ...(typeof input.sidePanelCompact === 'boolean' ? { sidePanelCompact: input.sidePanelCompact } : {}),
     sidePanelTool: member(SIDE_PANEL_TOOLS, input.sidePanelTool) ? input.sidePanelTool : DEFAULT_UI_PREFERENCES.sidePanelTool,
     newTabBackground: member(NEW_TAB_BACKGROUNDS, input.newTabBackground) ? input.newTabBackground : DEFAULT_UI_PREFERENCES.newTabBackground,
     showRecentOnNewTab: typeof input.showRecentOnNewTab === 'boolean' ? input.showRecentOnNewTab : DEFAULT_UI_PREFERENCES.showRecentOnNewTab,
@@ -63,13 +65,14 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
 export function requireUiPreferencesPatch(value: unknown): UiPreferencesPatch {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid interface preferences');
   const input = value as Record<string, unknown>;
-  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelTool', 'newTabBackground', 'showRecentOnNewTab', 'offerSetupGuide', 'importedChromeData']);
+  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelCompact', 'sidePanelTool', 'newTabBackground', 'showRecentOnNewTab', 'offerSetupGuide', 'importedChromeData']);
   const keys = Object.keys(input);
   if (keys.length === 0 || keys.some((key) => !allowed.has(key))) throw new Error('Invalid interface preferences');
   const patch: UiPreferencesPatch = {};
   if ('theme' in input) { if (!member(THEMES, input.theme)) throw new Error('Invalid theme'); patch.theme = input.theme; }
   if ('bookmarkBarMode' in input) { if (!member(BOOKMARK_BAR_MODES, input.bookmarkBarMode)) throw new Error('Invalid bookmarks bar mode'); patch.bookmarkBarMode = input.bookmarkBarMode; }
   if ('sidePanelOpen' in input) { if (typeof input.sidePanelOpen !== 'boolean') throw new Error('Invalid side panel state'); patch.sidePanelOpen = input.sidePanelOpen; }
+  if ('sidePanelCompact' in input) { if (typeof input.sidePanelCompact !== 'boolean') throw new Error('Invalid side panel mode'); patch.sidePanelCompact = input.sidePanelCompact; }
   if ('sidePanelWidth' in input) {
     if (typeof input.sidePanelWidth !== 'number' || !Number.isFinite(input.sidePanelWidth)) throw new Error('Invalid side panel width');
     patch.sidePanelWidth = clampSidePanelWidth(input.sidePanelWidth);

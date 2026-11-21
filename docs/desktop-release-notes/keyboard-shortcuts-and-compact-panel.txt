@@ -1,0 +1,1 @@
+Find keyboard shortcuts in the browser menu, open the workspace switcher from the keyboard, and use a compact side panel to keep more of the page visible.

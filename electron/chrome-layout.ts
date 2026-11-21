@@ -16,6 +16,7 @@ export const CHROME = {
 } as const;
 
 export const SIDE_PANEL = {
+  compact: 272,
   min: 320,
   default: 400,
   max: 520,
@@ -50,6 +51,7 @@ export interface ChromeLayoutInput {
   findBarOpen: boolean;
   sidePanelOpen: boolean;
   sidePanelWidth: number;
+  sidePanelCompact?: boolean;
   fullscreen: boolean;
   windowWidth?: number;
 }
@@ -83,7 +85,10 @@ export function computeChromeLayout(input: ChromeLayoutInput): ChromeLayout {
   }
   const bookmarkBar = bookmarkBarShown(input.bookmarkBarMode, input.isHome) ? CHROME.bookmarkBar : 0;
   const findBar = input.findBarOpen && !input.isHome ? CHROME.findBar : 0;
-  const sidePanel = input.sidePanelOpen ? clampSidePanelWidth(input.sidePanelWidth, input.windowWidth) : 0;
+  const compactWidth = Math.max(0, Math.min(SIDE_PANEL.compact, (input.windowWidth ?? Infinity) - MIN_CONTENT_WIDTH));
+  const sidePanel = input.sidePanelOpen
+    ? input.sidePanelCompact ? compactWidth : clampSidePanelWidth(input.sidePanelWidth, input.windowWidth)
+    : 0;
   return {
     tabStrip: CHROME.tabStrip,
     toolbar: CHROME.toolbar,
