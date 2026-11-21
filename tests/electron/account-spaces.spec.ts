@@ -38,11 +38,28 @@ test.beforeEach(async () => {
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
+    if (request.url?.startsWith('http://scorecardresearch.com/tracker-')) {
+      trackerConnections++;
+      response.writeHead(404, { 'Cache-Control': 'no-store' });
+      response.end();
+      return;
+    }
     if (request.url === '/sleep-static' || request.url === '/sleep-form') {
       response.setHeader('Content-Type', 'text/html');
       response.end(request.url === '/sleep-static'
         ? '<!doctype html><title>Reference to sleep</title><p>Static reference text.</p>'
         : '<!doctype html><title>Page with a form</title><form><input name="unsaved"></form>');
+      return;
+    }
+    if (request.url?.startsWith('/sample-failure?')) {
+      response.writeHead(503, { 'Cache-Control': 'no-store' });
+      response.end('local fixture unavailable');
+      return;
+    }
+    if (request.url === '/inspection.html') {
+      response.setHeader('Content-Type', 'text/html');
+      response.end(`<!doctype html><title>Development inspection fixture</title>
+        <script>void (async () => { await fetch('/sample-failure?fixture=first'); await fetch('/sample-failure?fixture=second'); })()</script>`);
       return;
     }
     if (request.url === '/slow-download') {
@@ -95,7 +112,6 @@ test.beforeEach(async () => {
     response.end('<!doctype html><title>Account isolation fixture</title>');
   });
   server.on('connect', (request, socket) => {
-    if (request.url === 'scorecardresearch.com:443') trackerConnections++;
     // The test proxy terminates every connection locally.
     socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
   });
@@ -138,6 +154,24 @@ test('restores selected side-panel tools and pins only for their owning Account 
   expect((await state()).sidePanelPins).toBeUndefined();
 });
 
+test('groups repeated native network failures without query values', async () => {
+  const page = await application!.firstWindow();
+  await page.evaluate((url) => window.privateBrowser.newTab('development', url), origin + '/inspection.html');
+  await expect.poll(() => page.evaluate(async () => {
+    try {
+      const info = await window.privateBrowser.inspectDeveloperPage(false);
+      return info.failures?.find((issue) => issue.url.endsWith('/sample-failure'))?.count;
+    } catch {
+      return undefined;
+    }
+  })).toBe(2);
+  const info = await page.evaluate(() => window.privateBrowser.inspectDeveloperPage(false));
+  const failures = info.failures?.filter((issue) => issue.url.endsWith('/sample-failure'));
+  expect(failures).toMatchObject([{ status: 503, count: 2, url: origin + '/sample-failure' }]);
+  expect(Date.parse(failures![0].firstAt!)).toBeLessThanOrEqual(Date.parse(failures![0].at));
+  expect(info.sourceReference).toBeUndefined();
+});
+
 test('offers first-launch setup once and keeps a skip after restart', async () => {
   let page = await application!.firstWindow();
   await expect(page.getByRole('button', { name: 'Open setup guide' })).toBeVisible();
@@ -162,9 +196,18 @@ test('counts blocked requests for the current page and keeps Banking strict', as
   const probe = (url: string, number: number) => application!.evaluate(async ({ webContents }, input) => {
     const contents = webContents.getAllWebContents().find((view) => view.getURL() === input.url);
     if (!contents) throw new Error('Tracker fixture view is missing');
-    await contents.session.setProxy({ mode: 'fixed_servers', proxyRules: input.proxy, proxyBypassRules: '127.0.0.1' });
-    await contents.session.closeAllConnections();
-    await contents.executeJavaScript(`new Image().src = "https://scorecardresearch.com/tracker-${input.number}.gif"; true`);
+    const trackerUrl = 'http://scorecardresearch.com/tracker-' + input.number + '.gif';
+    const proxyAddress = new URL(input.proxy).host;
+    await contents.session.setProxy({ mode: 'fixed_servers', proxyRules: proxyAddress, proxyBypassRules: '127.0.0.1' });
+    const proxy = await contents.session.resolveProxy(trackerUrl);
+    if (proxy !== 'PROXY ' + proxyAddress) throw new Error('The tracker fixture did not resolve to its local proxy.');
+    await contents.executeJavaScript(`new Promise((resolve) => {
+      const image = new Image();
+      image.hidden = true;
+      image.onload = image.onerror = () => { image.remove(); resolve(true); };
+      document.body.append(image);
+      image.src = ${JSON.stringify(trackerUrl)};
+    })`);
   }, { url, number, proxy: origin });
 
   await page.evaluate((url) => window.privateBrowser.navigate(url), ordinary);
@@ -374,6 +417,48 @@ test('previews a native Chrome import and undoes its untouched records only', as
   expect(after).toHaveLength(initial.bookmarks.length + 1);
   expect(after.find((item) => item.id === edited.id)?.title).toBe('I edited this');
   expect(after).toContainEqual(initial.bookmarks[0]);
+  await expect(page.evaluate((value) => window.privateBrowser.previewChromeImport(value), options)).rejects.toThrow(/already been imported/);
+});
+
+test('suggests a Chrome profile destination and persists one settings import per profile', async () => {
+  test.skip(process.platform !== 'win32', 'The fixture uses the Windows Chrome profile path.');
+  const localRoot = join(userDataPath, 'chrome-settings-fixture');
+  const source = join(localRoot, 'Google', 'Chrome', 'User Data');
+  mkdirSync(join(source, 'Profile 1'), { recursive: true });
+  writeFileSync(join(source, 'Local State'), JSON.stringify({ profile: { info_cache: { 'Profile 1': { name: 'Research' } } } }));
+  writeFileSync(join(source, 'Profile 1', 'Preferences'), JSON.stringify({
+    default_search_provider_data: { template_url_data: { url: '{google:baseURL}search?q={searchTerms}' } },
+    homepage_is_newtabpage: false, homepage: 'https://research.example.test/',
+    session: { restore_on_startup: 5 },
+  }));
+  const useFixture = () => application!.evaluate((_electron, directory) => { process.env.LOCALAPPDATA = directory; }, localRoot);
+  await useFixture();
+  let page = await application!.firstWindow();
+  const id = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Research', 'sky'));
+  const profile = () => page.evaluate(() => window.privateBrowser.listChromeProfiles().then((profiles) => profiles.find((item) => item.id === 'Profile 1')));
+  expect(await profile()).toMatchObject({ suggestedAccountSpaceId: id, hasPreferences: true });
+  const options = { profileId: 'Profile 1', workspaceId: 'personal' as const, accountSpaceId: id,
+    bookmarks: false, history: false, settings: { search: true, home: true } };
+  const preview = () => page.evaluate((value) => window.privateBrowser.previewChromeImport(value), options);
+  const old = await preview();
+  expect(old.settingsPatch).toEqual({ searchEngine: 'google', homePage: 'url', homePageUrl: 'https://research.example.test/' });
+  const original = await page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings));
+  expect(original.searchEngine).toBe('duckduckgo');
+  await page.evaluate(() => window.privateBrowser.setBrowserSettings({ searchEngine: 'bing' }, 'personal'));
+  await expect(page.evaluate((value) => window.privateBrowser.confirmChromeImport(value), old.id)).rejects.toThrow(/Workspace settings changed/);
+  const final = await preview();
+  await expect(page.evaluate((value) => window.privateBrowser.confirmChromeImport(value), final.id)).resolves.toMatchObject({ appliedSettings: ['search', 'home'] });
+  expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings)))
+    .toMatchObject({ searchEngine: 'google', homePageUrl: 'https://research.example.test/', startup: original.startup });
+  await application!.close();
+  application = await launchProfile();
+  await useFixture();
+  page = await application.firstWindow();
+  expect(await profile()).toMatchObject({ imported: true, importedInto: id });
+  await expect(preview()).rejects.toThrow(/already been imported/);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
+  expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings.searchEngine))).toBe('duckduckgo');
+  expect(await profile()).toMatchObject({ imported: true, importedInto: undefined });
 });
 
 test('imports standard bookmark HTML into the selected native Account Space', async () => {

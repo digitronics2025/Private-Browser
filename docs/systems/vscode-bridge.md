@@ -9,7 +9,7 @@ verified_at: dcd6823a
 
 # VS Code Bridge
 
-> Last verified: 2026-09-25
+> Last verified: 2026-11-21
 
 ## Agent Brief
 
@@ -129,10 +129,13 @@ Chromium DevTools remain available only on non-protected Development pages.
 Element selection uses Electron's main-process `webContents.debugger` CDP
 session without exposing a remote-debugging socket. When native DevTools already
 owns the debugger, the same bounded evaluation runs through the main process.
-Selectors contain only IDs, tag names, and a few classes. Route, framework,
-viewport, console sources, failed requests, active editor, and confidence labels
-are presented without claiming an exact React component when only a nearest
-match exists.
+Selectors contain only IDs, tag names, and a few classes. The inspector groups
+request failures by sanitized URL, method, type and outcome for the current tab.
+Each group shows its count and first and last occurrence. Source opening requires
+companion 0.4.4, the selected project's running local server and a confirmed
+workspace file for a direct HTML route or explicit asset reference. The companion
+rechecks the short-lived file reference and project grant on open. Other elements
+show the available source confidence and keep opening disabled.
 
 Quick Test and Test Everything execute approved project checks. Current Page,
 Responsive, Accessibility, Performance, Record Flow, Live Website, and

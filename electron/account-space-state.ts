@@ -28,6 +28,7 @@ import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation
 import { pruneBookmarkIcons, sanitizeBookmarkIcons } from './bookmark-icons.js';
 import { isAllowedRemoteUrl } from './security.js';
 import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings, sanitizeWorkspaceSettings } from './browser-settings.js';
+import { chromeProfileReceipts } from './chrome-profile-preferences.js';
 import { sanitizeAccountPanel, sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
 import { sanitizeBrowserRoutines } from './browser-routines.js';
@@ -389,6 +390,7 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
     ui,
     settings: sanitizeBrowserSettings(input.settings),
     workspaceSettings: sanitizeWorkspaceSettings(input.workspaceSettings),
+    chromeProfileImports: chromeProfileReceipts(input.chromeProfileImports),
     routines: sanitizeBrowserRoutines(input.routines),
   };
 }

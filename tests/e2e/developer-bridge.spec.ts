@@ -14,8 +14,11 @@ function snapshot(workspaceId: 'development' | 'banking') {
   return { workspaces, activeWorkspaceId: workspaceId, activeAccountSpaceId: active.id, activeTabId: workspaceId, tabs, bookmarks: [], history: [], downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true, accountSpaces: accounts, accountHealth: accounts.map((account) => ({ accountSpaceId: account.id, status: account.googleConnection, checkedAt: '2026-09-12T10:00:00Z' })), googleConfiguration: { configured: false }, externalBrowsers: [] };
 }
 
-async function installMock(page: import('@playwright/test').Page, workspaceId: 'development' | 'banking', connected = false) {
-  await page.addInitScript(({ state, connected }) => {
+async function installMock(page: import('@playwright/test').Page, workspaceId: 'development' | 'banking', connected = false, inspection = false) {
+  await page.addInitScript(({ state, connected, inspection }) => {
+    if (inspection) Object.assign(state.tabs.find((tab) => tab.id === state.activeTabId)!, {
+      url: 'http://127.0.0.1:5173/catalogue.html', title: 'Inspection fixture', isHome: false, developerToolsAllowed: true,
+    });
     const project = { project: { id: 'a'.repeat(32), name: 'Fixture workspace', trusted: true }, framework: 'Vite', packageManager: 'npm', types: ['vite-react'] };
     const commit = 'a'.repeat(40);
     let bridge: { state: string; browserVersion: string; extensionVersion?: string; project?: typeof project; pairingCode?: string; pairingExpiresAt?: number; activity?: string; vscodeVersion?: string; instanceId?: string } = connected
@@ -40,8 +43,16 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
       beginBridgePairing: async () => (bridge = { state: 'pairing', browserVersion: '0.4.0', pairingCode: '12345678', pairingExpiresAt: Date.now() + 300000 }),
       cancelBridgePairing: async () => (bridge = { state: 'disconnected', browserVersion: '0.4.0', activity: 'Pairing cancelled' }),
       listBridgeProjects: async () => [],
+      inspectDeveloperPage: async (pick: boolean) => ({
+        route: '/catalogue.html', framework: 'Fixture', viewport: '390 × 800',
+        failures: [{ at: '2026-11-21T12:01:00Z', firstAt: '2026-11-21T12:00:00Z', method: 'GET',
+          resourceType: 'xhr', status: 503, count: 3, url: 'http://127.0.0.1:5173/api/items' }],
+        ...(pick ? { element: 'button', selector: '#sample', confidence: 'nearest' }
+          : { confidence: 'exact', sourcePath: 'catalogue.html', sourceReference: '00000000-0000-4000-8000-000000000001' }),
+      }),
       setUiPreferences: async (patch: Record<string, unknown>) => { ui = { ...ui, ...patch }; notify?.(getState()); },
       runBridgeAction: async (action: string, payload: Record<string, unknown> = {}) => {
+        if (action === 'inspect.open-source') document.documentElement.dataset.confirmedSource = String(payload.reference);
         if (action === 'project.revision') return { branch: 'topic/review', commit, staged: 1, unstaged: 2, untracked: 0, conflicts: 0, githubRepository: 'example/app' };
         if (action === 'reports.search') {
           const query = payload.query as { text?: string; status?: string; date?: string; project?: string };
@@ -80,8 +91,29 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
       setLayout: async () => undefined,
     }, { get: (target, property) => property in target ? target[property as keyof typeof target] : async () => undefined });
     Object.defineProperty(window, 'privateBrowser', { value: api });
-  }, { state: snapshot(workspaceId), connected });
+  }, { state: snapshot(workspaceId), connected, inspection });
 }
+
+test('opens only a confirmed inspection source and displays grouped failures', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await installMock(page, 'development', true, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  await page.getByRole('tab', { name: 'Developer Bridge' }).click();
+  await page.getByRole('tab', { name: 'Inspect', exact: true }).click();
+  await page.getByRole('button', { name: 'Select element' }).click();
+  await expect(page.getByText('#sample')).toBeVisible();
+  await expect(page.getByText('Nearest editor match, source unconfirmed')).toBeVisible();
+  const open = page.getByRole('button', { name: 'Open source in VS Code' });
+  await expect(open).toHaveCount(0);
+  const failures = page.getByRole('region', { name: 'Recent request failures' });
+  await expect(failures.getByText('HTTP 503 · 3 occurrences')).toBeVisible();
+  await expect(failures.getByText(/First .*Last /)).toBeVisible();
+  await page.getByRole('button', { name: 'Inspect page' }).click();
+  await expect(page.getByText('Confirmed source file')).toBeVisible();
+  await open.click();
+  await expect(page.locator('html')).toHaveAttribute('data-confirmed-source', '00000000-0000-4000-8000-000000000001');
+});
 
 test('shows focused pairing and all four bridge tabs in Development', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));

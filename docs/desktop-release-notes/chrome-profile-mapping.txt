@@ -1,0 +1,1 @@
+Choose a destination for each Chrome profile. Review bookmarks, history and optional Search, Home or startup settings before importing. A saved receipt prevents repeating the same profile import.

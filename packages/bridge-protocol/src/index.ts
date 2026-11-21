@@ -69,6 +69,20 @@ export function localDevelopmentAddress(value: string): URL | undefined {
 }
 
 const localDevelopmentAddressSchema = z.string().max(512).refine((value) => Boolean(localDevelopmentAddress(value)));
+export const inspectionSourceSchema = z.object({
+  reference: z.string().uuid(),
+  path: z.string().min(1).max(500),
+});
+
+export function inspectionSourcePath(pathname: string): string | undefined {
+  let decoded: string;
+  try { decoded = decodeURIComponent(pathname); } catch { return undefined; }
+  if (decoded.length > 500 || !/^\/[\w./ -]+$/.test(decoded)) return undefined;
+  const segments = decoded.slice(1).split('/');
+  if (segments.some((part) => !part || part === '.' || part === '..' || /^(?:\.git|node_modules)$/i.test(part))) return undefined;
+  return /\.(?:html?|css|[cm]?jsx?|tsx?|vue|svelte)$/i.test(decoded) ? segments.join('/') : undefined;
+}
+
 export const devServerStatusSchema = z.object({
   phase: z.enum(['stopped', 'waiting', 'ready', 'stopping', 'failed', 'missing-command']),
   expectedUrl: localDevelopmentAddressSchema.optional(),
