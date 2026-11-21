@@ -15,11 +15,16 @@ import { requireBrowserSettingsPatch } from './browser-settings.js';
 import { requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
+import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
 export function validateIpcArguments(channel: string, args: unknown[]): void {
   switch (channel) {
+    case 'browser:open-bookmarks-in-background':
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (!Array.isArray(args[1]) || !args[1].length || args[1].length > MAX_BOOKMARK_BATCH) throw new Error('Select between 1 and 20 bookmarks');
+      args[1].forEach((id) => requireNonEmptyText(id, 'bookmark identifier', 128)); return;
     case 'routines:save':
       exact(args, 1); requireBrowserRoutine(args[0]); return;
     case 'routines:delete':

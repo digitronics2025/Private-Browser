@@ -5,6 +5,7 @@ import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsP
 import { parseWebAddress } from '../electron/security';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
+import { planBookmarkBatch } from '../electron/bookmark-batch';
 import { canonicalRoutineUrl, defaultBrowserRoutines, requireBrowserRoutine } from '../electron/browser-routines';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
@@ -337,6 +338,19 @@ export function installPreviewApi(): void {
       await (source === 'tab' ? handlers.activateTab(entry.id) : handlers.navigate(entry.url));
     },
     openBookmark: async (value) => { const item = state.bookmarks.find((entry) => entry.id === value); if (item) { const id = `preview-${crypto.randomUUID()}`; state.tabs.push(pageTab(id, state.activeAccountSpaceId, item.title, item.url)); state.activeTabId = id; publish(); } },
+    openBookmarksInBackground: (async (account: unknown, ids: unknown) => {
+      const activeAccount = state.activeAccountSpaceId;
+      if (activeAccount !== account || state.accountSpaces.find((item) => item.id === activeAccount)?.locked) {
+        throw new Error('The Account Space changed. Reopen the bookmark preview.');
+      }
+      if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) throw new Error('Invalid bookmark selection');
+      const { pending, reused, skipped } = planBookmarkBatch(
+        state.bookmarks.filter((item) => item.accountSpaceId === activeAccount), state.tabs.filter((tab) => tab.accountSpaceId === activeAccount), ids,
+      );
+      state.tabs.push(...pending.map(({ bookmark }) => pageTab(crypto.randomUUID(), activeAccount, bookmark.title, bookmark.url)));
+      publish();
+      return { opened: pending.length, reused, skipped };
+    }) satisfies PrivateBrowserApi['openBookmarksInBackground'],
     toggleBookmark: async () => {
       const tab = activeTab();
       if (tab.isHome) return;

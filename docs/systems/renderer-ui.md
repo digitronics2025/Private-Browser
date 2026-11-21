@@ -181,8 +181,9 @@ Entries come from `bookmarkEntries` (imported Chrome order and folders). A hidde
 measuring row gives each entry's width; a `ResizeObserver` decides how many fit
 and the rest go to the » overflow menu. Folders open nested `SubmenuItem` menus.
 Top-level entries drag-reorder (`moveBookmark`). Right-click offers Open in new
-tab, Copy link, Edit name, Delete; folders offer Open all (confirm above 8), Rename
-and Delete; the empty bar offers the visibility modes, the manager, import and
+tab, Copy link, Edit name and Delete. Folders offer a selectable background-opening
+preview that skips addresses already open in the active space, plus Rename and
+Delete. The empty bar offers the visibility modes, the manager, import and
 export. Icons reuse favicons the main process already fetched — live tab icons
 first, then the active space's remembered `bookmarkIcons` — and the bar never
 fetches an icon. The import hint appears only while the bar is empty

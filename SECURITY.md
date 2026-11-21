@@ -132,6 +132,11 @@ manifest. This does not replace operating-system malware scanning.
 
 Chromium DevTools attach only to non-home pages in the Development workspace. They are refused in every other workspace and on detected banking or payment URLs, and are closed whenever the user switches tabs or workspaces or a tab commits a protected navigation. Page context menus expose exact element inspection only inside that boundary.
 
+The native page menu is unavailable in Banking and on detected protected pages.
+It rechecks the active page and frame before acting. Paste and copy use native
+edit commands in the focused source frame. Image saving follows the originating
+Account Space's download permission.
+
 Developer diagnostics are process-memory-only, bounded per tab, and collect only console warnings/errors, failed-request method/status/type, sanitized source URLs, and aggregate document counts. They never collect page text, input values, cookies, local or session storage, headers, request or response bodies. URL credentials, queries and fragments are removed, high-entropy path segments and sensitive text patterns are redacted, and the user explicitly copies the resulting report before it can reach another tool.
 
 ## VS Code bridge

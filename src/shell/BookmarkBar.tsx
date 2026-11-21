@@ -255,7 +255,7 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
       )}
       {menu?.kind === 'context-folder' && (
         <MenuSurface point={menu.point} label={`${menu.name} folder actions`} className="context-menu" onClose={() => setMenu(null)}>
-          <MenuItem icon={ExternalLink} label={`Open all (${menu.items.length})`} onSelect={() => actions.openAll(menu.items)} />
+          <MenuItem icon={ExternalLink} label={`Open bookmarks… (${menu.items.length})`} onSelect={() => actions.openAll(menu.items)} />
           <MenuSeparator />
           <MenuItem icon={Pencil} label="Rename folder…" onSelect={() => actions.renameFolder(level, menu.name)} />
           <MenuItem icon={Trash2} danger label="Delete folder…" onSelect={() => actions.removeFolder(level, menu.name, menu.items.length)} />
