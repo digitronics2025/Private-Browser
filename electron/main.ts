@@ -171,7 +171,7 @@ import { chromeProfileKey, MAX_CHROME_PROFILE_RECEIPTS } from './chrome-profile-
 import { chromeImportBookmarkStamp, chromeImportKey, planChromeImport } from './chrome-import-review.js';
 import type { ChromeImportReview } from './types.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
-import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
+import { adoptPopupWindow, guardPageNavigation, PopupReview, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
@@ -382,6 +382,7 @@ class BrowserController {
   private readonly fillCapabilities = new FillCapabilityStore();
   private readonly fillPicker: FillPicker = new FillPicker(() => this.window, { choose: (choice) => void this.handleFillPickerChoice(choice) });
   private readonly vaultSync: VaultSyncController;
+  private readonly popupReview = new PopupReview();
   private dirtySyncTimer?: NodeJS.Timeout;
   private readonly passkeyController = new InternalPasskeyController();
   private readonly passkeyOptIns: PasskeyOptIns = { global: false, workspaces: {}, sites: {} };
@@ -1521,6 +1522,10 @@ class BrowserController {
       }
     } finally {
       pending.respond(allowed, displaySourceId);
+      if (!allowed) {
+        const reason = Date.parse(pending.prompt.expiresAt) <= Date.now() ? 'The permission request expired.' : 'The permission was declined or the source was unavailable.';
+        this.logBlockedPermission(pending.prompt.accountSpaceId, pending.prompt.capability, reason + ' Request it again from the page.');
+      }
       this.broadcast();
       await this.showActiveTab();
       this.activeContents()?.focus();
@@ -1972,6 +1977,7 @@ class BrowserController {
   private queuePermissionPrompt(prompt: PermissionPrompt, respond: (allowed: boolean, displaySourceId?: string) => void, retainAllowOnce = false): void {
     if (this.pendingPermission) {
       respond(false);
+      this.logBlockedPermission(prompt.accountSpaceId, prompt.capability, 'Finish the open permission request, then try again.');
       return;
     }
     this.pendingPermission = { prompt, respond, retainAllowOnce };
@@ -1979,6 +1985,15 @@ class BrowserController {
     this.runtimeTabs.get(active.id)?.view?.setVisible(false);
     if (this.visibleSplitTabId) this.applyLayout();
     this.broadcast();
+  }
+
+  private logBlockedPermission(accountId: AccountSpaceId, capability: PermissionCapability, detail: string): void {
+    const title = 'Permission blocked · ' + capability.replaceAll('-', ' ');
+    const state = this.store.get();
+    if (this.activeAccountSpaceId(state) !== accountId) return;
+    if (state.privacyLog.some((event) => event.accountSpaceId === accountId && event.title === title
+      && event.detail === detail && Date.now() - Date.parse(event.at) < 15_000)) return;
+    this.addPrivacyEvent('blocked', title, detail, accountId);
   }
 
   goBack(): void {
@@ -4550,17 +4565,20 @@ class BrowserController {
     // navigation or tab-tracking control for its whole life (F-28).
     const popupTimes: number[] = [];
     // `popup` is set when the request comes from a popup window this tab opened.
-    const openFromPage = ({ url, disposition }: HandlerDetails, popup?: BrowserWindow): WindowOpenHandlerResponse => {
+    const openFromPage = ({ url, disposition, postBody }: HandlerDetails, popup?: BrowserWindow): WindowOpenHandlerResponse => {
       if (agentHost?.isLentContents(view.webContents.id)) return { action: 'deny' };
       if (tab.workspaceId === 'banking') {
-        this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs', tab.accountSpaceId);
+        this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking blocks site-opened windows. Open a link yourself from the original tab if you trust the address.', tab.accountSpaceId);
         return { action: 'deny' };
       }
-      if (!isAllowedRemoteUrl(url)) return { action: 'deny' };
+      if (!isAllowedRemoteUrl(url)) {
+        this.addPrivacyEvent('blocked', 'Popup address blocked', 'Site-opened windows require an HTTP or HTTPS address. Check the link on the original page.', tab.accountSpaceId);
+        return { action: 'deny' };
+      }
       const now = Date.now();
       while (popupTimes.length && now - popupTimes[0]! > POPUP_WINDOW_MS) popupTimes.shift();
       if (popupTimes.length >= MAX_POPUPS_PER_WINDOW) {
-        this.addPrivacyEvent('blocked', 'Popups blocked', `${urlOriginForSharing(url)} opened too many windows`, tab.accountSpaceId);
+        this.addPrivacyEvent('blocked', 'Popups blocked', `${urlOriginForSharing(url)} opened too many windows. Wait a few seconds, then reopen the page.`, tab.accountSpaceId);
         return { action: 'deny' };
       }
       popupTimes.push(now);
@@ -4570,13 +4588,47 @@ class BrowserController {
       const inForeground = popup
         ? !popup.isDestroyed() && popup.isFocused()
         : opener.id === tabId && view.getVisible() && !this.window.isDestroyed() && this.window.isFocused();
-      if (inForeground && wantsPopupWindow(disposition)) return popupWindowResponse(this.window);
+      if (inForeground && wantsPopupWindow(disposition)) {
+        if (this.popupReview.pending || this.pendingPermission) {
+          this.addPrivacyEvent('blocked', 'Popup waiting for an earlier decision', 'Finish the open permission or window review, then try again from the page.', tab.accountSpaceId);
+          return { action: 'deny' };
+        }
+        const from = popup?.webContents ?? view.webContents;
+        const requestOrigin = safeOrigin(from.getURL());
+        const destination = safeOrigin(url);
+        const generation = runtime.navigationGeneration;
+        const requestPage = from.getURL();
+        const account = this.accounts.require(tab.accountSpaceId);
+        const accountLabel = account.label.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 100);
+        return popupWindowResponse(this.window, (options) => {
+          const child = new BrowserWindow({ ...options, show: false });
+          adoptPopupWindow(child, (window) => (details) => openFromPage(details, window));
+          this.popupReview.start(child, {
+            url, method: postBody ? 'POST' : 'GET',
+            current: () => !this.sessionIsLocked && !from.isDestroyed() && from.getURL() === requestPage
+              && runtime.navigationGeneration === generation && this.activeTab(this.store.get()).id === tabId
+              && !agentHost?.isLentContents(view.webContents.id),
+            ask: (signal) => dialog.showMessageBox(this.window, {
+              type: 'question', title: 'Review site-opened window', message: 'Open this window?',
+              detail: ['Requesting site: ' + requestOrigin, 'Destination: ' + destination, 'Account Space: ' + accountLabel,
+                'Continue only if you expected this sign-in or payment. This request expires after 30 seconds.'].join('\n'),
+              buttons: ['Continue', 'Cancel'], defaultId: 1, cancelId: 1, signal,
+            }).then(({ response }) => response === 0),
+            finish: (outcome) => {
+              if (outcome === 'continued' || this.window.isDestroyed()) return;
+              const reason = outcome === 'expired' ? 'The window review expired.'
+                : outcome === 'changed' ? 'The original page or Account Space changed.' : 'You cancelled the window.';
+              this.addPrivacyEvent('blocked', 'Site-opened window stopped', reason + ' Try again from the original page.', tab.accountSpaceId);
+            },
+          });
+          return child.webContents;
+        });
+      }
       if (inForeground) void this.newTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
       else this.addBackgroundTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
       return { action: 'deny' };
     };
     view.webContents.setWindowOpenHandler((details) => openFromPage(details));
-    view.webContents.on('did-create-window', (child) => adoptPopupWindow(child, (window) => (details) => openFromPage(details, window)));
     guardPageNavigation(view.webContents);
     view.webContents.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
       if (!isMainFrame) return;
@@ -4713,11 +4765,12 @@ class BrowserController {
     if (spelling) this.applySpellcheck(ses, spelling);
     const protectedWorkspace = WORKSPACES.find((workspace) => workspace.id === workspaceId)!.protected;
     ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+      const capability = permissionCapability(permission, details);
       if (protectedWorkspace || !details.isMainFrame || agentHost?.isLentContents(_webContents?.id)) {
         callback(false);
+        if (capability && protectedWorkspace) this.logBlockedPermission(accountSpaceId, capability, 'Banking blocks site permissions. Use a regular Account Space for a call or notifications.');
         return;
       }
-      const capability = permissionCapability(permission, details);
       if (!capability) {
         callback(isAllowedSitePermission(permission, details.requestingUrl, false, details.isMainFrame));
         return;
@@ -4726,6 +4779,12 @@ class BrowserController {
       const evaluation = this.permissions.evaluate(accountSpaceId, workspaceId, origin, capability);
       if (evaluation !== 'prompt') {
         callback(evaluation === 'granted');
+        if (evaluation === 'denied') {
+          const guidance = capability === 'geolocation' ? 'This browser blocks location access from websites.'
+            : capability === 'notifications' ? 'Notifications require an allowed Google service origin.'
+              : 'Camera, microphone and screen sharing require the Google Meet site.';
+          this.logBlockedPermission(accountSpaceId, capability, guidance + ' Review Site permissions from the address bar.');
+        }
         return;
       }
       try {
@@ -4758,6 +4817,11 @@ class BrowserController {
         || !activeView?.getVisible()
         || request.frame !== activeView.webContents.mainFrame) {
         deny();
+        if (active.accountSpaceId === accountSpaceId) {
+          this.logBlockedPermission(accountSpaceId, 'display-capture', protectedWorkspace
+            ? 'Banking blocks screen sharing. Use Google Meet in a regular Account Space.'
+            : 'Open Google Meet in front, then start screen sharing from that page.');
+        }
         return;
       }
       if (this.permissions.evaluate(accountSpaceId, workspaceId, origin, 'display-capture', false) === 'denied') {
@@ -4780,7 +4844,7 @@ class BrowserController {
         deny();
       }
     }, { useSystemPicker: false });
-    ses.webRequest.onBeforeRequest((details, callback) => {
+    const checkRequest = (details: Electron.OnBeforeRequestListenerDetails, callback: (result: Electron.CallbackResponse) => void) => {
       if (agentHost?.allowLentRequest(details) === false) { callback({ cancel: true }); return; }
       if (details.resourceType === 'mainFrame' && details.webContentsId !== undefined) {
         const tab = this.contentsTabs.get(details.webContentsId);
@@ -4798,6 +4862,12 @@ class BrowserController {
       const blocked = this.trackerProtection.shouldBlock(accountSpaceId, category, { origin, strict, enabled });
       if (blocked && origin) this.scheduleTrackerBroadcast();
       callback({ cancel: blocked });
+    };
+    ses.webRequest.onBeforeRequest((details, callback) => {
+      if (!this.popupReview.hold(details, (allowed) => {
+        if (allowed) checkRequest(details, callback);
+        else callback({ cancel: true });
+      })) checkRequest(details, callback);
     });
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
@@ -5019,6 +5089,7 @@ class BrowserController {
   }
 
   private hideAllViews(): void {
+    this.popupReview.cancel();
     this.fillPicker.close();
     for (const runtime of this.runtimeTabs.values()) {
       if (runtime.view?.getVisible()) runtime.memorySaver.lastVisibleAt = Date.now();

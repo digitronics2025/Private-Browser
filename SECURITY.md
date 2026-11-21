@@ -120,7 +120,9 @@ the active visible tab plus a source picker every time. Banking denies before
 saved grants. Popups become tabs in the originating account, except a
 `window.open` popup from the page in front (payment and sign-in flows), which
 opens as a sandboxed, preload-free window in the same account session, titled
-with its host, confined to http(s), and closed with its tab.
+with its host, confined to http(s), and closed with its tab. The initial
+request waits for a native confirmation bound to the opener, destination,
+method and Account Space. It expires after 30 seconds.
 
 Google service access uses narrow main-process clients, bounded ten-second
 requests and scope checks. Gmail sends, calendar mutations, Drive permission

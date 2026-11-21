@@ -1,5 +1,26 @@
-import { describe, expect, it } from 'vitest';
-import { popupTitle, popupWindowResponse, wantsPopupWindow } from '../electron/popup-windows';
+import { EventEmitter } from 'node:events';
+import type { BrowserWindow } from 'electron';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PopupReview, popupTitle, popupWindowResponse, wantsPopupWindow } from '../electron/popup-windows';
+
+const request = { webContentsId: 4, url: 'https://wallet.example/charge', resourceType: 'mainFrame', method: 'POST' };
+
+function pendingReview() {
+  const show = vi.fn();
+  const destroy = vi.fn();
+  const child = Object.assign(new EventEmitter(), { webContents: { id: 4 }, show, destroy, isDestroyed: () => false });
+  let answer!: (approved: boolean) => void;
+  const decision = new Promise<boolean>((resolve) => { answer = resolve; });
+  const ask = vi.fn(() => decision);
+  const finish = vi.fn();
+  const current = vi.fn(() => true);
+  const review = new PopupReview();
+  review.start(child as unknown as BrowserWindow, { url: request.url + '#step', method: 'POST', ask, finish, current });
+  const continueRequest = vi.fn();
+  return { review, continueRequest, current, ask, answer, finish, show, destroy };
+}
+
+afterEach(() => vi.useRealTimers());
 
 describe('popup windows', () => {
   it('opens a real window only for a window.open popup request', () => {
@@ -30,5 +51,35 @@ describe('popup windows', () => {
       allowRunningInsecureContent: false,
     });
     expect(response.overrideBrowserWindowOptions?.webPreferences).not.toHaveProperty('preload');
+  });
+
+  it('expires a held request and discards its later approval', async () => {
+    vi.useFakeTimers();
+    const fixture = pendingReview();
+    const wrong = vi.fn();
+    expect(fixture.review.hold({ ...request, webContentsId: 9 }, wrong)).toBe(false);
+    expect(fixture.review.hold({ ...request, method: 'GET' }, wrong)).toBe(true);
+    expect(wrong).toHaveBeenCalledExactlyOnceWith(false);
+    expect(fixture.review.hold(request, fixture.continueRequest)).toBe(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fixture.ask.mock.calls[0]).toEqual([expect.objectContaining({ aborted: true })]);
+    expect(fixture.continueRequest).toHaveBeenCalledExactlyOnceWith(false);
+    expect(fixture.finish).toHaveBeenCalledExactlyOnceWith('expired');
+    fixture.answer(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.show).not.toHaveBeenCalled();
+    expect(fixture.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('rejects Continue after the original page context changes', async () => {
+    vi.useFakeTimers();
+    const fixture = pendingReview();
+    expect(fixture.review.hold(request, fixture.continueRequest)).toBe(true);
+    fixture.current.mockReturnValue(false);
+    fixture.answer(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fixture.continueRequest).toHaveBeenCalledExactlyOnceWith(false);
+    expect(fixture.finish).toHaveBeenCalledExactlyOnceWith('changed');
+    expect(fixture.show).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,7 @@ let application: ElectronApplication | undefined;
 let userDataPath: string;
 let origin: string;
 let server: Server;
+let walletRequests: number;
 
 // A checkout page and a wallet popup that reports back to its opener, the way
 // Google Pay does. Without `window.opener` it fails with OR_BIBED_15.
@@ -22,7 +23,9 @@ const PAGES: Record<string, string> = {
 };
 
 test.beforeEach(async () => {
+  walletRequests = 0;
   server = createServer((request, response) => {
+    if (request.url === '/wallet') walletRequests++;
     response.setHeader('Content-Type', 'text/html');
     response.end(PAGES[new URL(request.url ?? '/', 'http://localhost').pathname] ?? '<!doctype html><title>Other</title>');
   });
@@ -60,13 +63,41 @@ function runInCheckout<T>(script: string): Promise<T> {
   }, { url: `${origin}/checkout`, code: script }) as Promise<T>;
 }
 
+async function capturePopupReview() {
+  await application!.evaluate(({ dialog }) => {
+    const fixture = globalThis as typeof globalThis & { popupReview?: { detail: string; signal?: AbortSignal; reply: (choice: number) => void } };
+    const original = dialog.showMessageBox;
+    dialog.showMessageBox = ((parent: Electron.BrowserWindow, options: Electron.MessageBoxOptions) => {
+      if (options?.title !== 'Review site-opened window') return original(parent, options);
+      return new Promise<Electron.MessageBoxReturnValue>((resolve) => {
+        fixture.popupReview = { detail: options.detail ?? '', signal: options.signal, reply: (response) => resolve({ response, checkboxChecked: false }) };
+        options.signal?.addEventListener('abort', () => resolve({ response: 1, checkboxChecked: false }), { once: true });
+      });
+    }) as typeof dialog.showMessageBox;
+  });
+  return {
+    detail: () => application!.evaluate(() => (globalThis as { popupReview?: { detail: string } }).popupReview?.detail ?? ''),
+    answer: (choice: number) => application!.evaluate((_electron, value) => {
+      (globalThis as { popupReview?: { reply: (response: number) => void } }).popupReview?.reply(value);
+    }, choice),
+  };
+}
+
 test('a payment popup opens as a real window that can talk to the checkout page', async () => {
   const page = await openCheckout('personal');
   const windowsBefore = await windowCount();
+  const review = await capturePopupReview();
 
   expect(await runInCheckout<boolean>(`window.wallet = window.open('/wallet', 'wallet', 'popup,width=420,height=560'); Boolean(window.wallet)`)).toBe(true);
   await expect.poll(windowCount).toBe(windowsBefore + 1);
+  await expect.poll(review.detail).toContain('Requesting site: ' + origin);
+  expect(await review.detail()).toContain('Destination: ' + origin);
+  expect(await review.detail()).toContain('Account Space: Personal');
+  expect(walletRequests).toBe(0);
+  expect(await runInCheckout<string[]>('window.received')).toEqual([]);
+  await review.answer(0);
   await expect.poll(() => runInCheckout<string[]>('window.received')).toEqual(['wallet-ready']);
+  expect(walletRequests).toBe(1);
 
   // Same Account Space session, hardened, and titled with its host.
   const popup = await application!.evaluate(async ({ BrowserWindow, webContents }, url) => {
@@ -96,6 +127,20 @@ test('a payment popup opens as a real window that can talk to the checkout page'
   const checkoutTab = tabs.find((tab) => tab.url === `${origin}/checkout`)!;
   await page.evaluate((id) => window.privateBrowser.closeTab(id), checkoutTab.id);
   await expect.poll(windowCount).toBe(windowsBefore);
+});
+
+test('cancel closes the held popup before a request can reach the wallet', async () => {
+  const page = await openCheckout('personal');
+  const windowsBefore = await windowCount();
+  const review = await capturePopupReview();
+  expect(await runInCheckout<boolean>(`Boolean(window.open('/wallet', 'wallet', 'popup,width=420,height=560'))`)).toBe(true);
+  await expect.poll(review.detail).toContain('expires after 30 seconds');
+  expect(walletRequests).toBe(0);
+  await review.answer(1);
+  await expect.poll(windowCount).toBe(windowsBefore);
+  expect(walletRequests).toBe(0);
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then(({ privacyLog }) =>
+    privacyLog.find(({ title }) => title === 'Site-opened window stopped')?.detail))).toContain('Try again from the original page.');
 });
 
 test('Banking still refuses payment popups', async () => {
