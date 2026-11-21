@@ -191,6 +191,8 @@ headers, Drive displays allowed files, and Calendar displays upcoming primary
 calendar events. Each section loads up to 10 items per page and 50 per visit.
 Results and paging state stay in memory. Original links open in the same space.
 This view uses the existing grants and does not request expanded access.
+See [Review Google actions](../google-action-review.md) for replies, shares,
+meeting invitations and encrypted retry receipts.
 
 ## Permissions
 
