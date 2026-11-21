@@ -33,7 +33,7 @@ export function showPageContextMenu(
   const editing: MenuItemConstructorOptions[] = [];
   const password = params.formControlType === 'input-password';
   if (!password && params.selectionText && params.editFlags.canCopy) editing.push(item('Copy selected text', () => contents.copy(), editFrame));
-  if (params.isEditable && params.editFlags.canPaste) editing.push(item('Paste', () => contents.paste(), editFrame));
+  if (params.isEditable) editing.push({ ...item('Paste', () => contents.paste(), editFrame), enabled: params.editFlags.canPaste });
   if (!password && params.isEditable && params.misspelledWord) {
     for (const suggestion of params.dictionarySuggestions.slice(0, 5)) {
       // Ampersands are accelerators on Windows. A suggestion is always literal.

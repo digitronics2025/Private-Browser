@@ -12,7 +12,7 @@ let server: Server;
 test.beforeEach(async () => {
   server = createServer((_request, response) => {
     response.setHeader('Content-Type', 'text/html');
-    response.end('<!doctype html><title>Containment fixture</title><p>fixture</p><a href="/background-menu">Background link</a><input aria-label="Message">');
+    response.end('<!doctype html><title>Containment fixture</title><p>fixture</p><a href="/background-menu">Background link</a><input aria-label="Message" value="Sample text">');
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -46,9 +46,9 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
   const page = await application!.firstWindow();
   const origin = `http://127.0.0.1:${port}`;
   const url = origin + '/context';
-  type Capture = { labels: string[]; source?: string; calls: number; paste: number; open?: () => void; edit?: () => void };
+  type Capture = { labels: string[]; source?: string; calls: number; copies: number; open?: () => void; copy?: () => void };
   await application!.evaluate(({ Menu, BrowserWindow }) => {
-    const capture: Capture = { labels: [], calls: 0, paste: 0 };
+    const capture: Capture = { labels: [], calls: 0, copies: 0 };
     Object.assign(globalThis, { pageMenuCapture: capture });
     Menu.prototype.popup = function (options) {
       capture.calls += 1;
@@ -56,13 +56,13 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
       capture.labels = this.items.map((item) => item.label);
       const open = this.items.find((item) => item.label === 'Open link in background tab');
       if (open) capture.open = () => Reflect.apply(open.click, open, [open, BrowserWindow.getAllWindows()[0], {}]);
-      const paste = this.items.find((item) => item.label === 'Paste');
-      if (paste) capture.edit = () => Reflect.apply(paste.click, paste, [paste, BrowserWindow.getAllWindows()[0], {}]);
+      const copy = this.items.find((item) => item.label === 'Copy selected text');
+      if (copy) capture.copy = () => Reflect.apply(copy.click, copy, [copy, BrowserWindow.getAllWindows()[0], {}]);
     };
   });
   const capture = () => application!.evaluate(() => {
-    const { labels, source, calls, paste } = (globalThis as unknown as { pageMenuCapture: Capture }).pageMenuCapture;
-    return { labels, source, calls, paste };
+    const { labels, source, calls, copies } = (globalThis as unknown as { pageMenuCapture: Capture }).pageMenuCapture;
+    return { labels, source, calls, copies };
   });
   const openAt = (target: string, command: 'mouse' | 'keyboard') => application!.evaluate(async ({ webContents }, { target, command }) => {
     const contents = webContents.getAllWebContents().find((item) => item.getURL() === target)!;
@@ -76,14 +76,14 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
       contents.sendInputEvent({ type: 'mouseDown', ...point, button: 'right', clickCount: 1 });
       contents.sendInputEvent({ type: 'mouseUp', ...point, button: 'right', clickCount: 1 });
     } else {
-      contents.paste = () => { (globalThis as unknown as { pageMenuCapture: Capture }).pageMenuCapture.paste += 1; };
-      await contents.executeJavaScript("document.querySelector('input').focus()");
+      contents.copy = () => { (globalThis as unknown as { pageMenuCapture: Capture }).pageMenuCapture.copies += 1; };
+      await contents.executeJavaScript("const field = document.querySelector('input'); field.focus(); field.select()");
       contents.sendInputEvent({ type: 'keyDown', keyCode: 'F10', modifiers: ['shift'] });
       contents.sendInputEvent({ type: 'keyUp', keyCode: 'F10', modifiers: ['shift'] });
     }
     return delivered;
   }, { target, command });
-  const invoke = (command: 'open' | 'edit') => application!.evaluate((_electron, action) => {
+  const invoke = (command: 'open' | 'copy') => application!.evaluate((_electron, action) => {
     (globalThis as unknown as { pageMenuCapture: Capture }).pageMenuCapture[action]?.();
   }, command);
   const getState = () => page.evaluate(() => window.privateBrowser.getState());
@@ -98,9 +98,9 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
   expect(opened.tabs.filter((tab) => tab.url === origin + '/background-menu')).toMatchObject([{ accountSpaceId: opened.activeAccountSpaceId }]);
 
   expect(await openAt(url, 'keyboard')).toBe('keyboard');
-  await expect.poll(capture).toMatchObject({ source: 'keyboard', labels: ['Paste'] });
-  await invoke('edit');
-  expect((await capture()).paste).toBe(1);
+  await expect.poll(capture).toMatchObject({ source: 'keyboard', labels: ['Copy selected text', 'Paste'] });
+  await invoke('copy');
+  expect((await capture()).copies).toBe(1);
 
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   const bankingUrl = origin + '/private-space-fixture';
