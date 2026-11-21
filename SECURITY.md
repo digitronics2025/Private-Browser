@@ -25,7 +25,10 @@ the main process may hand the trusted chrome renderer a still JPEG of the active
 page (`browser:freeze-content`). The image is held in renderer memory only while
 the menu is open and never written to disk or sent anywhere. It is never produced
 for Banking or other protected workspaces, for `isProtectedPage` URLs, or for a
-hidden view; those show a neutral backdrop instead. Page layout insets sent by the
+hidden view; those show a neutral backdrop instead. The backdrop is also used
+when two native pages are visible in split view. Split view admits only regular
+pages from the active Account Space and closes both pane surfaces for a prompt
+or overlay. Page layout insets sent by the
 renderer are clamped so the address bar and its security warning can never be
 covered by page content.
 

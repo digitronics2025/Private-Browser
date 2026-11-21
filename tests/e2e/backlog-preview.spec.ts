@@ -177,20 +177,20 @@ test('keeps keyboard selection when the native page overlay is still preparing',
       configurable: true,
       value: new Proxy(api, {
         get(target, property) {
-          if (property !== 'freezeContent') return Reflect.get(target, property);
-          return () => new Promise<null>((resolve) => {
-            window.addEventListener('preview-release-freeze', () => resolve(null), { once: true });
-            document.documentElement.dataset.previewFreezePending = 'true';
-          });
+          if (property !== 'setOverlayOpen') return Reflect.get(target, property);
+          return (open: boolean) => open ? new Promise<void>((resolve, reject) => {
+            window.addEventListener('preview-release-overlay', () => target.setOverlayOpen(true).then(resolve, reject), { once: true });
+            document.documentElement.dataset.previewOverlayPending = 'true';
+          }) : target.setOverlayOpen(false);
         },
       }),
     });
   });
   await input.fill('quarterly operations');
-  await expect(page.locator('html')).toHaveAttribute('data-preview-freeze-pending', 'true');
+  await expect(page.locator('html')).toHaveAttribute('data-preview-overlay-pending', 'true');
   await expect(input).toHaveAttribute('aria-expanded', 'false');
   await input.press('ArrowDown');
-  await page.evaluate(() => window.dispatchEvent(new Event('preview-release-freeze')));
+  await page.evaluate(() => window.dispatchEvent(new Event('preview-release-overlay')));
   await expect(page.getByRole('option', { selected: true })).toBeVisible();
   await input.press('Enter');
   await expect(input).toHaveValue('https://docs.google.com/document/d/preview');
