@@ -57,7 +57,8 @@ function bookmark(id: string, title: string, url: string, folderPath: string[], 
 export function installPreviewApi(): void {
   if (!import.meta.env.DEV || 'privateBrowser' in window || new URLSearchParams(location.search).get('preview') === 'bridge') return;
   const params = new URLSearchParams(location.search);
-  const googleModules: GoogleModule[] = params.get('googleOverview') === 'sample'
+  const overviewFixture = params.get('googleOverview') === 'sample';
+  const googleModules: GoogleModule[] = overviewFixture
     ? ['identity', 'gmail-metadata', 'drive-files'] : ['identity', 'gmail-metadata', 'drive-files', 'calendar-read'];
   const accounts = [
     account(ids.digitronics, 'digitronics', 'Digitronics', 'indigo'), account(ids.tenten, 'tenten', 'TenTen', 'amber'), account(ids.development, 'development', 'Development', 'violet'),
@@ -66,7 +67,7 @@ export function installPreviewApi(): void {
     account(ids.banking, 'banking', 'Banking', 'rose'),
   ];
   const google = ids.google as AccountSpaceId;
-  const overviewCursor = crypto.randomUUID();
+  const overviewCursor = overviewFixture ? crypto.randomUUID() : undefined;
   const vaultHealthFixture = { id: 'preview-vault-health', label: 'Sample login', username: 'sample@example.test',
     url: 'https://shop.example.test', hasTotp: false, updatedAt: '2026-11-21T10:00:00Z' };
   const state: BrowserSnapshot = {
@@ -360,7 +361,7 @@ export function installPreviewApi(): void {
     cancelGoogleConnection: async () => false,
     gmailOverview: desktopOnly,
     googleOverviewPage: async (id, _operation, service, next) => {
-      if (params.get('googleOverview') !== 'sample' || id !== google || id !== state.activeAccountSpaceId || service === 'calendar') return desktopOnly();
+      if (!overviewCursor || id !== google || id !== state.activeAccountSpaceId || service === 'calendar') return desktopOnly();
       if (service === 'drive') return { ok: true, data: { page: 1, limited: false, items: [
         { id: 'file-fixture', title: 'Stock worksheet', original: 'https://drive.google.com/open?id=file-fixture' },
       ] } };
@@ -893,7 +894,7 @@ export function installPreviewApi(): void {
     updateAccountSpace: async (idValue, labelValue, colorValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { if (typeof labelValue === 'string') selected.label = labelValue; if (typeof colorValue === 'string') selected.color = colorValue as typeof selected.color; publish(); } },
     reorderAccountSpaces: async (_workspace, orderValue) => { (orderValue as AccountSpaceId[]).forEach((id, order) => { const item = state.accountSpaces.find((candidate) => candidate.id === id); if (item) item.order = order; }); publish(); },
     openInAccountSpace: async (id, url) => {
-      if (params.get('googleOverview') === 'sample' && id === google && id === state.activeAccountSpaceId) {
+      if (overviewFixture && id === google && id === state.activeAccountSpaceId) {
         await handlers.newTab();
         await handlers.navigate(url);
       }
