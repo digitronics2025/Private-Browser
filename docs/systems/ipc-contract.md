@@ -238,7 +238,8 @@ approved preview in main, never from the renderer. Behaviour:
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
 | `ai:prepare-preview` | `prepareAiPreview(scope?)` | optional page or selection | `AiPagePreview` |
-| `ai:review-request` | `reviewAssistantRequest(id, text, question, withEvidence?)` | preview ID, editable text, question and optional source passages | `AiRequestReview` |
+| `ai:prepare-source` | `prepareAssistantSource(id, tabId)` | current preview ID and another same-space tab ID | `AssistantSelectionSource` |
+| `ai:review-request` | `reviewAssistantRequest(id, text, question, withEvidence?, edits?)` | preview ID, text, question, source-passage option, and optional extra excerpts | `AiRequestReview` |
 | `ai:send-reviewed` | `sendReviewedAssistant(id)` | single-use review ID | `AssistantAnswer` |
 | `ai:cancel-reviewed` | `cancelReviewedAssistant(id)` | currently running review ID | — |
 | `ai:set-space-cloud` | `setAssistantCloudAllowed(id, allowed)` | active Account Space ID and boolean | — |

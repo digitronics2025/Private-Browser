@@ -1,6 +1,8 @@
 export const AI_SYSTEM_PROMPT = 'Answer only from the user-approved webpage context. Clearly say when the context is insufficient. Never request or expose credentials.';
 export const MAX_ASSISTANT_CONTEXT = 12000;
 export const MAX_ASSISTANT_QUESTION = 2000;
+export const MAX_ASSISTANT_EXTRA_SOURCES = 3;
+export const MAX_ASSISTANT_SOURCE_TEXT = 4000;
 
 export const ASSISTANT_PRESETS = {
   darija: { label: 'Short Darija reply', question: 'Write a short, polite reply in Moroccan Darija using Arabic script. Keep the facts and commitments in the selected text.' },
@@ -16,6 +18,11 @@ export function aiUserPrompt(context: { title: string; url: string; text: string
   const structure = context.dom ? `\n\nApproved structural DOM (no text or values):\n${context.dom}` : '';
   return `Page: ${context.title}\nURL: ${context.url}\n\nApproved context:\n${context.text}${structure}\n\nQuestion: ${question}`;
 }
+
+export function formatAssistantExcerpts(sources: readonly { title: string; url: string; text: string }[], labelEach: boolean): string {
+  if (!labelEach) return sources[0]?.text ?? '';
+  return sources.map((source, index) => `Source ${index + 1}: ${source.title} (${source.url})\n${source.text}`).join('\n\n');
+}
 import type { AssistantAnswer } from './types.js';
 
 
@@ -24,7 +31,7 @@ export function assistantQuestion(question: string, withEvidence: boolean): stri
   return `${question}\n\nUse this JSON format: {"findings":[{"claim":"A concise fact","quote":"An exact short quote from the approved context"}]}. Include one quote per finding. If the context is insufficient, return {"findings":[]}.`;
 }
 
-export function readAssistantAnswer(value: string, evidence: boolean, context: string): AssistantAnswer {
+export function readAssistantAnswer(value: string, evidence: boolean, context: string | readonly string[]): AssistantAnswer {
   if (!evidence) return { kind: 'answer', text: value };
   let findings: unknown;
   try {
@@ -40,7 +47,8 @@ export function readAssistantAnswer(value: string, evidence: boolean, context: s
     if (!finding || typeof finding.claim !== 'string' || typeof finding.quote !== 'string') continue;
     const claim = finding.claim.trim();
     const quote = finding.quote.trim();
-    if (!claim || claim.length > 1000 || quote.length < 8 || quote.length > 380 || !context.includes(quote) || seen.has(claim)) continue;
+    const matches = typeof context === 'string' ? context.includes(quote) : context.some((excerpt) => excerpt.includes(quote));
+    if (!claim || claim.length > 1000 || quote.length < 8 || quote.length > 380 || !matches || seen.has(claim)) continue;
     items.push({ claim, quote });
     seen.add(claim);
   }

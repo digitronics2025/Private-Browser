@@ -712,6 +712,9 @@ kbd { font: inherit; }
 .context-text { max-height: 220px; overflow: auto; margin: 10px 0 6px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--page-bg); color: var(--text); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .context-card label, .ask-card label { display: block; margin-top: 8px; }
 .context-card textarea { width: 100%; min-height: 100px; resize: vertical; }
+.assistant-source-picker summary { cursor: pointer; }
+.assistant-source-picker p { margin-top: 7px; }
+.assistant-source-picker select { display: block; width: 100%; margin: 4px 0 8px; }
 .request-review p { overflow-wrap: anywhere; }
 .request-review summary { margin-top: 8px; cursor: pointer; font-size: var(--fs-sm); }
 .request-cost label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(75px, 100px); align-items: center; gap: 8px; margin-top: 6px; font-size: var(--fs-sm); }
