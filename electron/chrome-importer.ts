@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import type { AccountSpaceId, Bookmark, ChromeImportResult, ChromeProfileSource, HistoryEntry, VaultItemInput, WorkspaceId } from './types.js';
+import type { AccountSpaceId, Bookmark, ChromeImportResult, ChromePasswordIssue, ChromePasswordSkipReason, ChromeProfileSource, HistoryEntry, VaultItemInput, WorkspaceId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
 
 const MAX_BOOKMARK_FILE_BYTES = 32 * 1024 * 1024;
@@ -215,6 +215,13 @@ function parseCsvRows(content: string): string[][] {
   let row: string[] = [];
   let field = '';
   let quoted = false;
+  const endRecord = () => {
+    row.push(field.replace(/\r$/, ''));
+    if (row.some(Boolean)) rows.push(row);
+    if (rows.length > 100_000) throw new Error('This CSV has too many entries.');
+    row = [];
+    field = '';
+  };
   for (let index = 0; index < content.length; index += 1) {
     const char = content[index];
     if (quoted) {
@@ -222,15 +229,20 @@ function parseCsvRows(content: string): string[][] {
       else if (char === '"') quoted = false;
       else field += char;
     } else if (char === '"') quoted = true;
-    else if (char === ',') { row.push(field); field = ''; }
-    else if (char === '\n') { row.push(field.replace(/\r$/, '')); rows.push(row); row = []; field = ''; }
+    else if (char === ',') {
+      row.push(field);
+      if (row.length >= 64) throw new Error('This CSV has too many columns.');
+      field = '';
+    } else if (char === '\n') endRecord();
     else field += char;
   }
-  if (field || row.length) { row.push(field.replace(/\r$/, '')); rows.push(row); }
+  if (quoted) throw new Error('The CSV ends inside a quoted field.');
+  if (field || row.length) endRecord();
   return rows;
 }
 
 export interface ChromePasswordRow extends VaultItemInput { note?: string }
+export const MAX_PASSWORD_IMPORT_ISSUES = 100;
 
 /**
  * The one parser for Chrome's password export, used by the live MyVault import.
@@ -239,7 +251,7 @@ export interface ChromePasswordRow extends VaultItemInput { note?: string }
  * skipped rather than aborting the import. Passwords are never trimmed: that
  * would change the credential.
  */
-export function parseChromePasswordCsv(content: string): { items: ChromePasswordRow[]; skipped: number } {
+export function describeChromePasswordCsv(content: string) {
   const rows = parseCsvRows(content.replace(/^\uFEFF/, ''));
   const headers = rows.shift()?.map((value) => value.trim().toLowerCase()) ?? [];
   const indexOf = (names: string[]) => headers.findIndex((header) => names.includes(header));
@@ -249,19 +261,36 @@ export function parseChromePasswordCsv(content: string): { items: ChromePassword
   const passwordIndex = indexOf(['password']);
   const noteIndex = indexOf(['note']);
   if (urlIndex < 0 || usernameIndex < 0 || passwordIndex < 0) throw new Error('This is not a Chrome password CSV export');
-  let skipped = 0;
-  const items = rows.flatMap((row) => {
-    if (row.every((value) => !value)) return [] as ChromePasswordRow[];
+  const items: Array<{ entry: number; login: ChromePasswordRow }> = [];
+  const issues: ChromePasswordIssue[] = [];
+  const skipped: Partial<Record<ChromePasswordSkipReason, number>> = {};
+  let sourceCount = 0;
+  for (const [index, row] of rows.entries()) {
+    if (row.every((value) => !value)) continue;
+    sourceCount += 1;
+    const entry = index + 1;
     const url = row[urlIndex]?.trim();
     // A login with no username is legitimate (password-only sites).
     const username = row[usernameIndex]?.trim() ?? '';
     const password = row[passwordIndex] ?? '';
     const note = noteIndex >= 0 ? row[noteIndex] ?? '' : '';
-    if (!url || !password || !isAllowedRemoteUrl(url) || url.length > 2000 || username.length > 500 || password.length > 5000 || note.length > 10_000) {
-      skipped += 1;
-      return [] as ChromePasswordRow[];
+    let reason: ChromePasswordSkipReason | undefined;
+    if (!url || !isAllowedRemoteUrl(url)) reason = 'unsupported-site';
+    else if (!password) reason = 'missing-password';
+    else if (url.length > 2000 || username.length > 500 || password.length > 5000 || note.length > 10_000) reason = 'field-limit';
+    else if (items.length >= 5000) reason = 'row-limit';
+    if (reason || !url) {
+      const key = reason ?? 'unsupported-site';
+      skipped[key] = (skipped[key] ?? 0) + 1;
+      if (issues.length < MAX_PASSWORD_IMPORT_ISSUES) issues.push({ entry, reason: key });
+      continue;
     }
-    return [{ label: (row[nameIndex]?.trim() || new URL(url).hostname).slice(0, 200), url, username, password, ...(note ? { note } : {}) }];
-  });
-  return { items: items.slice(0, 5000), skipped: skipped + Math.max(0, items.length - 5000) };
+    items.push({ entry, login: { label: (row[nameIndex]?.trim() || new URL(url).hostname).slice(0, 200), url, username, password, ...(note ? { note } : {}) } });
+  }
+  return { items, sourceCount, skipped, issues };
+}
+
+export function parseChromePasswordCsv(content: string): { items: ChromePasswordRow[]; skipped: number } {
+  const parsed = describeChromePasswordCsv(content);
+  return { items: parsed.items.map(({ login }) => login), skipped: parsed.sourceCount - parsed.items.length };
 }

@@ -383,6 +383,12 @@ kbd { font: inherit; }
 .vault-health-review p { color: var(--text-muted); font-size: var(--fs-sm); }
 .vault-health-review ul { margin: 8px 0 0; padding: 0; list-style: none; }
 .vault-health-review li { border-top: 1px solid var(--border); padding: 8px 0; }
+.chrome-password-review { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.chrome-password-review h3, .chrome-password-review p, .chrome-password-review dl { margin: 0; }
+.chrome-password-review ol, .chrome-password-review ul { margin: 0; padding-inline-start: 20px; }
+.chrome-password-review dl > div { display: flex; justify-content: space-between; gap: 10px; }
+.chrome-password-review dd { margin: 0; }
+.chrome-password-review small { display: block; color: var(--text-muted); }
 .ntp-space-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--workspace-color); }
 .ntp-shortcuts { width: min(584px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 4px; }
 .ntp-tile { position: relative; }

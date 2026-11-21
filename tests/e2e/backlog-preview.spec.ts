@@ -150,6 +150,7 @@ test('labels the preview and exercises Chrome import and protected browsing', as
   await expect(page.getByText('Import complete')).toBeVisible();
   await expect(page.getByText('1 bookmarks · 1 history · 0 passwords')).toBeVisible();
   await page.getByRole('button', { name: 'Choose CSV' }).click();
+  await page.getByRole('button', { name: 'Choose password CSV' }).click();
   await expect(page.getByText('Password files are unavailable in the synthetic preview')).toBeVisible();
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   await expect(page.getByRole('button', { name: 'Account Space: Banking' })).toBeVisible();

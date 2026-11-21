@@ -3,6 +3,7 @@ import { ArrowLeft, Bookmark, Home, Search, Palette, Check, ChevronRight, Code2,
 import type { AccountSpaceId, BrowserSettings, BrowserSettingsPatch, BrowserSnapshot, ChromeImportResult, ChromeProfileSource, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, UiPreferences, UiPreferencesPatch } from '../../electron/types';
 import type { ChromeImportReview } from '../../electron/types';
 import { PanelHeader } from './common';
+import { ChromePasswordImportWizard } from './ChromePasswordImportWizard';
 import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
 import { DEFAULT_SPELLCHECK, MAX_SETTING_URL_LENGTH, MAX_SITE_KEYWORDS, MAX_STARTUP_PAGES, SEARCH_ENGINES, SPELLCHECK_LANGUAGES, type PresetSearchEngineId, type SpellcheckLanguage, type SpellcheckSettings } from '../../electron/browser-settings';
 import type { Workspace } from '../../electron/types';
@@ -197,15 +198,6 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setChromeLoading(false); }
   };
-  const importChromePasswords = async () => {
-    setChromeLoading(true);
-    try {
-      const result = await window.privateBrowser.importChromePasswords();
-      setChromeResult(result);
-      onToast(`Encrypted ${result.imported.passwords} Chrome passwords in your local vault`);
-    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
-    finally { setChromeLoading(false); }
-  };
   const importBookmarkHtml = async () => {
     setChromeLoading(true);
     setBookmarkHtmlResult(undefined);
@@ -318,7 +310,8 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
           <button type="button" disabled={chromeLoading} onClick={() => void undoChrome()}>Undo last Chrome import</button>
           <small className="import-note">Available this session. Bookmarks you edited stay.</small>
         </div>}
-        <div className="password-import-row"><div><strong>Saved passwords</strong><small>Chrome protects direct access. Export passwords as CSV, then select that file here. Secrets go straight into MyVault and never enter the page.</small></div><button disabled={chromeLoading} onClick={() => void importChromePasswords()}>Choose CSV</button></div>
+        <ChromePasswordImportWizard key={state.activeAccountSpaceId} buttonLabel="Choose CSV"
+          disabled={chromeLoading || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development'} />
         <p className="import-limit"><Shield size={13} /> Cookies, signed-in sessions, payment cards, extensions and Chrome account tokens are intentionally not copied.</p>
         {chromeResult && <div className="import-result"><Check size={15} /><div><strong>Import complete</strong><small>{chromeResult.imported.bookmarks} bookmarks · {chromeResult.imported.history} history · {chromeResult.imported.passwords} passwords</small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords > 0 && <small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords} duplicate or unsafe entries skipped</small>}{chromeResult.warnings.map((warning) => <small className="warning" key={warning}>{warning}</small>)}</div></div>}
       </div>}

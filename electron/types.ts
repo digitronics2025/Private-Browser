@@ -793,6 +793,19 @@ export interface VaultStatus {
 }
 
 export type VaultFillReadiness = 'ready' | 'locked' | 'connect' | 'no-match' | 'unsupported' | 'manual' | 'choose-login' | 'unavailable';
+export type ChromePasswordSkipReason = 'unsupported-site' | 'missing-password' | 'field-limit' | 'row-limit' | 'already-saved' | 'duplicate-in-file';
+export interface ChromePasswordIssue { entry: number; reason: ChromePasswordSkipReason; origin?: string; username?: string }
+export interface ChromePasswordImportReview {
+  id: string;
+  sourceCount: number;
+  toImport: number;
+  skipped: Partial<Record<ChromePasswordSkipReason, number>>;
+  issues: ChromePasswordIssue[];
+}
+export interface ChromePasswordImportResult {
+  imported: number;
+  skipped: Partial<Record<ChromePasswordSkipReason, number>>;
+}
 export type VaultHealthIssue = 'duplicate-login' | 'missing-origin' | 'reused-password' | 'weak-password';
 export interface VaultHealthFinding { id: string; issues: VaultHealthIssue[] }
 export interface VaultHealthReport { checked: number; findings: VaultHealthFinding[] }

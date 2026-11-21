@@ -1,5 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
-import type { ChromeImportOptions } from '../electron/types';
+import type { ChromeImportOptions, ChromePasswordImportReview } from '../electron/types';
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
@@ -155,6 +155,7 @@ export function installPreviewApi(): void {
   const siteZoom = new Map<string, number>();
   const siteZoomKey = (account: string, url: string) => JSON.stringify([account, new URL(url).origin]);
   let pendingChromeImport: { id: string; options: ChromeImportOptions; owner: AccountSpaceId } | undefined;
+  let passwordReview: { review: ChromePasswordImportReview; accountId: AccountSpaceId } | undefined;
   const chromeUndo = new Map<AccountSpaceId, { bookmark: boolean; history: boolean }>();
   let sampleGrants: PermissionGrantSummary[] = params.get('permissions') === 'sample' ? [
     { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
@@ -896,9 +897,27 @@ export function installPreviewApi(): void {
         warnings: [],
       };
     }) satisfies PrivateBrowserApi['importChrome'],
-    importChromePasswords: (async () => {
-      throw new Error('Password files are unavailable in the synthetic preview');
-    }) satisfies PrivateBrowserApi['importChromePasswords'],
+    reviewChromePasswords: async () => {
+      if (params.get('chromePassword') !== 'sample' || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development') {
+        throw new Error('Password files are unavailable in the synthetic preview');
+      }
+      const review: ChromePasswordImportReview = {
+        id: crypto.randomUUID(), sourceCount: 3, toImport: 1, skipped: { 'already-saved': 1, 'unsupported-site': 1 },
+        issues: [{ entry: 2, reason: 'already-saved', origin: 'https://shop.example.test', username: 'sample@example.test' },
+          { entry: 3, reason: 'unsupported-site' }],
+      };
+      passwordReview = { review, accountId: state.activeAccountSpaceId };
+      return review;
+    },
+    importReviewedChromePasswords: async (id) => {
+      if (passwordReview?.review.id !== id || passwordReview.accountId !== state.activeAccountSpaceId) throw new Error('Review the password file again before importing.');
+      const { review } = passwordReview;
+      passwordReview = undefined;
+      return { imported: review.toImport, skipped: review.skipped };
+    },
+    discardChromePasswordReview: async (id) => {
+      if (passwordReview?.review.id === id) passwordReview = undefined;
+    },
     getBridgeStatus: (async () => ({ state: 'disconnected', browserVersion: 'Preview' })) satisfies PrivateBrowserApi['getBridgeStatus'],
     listBridgeProjects: (async () => []) satisfies PrivateBrowserApi['listBridgeProjects'],
     beginBridgePairing: (async () => {

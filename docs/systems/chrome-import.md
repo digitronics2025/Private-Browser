@@ -35,8 +35,8 @@ cross the preload bridge.
    filesystem path.
 2. Imported URLs must pass `isAllowedRemoteUrl`, so `chrome:`, `file:`, `data:`
    and `javascript:` entries are dropped.
-3. Password CSV contents never reach the renderer. The bridge returns counts and
-   warnings only, and accepted rows are encrypted by `VaultBroker` immediately.
+3. Passwords, notes, and the selected CSV path stay in main. The review returns
+   counts and bounded skip metadata. Approved logins are written by `VaultBroker`.
 4. History is queried from a temporary copy and the temporary directory is
    removed in `finally`, so Chrome's live SQLite database is never opened for
    writing.
@@ -59,13 +59,13 @@ cross the preload bridge.
 - **History:** copies and opens the selected profile's `History` SQLite database
   read-only, selecting up to 10,000 newest visible URLs and converting Chrome's
   1601-based microsecond timestamps to ISO time.
-- **Passwords:** the MyVault import service reads the selected CSV in main (20 MB
-  cap) through `parseChromePasswordCsv`: BOM stripped, fields bounded, 5,000
-  rows, passwords never trimmed. Rows that are not web logins — Chrome's
-  `android://` app entries, `chrome://`, unparsable URLs — are counted as
-  skipped instead of aborting. Duplicates (origin + username) are skipped, and
-  the new logins are written in one encrypted save. The plaintext source remains
-  until the user deletes it explicitly.
+- **Passwords:** the wizard explains Chrome export, previews the selected CSV,
+  and shows skips by reason. Main limits the file to 20 MB and accepts up to
+  5,000 candidate logins. It preserves password whitespace. Confirm rechecks
+  the exact file and the unlocked vault. Duplicates by origin and username are
+  skipped. New logins are written in one encrypted save. The wizard explains
+  how to remove the plaintext CSV after verifying the import.
+  [Chrome export instructions](https://support.google.com/chrome/answer/13068232)
 
 Cookies, sessions, payment cards, extensions, account tokens, search engines and
 autofill profiles are not copied. The current product has no compatible storage
@@ -82,8 +82,8 @@ subset of extension APIs. [Electron extension support](https://www.electronjs.or
 - `listChromeProfiles(userDataDirectory?)` returns display-safe profile metadata.
 - `readChromeProfile(...)` validates the profile id and non-Banking Account Space target,
   returning accepted bookmarks/history plus result counters.
-- `parseChromeBookmarks(...)` and `parseChromePasswordCsv(...)` are pure parsers;
-  the second is the live password-import parser (`vault-migration.ts`).
+- `parseChromeBookmarks(...)` and `describeChromePasswordCsv(...)` are pure
+  parsers. The password parser counts unsupported origins and invalid rows.
 
 ## Related Systems
 
