@@ -3,7 +3,7 @@ import type { ChromeImportOptions, ChromePasswordImportReview } from '../electro
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
-import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
@@ -147,6 +147,10 @@ export function installPreviewApi(): void {
   const syncDarkMode = () => { state.windowState.darkMode = state.ui.theme === 'system' ? media.matches : state.ui.theme === 'dark'; };
   syncDarkMode();
   const listeners = new Set<(snapshot: BrowserSnapshot) => void>();
+  let backupRestoreReview: BackupRestorePreview | undefined;
+  if (params.get('backupRestore') === 'sample') {
+    state.accountSpaces.find(({ id }) => id === google)?.enabledModules.push('encrypted-backup');
+  }
   const closedByAccount = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   let routines = defaultBrowserRoutines(Object.fromEntries(accounts.filter((account) => account.id !== google).map((account) => [account.workspaceId, account.id])));
   state.routines = routines;
@@ -345,7 +349,24 @@ export function installPreviewApi(): void {
     prepareCalendarWrite: desktopOnly,
     writeCalendarEvent: desktopOnly,
     listContacts: desktopOnly,
-    restoreBackup: desktopOnly,
+    previewBackupRestore: async (id, _operation, code) => {
+      if (params.get('backupRestore') !== 'sample' || id !== google || code !== 'fixture-recovery-code') {
+        throw new Error('Encrypted backup failed authentication or is corrupt.');
+      }
+      backupRestoreReview = {
+        id: crypto.randomUUID(), accountSpaceId: id, accountLabel: 'Operations', workspaceId: 'personal',
+        createdAt: '2026-11-21T12:00:00.000Z',
+        counts: { bookmarks: { added: 2, duplicates: 1, capacityExceeded: 0 },
+          history: { added: 0, duplicates: 1, capacityExceeded: 0 }, tabs: { added: 1, duplicates: 0, capacityExceeded: 2 } },
+      };
+      return backupRestoreReview;
+    },
+    applyBackupRestore: async (id) => {
+      if (backupRestoreReview?.id !== id) throw new Error('Review the backup again before restoring.');
+      document.documentElement.dataset.previewBackupApplied = backupRestoreReview.accountSpaceId;
+      backupRestoreReview = undefined;
+    },
+    cancelBackupRestore: async (id) => { if (backupRestoreReview?.id === id) backupRestoreReview = undefined; },
     disableBackup: desktopOnly,
     cancelOperation: async () => false,
     performRecoveryAction: desktopOnly,

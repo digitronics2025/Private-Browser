@@ -77,6 +77,7 @@ import type {
   BookmarkEntryKeyInput,
   BookmarkLevelInput,
   BrowserSnapshot,
+  BackupRestorePreview,
   BrowserTab,
   BrowserRoutine,
   RoutineRunResult,
@@ -145,7 +146,7 @@ import { GoogleTokenBroker } from './google-token-broker.js';
 import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailSendInput } from './google-services.js';
 import { healthFromGoogleConnection, observeGoogleHealth } from './google-connection-health.js';
 import type { GoogleConnectionHealth } from './types.js';
-import { AccountBackupManager, restorableItems, type BackupWriteResult } from './account-backup.js';
+import { AccountBackupManager, backupRestoreRevision, planBackupRestore, type BackupWriteResult } from './account-backup.js';
 import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
 import { ControlCenterLink, developerEvidence } from './control-center-link.js';
@@ -292,6 +293,8 @@ type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: Ex
 
 class BrowserController {
   private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
+  private pendingBackupRequest?: { accountSpaceId: AccountSpaceId; operationId: string };
+  private backupRestoreReview?: { preview: BackupRestorePreview; items: ReturnType<typeof planBackupRestore>['items']; subject: string; revision: string; expiresAt: number };
   private pendingChromePasswords?: { id: string; accountId: AccountSpaceId; path: string; digest: string; revision: string; expiresAt: number };
   private selectingChromePasswords = false;
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
@@ -1517,21 +1520,64 @@ class BrowserController {
     return this.runGoogleOperation(accountSpaceId, operationId, 'backup', (signal) => this.backups.upload(accountSpaceId, payload, conflictResolution, signal));
   }
 
-  restoreBackup(accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<void> {
-    const account = this.requireAccountMembership(accountSpaceId);
-    return this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
-      const restored = restorableItems(await this.backups.restore(accountSpaceId, recoveryCode, signal), { accountSpaceId, workspaceId: account.workspaceId });
-      this.closeAccountViews(accountSpaceId);
-      this.store.update((state) => {
-        state.bookmarks = [...state.bookmarks.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.bookmarks];
-        if (restored.history) state.history = [...state.history.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.history];
-        if (restored.openTabs?.length) {
-          state.tabs = [...state.tabs.filter((item) => item.accountSpaceId !== accountSpaceId), ...restored.openTabs.map((tab) => ({ ...tab, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false }))];
-          state.activeTabByAccountSpace[accountSpaceId] = restored.openTabs[0]!.id;
+  async previewBackupRestore(accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<BackupRestorePreview> {
+    const account = this.requireBackupRestoreTarget(accountSpaceId);
+    const previous = this.pendingBackupRequest;
+    if (previous) this.cancelOperation(previous.operationId);
+    const request = { accountSpaceId, operationId };
+    this.pendingBackupRequest = request;
+    this.backupRestoreReview = undefined;
+    try {
+      return await this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
+        const payload = await this.backups.restore(accountSpaceId, recoveryCode, signal);
+        if (signal.aborted || this.pendingBackupRequest !== request || this.requireBackupRestoreTarget(accountSpaceId).subject !== account.subject) {
+          throw new Error('The backup request changed. Start a new preview.');
         }
+        const state = this.store.get();
+        const { counts, items } = planBackupRestore(payload, { accountSpaceId, workspaceId: account.workspaceId }, state);
+        const preview: BackupRestorePreview = { id: randomUUID(), accountSpaceId, accountLabel: account.label,
+          workspaceId: account.workspaceId, createdAt: payload.createdAt, counts };
+        this.backupRestoreReview = { preview, items, subject: account.subject,
+          revision: backupRestoreRevision(accountSpaceId, state), expiresAt: Date.now() + 2 * 60_000 };
+        return preview;
       });
-      this.broadcast();
+    } finally {
+      if (this.pendingBackupRequest === request) this.pendingBackupRequest = undefined;
+    }
+  }
+
+  applyBackupRestore(id: string): void {
+    const pending = this.backupRestoreReview;
+    if (!pending || pending.preview.id !== id) throw new Error('Review the backup again before restoring.');
+    this.backupRestoreReview = undefined;
+    const { accountSpaceId } = pending.preview;
+    const account = this.requireBackupRestoreTarget(accountSpaceId);
+    if (pending.expiresAt <= Date.now() || pending.subject !== account.subject
+      || pending.revision !== backupRestoreRevision(accountSpaceId, this.store.get())) {
+      throw new Error('Backup review expired or its Account Space changed. Review it again.');
+    }
+    this.store.update((state) => {
+      state.bookmarks.push(...pending.items.bookmarks);
+      state.history.push(...pending.items.history);
+      state.tabs.push(...pending.items.tabs.map((tab) => ({
+        ...tab, restorePaused: true, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false,
+      })));
     });
+    this.broadcast();
+  }
+
+  cancelBackupRestore(id: string): void {
+    if (this.backupRestoreReview?.preview.id === id) this.backupRestoreReview = undefined;
+  }
+
+  private requireBackupRestoreTarget(accountSpaceId: AccountSpaceId) {
+    const account = this.requireAccountMembership(accountSpaceId);
+    const record = this.accounts.require(accountSpaceId);
+    if (account.locked || account.workspaceId === 'banking' || account.googleConnection !== 'connected'
+      || !record.googleIdentity || !record.enabledModules.includes('encrypted-backup')) {
+      throw new Error('Connect the same Google account and enable Encrypted backup in a compatible Account Space.');
+    }
+    return { label: record.label, workspaceId: record.workspaceId, subject: record.googleIdentity.sub };
   }
 
   cancelOperation(operationId: string): boolean {
@@ -1609,6 +1655,7 @@ class BrowserController {
     this.googleServices.clearAccount(accountSpaceId);
     this.googleChecks.delete(accountSpaceId);
     this.backups.clearAccount(accountSpaceId);
+    if (this.backupRestoreReview?.preview.accountSpaceId === accountSpaceId) this.backupRestoreReview = undefined;
     for (const [operationId, operation] of this.operations) {
       if (operation.accountSpaceId !== accountSpaceId) continue;
       operation.controller.abort();
@@ -4651,7 +4698,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('backup:create-recovery', (_event, id: AccountSpaceId) => controller!.createBackupRecoveryCode(id));
   handle('backup:verify-enable', (_event, id: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean) => controller!.verifyAndEnableBackup(id, recoveryCode, includeOpenTabs, includeHistory));
   handle('backup:upload', (_event, id: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite') => controller!.uploadBackup(id, operationId, conflictResolution));
-  handle('backup:restore', (_event, id: AccountSpaceId, operationId: string, recoveryCode?: string) => controller!.restoreBackup(id, operationId, recoveryCode));
+  handle('backup:preview-restore', (_event, id: AccountSpaceId, operationId: string, recoveryCode?: string) => controller!.previewBackupRestore(id, operationId, recoveryCode));
+  handle('backup:apply-restore', (_event, id: string) => controller!.applyBackupRestore(id));
+  handle('backup:cancel-restore', (_event, id: string) => controller!.cancelBackupRestore(id));
   handle('backup:disable', (_event, id: AccountSpaceId) => controller!.disableBackup(id));
   handle('operations:cancel', (_event, operationId: string) => controller!.cancelOperation(operationId));
   handle('recovery:act', (_event, action: StateRecoveryAction, confirmation?: string) => controller!.recoveryAction(action, confirmation));

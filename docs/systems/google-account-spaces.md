@@ -201,6 +201,13 @@ open tabs are optional and history is separately opt-in. Cookies, tokens, codes,
 passwords, passkeys/TOTP, downloads, mail bodies, attachments, AI privacy logs
 and My Vault are excluded. ETags detect conflicts and require explicit merge or
 overwrite. A bad authentication tag or missing recovery key stops restore.
+
+On a replacement PC, connect the same Google account and enable the encrypted
+backup tool in the same workspace. **Verify and preview backup** checks the
+recovery code and shows the backup date, destination, additions, duplicates and
+capacity limits without writing browser data. **Add reviewed items** merges the
+exact preview once and keeps existing data in place. Restored tabs stay paused.
+Changes to the destination or Google identity invalidate the preview.
 Restore (`restorableItems`) re-stamps items with the target space's id — a new
 device has new local ids — requires the same workspace, passes everything through
 the on-disk state validator, and never applies the browser-wide tracker setting.

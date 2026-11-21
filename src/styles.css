@@ -1029,6 +1029,13 @@ kbd { font: inherit; }
 .service-launchers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .service-launchers button { min-height: 42px; border-radius: var(--radius-md); }
 .backup-actions { display: flex; gap: 8px; }
+.backup-restore, .backup-restore-detail { display: grid; gap: 8px; min-width: 0; }
+.backup-restore h3, .backup-restore h4, .backup-restore p { margin: 0; }
+.backup-restore label { display: grid; gap: 5px; max-width: 340px; }
+.backup-restore input { width: 100%; min-height: 36px; padding-inline: 8px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--field); color: var(--text); }
+.backup-restore table { border-collapse: collapse; text-align: start; }
+.backup-restore th, .backup-restore td { padding: 6px 4px; border-bottom: 1px solid var(--border); }
+.backup-restore .backup-actions { flex-wrap: wrap; }
 .recovery-code { display: grid; gap: 9px; padding: 14px; border-radius: var(--radius-md); background: var(--ok-soft); }
 .recovery-code strong { font-size: var(--fs-sm); }
 .recovery-code code { padding: 9px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--fs-sm); overflow-wrap: anywhere; user-select: all; }
