@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { BrowserRoutine, RoutineRunResult } from './types.js';
 import type { LocalAiModels } from './types.js';
 import type { AddressMatch, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
+import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
@@ -42,6 +43,10 @@ const api = {
   clearAccountSpaceData: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('accounts:clear-data', accountSpaceId),
   deleteAccountSpace: (accountSpaceId: AccountSpaceId, confirmation: 'DELETE_ACCOUNT_SPACE'): Promise<void> => ipcRenderer.invoke('accounts:delete', accountSpaceId, confirmation),
   respondToPermissionPrompt: (promptId: string, decision: PermissionDecision, displaySourceId?: string): Promise<void> => ipcRenderer.invoke('permissions:respond', promptId, decision, displaySourceId),
+  getSitePermissions: (tabId: string, origin: string): Promise<SitePermissionStatus[]> => ipcRenderer.invoke('permissions:site', tabId, origin),
+  revokeSitePermission: (tabId: string, origin: string, capability: PermissionCapability): Promise<SitePermissionStatus[]> =>
+    ipcRenderer.invoke('permissions:revoke-site', tabId, origin, capability),
+  listAccountPermissionGrants: (id: AccountSpaceId): Promise<PermissionGrantSummary[]> => ipcRenderer.invoke('permissions:list-account', id),
   configureGoogle: (clientId: string): Promise<void> => ipcRenderer.invoke('google:configure', clientId),
   clearGoogleConfiguration: (): Promise<void> => ipcRenderer.invoke('google:clear-configuration'),
   connectGoogleAccount: (accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId): Promise<GoogleOperationResult> => ipcRenderer.invoke('google:connect', accountSpaceId, modules, browserId),

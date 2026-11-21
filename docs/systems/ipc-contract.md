@@ -152,6 +152,9 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:toggle-tracker-blocking` | `toggleTrackerBlocking()` | — | `void` |
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
+| `permissions:site` | `getSitePermissions(tabId, origin)` | active tab and exact origin | current policy and grant duration |
+| `permissions:revoke-site` | `revokeSitePermission(tabId, origin, capability)` | active tab, exact origin and supported capability | updated site status |
+| `permissions:list-account` | `listAccountPermissionGrants(id)` | selected Account Space in the active workspace | reusable grants |
 
 ### routines:
 

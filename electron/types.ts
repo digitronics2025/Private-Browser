@@ -146,6 +146,16 @@ export type PermissionCapability =
 
 export type PermissionDecision = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 
+export type PermissionGrantDuration = 'once' | 'session' | 'until-revoked';
+export interface PermissionGrantSummary {
+  origin: string;
+  capability: PermissionCapability;
+  duration: PermissionGrantDuration;
+}
+export type SitePermissionStatus =
+  | { capability: PermissionCapability; decision: 'allowed'; duration: PermissionGrantDuration }
+  | { capability: PermissionCapability; decision: 'ask' | 'blocked' };
+
 export interface PermissionPrompt {
   id: string;
   accountSpaceId: AccountSpaceId;

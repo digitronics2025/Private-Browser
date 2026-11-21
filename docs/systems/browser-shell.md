@@ -536,6 +536,12 @@ the whole state file per event.
 
 ## Per-Account-Space Sessions and Permissions
 
+Site information displays the exact active origin's current policy and grant
+duration. Revoking a grant clears the stored and session entries for that
+account, origin and capability. The page requests permission again on its
+next use. Closing the page ends an active capture. Account Manager filters
+grants for the selected, unlocked Account Space.
+
 `ensureView` derives the partition from the tab's **Account Space**
 (`store.partitionFor(accountSpaceId)`): `persist:private-browser-account-<id>`,
 or the workspace's legacy `persist:private-browser-<workspace>` for an account

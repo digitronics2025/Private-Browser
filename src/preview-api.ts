@@ -1,4 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
+import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, searchTemplateFor } from '../electron/browser-settings';
@@ -131,6 +132,10 @@ export function installPreviewApi(): void {
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
+  let sampleGrants: PermissionGrantSummary[] = params.get('permissions') === 'sample' ? [
+    { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
+    { origin: 'https://mail.google.com', capability: 'notifications', duration: 'session' },
+  ] : [];
   let previewProvider: AiProviderStatus = { configured: false };
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
@@ -163,6 +168,23 @@ export function installPreviewApi(): void {
   };
   const handlers: Record<string, (...args: unknown[]) => unknown> = {
     getState: async () => structuredClone(state),
+    getSitePermissions: async (id, origin) => {
+      const tab = state.tabs.find((item) => item.id === id && item.id === state.activeTabId);
+      if (!tab || tab.isHome || new URL(tab.url).origin !== origin) throw new Error('The page changed. Open site information again.');
+      return (['download', 'camera', 'notifications'] as const).map((capability): SitePermissionStatus => {
+        const grant = tab.accountSpaceId === google && sampleGrants.find((item) => item.origin === origin && item.capability === capability);
+        if (state.activeWorkspaceId === 'banking' || capability === 'camera') return { capability, decision: 'blocked' };
+        return grant ? { capability, decision: 'allowed', duration: grant.duration } : { capability, decision: 'ask' };
+      });
+    },
+    revokeSitePermission: async (id, origin, capability) => {
+      await handlers.getSitePermissions(id, origin);
+      if (state.activeWorkspaceId === 'banking' || state.activeAccountSpaceId !== google) throw new Error('Permission changes are unavailable in this Account Space.');
+      sampleGrants = sampleGrants.filter((item) => item.origin !== origin || item.capability !== capability);
+      return handlers.getSitePermissions(id, origin);
+    },
+    listAccountPermissionGrants: async (id) => state.activeWorkspaceId === 'personal' && id === google
+      && !state.accountSpaces.find((item) => item.id === id)?.locked ? structuredClone(sampleGrants) : [],
     saveRoutine: async (input) => {
       const routine = requireBrowserRoutine(input);
       if (state.activeWorkspaceId === 'banking' || routine.links.some((link) => !state.accountSpaces.some((account) => account.id === link.accountSpaceId && account.workspaceId !== 'banking'))) {

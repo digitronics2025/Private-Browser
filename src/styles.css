@@ -439,6 +439,17 @@ kbd { font: inherit; }
 .site-info-facts > div { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
 .site-info-facts dt { color: var(--text-muted); }
 .site-info-facts dd { margin: 0; text-align: right; min-width: 0; }
+.site-permissions { margin: 0 10px 6px; border-top: 1px solid var(--border); }
+.site-permissions summary, .account-permissions summary { padding: 8px 0; cursor: pointer; font-weight: 650; }
+.site-permission-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.site-permission-row small { display: block; color: var(--text-muted); }
+.site-permissions [role='status']:not(:empty), .account-permissions [role='status'] { padding: 5px 0; color: var(--text-muted); font-size: var(--fs-sm); }
+.permission-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.permission-filters label { display: grid; flex: 1 1 130px; gap: 4px; min-width: 0; }
+.permission-filters input, .permission-filters select { width: 100%; min-width: 0; }
+.account-grants { display: grid; gap: 6px; padding-left: 1.25em; }
+.account-grants strong { overflow-wrap: anywhere; }
+.account-grants li span { display: block; color: var(--text-muted); font-size: var(--fs-sm); }
 .site-info-url { overflow-wrap: anywhere; font-size: var(--fs-xs); color: var(--text-muted); }
 
 /* Profile menu */

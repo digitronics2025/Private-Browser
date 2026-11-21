@@ -1133,6 +1133,32 @@ class BrowserController {
     }
   }
 
+  private activePermissionSite(tabId: string, origin: string) {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    if (tab.id !== tabId || tab.isHome || !isAllowedRemoteUrl(tab.url) || safeOrigin(tab.url) !== origin) {
+      throw new Error('The page changed. Open site information again.');
+    }
+    return tab;
+  }
+
+  getSitePermissions(tabId: string, origin: string) {
+    const tab = this.activePermissionSite(tabId, origin);
+    return this.permissions.siteStatus(tab.accountSpaceId, tab.workspaceId, origin);
+  }
+
+  revokeSitePermission(tabId: string, origin: string, capability: PermissionCapability) {
+    const tab = this.activePermissionSite(tabId, origin);
+    if (this.store.isReadOnly() || tab.workspaceId === 'banking') throw new Error('Permission changes are unavailable in this Account Space.');
+    this.permissions.revoke(tab.accountSpaceId, tab.workspaceId, origin, capability);
+    return this.permissions.siteStatus(tab.accountSpaceId, tab.workspaceId, origin);
+  }
+
+  listAccountPermissionGrants(accountSpaceId: AccountSpaceId) {
+    const account = this.requireAccountMembership(accountSpaceId);
+    return account.locked || account.workspaceId === 'banking' ? [] : this.permissions.listGrants(accountSpaceId);
+  }
+
   prepareGmailSend(accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) {
     this.requireAccountMembership(accountSpaceId);
     return this.googleServices.prepareGmailSend(accountSpaceId, input, sourceRevision);
@@ -3562,6 +3588,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('accounts:clear-data', (_event, id: AccountSpaceId) => controller!.clearAccountSpaceData(id));
   handle('accounts:delete', (_event, id: AccountSpaceId, confirmation: string) => controller!.deleteAccountSpace(id, confirmation));
   handle('permissions:respond', (_event, promptId: string, decision: PermissionDecision, displaySourceId?: string) => controller!.respondToPermissionPrompt(promptId, decision, displaySourceId));
+  handle('permissions:site', (_event, tabId: string, origin: string) => controller!.getSitePermissions(tabId, origin));
+  handle('permissions:revoke-site', (_event, tabId: string, origin: string, capability: PermissionCapability) => controller!.revokeSitePermission(tabId, origin, capability));
+  handle('permissions:list-account', (_event, id: AccountSpaceId) => controller!.listAccountPermissionGrants(id));
   handle('google:configure', (_event, clientId: string) => controller!.configureGoogle(clientId));
   handle('google:clear-configuration', () => controller!.clearGoogleConfiguration());
   handle('google:connect', (_event, id: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) => controller!.connectGoogleAccount(id, modules, browserId));
