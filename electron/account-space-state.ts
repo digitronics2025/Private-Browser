@@ -556,8 +556,16 @@ function accountRecovery(accountSpaceId: AccountSpaceId, backupAvailable: boolea
 export function atomicWriteJson(filePath: string, value: unknown): void {
   mkdirSync(dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
-  writeFileSync(temporaryPath, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-  renameSync(temporaryPath, filePath);
+  const text = JSON.stringify(value, null, 2);
+  try {
+    writeFileSync(temporaryPath, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    renameSync(temporaryPath, filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      try { rmSync(temporaryPath, { force: true }); } catch { /* Preserve the write error. */ }
+    }
+    throw error;
+  }
 }
 
 function safeTimestamp(value: Date): string {

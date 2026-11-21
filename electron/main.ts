@@ -446,6 +446,21 @@ class BrowserController {
     // The chrome's geometry is expressed in DIPs; a zoomed chrome would drift from the page view.
     this.window.webContents.on('did-finish-load', () => this.window.webContents.setZoomFactor(1));
     this.window.webContents.setVisualZoomLevelLimits(1, 1).catch(() => undefined);
+    this.window.on('close', (event) => {
+      try {
+        this.store.flushPendingWrites();
+      } catch {
+        const closeAnyway = dialog.showMessageBoxSync(this.window, {
+          type: 'warning',
+          message: 'Recent browsing changes could not be saved.',
+          detail: 'Keep Private Browser open to retry, or close it and lose the pending changes.',
+          buttons: ['Keep open', 'Close anyway'],
+          defaultId: 0,
+          cancelId: 0,
+        }) === 1;
+        if (!closeAnyway) event.preventDefault();
+      }
+    });
     this.window.on('closed', () => {
       screen.removeListener('display-metrics-changed', onDisplayChange);
       nativeTheme.removeListener('updated', onThemeChange);
@@ -3778,7 +3793,7 @@ class BrowserController {
       this.store.update((state) => {
         const target = state.tabs.find((candidate) => candidate.id === tabId);
         if (target) target.title = title || 'Untitled';
-      });
+      }, 'routine');
       this.broadcast();
     });
     view.webContents.on('page-favicon-updated', (_event, favicons) => void this.updateFavicon(tabId, ses, favicons[0]));
@@ -4151,7 +4166,7 @@ class BrowserController {
     const icons = rememberBookmarkIcon(state.bookmarkIconsByAccountSpace[tab.accountSpaceId], bookmarks, tab.url, dataUrl);
     if (!icons) return;
     try {
-      this.store.update((next) => { next.bookmarkIconsByAccountSpace[tab.accountSpaceId] = icons; });
+      this.store.update((next) => { next.bookmarkIconsByAccountSpace[tab.accountSpaceId] = icons; }, 'routine');
     } catch {
       // A missed icon is cosmetic; the live tab still shows it.
     }
@@ -4194,7 +4209,7 @@ class BrowserController {
           (state.historyTrimmedByAccountSpace ??= {})[removed.accountSpaceId] = true;
         }
       }
-    });
+    }, 'routine');
     this.updateRuntime(tabId, {});
   }
 
