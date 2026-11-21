@@ -1,5 +1,46 @@
 # Changelog
 
+The [download page](https://private-browser-downloads.digitronics-electro.workers.dev/#release-history)
+lists stable versions with their publication dates. Read the
+[desktop highlights](docs/desktop-release-notes/) for individual changes.
+
+## 0.6.40
+
+- Generate passwords, passphrases and PINs inside the secure MyVault editor.
+  Review the login and press Save to store it.
+
+## 0.6.39
+
+- Edit bookmark addresses, review duplicates, and preview bulk move or delete
+  actions. Undo the last bulk change in the same Account Space.
+
+## 0.6.38
+
+- See file type, release checksum and Windows publisher details separately.
+  Recover from side-app loading errors with the matching action.
+
+## 0.6.37
+
+- Use a native page context menu. Preview opening a bookmark folder in background
+  tabs. Pin and reorder New Tab shortcuts and hide recent sites if desired.
+
+## 0.6.36
+
+- Build routines with a destination Account Space for each page. Reuse open
+  tabs and keep a manual checklist between shifts.
+
+## 0.6.35
+
+- Pin and group tabs by Account Space, undo bulk closes, and select tabs to
+  restore after startup failures. Windows Default Apps and a test link are
+  available from Settings.
+
+## 0.6.34
+
+- Find tabs, bookmarks and retained history from the address bar. Route
+  external links into a regular Account Space, and see only that space's
+  downloads. Browse large bookmark collections in pages.
+
 ## 0.6.0 — 2026-09-14
 
 - Redesigned the browser frame in a Chrome-familiar "Chrome Precision" style with

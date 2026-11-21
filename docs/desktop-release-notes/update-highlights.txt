@@ -1,0 +1,1 @@
+The Updates screen now shows the latest release highlights and opens the public release history for earlier changes. The download page links to the full changelog.

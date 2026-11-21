@@ -29,6 +29,7 @@ export function renderDownloadPage(model: DownloadPageModel): string {
   const notes = release.release_notes || `Private Browser ${release.version} stable release.`;
   const sourceUrl = sourceCommitUrl(release.commit_sha);
   const historyUrl = 'https://github.com/digitronics2025/Private-Browser/actions/workflows/ci.yml';
+  const changelogUrl = 'https://github.com/digitronics2025/Private-Browser/blob/main/CHANGELOG.md';
   const historyMarkup = history.length > 0
     ? history.map((item) => renderHistoryItem(item, model.renderedAt)).join('')
     : '<p class="history-empty">This is the first published stable release.</p>';
@@ -103,6 +104,8 @@ export function renderDownloadPage(model: DownloadPageModel): string {
     .version { display: block; margin-top: 8px; font-size: 48px; line-height: 1; letter-spacing: -0.045em; }
     .build-pill { border-radius: 999px; background: var(--primary); color: white; padding: 8px 12px; font-size: 11px; font-weight: 750; white-space: nowrap; }
     .release-notes { position: relative; z-index: 1; min-height: 52px; margin: 26px 0; color: var(--muted-strong); line-height: 1.6; }
+    .release-notes h2 { margin: 0; font-size: .9rem; color: var(--text); }
+    .release-notes p { margin: 6px 0 0; }
     .release-facts { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: var(--border); }
     .fact { min-height: 74px; display: flex; flex-direction: column; justify-content: center; gap: 7px; background: var(--surface-soft); padding: 14px 16px; }
     .fact small { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.11em; text-transform: uppercase; }
@@ -202,7 +205,7 @@ export function renderDownloadPage(model: DownloadPageModel): string {
           <div><span class="version-label">Current version</span><strong class="version">${escapeHtml(release.version)}</strong></div>
           <span class="build-pill">Build ${release.build_number}</span>
         </div>
-        <p class="release-notes">${escapeHtml(notes)}</p>
+        <div class="release-notes"><h2>Latest release highlights</h2><p>${escapeHtml(notes)}</p></div>
         <div class="release-facts">
           <div class="fact"><small>Published</small><strong>${escapeHtml(published.readable)}</strong></div>
           <div class="fact"><small>Channel</small><strong>Stable release</strong></div>
@@ -222,6 +225,7 @@ export function renderDownloadPage(model: DownloadPageModel): string {
       <div class="section-head"><h2 id="history-title">Release history</h2><p>The five stable releases before the current version, ordered by publication time.</p></div>
       <div class="timeline">${historyMarkup}</div>
       <a class="history-link" href="${historyUrl}" rel="noopener noreferrer">View verified build history ↗</a>
+      <a class="history-link" href="${changelogUrl}" rel="noopener noreferrer">Full changelog ↗</a>
     </section>
 
     <section class="shell content install-grid" aria-label="Installation and verification">

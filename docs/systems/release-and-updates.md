@@ -458,6 +458,12 @@ from `GITHUB_SHA`, SHA-256 and size computed locally and required to equal the
 Windows job's `SHA256SUMS.txt`, POSTed to `/api/v1/admin/releases` with
 `redirect: 'error'` and a 30-second timeout.
 
+Write a short [desktop release highlight](../desktop-release-notes/README.md)
+for visible changes. The publisher reads new highlight files from the exact
+candidate commit and compares it with the active release commit. The Updates
+screen and download page render those notes as plain text. Release history
+and the public changelog cover earlier versions.
+
 Every action is pinned to a commit SHA (Dependabot updates the pins).
 
 **Both Cloudflare jobs no-op gracefully.** A "Detect … configuration" step writes

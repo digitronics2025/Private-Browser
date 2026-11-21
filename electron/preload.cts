@@ -164,6 +164,7 @@ const api = {
   clearUpdateService: (): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:clear'),
   checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check'),
   openUpdatePage: (): Promise<void> => ipcRenderer.invoke('updates:open-page'),
+  openReleaseHistory: (): Promise<void> => ipcRenderer.invoke('updates:open-history'),
   onState: (callback: (state: BrowserSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: BrowserSnapshot) => callback(state);
     ipcRenderer.on('browser:state', listener);
