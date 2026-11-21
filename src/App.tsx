@@ -612,7 +612,12 @@ export default function App() {
 
         {menu === 'shield' && <ShieldStatusMenu anchor={shieldButtonRef.current} state={state} workspace={workspace} onClose={closeMenu} onToggleTrackers={() => void act(() => window.privateBrowser.toggleTrackerBlocking(), state.trackerBlocking ? 'Tracker blocking paused' : 'Tracker blocking enabled')} onCompatibility={(origin, paused) => void act(() => window.privateBrowser.setTrackerCompatibility(state.activeTabId, origin, paused))} onOpenPrivacy={() => openTool('privacy')} onOpenSettings={() => openTool('settings')} />}
         {menu === 'tab-search' && <TabSearchMenu anchor={tabSearchButtonRef.current} tabs={workspaceTabs} activeTabId={activeTab.id} onActivate={(id) => void act(() => window.privateBrowser.activateTab(id))} onClose={closeMenu} />}
-        {menu === 'site-info' && <SiteInfoMenu anchor={siteInfoButtonRef.current} tab={activeTab} account={activeAccount} trackerBlocking={state.trackerSite?.blocking ?? state.trackerBlocking} onClose={closeMenu} onOpenPrivacy={() => openTool('privacy')} onResetZoom={() => void act(() => window.privateBrowser.zoom('reset'))} onToggleDeveloperTools={() => void act(() => window.privateBrowser.toggleDeveloperTools('right'))} />}
+        {menu === 'site-info' && <SiteInfoMenu anchor={siteInfoButtonRef.current} tab={activeTab} account={activeAccount} trackerBlocking={state.trackerSite?.blocking ?? state.trackerBlocking}
+          keepSiteAwake={state.memorySaverSite && (ui.memorySaverMinutes || state.memorySaverSite.keptAwake) ? {
+            enabled: state.memorySaverSite.keptAwake,
+            toggle: () => { const site = state.memorySaverSite!; void act(() => window.privateBrowser.setMemorySaverSite(activeTab.id, site.origin, !site.keptAwake)); },
+          } : undefined}
+          onClose={closeMenu} onOpenPrivacy={() => openTool('privacy')} onResetZoom={() => void act(() => window.privateBrowser.zoom('reset'))} onToggleDeveloperTools={() => void act(() => window.privateBrowser.toggleDeveloperTools('right'))} />}
         {menu === 'zoom' && !activeTab.isHome && <ZoomMenu anchor={zoomButtonRef.current} zoom={activeTab.zoomPercent ?? 100} onZoom={(direction) => void act(() => window.privateBrowser.zoom(direction))} onClose={closeMenu} />}
         {menu === 'profile' && (
           <ProfileMenu

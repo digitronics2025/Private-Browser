@@ -1,0 +1,1 @@
+Memory Saver can unload eligible background tabs and reload them when you select them. Protected and interactive tabs stay awake. Each Account Space can keep individual sites awake.
