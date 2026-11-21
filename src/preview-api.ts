@@ -1356,7 +1356,7 @@ export function installPreviewApi(): void {
     listControlCenterRepositories: async () => ({ repositories: [{ id: 'repo-shop', name: 'shop', devOrigin: 'http://127.0.0.1:5173' }, { id: 'repo-site', name: 'site', devOrigin: null }], suggestedId: 'repo-shop' }),
     listControlCenterTasks: async () => [{ id: 'TASK-0042', title: 'The cart page crashes when it is empty', repositoryName: 'shop', status: 'COMPLETED', currentStageName: 'Complete', blocker: null, finalStatus: 'READY', createdAt: '2026-09-24T10:00:00.000Z', updatedAt: '2026-09-24T10:20:00.000Z', dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0042' }],
     sendToControlCenter: async () => ({ id: 'TASK-0043', title: 'Preview task', repositoryName: 'shop', status: 'QUEUED', currentStageName: 'Investigate', blocker: null, finalStatus: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0043' }),
-    recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md' }),
+    recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md', capturedAt: new Date().toISOString(), attachedAt: new Date().toISOString() }),
     inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),
     copyGeneratedCredential: async () => {
       if (state.activeWorkspaceId === 'banking') throw new Error('Vault clipboard is disabled in this workspace');

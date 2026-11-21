@@ -741,6 +741,7 @@ export interface AiPagePreview {
   tabId: string;
   service: 'browser' | 'gmail' | 'drive' | 'calendar' | 'contacts';
   sourceRevision: string;
+  capturedAt?: string;
   sourceUrl: string;
   title: string;
   url: string;
@@ -1015,6 +1016,18 @@ export interface ControlCenterTask {
   updatedAt: string;
   /** Where the task opens in the Control Center dashboard. */
   dashboardUrl: string;
+  browserContext?: {
+    route?: string;
+    routeMatch: boolean;
+    capturedAt: string;
+    receipt?: ControlCenterEvidenceReceipt;
+  };
+}
+
+export interface ControlCenterEvidenceReceipt {
+  name: string;
+  capturedAt: string;
+  attachedAt: string;
 }
 
 export interface ControlCenterSendInput {

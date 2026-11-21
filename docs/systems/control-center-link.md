@@ -92,11 +92,20 @@ its Account Spaces, cookies or the vault. Local coding agents use the separate
 3. **Follow.** "Sent from this browser" polls every 5 s while the tab is open.
    It shows the stage, outcome and blocker of the app's own tasks, and a link
    that opens the task in the Control Center in a new Development tab.
-4. **Re-check.** On a finished task, **Check again** clears the tab's captured
+4. **Re-check.** The task shows when the browser captured its latest evidence.
+   **Open original page** returns to the recorded route in its Account Space
+   when it can be reopened safely. On a finished task, **Check again** clears the tab's captured
    console and network entries (they otherwise survive a reload, and a re-check
    would repeat the old error), reloads the page, waits for it to load, and
    builds a fresh preview. **Attach to TASK-…** approves and
    sends it as re-check evidence.
+
+The sealed link retains each recent task's source route fingerprint, owning
+Account Space, capture time and attachment receipt. A route that can be
+reopened omits the query and fragment. The browser checks the task identity,
+terminal state and route again before attaching evidence. Earlier tasks
+without a recorded binding remain visible with their status. Their route is
+unavailable for re-checking. **Retry** reconnects after a failed service check.
 
 A create or re-check that loses its answer is retried up to twice with the
 **same** request id, so the Control Center returns the task it already made
