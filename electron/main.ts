@@ -25,6 +25,7 @@ import {
   type WindowOpenHandlerResponse,
 } from 'electron';
 import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from './security.js';
+import { externalLinkAccounts, isAvailableRegularAccount, preferredExternalLinkAccount } from './external-link-routing.js';
 import { ClipboardGuard } from './clipboard-guard.js';
 import { verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { AiProviderStore } from './ai-provider.js';
@@ -63,6 +64,9 @@ import type {
   DeveloperNetworkIssue,
   DevToolsMode,
   DownloadEntry,
+  AddressMatch,
+  HistoryQuery,
+  RecentlyClosedTab,
   PrivacyEvent,
   RuntimeBrowserStateV2,
   PermissionCapability,
@@ -228,7 +232,7 @@ const TRACKER_HOSTS = [
 
 class BrowserController {
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
-  private readonly downloads = new Map<string, DownloadEntry>();
+  private readonly downloads = new Map<string, DownloadEntry & { savePath?: string }>();
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly configuredSessions = new Set<string>();
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
@@ -246,7 +250,7 @@ class BrowserController {
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { ...DEFAULT_CONTENT_INSETS };
-  private readonly closedTabs = new Map<AccountSpaceId, Array<{ title: string; url: string }>>();
+  private readonly closedTabs = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   private htmlFullscreenOwner?: string;
   private settleLayoutTimer?: NodeJS.Timeout;
   private settleBroadcast = false;
@@ -412,7 +416,11 @@ class BrowserController {
       tabs,
       bookmarks: persisted.bookmarks,
       history: persisted.history.slice(0, 100),
-      downloads: [...this.downloads.values()],
+      downloads: this.activeDownloadAccount(persisted)
+        ? [...this.downloads.values()]
+          .filter((entry) => entry.accountSpaceId === activeAccountSpaceId)
+          .map(({ savePath: _path, ...entry }) => entry)
+        : [],
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
       activeAccountSpaceId,
@@ -433,6 +441,7 @@ class BrowserController {
       shortcutsByAccountSpace: persisted.shortcutsByAccountSpace,
       bookmarkIcons: persisted.bookmarkIconsByAccountSpace[activeAccountSpaceId] ?? {},
       canReopenClosedTab: (this.closedTabs.get(activeAccountSpaceId)?.length ?? 0) > 0,
+      recentlyClosedTabs: (this.closedTabs.get(activeAccountSpaceId) ?? []).slice().reverse(),
       sideApps: this.sideApps.snapshot(),
     };
   }
@@ -476,9 +485,47 @@ class BrowserController {
   }
 
   focus(): void {
+    if (!this.window || this.window.isDestroyed()) return;
     if (this.window.isMinimized()) this.window.restore();
     this.window.show();
     this.window.focus();
+  }
+
+  async openSystemLink(url: string): Promise<void> {
+    if (!isAllowedRemoteUrl(url) || this.store.isReadOnly() || this.window.isDestroyed()) return;
+    this.focus();
+    const state = this.store.get();
+    const eligible = externalLinkAccounts(state);
+    const accountId = preferredExternalLinkAccount(state, eligible) ?? await this.chooseSystemLinkAccount(url, eligible);
+    if (!accountId || this.window.isDestroyed()) return;
+    // The native prompt is asynchronous. The chosen account may have become unavailable.
+    const account = externalLinkAccounts(this.store.get()).find((candidate) => candidate.id === accountId);
+    if (account) await this.newTab(account.workspaceId, url, account.id);
+  }
+
+  private async chooseSystemLinkAccount(url: string, eligible: ReturnType<typeof externalLinkAccounts>): Promise<AccountSpaceId | undefined> {
+    const pageSize = 4;
+    for (let offset = 0; offset < eligible.length && !this.window.isDestroyed(); offset += pageSize) {
+      const page = eligible.slice(offset, offset + pageSize);
+      const buttons = page.map((account) => {
+        const workspace = WORKSPACES.find((candidate) => candidate.id === account.workspaceId)!;
+        return workspace.name + ' / ' + account.label + ' (' + (account.order + 1) + ')';
+      });
+      if (offset + pageSize < eligible.length) buttons.push('More spaces');
+      const cancelId = buttons.push('Cancel') - 1;
+      const { response } = await dialog.showMessageBox(this.window, {
+        type: 'question',
+        title: 'Open external link',
+        message: 'Choose an Account Space',
+        detail: 'Open a link to ' + new URL(url).host + '.',
+        buttons,
+        defaultId: cancelId,
+        cancelId,
+      });
+      if (response === cancelId) return undefined;
+      if (page[response]) return page[response].id;
+    }
+    return undefined;
   }
 
   setLayout(layout: Layout): void {
@@ -518,11 +565,26 @@ class BrowserController {
     this.broadcast();
   }
 
+  addressMatches(accountSpaceId: AccountSpaceId, text: string): AddressMatch[] {
+    return this.store.addressMatches(accountSpaceId, text);
+  }
+
+  retainedHistory(accountSpaceId: AccountSpaceId, input: HistoryQuery) {
+    return this.store.retainedHistory(accountSpaceId, input);
+  }
+
+  async openAddressMatch(accountSpaceId: AccountSpaceId, source: AddressMatch['source'], id: string): Promise<void> {
+    const url = this.store.addressMatchTarget(accountSpaceId, source, id);
+    if (!url || !isAllowedRemoteUrl(url)) throw new Error('This address result is no longer available');
+    if (source === 'tab') await this.activateTab(id);
+    else await this.navigate(url);
+  }
+
   /**
    * Adds a tab behind the current one without changing what the user sees: no
    * workspace, Account Space or tab switch. Its page loads when it is first shown.
    */
-  private addBackgroundTab(workspaceId: WorkspaceId, url: string, accountSpaceId: AccountSpaceId): void {
+  private addBackgroundTab(workspaceId: WorkspaceId, url: string, accountSpaceId: AccountSpaceId, title?: string): string | undefined {
     const state = this.store.get();
     if (!isAllowedRemoteUrl(url) || !state.accountSpaces.some((account) => account.id === accountSpaceId && account.workspaceId === workspaceId)) return;
     const id = randomUUID();
@@ -531,7 +593,7 @@ class BrowserController {
         id,
         accountSpaceId,
         workspaceId,
-        title: new URL(url).hostname,
+        title: title ?? new URL(url).hostname,
         url,
         isHome: false,
         loading: false,
@@ -543,6 +605,7 @@ class BrowserController {
     });
     this.runtimeTabs.set(id, this.newRuntimeTab());
     this.broadcast();
+    return id;
   }
 
   async newTab(workspaceId?: WorkspaceId, url = 'private://home', accountSpaceId?: AccountSpaceId): Promise<void> {
@@ -590,7 +653,7 @@ class BrowserController {
     const wasActive = state.activeTabByAccountSpace[tab.accountSpaceId] === tabId;
     if (!tab.isHome && tab.workspaceId !== 'banking' && isAllowedRemoteUrl(tab.url)) {
       const closed = this.closedTabs.get(tab.accountSpaceId) ?? [];
-      closed.push({ title: tab.title, url: tab.url });
+      closed.push({ id: tab.id, title: tab.title, url: tab.url, closedAt: new Date().toISOString() });
       this.closedTabs.set(tab.accountSpaceId, closed.slice(-MAX_CLOSED_TABS));
     }
     const runtime = this.runtimeTabs.get(tabId);
@@ -848,6 +911,7 @@ class BrowserController {
     await clearAndVerifyAccountSession(session.fromPartition(partition));
     this.store.update((state) => {
       state.history = state.history.filter((entry) => entry.accountSpaceId !== accountSpaceId);
+      if (state.historyTrimmedByAccountSpace) delete state.historyTrimmedByAccountSpace[accountSpaceId];
       for (const tab of state.tabs.filter((candidate) => candidate.accountSpaceId === accountSpaceId)) {
         tab.title = 'New tab';
         tab.url = 'private://home';
@@ -875,6 +939,9 @@ class BrowserController {
     await clearAndVerifyAccountSession(session.fromPartition(partition));
     this.configuredSessions.delete(partition);
     this.store.removeAccount(accountSpaceId);
+    for (const [id, entry] of this.downloads) {
+      if (entry.accountSpaceId === accountSpaceId) this.downloads.delete(id);
+    }
     await this.showActiveTab();
   }
 
@@ -1211,13 +1278,20 @@ class BrowserController {
     this.broadcast();
   }
 
-  async reopenClosedTab(): Promise<void> {
+  async reopenClosedTab(closedId?: string): Promise<void> {
     const state = this.store.get();
     const accountSpaceId = this.activeAccountSpaceId(state);
     const closed = this.closedTabs.get(accountSpaceId);
-    const entry = closed?.pop();
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!closed?.length || !account || !isAvailableRegularAccount(state, account)) return;
+    const index = closedId === undefined ? closed.length - 1 : closed.findIndex((entry) => entry.id === closedId);
+    const entry = closed[index];
     if (!entry) return;
-    await this.newTab(state.activeWorkspaceId, entry.url, accountSpaceId);
+    const restored = this.addBackgroundTab(account.workspaceId, entry.url, accountSpaceId, entry.title);
+    if (!restored) return;
+    closed.splice(index, 1);
+    if (closedId === undefined) await this.activateTab(restored);
+    else this.broadcast();
   }
 
   zoom(direction: 'in' | 'out' | 'reset'): void {
@@ -2203,9 +2277,24 @@ class BrowserController {
     this.addPrivacyEvent('vault', 'Generated credential copied', 'Generated by the broker; clipboard auto-clear enabled');
   }
 
-  openDownload(id: string): void {
+  private activeDownloadAccount(state = this.store.get()): AccountSpaceId | undefined {
+    const id = this.activeAccountSpaceId(state);
+    const account = state.accountSpaces.find((candidate) => candidate.id === id);
+    return account && isAvailableRegularAccount(state, account) ? id : undefined;
+  }
+
+  private requireActiveDownload(id: string) {
     const item = this.downloads.get(id);
-    if (!item || item.state !== 'completed' || !item.savePath) return;
+    if (!item || item.accountSpaceId !== this.activeDownloadAccount()) {
+      throw new Error('Download is unavailable in this Account Space');
+    }
+    if (item.state !== 'completed' || !item.savePath) throw new Error('This download is incomplete');
+    if (!existsSync(item.savePath)) throw new Error('The downloaded file is missing');
+    return { ...item, savePath: item.savePath };
+  }
+
+  async openDownload(id: string): Promise<void> {
+    const item = this.requireActiveDownload(id);
     // A file whose checksum did not match the manifest is the one case where the
     // app knows something is wrong; opening it anyway would waste the check.
     if (item.checksum === 'mismatch') throw new Error('This download does not match the published checksum and will not be opened. Delete it and download again.');
@@ -2213,12 +2302,12 @@ class BrowserController {
     if (downloadRisk(basename(item.savePath)) !== 'ordinary' && item.checksum !== 'verified') {
       throw new Error('Private Browser only opens documents, images, media and archives. Other file types can run code: review this one in its folder and scan it first.');
     }
-    void shell.openPath(item.savePath);
+    const error = await shell.openPath(item.savePath);
+    if (error) throw new Error('Windows could not open the downloaded file. Use Show folder to check it.');
   }
 
   showDownload(id: string): void {
-    const item = this.downloads.get(id);
-    if (item?.savePath) shell.showItemInFolder(item.savePath);
+    shell.showItemInFolder(this.requireActiveDownload(id).savePath);
   }
 
   isDefaultBrowser(): boolean {
@@ -2637,7 +2726,7 @@ class BrowserController {
     ses.on('will-download', (event, item, sourceContents) => {
       if (protectedWorkspace) {
         event.preventDefault();
-        this.addPrivacyEvent('blocked', 'Download blocked in Banking', item.getFilename().slice(0, 300));
+        this.addPrivacyEvent('blocked', 'Download blocked in Banking', 'Banking does not allow saving downloads');
         return;
       }
       const downloadOrigin = safeOrigin(item.getURL());
@@ -2660,7 +2749,7 @@ class BrowserController {
         return;
       }
       const id = randomUUID();
-      const entry: DownloadEntry = {
+      const entry: DownloadEntry & { savePath?: string } = {
         id,
         accountSpaceId,
         filename: item.getFilename(),
@@ -2682,14 +2771,14 @@ class BrowserController {
         this.broadcast();
         if (state !== 'completed') return;
         void verifyDownload(entry.savePath ?? '', entry.filename, this.expectedInstaller).then((checksum) => {
-          if (checksum === 'unchecked') return;
+          if (checksum === 'unchecked' || this.downloads.get(id) !== entry) return;
           entry.checksum = checksum;
           this.addPrivacyEvent(
             checksum === 'verified' ? 'vault' : 'blocked',
             checksum === 'verified' ? 'Installer checksum verified' : 'Installer checksum did NOT match',
             checksum === 'verified'
-              ? `${entry.filename} matches the signed release manifest`
-              : `${entry.filename} does not match the published checksum — do not run it`,
+              ? 'The file matches the signed release manifest'
+              : 'The file does not match the published checksum',
           );
           this.broadcast();
         });
@@ -2903,7 +2992,34 @@ class BrowserController {
 
 let controller: BrowserController | undefined;
 let vscodeBridge: VscodeBridgeServer | undefined;
-let pendingLaunchUrl = process.argv.find((argument) => isAllowedRemoteUrl(argument));
+const pendingLaunchUrls: string[] = [];
+let launchWindowReady = false;
+let processingLaunchUrls = false;
+
+function queueSystemLink(url: string): void {
+  if (!isAllowedRemoteUrl(url) || pendingLaunchUrls.length >= 20) return;
+  pendingLaunchUrls.push(url);
+  void openPendingSystemLinks();
+}
+
+async function openPendingSystemLinks(): Promise<void> {
+  if (!launchWindowReady || processingLaunchUrls || !controller) return;
+  processingLaunchUrls = true;
+  try {
+    for (let url = pendingLaunchUrls.shift(); url; url = pendingLaunchUrls.shift()) {
+      try {
+        await controller.openSystemLink(url);
+      } catch {
+        // A failed load must not prevent the next system link from opening.
+      }
+    }
+  } finally {
+    processingLaunchUrls = false;
+  }
+}
+
+const initialUrl = process.argv.find(isAllowedRemoteUrl);
+if (initialUrl) queueSystemLink(initialUrl);
 app.enableSandbox();
 app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'default_public_interface_only');
 app.on('certificate-error', (event, webContents, _url, _error, _certificate, callback) => {
@@ -2921,15 +3037,12 @@ if (!hasSingleInstanceLock) {
 } else {
   app.on('second-instance', (_event, commandLine) => {
     const url = commandLine.find((argument) => isAllowedRemoteUrl(argument));
-    if (url) void controller?.newTab(undefined, url);
+    if (url) queueSystemLink(url);
     controller?.focus();
   });
   app.on('open-url', (event, url) => {
     event.preventDefault();
-    if (isAllowedRemoteUrl(url)) {
-      if (controller) void controller.newTab(undefined, url);
-      else pendingLaunchUrl = url;
-    }
+    queueSystemLink(url);
   });
 }
 
@@ -3019,6 +3132,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:activate-tab', (_event, id: string) => controller!.activateTab(id));
   handle('browser:switch-workspace', (_event, id: WorkspaceId) => controller!.switchWorkspace(id));
   handle('browser:switch-account-space', (_event, id: AccountSpaceId) => controller!.switchAccountSpace(id));
+  handle('browser:address-matches', (_event, account: AccountSpaceId, text: string) => controller!.addressMatches(account, text));
+  handle('browser:query-history', (_event, account: AccountSpaceId, input: HistoryQuery) => controller!.retainedHistory(account, input));
+  handle('browser:open-address-match', (_event, account: AccountSpaceId, source: AddressMatch['source'], id: string) => controller!.openAddressMatch(account, source, id));
   handle('accounts:add-local', (_event, workspaceId: WorkspaceId, label: string, color: AccountSpaceColor) => controller!.addLocalAccountSpace(workspaceId, label, color));
   handle('accounts:update', (_event, id: AccountSpaceId, label?: string, color?: AccountSpaceColor) => controller!.updateAccountSpace(id, label, color));
   handle('accounts:reorder', (_event, workspaceId: WorkspaceId, ids: AccountSpaceId[]) => controller!.reorderAccountSpaces(workspaceId, ids));
@@ -3064,6 +3180,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:freeze-content', () => controller!.freezeContent());
   handle('browser:move-tab', (_event, tabId: string, toIndex: number) => controller!.moveTab(tabId, toIndex));
   handle('browser:reopen-closed-tab', () => controller!.reopenClosedTab());
+  handle('browser:reopen-recent-tab', (_event, id: string) => controller!.reopenClosedTab(id));
   handle('browser:zoom', (_event, direction: 'in' | 'out' | 'reset') => controller!.zoom(direction));
   handle('browser:print', () => controller!.print());
   handle('browser:find', (_event, text: string, forward: boolean, findNext: boolean) => controller!.findInPage(text, forward, findNext));
@@ -3146,13 +3263,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   await controller.createWindow();
   setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();
   setInterval(() => void controller?.checkForUpdatesInBackground(), 24 * 60 * 60_000).unref();
-  if (pendingLaunchUrl) {
-    const url = pendingLaunchUrl;
-    pendingLaunchUrl = undefined;
-    await controller.newTab(undefined, url);
-  } else {
-    await controller.openStartupHome();
-  }
+  if (!pendingLaunchUrls.length) await controller.openStartupHome();
+  launchWindowReady = true;
+  await openPendingSystemLinks();
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) await controller!.createWindow();
   });

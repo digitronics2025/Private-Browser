@@ -5,12 +5,12 @@ sources:
   - electron/account-space-state.ts
   - electron/runtime-state-store.ts
   - electron/ui-preferences.ts
-verified_at: 028b9d2d
+verified_at: 9916c243
 ---
 
 # Workspaces and Persisted State
 
-> Last verified: 2026-09-26
+> Last verified: 2026-11-20
 
 ## Agent Brief
 
@@ -61,7 +61,8 @@ Account Space deletes its plaintext browsing file.
 
 ## Version-2 plaintext boundary
 
-The manifest contains opaque UUID references, active selection, tracker
+The manifest contains opaque UUID references, active selection, an optional
+last regular Account Space for external-link routing, tracker
 preference, the privacy log and `ui` interface preferences: `theme`
 (`system`/`dark`/`light`), `bookmarkBarMode` (`always`/`new-tab`/`hidden`),
 `sidePanelOpen` (default `false`), `sidePanelWidth` (320–520, default 400),
@@ -86,8 +87,7 @@ the choices reset to defaults on the next save; nothing else is lost. IPC patche
 use `requireBrowserSettingsPatch`, and the controller normalizes `homePageUrl`
 through `parseWebAddress` before `mergeBrowserSettings`.
 
-Per-account browsing files contain URLs, titles, bookmark hierarchy, and history
-plus workspace/account IDs, and an optional `shortcuts` list (≤ 12 HTTP(S)
+Per-account browsing files contain URLs, titles, bookmark hierarchy, and history, along with workspace/account IDs. An optional flag records when the retention limit trimmed visits. The optional `shortcuts` list (≤ 12 HTTP(S)
 New Tab tiles, sanitised by `sanitizeShortcutTiles`) that is present only once the
 user customises them. An optional `bookmarkIcons` map (host → image `data:` URL,
 ≤ 300, sanitised by `sanitizeBookmarkIcons` and pruned to hosts that still have a

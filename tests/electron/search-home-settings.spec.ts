@@ -68,7 +68,7 @@ test('search engine, Home page and startup settings work in the real app and sur
   try {
     let page = await app.firstWindow();
     await expect(page.getByRole('heading', { name: 'Private Browser' })).toBeVisible();
-    const address = () => page.getByRole('textbox', { name: 'Address and search bar' });
+    const address = () => page.getByRole('combobox', { name: 'Address and search bar' });
     const tabs = () => page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab');
 
     // A custom template is refused over plain HTTP, then accepted over HTTPS and used for typed text.

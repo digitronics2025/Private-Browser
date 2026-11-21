@@ -118,6 +118,10 @@ identifiers are removed from navigations, DNT and Global Privacy Control headers
 are sent, common tracker hosts are blocked, and cleartext or punycode domains are
 visibly marked in the address bar.
 
+Only the active, eligible Account Space can list, open or reveal its downloads.
+Downloaded file paths stay in the main process. Operating-system links are
+restricted to eligible regular Account Spaces, even with Banking in front.
+
 Private Browser opens only documents, images, media and archives. Every other
 download type — executables, scripts, installers such as `.msix`, disk images,
 shortcuts — and every deceptive double extension is labelled and cannot be

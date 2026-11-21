@@ -12,6 +12,10 @@ verified_at: 028b9d2d
 
 ## Agent Brief
 
+The Notes panel labels the configured service as a shared library above the
+page. This notice describes the library's access mode and does not depend on
+whether the native page has loaded.
+
 **Scope.** A trusted web app shown in the side panel next to the page, the way
 Chrome shows an extension's side panel. **Claude** (`https://claude.ai/new`) and
 **Notes** (the existing Easy Copy Notes app,

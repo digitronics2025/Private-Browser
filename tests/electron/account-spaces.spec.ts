@@ -15,6 +15,12 @@ test.beforeEach(async () => {
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
+    if (request.url === '/account-download') {
+      response.setHeader('Content-Type', 'text/plain');
+      response.setHeader('Content-Disposition', 'attachment; filename="account-fixture.txt"');
+      response.end('local fixture');
+      return;
+    }
     if (request.url === '/turnstile') {
       response.setHeader('Content-Type', 'text/html');
       response.end(`<!doctype html>
@@ -45,6 +51,104 @@ test.afterEach(async () => {
   await application?.close();
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   rmSync(userDataPath, { recursive: true, force: true });
+});
+
+test('routes an operating-system link back to the last regular account from Banking', async () => {
+  const page = await application!.firstWindow();
+  const accountSpaceId = await page.evaluate(async () => {
+    const id = await window.privateBrowser.addLocalAccountSpace('personal', 'External link destination', 'sky');
+    await window.privateBrowser.switchWorkspace('banking');
+    return id;
+  });
+  const before = await page.evaluate(() => window.privateBrowser.getState());
+  expect(before.activeWorkspaceId).toBe('banking');
+  await application!.evaluate(({ app }, url) => {
+    app.emit('second-instance', {}, ['private-browser', url], process.cwd(), {});
+  }, origin);
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) => state.activeAccountSpaceId)))
+    .toBe(accountSpaceId);
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) =>
+    state.tabs.find((tab) => tab.id === state.activeTabId)?.title))).toBe('Account isolation fixture');
+  const after = await page.evaluate(() => window.privateBrowser.getState());
+  expect(after.tabs.filter((tab) => tab.workspaceId === 'banking')).toEqual(before.tabs.filter((tab) => tab.workspaceId === 'banking'));
+});
+
+test('scopes the download list and both file commands to the originating account', async () => {
+  const page = await application!.firstWindow();
+  const first = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Download owner', 'sky'));
+  const target = origin + '/account-download';
+  await page.evaluate((url) => window.privateBrowser.navigate(url + '/source'), target);
+  const savePath = join(userDataPath, 'account-fixture.txt');
+  await application!.evaluate(({ webContents }, { target, savePath }) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === target + '/source');
+    if (!contents) throw new Error('Download source view is missing');
+    // The initial request is stopped for permission. Set a path only on its granted retry.
+    contents.session.once('will-download', () => {
+      contents.session.once('will-download', (_event, item) => item.setSavePath(savePath));
+    });
+    contents.downloadURL(target);
+  }, { target, savePath });
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
+  const promptId = (await getState()).pendingPermission!.id;
+  await page.evaluate((id) => window.privateBrowser.respondToPermissionPrompt(id, 'allow-once'), promptId);
+  await expect.poll(async () => (await getState()).downloads[0]?.state).toBe('completed');
+  const [download] = (await getState()).downloads;
+  expect(download.filename).toBe('account-fixture.txt');
+  expect(download).not.toHaveProperty('savePath');
+  await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Separate account', 'indigo'));
+  expect((await getState()).downloads).toEqual([]);
+  const errors = await page.evaluate(async (id) => {
+    const results = await Promise.allSettled([
+      window.privateBrowser.openDownload(id),
+      window.privateBrowser.showDownload(id),
+    ]);
+    return results.map((result) => result.status === 'rejected' ? String(result.reason) : 'allowed');
+  }, download.id);
+  for (const error of errors) expect(error).toContain('Download is unavailable in this Account Space');
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), first);
+  expect((await getState()).downloads).toEqual([download]);
+});
+
+test('switches to an existing tab through the real address bar bridge', async () => {
+  const page = await application!.firstWindow();
+  const initial = await page.evaluate(() => window.privateBrowser.getState());
+  await page.evaluate((url) => window.privateBrowser.navigate(url), origin);
+  await expect.poll(() => page.evaluate(async () => {
+    const state = await window.privateBrowser.getState();
+    return state.tabs.find((tab) => tab.id === state.activeTabId)?.title;
+  })).toBe('Account isolation fixture');
+  await page.evaluate(() => window.privateBrowser.newTab());
+  const address = page.getByRole('combobox', { name: 'Address and search bar' });
+  await address.fill('isolation fixture');
+  await expect(page.getByRole('option', { name: /Account isolation fixture.*Switch to tab/i })).toBeVisible();
+  await address.press('ArrowDown');
+  await address.press('Enter');
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) => state.activeTabId)))
+    .toBe(initial.activeTabId);
+});
+
+test('keeps recently closed entries local to their Account Space', async () => {
+  const page = await application!.firstWindow();
+  const owner = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Closed tab owner', 'sky'));
+  await page.evaluate((url) => window.privateBrowser.navigate(url), origin);
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  const original = (await getState()).activeTabId;
+  await page.evaluate((id) => window.privateBrowser.closeTab(id), original);
+  const [closed] = (await getState()).recentlyClosedTabs!;
+  expect(closed).toMatchObject({ id: original, url: origin + '/' });
+  expect(Date.parse(closed.closedAt)).toBeGreaterThan(0);
+  await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Other account', 'indigo'));
+  await page.evaluate((id) => window.privateBrowser.reopenRecentTab(id), closed.id);
+  expect((await getState()).recentlyClosedTabs).toEqual([]);
+  expect((await getState()).tabs.filter((tab) => tab.url === closed.url)).toHaveLength(0);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), owner);
+  const foreground = (await getState()).activeTabId;
+  await page.evaluate((id) => window.privateBrowser.reopenRecentTab(id), closed.id);
+  const restored = await getState();
+  expect(restored.recentlyClosedTabs).toEqual([]);
+  expect(restored.activeTabId).toBe(foreground);
+  expect(restored.tabs.filter((tab) => tab.url === closed.url && tab.accountSpaceId === owner)).toHaveLength(1);
 });
 
 test('keeps the default embedded-browser identity stable across the session', async () => {

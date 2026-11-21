@@ -7,12 +7,12 @@ sources:
   - electron/shortcuts.ts
   - electron/bookmark-tree.ts
   - electron/popup-windows.ts
-verified_at: 028b9d2d
+verified_at: 9916c243
 ---
 
 # Browser Shell
 
-> Last verified: 2026-09-26
+> Last verified: 2026-11-20
 
 ## Agent Brief
 
@@ -203,11 +203,31 @@ views; their webContents stay alive and keep running timers, media and network.
 
 ## Navigation and History
 
+The Recently closed submenu lists up to 25 pages from the active Account Space
+with their close times. Choosing a page adds a background tab. Reopen closed tab
+and Ctrl+Shift+T still restore the most recent page to the foreground. The list
+is session-only and excludes Banking.
+
+**External links.** Launch arguments and links from a running desktop session
+share the same routing. The main process opens HTTP(S) links in the active
+eligible Account Space or the last eligible regular space. If the destination is
+ambiguous, a native chooser shows the target host and eligible spaces. Cancel
+leaves the link unopened. Banking, locked spaces, and spaces in recovery never
+receive an operating-system link.
+
 `navigate(value)` runs the raw address-bar string through
 `normalizeNavigationInput` with the search template of the chosen engine (bare
 host to https, localhost or IP to http, anything else to a search — see
 [security-boundary.md](security-boundary.md)). `openInAccountSpace` uses the same
-template.
+template. The address-bar query searches the active Account Space in main and
+returns at most eight unique URLs, prioritizing tabs, bookmarks, then retained
+history. Banking history is excluded. The selection command rechecks the
+expected space and resolves the chosen record by ID before opening it.
+
+The History panel queries the active space's full retained history in main.
+It filters by title or address, hostname, and a local date range. It groups
+repeat visits by address and returns 40 results per page. The New Tab page
+still uses the bounded recent-history snapshot.
 
 **Home.** The Home button and Alt+Home call `goHome()` (`browser:home`), which
 navigates the active tab to `resolveHomeUrl(settings, workspace.protected)`: the
@@ -422,15 +442,18 @@ becomes a `DownloadEntry` in an in-memory `Map` keyed by a fresh `randomUUID()`:
   listeners, and every mutation calls `broadcast()`, so the renderer sees live
   progress.
 - Nothing calls `item.setSavePath()`, so Electron's own save behaviour applies.
-- Banking-workspace downloads are cancelled before a file is written.
+- Banking-workspace downloads are cancelled before a file is written. The
+  snapshot includes only the unlocked active Account Space's downloads and
+  omits local file paths. Both file actions check ownership again in main.
 - `downloadRisk` is an allowlist: only documents, images, media and archives are
   `ordinary`; every other type (including `.msix`, `.vhdx`, `.url`,
   extensionless names) is `dangerous`, and a disguise extension before it is
   `deceptive`. Risk is re-judged from the saved path's name when the download
   completes. `openDownload(id)` requires state `completed` **and** a `savePath`,
-  and refuses a risky file unless it is the checksum-verified app installer;
-  `showDownload(id)` only requires a `savePath`.
-- The map is never persisted and never pruned.
+  and refuses a risky file unless it is the checksum-verified app installer.
+  Show folder also requires a completed download with an existing saved file.
+- The map is session-only. Deleting an Account Space removes its records and
+  leaves the downloaded files on disk.
 
 ## Downloads — checksum verification
 

@@ -8,6 +8,7 @@ test('Notes is discoverable, keyboard accessible and has deliberate local data c
   await expect(notes).toHaveAttribute('aria-selected', 'true');
   await expect(notes).toBeFocused();
   await expect(page.getByRole('button', { name: 'Library home', exact: true })).toBeVisible();
+  await expect(page.getByRole('note')).toHaveText('Shared Notes library');
   await expect(page.getByRole('button', { name: /Sign out of Notes/ })).toHaveCount(0);
   page.once('dialog', async dialog => {
     expect(dialog.message()).toContain('Only the Notes side-panel partition is cleared');
@@ -25,6 +26,7 @@ test('Notes is discoverable, keyboard accessible and has deliberate local data c
   await page.getByRole('tab', { name: 'Claude', exact: true }).click();
   await expect(page.getByRole('button', { name: 'New chat', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sign out of Claude', exact: true })).toBeVisible();
+  await expect(page.getByText('Shared Notes library')).toHaveCount(0);
 });
 
 

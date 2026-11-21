@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { AddressMatch, HistoryPage, HistoryQuery } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
@@ -17,6 +18,9 @@ const api = {
   activateTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:activate-tab', tabId),
   switchWorkspace: (workspaceId: WorkspaceId): Promise<void> => ipcRenderer.invoke('browser:switch-workspace', workspaceId),
   switchAccountSpace: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:switch-account-space', accountSpaceId),
+  addressMatches: (accountSpaceId: AccountSpaceId, text: string): Promise<AddressMatch[]> => ipcRenderer.invoke('browser:address-matches', accountSpaceId, text),
+  queryHistory: (accountSpaceId: AccountSpaceId, input: HistoryQuery): Promise<HistoryPage> => ipcRenderer.invoke('browser:query-history', accountSpaceId, input),
+  openAddressMatch: (accountSpaceId: AccountSpaceId, source: AddressMatch['source'], id: string): Promise<void> => ipcRenderer.invoke('browser:open-address-match', accountSpaceId, source, id),
   addLocalAccountSpace: (workspaceId: WorkspaceId, label: string, color: AccountSpaceColor): Promise<AccountSpaceId> => ipcRenderer.invoke('accounts:add-local', workspaceId, label, color),
   updateAccountSpace: (accountSpaceId: AccountSpaceId, label?: string, color?: AccountSpaceColor): Promise<void> => ipcRenderer.invoke('accounts:update', accountSpaceId, label, color),
   reorderAccountSpaces: (workspaceId: WorkspaceId, accountSpaceIds: AccountSpaceId[]): Promise<void> => ipcRenderer.invoke('accounts:reorder', workspaceId, accountSpaceIds),
@@ -62,6 +66,7 @@ const api = {
   freezeContent: (): Promise<string | null> => ipcRenderer.invoke('browser:freeze-content'),
   moveTab: (tabId: string, toIndex: number): Promise<void> => ipcRenderer.invoke('browser:move-tab', tabId, toIndex),
   reopenClosedTab: (): Promise<void> => ipcRenderer.invoke('browser:reopen-closed-tab'),
+  reopenRecentTab: (id: string): Promise<void> => ipcRenderer.invoke('browser:reopen-recent-tab', id),
   zoom: (direction: 'in' | 'out' | 'reset'): Promise<void> => ipcRenderer.invoke('browser:zoom', direction),
   print: (): Promise<void> => ipcRenderer.invoke('browser:print'),
   findInPage: (text: string, forward: boolean, findNext: boolean): Promise<void> => ipcRenderer.invoke('browser:find', text, forward, findNext),

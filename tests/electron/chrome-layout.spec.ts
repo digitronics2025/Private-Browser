@@ -99,7 +99,7 @@ test('the page view follows the chrome through every layout change', async () =>
       view.webContents.focus();
       view.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'L', modifiers: ['control'] });
     });
-    await expect(page.getByRole('textbox', { name: 'Address and search bar' })).toBeFocused();
+    await expect(page.getByRole('combobox', { name: 'Address and search bar' })).toBeFocused();
 
     await page.evaluate(() => window.privateBrowser.toggleBookmarkBar());
     await expect(page.getByRole('navigation', { name: 'Bookmarks bar' })).toHaveCount(0);

@@ -10,6 +10,7 @@ import {
 } from './account-space-validation.js';
 import type { ExternalBrowserId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
+import { MAX_ADDRESS_QUERY_LENGTH } from './address-matches.js';
 import { requireBrowserSettingsPatch } from './browser-settings.js';
 import { requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
@@ -105,6 +106,22 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); requireBrowserSettingsPatch(args[0]); return;
     case 'browser:home':
       exact(args, 0); return;
+    case 'browser:address-matches':
+      exact(args, 2); requireAccountSpaceId(args[0]); requireBoundedText(args[1], 'address search', MAX_ADDRESS_QUERY_LENGTH); return;
+    case 'browser:query-history': {
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      const input = requireExactKeys(args[1], ['text', 'site', 'from', 'until', 'page']);
+      requireBoundedText(input.text, 'history search', 256);
+      requireBoundedText(input.site, 'history site', 255);
+      if (input.from !== null) requireBoundedNumber(input.from, 'history start', -8.64e15, 8.64e15);
+      if (input.until !== null) requireBoundedNumber(input.until, 'history end', -8.64e15, 8.64e15);
+      requireIndex(input.page);
+      return;
+    }
+    case 'browser:open-address-match':
+      exact(args, 3); requireAccountSpaceId(args[0]);
+      if (args[1] !== 'tab' && args[1] !== 'bookmark' && args[1] !== 'history') throw new Error('Invalid address result type');
+      requireNonEmptyText(args[2], 'address result identifier', 200); return;
     case 'browser:move-tab':
       exact(args, 2); requireBoundedText(args[0], 'tab identifier', 200); requireIndex(args[1]); return;
     case 'browser:zoom':
@@ -170,6 +187,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     }
     // Channels that take one identifier chosen from state the renderer was given.
     case 'browser:activate-tab':
+    case 'browser:reopen-recent-tab':
     case 'browser:close-tab':
     case 'browser:open-download':
     case 'browser:show-download':

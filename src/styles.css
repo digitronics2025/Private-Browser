@@ -242,6 +242,12 @@ kbd { font: inherit; }
   transition: background var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease), border-color var(--motion-fast);
 }
 .omnibox:hover { background: var(--field-hover); }
+.omnibox { position: relative; }
+.address-matches { position: absolute; inset: calc(100% + 5px) 0 auto; z-index: 18; max-height: min(55vh, 420px); overflow: auto; padding: 4px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-raised); box-shadow: var(--shadow-sm); }
+.address-matches [role='option'] { display: grid; gap: 3px; padding: 8px 10px; border-radius: 7px; cursor: pointer; }
+.address-matches [role='option']:hover, .address-matches [aria-selected='true'] { background: var(--hover); }
+.address-matches strong, .address-matches small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.address-matches small { color: var(--text-muted); }
 .omnibox:focus-within { background: var(--field-focus); border-color: var(--accent-ring); box-shadow: 0 0 0 1px var(--accent-ring), var(--shadow-sm); }
 .omnibox input { min-width: 0; flex: 1; height: 100%; padding: 0 6px; border: 0; outline: 0; background: transparent; color: var(--text); font-size: var(--fs-md); }
 .omnibox input::placeholder { color: var(--text-subtle); }
@@ -481,6 +487,9 @@ kbd { font: inherit; }
 .panel-actions button:hover:not(:disabled) { background: var(--hover); }
 .panel-actions button:disabled { opacity: .45; }
 .panel-actions button.danger { color: var(--danger); }
+.history-dates { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.history-dates label { flex: 1; display: grid; gap: 4px; color: var(--text-muted); }
+.history-dates input { min-width: 0; padding: 6px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--surface); color: var(--text); }
 .panel-count { margin: 4px 2px 8px; color: var(--text-muted); font-size: var(--fs-xs); }
 .empty-state { min-height: 140px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 20px; color: var(--text-subtle); font-size: var(--fs-sm); text-align: center; }
 .item-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
@@ -675,6 +684,7 @@ kbd { font: inherit; }
 .progress { height: 4px; margin-top: 7px; overflow: hidden; border-radius: 2px; background: var(--surface-3); }
 .progress span { display: block; height: 100%; background: var(--accent); }
 .download-actions { display: flex; gap: 6px; margin-top: 8px; }
+.browser-preview-marker { position: fixed; inset: auto auto 8px 8px; z-index: 10; padding: 3px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 11px; pointer-events: none; }
 .checksum { display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: var(--fs-xs); }
 .checksum.ok { color: var(--ok); }
 .checksum.bad { color: var(--danger); font-weight: 700; }

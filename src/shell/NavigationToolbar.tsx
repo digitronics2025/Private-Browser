@@ -1,7 +1,10 @@
 import type { FormEvent, RefObject } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, Asterisk, ArrowRight, Home, KeyRound, MoreVertical, PanelRight, RefreshCw, Search, SlidersHorizontal, Sparkles, Star, TriangleAlert, X, ZoomIn, ZoomOut } from 'lucide-react';
-import type { AccountSpaceSummary, BrowserTab } from '../../electron/types';
+import type { AccountSpaceSummary, AddressMatch, BrowserTab } from '../../electron/types';
+import { MAX_ADDRESS_QUERY_LENGTH } from '../../electron/address-matches';
 import { AccountAvatar, accountNeedsAction } from '../lib/accounts';
+import { useOverlayLayer } from './overlay';
 
 export interface NavigationToolbarProps {
   /** "Search Google or enter address" — names the engine chosen in Settings. */
@@ -25,6 +28,7 @@ export interface NavigationToolbarProps {
   menuOpen: boolean;
   onAddressChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
+  onOpenAddressMatch: (match: AddressMatch) => void;
   onBack: () => void;
   onForward: () => void;
   onReloadOrStop: () => void;
@@ -45,6 +49,41 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
   const zoom = tab.zoomPercent ?? 100;
   const warning = tab.securityWarning;
   const needsAction = accountNeedsAction(account);
+  const [draftTabId, setDraftTabId] = useState<string>();
+  const [response, setResponse] = useState<{ tabId: string; query: string; matches: AddressMatch[] }>();
+  const [selected, setSelected] = useState(-1);
+  const query = props.address.trim();
+  const matches = draftTabId === tab.id && response?.tabId === tab.id && response.query === query ? response.matches : [];
+  const ready = useOverlayLayer(matches.length > 0);
+  const expanded = matches.length > 0 && ready;
+
+  useEffect(() => {
+    if (draftTabId !== tab.id || query.length < 2 || query.length > MAX_ADDRESS_QUERY_LENGTH) return;
+    let current = true;
+    const timer = window.setTimeout(() => {
+      void window.privateBrowser.addressMatches?.(account.id, query).then((matches) => {
+        if (current && Array.isArray(matches)) {
+          setSelected(-1);
+          setResponse({ tabId: tab.id, query, matches });
+        }
+      }).catch(() => undefined);
+    }, 90);
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [account.id, draftTabId, query, tab.id]);
+
+  useEffect(() => {
+    if (expanded && selected >= 0) document.getElementById('address-match-' + selected)?.scrollIntoView({ block: 'nearest' });
+  }, [expanded, selected]);
+
+  const closeMatches = () => {
+    setDraftTabId(undefined);
+    setResponse(undefined);
+    setSelected(-1);
+  };
+  const chooseMatch = (match: AddressMatch) => {
+    closeMatches();
+    props.onOpenAddressMatch(match);
+  };
   return (
     <nav className="toolbar" aria-label="Navigation">
       <button type="button" className="toolbar-button" aria-label="Back" title="Back (Alt+Left)" disabled={!tab.canGoBack} onClick={props.onBack}><ArrowLeft size={18} /></button>
@@ -54,7 +93,16 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
       </button>
       <button type="button" className="toolbar-button optional" aria-label="Home" title="Home (Alt+Home)" onClick={props.onHome}><Home size={18} /></button>
 
-      <form className={`omnibox ${warning ? 'has-warning' : ''}`} onSubmit={props.onSubmit} role="search">
+      <form className={`omnibox ${warning ? 'has-warning' : ''}`} onSubmit={(event) => {
+        const match = matches[selected];
+        if (match) {
+          event.preventDefault();
+          chooseMatch(match);
+        } else {
+          closeMatches();
+          props.onSubmit(event);
+        }
+      }} role="search">
         <button
           ref={props.siteInfoButtonRef}
           type="button"
@@ -74,14 +122,52 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
         )}
         <input
           ref={props.addressRef}
+          role="combobox"
           aria-label="Address and search bar"
+          aria-autocomplete="list"
+          aria-expanded={expanded}
+          aria-controls={expanded ? 'address-matches' : undefined}
+          aria-activedescendant={expanded && selected >= 0 ? 'address-match-' + selected : undefined}
           value={props.address}
-          onChange={(event) => props.onAddressChange(event.target.value)}
+          onChange={(event) => {
+            setDraftTabId(tab.id);
+            setResponse(undefined);
+            setSelected(-1);
+            props.onAddressChange(event.target.value);
+          }}
           onFocus={(event) => event.currentTarget.select()}
+          onBlur={closeMatches}
+          onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return;
+            if (event.key === 'Escape' && draftTabId === tab.id) {
+              event.preventDefault();
+              event.stopPropagation();
+              closeMatches();
+            }
+            if (matches.length > 0 && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+              event.preventDefault();
+              setSelected((current) => event.key === 'ArrowDown'
+                ? (current + 1) % matches.length
+                : (current <= 0 ? matches.length - 1 : current - 1));
+            }
+          }}
           placeholder={props.searchPrompt}
           spellCheck={false}
           autoComplete="off"
         />
+        {expanded && <div className="address-matches" id="address-matches" role="listbox" aria-label="Local address matches">
+          {matches.map((match, index) => <div
+            key={match.source + '-' + match.id}
+            id={'address-match-' + index}
+            role="option"
+            aria-selected={selected === index}
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => chooseMatch(match)}
+          >
+            <strong>{match.title || match.url}</strong>
+            <small>{match.source === 'tab' ? 'Switch to tab' : match.source === 'bookmark' ? 'Bookmark' : 'History'} · {match.url}</small>
+          </div>)}
+        </div>}
         {(zoom !== 100 || props.zoomOpen) && !tab.isHome && (
           <button ref={props.zoomButtonRef} type="button" className={`omnibox-action ${props.zoomOpen ? 'active' : ''}`} aria-label={`Zoom: ${zoom}%`} aria-haspopup="dialog" aria-expanded={props.zoomOpen} title={`Zoom: ${zoom}%`} onClick={props.onZoomMenu}>
             {zoom > 100 ? <ZoomIn size={16} /> : <ZoomOut size={16} />}

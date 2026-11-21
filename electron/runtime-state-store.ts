@@ -4,7 +4,10 @@ import type {
   AccountSpaceHealth,
   AccountSpaceId,
   AccountSpaceSummary,
+  AddressMatch,
   BrowserStateManifestV2,
+  HistoryPage,
+  HistoryQuery,
   RuntimeBrowserStateV2,
   StateRecoveryStatus,
   WorkspaceId,
@@ -12,6 +15,9 @@ import type {
 import { AccountStore, type AccountSpaceRecord } from './account-store.js';
 import { AccountSpaceStateStore, type AccountSpaceStateInitialization } from './account-space-state.js';
 import { pruneBookmarkIcons } from './bookmark-icons.js';
+import { isAvailableRegularAccount } from './external-link-routing.js';
+import { findAddressMatches } from './address-matches.js';
+import { queryHistory, RETAINED_HISTORY_LIMIT } from './history-query.js';
 import { WORKSPACES } from './state-store.js';
 import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings } from './browser-settings.js';
 import { DEFAULT_UI_PREFERENCES, sanitizeUiPreferences } from './ui-preferences.js';
@@ -41,6 +47,7 @@ export class RuntimeStateStore {
     for (const record of initialization.accounts) this.records.set(record.id, record);
     for (const recovery of initialization.accountRecoveries) if (recovery.accountSpaceId) this.recovering.add(recovery.accountSpaceId);
     this.state = combine(initialization.manifest, initialization.accounts, initialization.accountStates, initialization.accountRecoveries);
+    rememberExternalLinkAccount(this.state);
   }
 
   get(): RuntimeBrowserStateV2 {
@@ -49,6 +56,32 @@ export class RuntimeStateStore {
 
   isReadOnly(): boolean {
     return this.readOnly;
+  }
+
+  addressMatches(accountSpaceId: AccountSpaceId, text: string): AddressMatch[] {
+    const account = this.activeReadableAccount(accountSpaceId);
+    if (!account) return [];
+    return findAddressMatches(text, account.id, this.state.tabs, this.state.bookmarks,
+      account.workspaceId === 'banking' ? [] : this.state.history);
+  }
+
+  addressMatchTarget(accountSpaceId: AccountSpaceId, source: AddressMatch['source'], id: string): string | undefined {
+    const account = this.activeReadableAccount(accountSpaceId);
+    if (!account || (source === 'history' && account.workspaceId === 'banking')) return undefined;
+    const entries = source === 'tab' ? this.state.tabs : source === 'bookmark' ? this.state.bookmarks : this.state.history;
+    return entries.find((entry) => entry.id === id && entry.accountSpaceId === accountSpaceId)?.url;
+  }
+
+  retainedHistory(accountSpaceId: AccountSpaceId, input: HistoryQuery): HistoryPage {
+    const account = this.activeReadableAccount(accountSpaceId);
+    if (!account || account.workspaceId === 'banking') return { entries: [], page: 0, pages: 0, total: 0, trimmed: false };
+    return queryHistory(this.state.history, account.id, input, this.state.historyTrimmedByAccountSpace?.[account.id]);
+  }
+
+  private activeReadableAccount(id: AccountSpaceId): AccountSpaceSummary | undefined {
+    if (this.readOnly || this.state.activeAccountSpaceByWorkspace[this.state.activeWorkspaceId] !== id
+      || this.state.accountHealth.some((health) => health.accountSpaceId === id && health.status === 'account-corrupt')) return undefined;
+    return this.state.accountSpaces.find((account) => account.id === id && !account.locked);
   }
 
   /**
@@ -80,6 +113,7 @@ export class RuntimeStateStore {
     const next = structuredClone(this.state);
     mutator(next);
     normalizeRuntimeState(next, this.recovering);
+    rememberExternalLinkAccount(next);
     this.persist(next);
     this.state = next;
     return this.get();
@@ -133,6 +167,7 @@ export class RuntimeStateStore {
       state.tabs = state.tabs.filter((tab) => tab.accountSpaceId !== id);
       state.bookmarks = state.bookmarks.filter((bookmark) => bookmark.accountSpaceId !== id);
       state.history = state.history.filter((entry) => entry.accountSpaceId !== id);
+      if (state.historyTrimmedByAccountSpace) delete state.historyTrimmedByAccountSpace[id];
       delete state.activeTabByAccountSpace[id];
       delete state.shortcutsByAccountSpace[id];
       delete state.bookmarkIconsByAccountSpace[id];
@@ -166,6 +201,7 @@ export class RuntimeStateStore {
       activeWorkspaceId: next.activeWorkspaceId,
       accountSpaceIds: [...new Set([...next.accountSpaces.map((account) => account.id), ...this.recovering])],
       activeAccountSpaceByWorkspace: next.activeAccountSpaceByWorkspace,
+      lastExternalLinkAccountSpaceId: next.lastExternalLinkAccountSpaceId,
       privacyLog: next.privacyLog,
       trackerBlocking: next.trackerBlocking,
       bookmarkBarVisible: next.ui.bookmarkBarMode !== 'hidden',
@@ -183,6 +219,7 @@ export class RuntimeStateStore {
         activeTabId: next.activeTabByAccountSpace[account.id],
         bookmarks: next.bookmarks.filter((item) => item.accountSpaceId === account.id),
         history: next.history.filter((item) => item.accountSpaceId === account.id),
+        ...(next.historyTrimmedByAccountSpace?.[account.id] ? { historyTrimmed: true } : {}),
         ...(next.shortcutsByAccountSpace[account.id] ? { shortcuts: next.shortcutsByAccountSpace[account.id] } : {}),
         ...(next.bookmarkIconsByAccountSpace[account.id] ? { bookmarkIcons: next.bookmarkIconsByAccountSpace[account.id] } : {}),
       };
@@ -190,6 +227,17 @@ export class RuntimeStateStore {
     }
     this.persistedStore.saveManifest(manifest);
   }
+}
+
+function rememberExternalLinkAccount(state: RuntimeBrowserStateV2): void {
+  const activeId = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+  const active = state.accountSpaces.find((account) => account.id === activeId);
+  if (active && isAvailableRegularAccount(state, active)) {
+    state.lastExternalLinkAccountSpaceId = active.id;
+    return;
+  }
+  const previous = state.accountSpaces.find((account) => account.id === state.lastExternalLinkAccountSpaceId);
+  if (!previous || !isAvailableRegularAccount(state, previous)) delete state.lastExternalLinkAccountSpaceId;
 }
 
 function combine(
@@ -222,10 +270,12 @@ function combine(
     version: 2,
     activeWorkspaceId: manifest.activeWorkspaceId,
     activeAccountSpaceByWorkspace: { ...manifest.activeAccountSpaceByWorkspace },
+    lastExternalLinkAccountSpaceId: manifest.lastExternalLinkAccountSpaceId,
     tabs,
     activeTabByAccountSpace,
     bookmarks: accountStates.flatMap((state) => state.bookmarks),
     history: accountStates.flatMap((state) => state.history),
+    historyTrimmedByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.historyTrimmed).map((state) => [state.accountSpaceId, true as const])),
     privacyLog: [...manifest.privacyLog],
     trackerBlocking: manifest.trackerBlocking,
     bookmarkBarVisible: manifest.bookmarkBarVisible,
@@ -314,7 +364,10 @@ function normalizeRuntimeState(state: RuntimeBrowserStateV2, recovering: Readonl
     if (kept) bookmarkIcons[id] = kept;
   }
   state.bookmarkIconsByAccountSpace = bookmarkIcons;
-  state.history = state.history.filter((item) => accountsById.get(item.accountSpaceId)?.workspaceId === item.workspaceId).slice(0, 10_000);
+  const retainedHistory = state.history.filter((item) => accountsById.get(item.accountSpaceId)?.workspaceId === item.workspaceId);
+  const trimmedAccounts = state.historyTrimmedByAccountSpace ??= {};
+  for (const removed of retainedHistory.slice(RETAINED_HISTORY_LIMIT)) trimmedAccounts[removed.accountSpaceId] = true;
+  state.history = retainedHistory.slice(0, RETAINED_HISTORY_LIMIT);
   state.privacyLog = state.privacyLog.slice(0, 100);
 }
 
