@@ -25,6 +25,8 @@ describe('interface preferences', () => {
       expect(() => requireUiPreferencesPatch(bad)).toThrow();
     }
     expect(mergeUiPreferences(DEFAULT_UI_PREFERENCES, { sidePanelOpen: true }).sidePanelOpen).toBe(true);
+    expect(requireUiPreferencesPatch({ showRecentOnNewTab: false })).toEqual({ showRecentOnNewTab: false });
+    expect(() => requireUiPreferencesPatch({ showRecentOnNewTab: 'false' })).toThrow();
   });
 
   it('round-trips through the saved manifest and keeps the legacy flag for older builds', () => {
@@ -36,10 +38,10 @@ describe('interface preferences', () => {
       trackerBlocking: true,
       bookmarkBarVisible: true,
       privacyLog: [],
-      ui: { ...DEFAULT_UI_PREFERENCES, bookmarkBarMode: 'hidden', theme: 'light' },
+      ui: { ...DEFAULT_UI_PREFERENCES, bookmarkBarMode: 'hidden', theme: 'light', showRecentOnNewTab: false },
     } as unknown as BrowserStateManifestV2;
     const validated = validateManifest(manifest);
-    expect(validated.ui).toMatchObject({ bookmarkBarMode: 'hidden', theme: 'light' });
+    expect(validated.ui).toMatchObject({ bookmarkBarMode: 'hidden', theme: 'light', showRecentOnNewTab: false });
     expect(validated.bookmarkBarVisible).toBe(false);
   });
 });

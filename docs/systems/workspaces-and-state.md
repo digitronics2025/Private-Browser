@@ -71,7 +71,8 @@ preference, the privacy log and `ui` interface preferences: `theme`
 (`system`/`dark`/`light`), `bookmarkBarMode` (`always`/`new-tab`/`hidden`),
 `sidePanelOpen` (default `false`), `sidePanelWidth` (320–520, default 400),
 `sidePanelTool` (default `assistant`; `claude` opens the
-[side app](side-apps.md)) and `newTabBackground`. `sanitizeUiPreferences` falls back to
+[side app](side-apps.md)), `newTabBackground` and `showRecentOnNewTab` (default `true`).
+`sanitizeUiPreferences` falls back to
 defaults for any unknown value rather than opening recovery, and migrates a
 manifest without `ui` from the legacy `bookmarkBarVisible` flag, which is still
 written (`bookmarkBarMode !== 'hidden'`) so an older build reads the same bar

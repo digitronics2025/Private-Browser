@@ -220,9 +220,10 @@ asserts `#root` scrollLeft 0 and no `.app-shell` overflow.
 
 Brand mark and "Private Browser" heading, a search field that calls `navigate`,
 the workspace and Account Space, up to 12 shortcut tiles, recently visited and
-bookmark cards, and a Customize popover (theme, five local gradient backgrounds,
-restore default shortcuts). Tiles default to `defaultShortcutTiles(workspace)`;
-the first edit saves an explicit list with fresh ids through `setShortcutTiles`.
+bookmark cards, and a Customize popover with theme, backgrounds and a recent-visit
+toggle. The Bookmarks menu can pin the current page. Shortcut menus can change
+the order by keyboard. Tiles default to `defaultShortcutTiles(workspace)`;
+the first edit saves an explicit list through `setShortcutTiles`.
 Protection detail is in the shield menu, not on the page.
 
 ## Panels and Their IPC
