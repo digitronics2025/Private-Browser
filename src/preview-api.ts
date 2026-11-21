@@ -541,7 +541,26 @@ export function installPreviewApi(): void {
     setAccountSpaceLocked: async (idValue, lockedValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.locked = Boolean(lockedValue); selected.googleConnection = selected.locked ? 'locked' : 'disconnected'; publish(); } },
     configureGoogle: async () => { state.googleConfiguration = { configured: true, source: 'encrypted-settings' }; publish(); },
     connectGoogleAccount: async (idValue, modulesValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.kind = 'google'; selected.email = selected.email ?? 'account@example.com'; selected.googleConnection = 'connected'; selected.enabledModules = [...modulesValue as typeof selected.enabledModules]; publish(); } return { ok: true }; },
-    disconnectGoogleAccount: async (idValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.googleConnection = 'disconnected'; publish(); } return { ok: true }; },
+    disconnectGoogleAccount: async (idValue, revoke) => {
+      const selected = state.accountSpaces.find((item) => item.id === idValue && item.workspaceId === state.activeWorkspaceId);
+      if (!selected) throw new Error('Choose an Account Space in the current workspace.');
+      document.documentElement.dataset.previewGoogleAccess = revoke ? 'revoke' : 'disconnect';
+      selected.googleConnection = 'disconnected';
+      selected.enabledModules = [];
+      selected.grantedScopes = [];
+      publish();
+      return { ok: true };
+    },
+    clearAccountSpaceData: async (id) => {
+      const selected = state.accountSpaces.find((item) => item.id === id && item.workspaceId === state.activeWorkspaceId);
+      if (!selected) throw new Error('Choose an Account Space in the current workspace.');
+      selected.websiteStatus = 'not-visited';
+      state.history = state.history.filter((item) => item.accountSpaceId !== selected.id);
+      for (const tab of state.tabs.filter((item) => item.accountSpaceId === selected.id)) {
+        Object.assign(tab, homeTab(tab.id, selected.workspaceId, selected.id));
+      }
+      publish();
+    },
     createBackupRecoveryCode: async () => `PB1-${'A'.repeat(43)}`,
     verifyAndEnableBackup: async (idValue, _code, includeOpenTabsValue, includeHistoryValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.backupEnabled = true; selected.backupIncludesOpenTabs = Boolean(includeOpenTabsValue); selected.backupIncludesHistory = Boolean(includeHistoryValue); publish(); } },
     uploadBackup: async () => ({ status: 'uploaded', etag: 'preview-etag' }),

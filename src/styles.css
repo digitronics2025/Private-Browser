@@ -962,6 +962,12 @@ kbd { font: inherit; }
 .account-identity p { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); }
 .manager-section { padding: 18px 0; border-top: 1px solid var(--border); }
 .manager-section-heading { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.account-access dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin: 0 0 12px; }
+.account-access dt { font-size: var(--fs-sm); color: var(--text-muted); }
+.account-access dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+.account-access summary { cursor: pointer; font-weight: 600; }
+.account-access details > div { margin: 10px 0 0; }
+.account-access details p { margin: 4px 0 0; overflow-wrap: anywhere; }
 .manager-section h3 { margin: 0; font-size: var(--fs-md); font-weight: 600; }
 .manager-section p { margin: 4px 0 0; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.55; }
 .reorder-actions { display: flex; gap: 6px; }
