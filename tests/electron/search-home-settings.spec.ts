@@ -62,6 +62,40 @@ async function openSettings(page: Page) {
   return panel;
 }
 
+test('New Tab shortcut order and the recent-visit preference survive a restart', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'private-browser-ntp-'));
+  let app = await electron.launch({ args: launchArguments(), env: environment(userData) });
+  try {
+    let page = await app.firstWindow();
+    await page.evaluate(async (fixture) => {
+      const api = window.privateBrowser;
+      const { activeAccountSpaceId } = await api.getState();
+      await api.navigate(fixture + '/shortcut');
+      await api.setShortcutTiles(activeAccountSpaceId, [
+        { id: 'second', title: 'Second', url: fixture + '/second' },
+        { id: 'first', title: 'First', url: fixture + '/shortcut' },
+      ]);
+      await api.setUiPreferences({ showRecentOnNewTab: false });
+      await api.newTab();
+    }, origin);
+
+    await app.close();
+    app = await electron.launch({ args: launchArguments(), env: environment(userData) });
+    page = await app.firstWindow();
+    const newTab = page.getByRole('main', { name: 'New Tab' });
+    const shortcuts = newTab.getByRole('region', { name: 'Shortcuts' });
+    await expect(shortcuts.getByRole('button', { name: /Edit shortcut/ }).first()).toHaveAccessibleName('Edit shortcut Second');
+    await expect(shortcuts.getByRole('button', { name: 'First', exact: true })).toBeVisible();
+    await expect(newTab.getByRole('heading', { name: 'Recently visited' })).toHaveCount(0);
+    await newTab.getByRole('button', { name: 'Customize' }).click();
+    await page.getByRole('menuitemcheckbox', { name: 'Show recently visited pages' }).click();
+    await expect(newTab.getByRole('heading', { name: 'Recently visited' })).toBeVisible();
+  } finally {
+    await app.close();
+    await rm(userData, { recursive: true, force: true, maxRetries: 4 });
+  }
+});
+
 test('search engine, Home page and startup settings work in the real app and survive a restart', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'private-browser-settings-'));
   let app = await electron.launch({ args: launchArguments(), env: environment(userData) });

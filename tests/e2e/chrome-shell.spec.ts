@@ -280,6 +280,38 @@ test('New Tab page searches, adds a shortcut and keeps privacy detail behind the
   noErrors();
 });
 
+test('pins the current page, reorders a shortcut and hides recent visits on New Tab', async ({ page }) => {
+  await page.setViewportSize({ width: 520, height: 760 });
+  await page.goto('/');
+  await page.evaluate(() => window.privateBrowser.navigate('https://status.example.test/service'));
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Bookmarks', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Pin current page to New Tab' }).click();
+  const pinDialog = page.getByRole('dialog', { name: 'Pin current page to New Tab' });
+  await expect(pinDialog.getByLabel('URL')).toHaveValue('https://status.example.test/service');
+  await pinDialog.getByLabel('Name').fill('Service status');
+  await pinDialog.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(pinDialog).toHaveCount(0);
+  await page.evaluate(() => window.privateBrowser.newTab());
+
+  const ntp = page.getByRole('main', { name: 'New Tab' });
+  const shortcutMenu = ntp.getByRole('button', { name: 'Edit shortcut Gmail' });
+  await expect(ntp.getByRole('button', { name: 'Service status', exact: true })).toBeVisible();
+  await shortcutMenu.press('Enter');
+  await page.getByRole('menuitem', { name: 'Move later' }).press('Enter');
+  const shortcuts = ntp.getByRole('region', { name: 'Shortcuts' }).getByRole('button', { name: /Edit shortcut/ });
+  await expect(shortcuts.nth(1)).toHaveAccessibleName('Edit shortcut Gmail');
+
+  await expect(ntp.getByRole('heading', { name: 'Recently visited' })).toBeVisible();
+  await ntp.getByRole('button', { name: 'Customize' }).click();
+  const show = page.getByRole('menuitemcheckbox', { name: 'Show recently visited pages' });
+  await expect(show).toHaveAttribute('aria-checked', 'true');
+  await show.click();
+  await expect(show).toHaveAttribute('aria-checked', 'false');
+  await expect(ntp.getByRole('heading', { name: 'Recently visited' })).toHaveCount(0);
+  await expect(ntp.getByRole('heading', { name: 'Bookmarks' })).toBeVisible();
+});
+
 // Ctrl+T and Ctrl+W are reserved by desktop Chrome itself, so they are exercised
 // in the real Electron window (tests/electron/chrome-layout.spec.ts) instead.
 test('chrome keyboard shortcuts open tools and menus', async ({ page }) => {

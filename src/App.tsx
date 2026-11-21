@@ -12,7 +12,7 @@ import { BookmarkBar, type BookmarkActions } from './shell/BookmarkBar';
 import { BookmarkBatchDialog } from './shell/BookmarkBatchDialog';
 import { FindBar } from './shell/FindBar';
 import { SidePanel } from './shell/SidePanel';
-import { NewTabPage } from './shell/NewTabPage';
+import { MAX_SHORTCUTS, NewTabPage } from './shell/NewTabPage';
 import { ProfileMenu } from './shell/ProfileMenu';
 import { BrowserMenu } from './shell/BrowserMenu';
 import { ShieldStatusMenu, SiteInfoMenu, TabSearchMenu, ZoomMenu } from './shell/StatusMenus';
@@ -35,6 +35,7 @@ import { defaultShortcutTiles } from './lib/quick-links';
 import { faviconsByHost } from './lib/format';
 import { disposer } from './lib/subscribe';
 import { DEFAULT_BROWSER_SETTINGS, searchEngineLabel, type BrowserSettings } from '../electron/browser-settings';
+import { isAllowedRemoteUrl, stripTrackingParameters } from '../electron/security';
 
 type MenuKind = 'browser' | 'profile' | 'shield' | 'tab-search' | 'site-info' | 'zoom';
 
@@ -334,6 +335,10 @@ export default function App() {
   const bookmarked = state.bookmarks.some((item) => item.url === activeTab.url && item.accountSpaceId === activeTab.accountSpaceId);
   const customShortcuts = state.shortcutsByAccountSpace?.[activeAccount.id];
   const shortcutTiles = customShortcuts ?? defaultShortcutTiles(state.activeWorkspaceId);
+  const canPinCurrentPage = !activeTab.isHome && !activeAccount.locked && isAllowedRemoteUrl(activeTab.url)
+    && activeTab.url.length <= 4096
+    && shortcutTiles.length < MAX_SHORTCUTS
+    && !shortcutTiles.some((tile) => stripTrackingParameters(tile.url) === stripTrackingParameters(activeTab.url));
   const recentHistory = state.history.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
   const fullscreen = windowState.fullscreen;
   const vaultAvailable = state.activeWorkspaceId !== 'development';
@@ -346,19 +351,27 @@ export default function App() {
   };
 
   const saveShortcuts = (tiles: ShortcutTile[] | null) => window.privateBrowser.setShortcutTiles(activeAccount.id, tiles);
-  const editShortcut = (tile?: ShortcutTile) => setPrompt({
-    title: tile ? 'Edit shortcut' : 'Add shortcut',
+  const editShortcut = (tile?: ShortcutTile, currentPage = false) => setPrompt({
+    title: tile ? 'Edit shortcut' : currentPage ? 'Pin current page to New Tab' : 'Add shortcut',
     confirmLabel: tile ? 'Save' : 'Add',
     fields: [
-      { name: 'title', label: 'Name', value: tile?.title ?? '', maxLength: 100 },
-      { name: 'url', label: 'URL', value: tile?.url ?? '', type: 'url', maxLength: 4096, placeholder: 'https://example.com' },
+      { name: 'title', label: 'Name', value: tile?.title ?? (currentPage ? (activeTab.title || new URL(activeTab.url).hostname).slice(0, 100) : ''), maxLength: 100 },
+      { name: 'url', label: 'URL', value: tile?.url ?? (currentPage ? activeTab.url : ''), type: 'url', maxLength: 4096, placeholder: 'https://example.com' },
     ],
     submit: async (values) => {
-      const next = { id: tile?.id && !tile.id.startsWith('default-') ? tile.id : crypto.randomUUID(), title: values.title.trim(), url: shortcutUrl(values.url) };
+      const next = { id: tile?.id ?? crypto.randomUUID(), title: values.title.trim(), url: shortcutUrl(values.url) };
       const tiles = tile ? shortcutTiles.map((item) => (item.id === tile.id ? next : item)) : [...shortcutTiles, next];
-      await saveShortcuts(tiles.map((item) => (item.id.startsWith('default-') ? { ...item, id: crypto.randomUUID() } : item)));
+      await saveShortcuts(tiles);
     },
   });
+  const moveShortcut = (tile: ShortcutTile, offset: -1 | 1) => {
+    const from = shortcutTiles.findIndex((item) => item.id === tile.id);
+    const to = from + offset;
+    if (from < 0 || to < 0 || to >= shortcutTiles.length) return;
+    const next = shortcutTiles.slice();
+    [next[from], next[to]] = [next[to], next[from]];
+    void act(() => saveShortcuts(next), 'Shortcut moved');
+  };
 
   const bookmarkActions: BookmarkActions = {
     open: (id) => void act(() => window.privateBrowser.openBookmark(id)),
@@ -510,6 +523,7 @@ export default function App() {
             shortcuts={shortcutTiles}
             customized={Boolean(customShortcuts)}
             history={recentHistory}
+            showRecent={ui.showRecentOnNewTab}
             bookmarks={accountBookmarks}
             favicons={favicons}
             background={ui.newTabBackground}
@@ -518,9 +532,11 @@ export default function App() {
             onOpenBookmark={bookmarkActions.open}
             onAddShortcut={() => editShortcut()}
             onEditShortcut={(tile) => editShortcut(tile)}
-            onRemoveShortcut={(tile) => void act(() => saveShortcuts(shortcutTiles.filter((item) => item.id !== tile.id).map((item) => (item.id.startsWith('default-') ? { ...item, id: crypto.randomUUID() } : item))), 'Shortcut removed')}
+            onRemoveShortcut={(tile) => void act(() => saveShortcuts(shortcutTiles.filter((item) => item.id !== tile.id)), 'Shortcut removed')}
+            onMoveShortcut={moveShortcut}
             onResetShortcuts={() => void act(() => saveShortcuts(null), 'Default shortcuts restored')}
             onBackground={(background) => setUi({ newTabBackground: background })}
+            onShowRecent={(showRecentOnNewTab) => setUi({ showRecentOnNewTab })}
             onTheme={(theme) => setUi({ theme })}
           />
         ) : (
@@ -575,6 +591,7 @@ export default function App() {
               manageAccounts: () => setAccountManagerOpen(true),
               openTool,
               toggleBookmark: () => void act(() => window.privateBrowser.toggleBookmark()),
+              pinCurrentPage: canPinCurrentPage ? () => editShortcut(undefined, true) : undefined,
               setUi,
               exportBookmarks: bookmarkActions.exportBookmarks,
               clearBrowsingData,

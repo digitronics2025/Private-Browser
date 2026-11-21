@@ -1,5 +1,5 @@
 import { useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { Clock3, MoreVertical, Palette, Pencil, Plus, RotateCcw, Search, Star, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Clock3, MoreVertical, Palette, Pencil, Plus, RotateCcw, Search, Star, Trash2 } from 'lucide-react';
 import type { AccountSpaceSummary, Bookmark, HistoryEntry, NewTabBackground, ShortcutTile, ThemePreference, Workspace } from '../../electron/types';
 import { domainFromUrl, timeAgo } from '../lib/format';
 import { BrandMark } from './BrandMark';
@@ -21,13 +21,14 @@ function tileHue(value: string): number {
   return hash;
 }
 
-export function NewTabPage({ searchPrompt, workspace, account, shortcuts, customized, history, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onResetShortcuts, onBackground, onTheme }: {
+export function NewTabPage({ searchPrompt, workspace, account, shortcuts, customized, history, showRecent, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onMoveShortcut, onResetShortcuts, onBackground, onShowRecent, onTheme }: {
   searchPrompt: string;
   workspace: Workspace;
   account: AccountSpaceSummary;
   shortcuts: ShortcutTile[];
   customized: boolean;
   history: HistoryEntry[];
+  showRecent: boolean;
   bookmarks: Bookmark[];
   favicons: Map<string, string>;
   background: NewTabBackground;
@@ -37,16 +38,19 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
   onAddShortcut: () => void;
   onEditShortcut: (tile: ShortcutTile) => void;
   onRemoveShortcut: (tile: ShortcutTile) => void;
+  onMoveShortcut: (tile: ShortcutTile, offset: -1 | 1) => void;
   onResetShortcuts: () => void;
   onBackground: (background: NewTabBackground) => void;
+  onShowRecent: (show: boolean) => void;
   onTheme: (theme: ThemePreference) => void;
 }) {
   const [query, setQuery] = useState('');
   const [tileMenu, setTileMenu] = useState<{ tile: ShortcutTile; anchor: HTMLElement } | null>(null);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const customizeRef = useRef<HTMLButtonElement>(null);
-  const recent = history.slice(0, 6);
+  const recent = showRecent ? history.slice(0, 6) : [];
   const saved = bookmarks.slice(0, 6);
+  const menuIndex = shortcuts.findIndex((tile) => tile.id === tileMenu?.tile.id);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -128,6 +132,8 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
       {tileMenu && (
         <MenuSurface anchor={tileMenu.anchor} placement="bottom-end" label={`${tileMenu.tile.title} shortcut`} className="context-menu" onClose={() => setTileMenu(null)}>
           <MenuItem icon={Pencil} label="Edit shortcut…" onSelect={() => onEditShortcut(tileMenu.tile)} />
+          <MenuItem icon={ArrowLeft} label="Move earlier" disabled={menuIndex <= 0} onSelect={() => onMoveShortcut(tileMenu.tile, -1)} />
+          <MenuItem icon={ArrowRight} label="Move later" disabled={menuIndex < 0 || menuIndex >= shortcuts.length - 1} onSelect={() => onMoveShortcut(tileMenu.tile, 1)} />
           <MenuItem icon={Trash2} danger label="Remove" onSelect={() => onRemoveShortcut(tileMenu.tile)} />
         </MenuSurface>
       )}
@@ -144,6 +150,7 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
             ))}
           </div>
           <MenuSeparator />
+          <MenuItem role="menuitemcheckbox" checked={showRecent} label="Show recently visited pages" keepOpen onSelect={() => onShowRecent(!showRecent)} />
           <MenuItem icon={RotateCcw} label="Restore default shortcuts" disabled={!customized} onSelect={onResetShortcuts} />
         </MenuSurface>
       )}

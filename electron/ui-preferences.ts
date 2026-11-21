@@ -11,6 +11,7 @@ export interface UiPreferences {
   sidePanelWidth: number;
   sidePanelTool: SidePanelTool;
   newTabBackground: NewTabBackground;
+  showRecentOnNewTab: boolean;
 }
 
 export type UiPreferencesPatch = Partial<UiPreferences>;
@@ -27,6 +28,7 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   sidePanelWidth: SIDE_PANEL.default,
   sidePanelTool: 'assistant',
   newTabBackground: 'plain',
+  showRecentOnNewTab: true,
 };
 
 function member<T extends string>(values: readonly T[], value: unknown): value is T {
@@ -47,6 +49,7 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
     sidePanelWidth: typeof input.sidePanelWidth === 'number' ? clampSidePanelWidth(input.sidePanelWidth) : DEFAULT_UI_PREFERENCES.sidePanelWidth,
     sidePanelTool: member(SIDE_PANEL_TOOLS, input.sidePanelTool) ? input.sidePanelTool : DEFAULT_UI_PREFERENCES.sidePanelTool,
     newTabBackground: member(NEW_TAB_BACKGROUNDS, input.newTabBackground) ? input.newTabBackground : DEFAULT_UI_PREFERENCES.newTabBackground,
+    showRecentOnNewTab: typeof input.showRecentOnNewTab === 'boolean' ? input.showRecentOnNewTab : DEFAULT_UI_PREFERENCES.showRecentOnNewTab,
   };
 }
 
@@ -54,7 +57,7 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
 export function requireUiPreferencesPatch(value: unknown): UiPreferencesPatch {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid interface preferences');
   const input = value as Record<string, unknown>;
-  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelTool', 'newTabBackground']);
+  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelTool', 'newTabBackground', 'showRecentOnNewTab']);
   const keys = Object.keys(input);
   if (keys.length === 0 || keys.some((key) => !allowed.has(key))) throw new Error('Invalid interface preferences');
   const patch: UiPreferencesPatch = {};
@@ -67,6 +70,10 @@ export function requireUiPreferencesPatch(value: unknown): UiPreferencesPatch {
   }
   if ('sidePanelTool' in input) { if (!member(SIDE_PANEL_TOOLS, input.sidePanelTool)) throw new Error('Invalid side panel tool'); patch.sidePanelTool = input.sidePanelTool; }
   if ('newTabBackground' in input) { if (!member(NEW_TAB_BACKGROUNDS, input.newTabBackground)) throw new Error('Invalid New Tab background'); patch.newTabBackground = input.newTabBackground; }
+  if ('showRecentOnNewTab' in input) {
+    if (typeof input.showRecentOnNewTab !== 'boolean') throw new Error('Invalid New Tab history setting');
+    patch.showRecentOnNewTab = input.showRecentOnNewTab;
+  }
   return patch;
 }
 
