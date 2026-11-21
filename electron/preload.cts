@@ -11,6 +11,7 @@ import type { BackupWriteResult } from './account-backup.js';
 import type { BackupReminderDays, BackupRestorePreview, BackupUploadPreview, GoogleOverviewPage, GoogleOverviewService } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
+import type { DownloadByteProgress } from './types.js';
 
 const api = {
   getAgentStatus: (): Promise<AgentUiStatus> => ipcRenderer.invoke('agents:status'),
@@ -61,6 +62,7 @@ const api = {
   newTab: (workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:new-tab', workspaceId, url, accountSpaceId),
   closeTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:close-tab', tabId),
   activateTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:activate-tab', tabId),
+  setSplitView: (tabId?: string): Promise<void> => ipcRenderer.invoke('browser:set-split-view', tabId),
   switchWorkspace: (workspaceId: WorkspaceId): Promise<void> => ipcRenderer.invoke('browser:switch-workspace', workspaceId),
   switchAccountSpace: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:switch-account-space', accountSpaceId),
   addressMatches: (accountSpaceId: AccountSpaceId, text: string): Promise<AddressMatch[]> => ipcRenderer.invoke('browser:address-matches', accountSpaceId, text),
@@ -261,6 +263,11 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, state: BrowserSnapshot) => callback(state);
     ipcRenderer.on('browser:state', listener);
     return () => { ipcRenderer.removeListener('browser:state', listener); };
+  },
+  onDownloadProgress: (callback: (progress: DownloadByteProgress) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: DownloadByteProgress) => callback(progress);
+    ipcRenderer.on('downloads:progress', listener);
+    return () => { ipcRenderer.removeListener('downloads:progress', listener); };
   },
   onCommand: (callback: (shortcut: Shortcut) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, shortcut: Shortcut) => callback(shortcut);
