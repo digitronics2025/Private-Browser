@@ -41,7 +41,7 @@ const MAX_AVATAR_BYTES = 512 * 1024;
 type GoogleErrorCode = NonNullable<GoogleOperationResult['error']>['code'];
 
 export class GoogleOAuthManager {
-  private readonly operations = new Map<AccountSpaceId, OAuthLoopbackReceiver>();
+  private readonly operations = new Map<AccountSpaceId, { cancelReceiver?: () => void; cancelled: boolean }>();
   private readonly accessTokens = new Map<AccountSpaceId, { value: string; expiresAt: number }>();
 
   constructor(
@@ -63,7 +63,7 @@ export class GoogleOAuthManager {
   ): Promise<GoogleOperationResult<AccountSpaceSummary>> {
     const requestId = randomUUID();
     if (this.operations.has(accountSpaceId)) return failure('GOOGLE_INTERNAL', 'A Google connection is already in progress for this account', requestId);
-    let receiver: OAuthLoopbackReceiver | undefined;
+    let operation: { cancelReceiver?: () => void; cancelled: boolean } | undefined;
     try {
       const clientId = this.configuration.getClientId();
       const account = this.accounts.require(accountSpaceId);
@@ -71,9 +71,17 @@ export class GoogleOAuthManager {
       const selectedModules = [...new Set<GoogleModule>(['identity', ...modules])];
       const requiredScopes = scopesForModules(selectedModules);
       const pkce = createPkceMaterial();
-      receiver = this.createReceiver();
-      this.operations.set(accountSpaceId, receiver);
+      const receiver = this.createReceiver();
+      operation = { cancelled: false };
+      this.operations.set(accountSpaceId, operation);
       const redirectUri = await receiver.start(pkce.state);
+      const callback = receiver.wait();
+      void callback.catch(() => undefined);
+      operation.cancelReceiver = () => receiver.cancel();
+      if (operation.cancelled) {
+        operation.cancelReceiver();
+        return failure('GOOGLE_CANCELLED', 'Google authorization was cancelled', requestId);
+      }
       const client = this.createClient(clientId, redirectUri);
       const authorizationUrl = client.generateAuthUrl({
         access_type: 'offline',
@@ -87,9 +95,9 @@ export class GoogleOAuthManager {
         redirect_uri: redirectUri,
       });
       this.externalBrowsers.launch(browserId, authorizationUrl);
-      const { code } = await receiver.wait();
-      this.operations.delete(accountSpaceId);
+      const { code } = await callback;
       const { tokens } = await withTimeout(client.getToken({ code, codeVerifier: pkce.verifier, redirect_uri: redirectUri }), TOKEN_TIMEOUT_MS);
+      if (operation.cancelled) return failure('GOOGLE_CANCELLED', 'Google authorization was cancelled', requestId);
       if (!tokens.id_token) throw new OAuthFailure('GOOGLE_INVALID_RESPONSE', 'Google did not return an identity token');
       const ticket = await withTimeout(client.verifyIdToken({ idToken: tokens.id_token, audience: clientId }), TOKEN_TIMEOUT_MS);
       const payload = validateVerifiedPayload(ticket.getPayload(), clientId, pkce.nonce, this.now());
@@ -113,14 +121,17 @@ export class GoogleOAuthManager {
         emailVerified: true,
         avatar: await fetchValidatedGoogleAvatar(payload.picture, this.request),
       };
+      if (operation.cancelled || this.accounts.require(accountSpaceId).locked) {
+        return failure('GOOGLE_CANCELLED', 'Google authorization was cancelled', requestId);
+      }
       const saved = this.accounts.saveGoogleGrant(accountSpaceId, identity, refreshToken, selectedModules, grantedScopes, allAccountIds());
       if (tokens.access_token) {
         this.accessTokens.set(accountSpaceId, { value: tokens.access_token, expiresAt: tokens.expiry_date ?? this.now().getTime() + 55 * 60_000 });
       }
       return { ok: true, data: this.accounts.toSummary(saved) };
     } catch (error) {
-      receiver?.cancel();
-      this.operations.delete(accountSpaceId);
+      operation?.cancelReceiver?.();
+      if (operation?.cancelled) return failure('GOOGLE_CANCELLED', 'Google authorization was cancelled', requestId);
       if (error instanceof OAuthFailure) return failure(error.code, error.message, requestId);
       if (error instanceof Error && error.message === 'Google integration needs configuration') {
         return failure('GOOGLE_CONFIGURATION_REQUIRED', error.message, requestId);
@@ -129,14 +140,20 @@ export class GoogleOAuthManager {
         ? 'Google authorization was cancelled'
         : 'Google authorization could not be completed';
       return failure(message.includes('cancelled') ? 'GOOGLE_CANCELLED' : 'GOOGLE_INTERNAL', message, requestId);
+    } finally {
+      if (operation) this.operations.delete(accountSpaceId);
     }
   }
 
+  isConnecting(accountSpaceId: AccountSpaceId): boolean {
+    return this.operations.has(accountSpaceId);
+  }
+
   cancel(accountSpaceId: AccountSpaceId): boolean {
-    const receiver = this.operations.get(accountSpaceId);
-    if (!receiver) return false;
-    this.operations.delete(accountSpaceId);
-    receiver.cancel();
+    const operation = this.operations.get(accountSpaceId);
+    if (!operation || operation.cancelled) return false;
+    operation.cancelled = true;
+    operation.cancelReceiver?.();
     return true;
   }
 

@@ -78,6 +78,30 @@ function oauthFixture(payloadPatch: Record<string, unknown> = {}, request: typeo
 }
 
 describe('secure Google desktop OAuth', () => {
+  it('preserves pending setup when cancelled during token exchange and resumes with identity only', async () => {
+    const fixture = oauthFixture();
+    fixture.accounts.update(ACCOUNT_ID, (account) => { account.googleSetupPending = true; });
+    let finishExchange!: () => void;
+    const waiting = new Promise<void>((resolve) => { finishExchange = resolve; });
+    const exchange = vi.mocked(fixture.client.getToken);
+    const tokens = { access_token: 'access-memory-only', refresh_token: 'refresh-encrypted-only',
+      id_token: 'signed-id-token-memory-only', scope: scopesForModules(['identity']).join(' ') };
+    exchange.mockImplementationOnce(async () => { await waiting; return { tokens }; });
+    const connect = () => fixture.manager.connect(ACCOUNT_ID, ['identity'], 'edge', () => [ACCOUNT_ID]);
+
+    const pending = connect();
+    await vi.waitFor(() => expect(exchange).toHaveBeenCalledTimes(1));
+    expect(fixture.manager.cancel(ACCOUNT_ID)).toBe(true);
+    await expect(connect()).resolves.toMatchObject({ ok: false, error: { code: 'GOOGLE_INTERNAL' } });
+    finishExchange();
+    await expect(pending).resolves.toMatchObject({ ok: false, error: { code: 'GOOGLE_CANCELLED' } });
+    expect(fixture.accounts.require(ACCOUNT_ID)).toMatchObject({ googleSetupPending: true, kind: 'local', enabledModules: [] });
+    expect(fixture.manager.readAccessToken(ACCOUNT_ID)).toBeUndefined();
+    exchange.mockResolvedValueOnce({ tokens });
+    await expect(connect()).resolves.toMatchObject({ ok: true, data: { googleSetupPending: undefined, enabledModules: ['identity'] } });
+    expect(fixture.getAuthorizationOptions().scope).toEqual(scopesForModules(['identity']));
+  });
+
   it('disconnects locally without contacting Google and keeps a failed revocation retryable', async () => {
     const request = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }));
     const fixture = oauthFixture({}, request);

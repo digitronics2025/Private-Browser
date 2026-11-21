@@ -2,6 +2,15 @@ import { useRef, useState } from 'react';
 import { Shield, TriangleAlert } from 'lucide-react';
 import type { BrowserSnapshot, PermissionDecision } from '../../electron/types';
 import { useArmedAfter, useModalFocus } from '../lib/dialog';
+import { SafeDiagnostics } from './SafeDiagnostics';
+import type { DiagnosticReason } from '../lib/safe-diagnostics';
+
+const recoveryDiagnostics = {
+  'unsupported-version': 'PB-RECOVERY-VERSION',
+  'invalid-state': 'PB-RECOVERY-STATE',
+  'migration-interrupted': 'PB-RECOVERY-MIGRATION',
+  'account-corrupt': 'PB-RECOVERY-ACCOUNT',
+} satisfies Record<NonNullable<BrowserSnapshot['recovery']>['reason'], DiagnosticReason>;
 
 export const PERMISSION_ARM_DELAY_MS = 500;
 
@@ -29,5 +38,5 @@ export function RecoveryOverlay({ state }: { state: BrowserSnapshot }) {
   const ref = useRef<HTMLDivElement>(null);
   // Recovery has no "dismiss": focus is kept inside, and Escape does nothing.
   useModalFocus(ref);
-  return <div className="modal-backdrop recovery-backdrop"><div className="permission-dialog recovery-dialog" ref={ref} role="alertdialog" aria-modal="true"><span className="permission-icon danger"><TriangleAlert size={23} /></span><small>READ-ONLY RECOVERY</small><h2>Browser data needs attention</h2><p>The original data was preserved{recovery.backupAvailable ? ' with a timestamped backup' : ''}. Writes stay disabled so one bad file cannot damage other Account Spaces.</p><div className="recovery-options">{recovery.actions.map((action) => <button key={action} onClick={() => act(action)}>{action.replaceAll('-', ' ')}</button>)}</div><p className="recovery-note">Retry restarts without replacing anything. Restore and fresh start always require explicit confirmation.</p></div></div>;
+  return <div className="modal-backdrop recovery-backdrop"><div className="permission-dialog recovery-dialog" ref={ref} role="alertdialog" aria-modal="true"><span className="permission-icon danger"><TriangleAlert size={23} /></span><small>READ-ONLY RECOVERY</small><h2>Browser data needs attention</h2><p>The original data was preserved{recovery.backupAvailable ? ' with a timestamped backup' : ''}. Writes stay disabled so one bad file cannot damage other Account Spaces.</p><div className="recovery-options">{recovery.actions.map((action) => <button key={action} onClick={() => act(action)}>{action.replaceAll('-', ' ')}</button>)}</div><p className="recovery-note">Retry restarts without replacing anything. Restore and fresh start always require explicit confirmation.</p><SafeDiagnostics reason={recoveryDiagnostics[recovery.reason]} /></div></div>;
 }

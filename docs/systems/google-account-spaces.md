@@ -151,10 +151,17 @@ cancelled reconnect leaves an existing grant's status as it was.
 Avatar URLs must be HTTPS on `googleusercontent.com` or a subdomain. Downloads
 reject redirects, stop at 512 KiB, and accept only PNG, JPEG or WebP magic bytes.
 
-Google installed-app OAuth does not use incremental authorization here. Every
-module change requests the complete selected scope set, compares the scopes in
-the token response, and atomically replaces the grant. Disabling a module is
-local; reducing Google's server-side grant means revoke and reconnect.
+The Account Space manager separates website sign-in in the selected partition
+from Google tools authorization in an external browser. A space added for Google
+tools stays pending until identity authorization succeeds. Cancellation retains
+the named space so its owner can resume or delete it. Pending setup is stored in
+the encrypted account record. The connecting status is temporary.
+
+Google installed-app OAuth starts with identity scopes. Each tool describes its
+own access and requests a change only when selected. It requests the complete
+approved scope set, checks the token response and atomically replaces the grant.
+Turning off a tool narrows local access. To remove server-side permissions, revoke
+the grant in Google and connect again.
 
 ## Module scope matrix
 

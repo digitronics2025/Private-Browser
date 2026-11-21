@@ -11,7 +11,9 @@ const installerName = 'PrivateBrowserUpdate.exe';
 const partName = 'installer.part';
 const internetZone = '[ZoneTransfer]\r\nZoneId=3\r\n';
 const staleStageAge = 3 * 24 * 60 * 60 * 1000;
-class UpdateInstallError extends Error {}
+class UpdateInstallError extends Error {
+  constructor(readonly failure: NonNullable<ManagedUpdateStatus['failure']>, message: string) { super(message); }
+}
 
 export async function streamUpdateInstaller(
   manifest: Pick<ReleaseManifest, 'downloadUrl' | 'sizeBytes' | 'sha256'>,
@@ -21,12 +23,15 @@ export async function streamUpdateInstaller(
   const url = new URL(manifest.downloadUrl);
   if (url.protocol !== 'https:' || url.username || url.password || url.hash
     || !Number.isSafeInteger(manifest.sizeBytes) || manifest.sizeBytes < 1 || manifest.sizeBytes > maxInstallerBytes) {
-    throw new UpdateInstallError('The release service returned invalid installer details.');
+    throw new UpdateInstallError('release', 'The release service returned invalid installer details.');
   }
   const request = options.request ?? fetch;
   const signal = AbortSignal.any([options.signal, AbortSignal.timeout(15 * 60 * 1000)]);
-  const response = await request(url, { redirect: 'error', headers: { 'Accept-Encoding': 'identity' }, signal });
-  if (response.status !== 200 || !response.body) throw new UpdateInstallError('The release service could not provide the installer.');
+  const response = await request(url, { redirect: 'error', headers: { 'Accept-Encoding': 'identity' }, signal }).catch(() => {
+    signal.throwIfAborted();
+    throw new UpdateInstallError('release', 'The release service could not provide the installer.');
+  });
+  if (response.status !== 200 || !response.body) throw new UpdateInstallError('release', 'The release service could not provide the installer.');
   const reader = response.body.getReader();
   const hash = createHash('sha256');
   const temporaryPath = join(directory, partName);
@@ -35,14 +40,14 @@ export async function streamUpdateInstaller(
   let nextProgressAt = 0;
   try {
     const length = response.headers.get('content-length');
-    if (length !== null && Number(length) !== manifest.sizeBytes) throw new UpdateInstallError('The installer size did not match the published release.');
+    if (length !== null && Number(length) !== manifest.sizeBytes) throw new UpdateInstallError('verification', 'The installer size did not match the published release.');
     const file = await open(temporaryPath, 'wx', 0o600);
     try {
       for (;;) {
         const chunk = await reader.read();
         if (chunk.done) break;
         received += chunk.value.byteLength;
-        if (received > manifest.sizeBytes) throw new UpdateInstallError('The installer size did not match the published release.');
+        if (received > manifest.sizeBytes) throw new UpdateInstallError('verification', 'The installer size did not match the published release.');
         await file.writeFile(chunk.value);
         hash.update(chunk.value);
         const now = Date.now();
@@ -53,7 +58,7 @@ export async function streamUpdateInstaller(
       }
       signal.throwIfAborted();
       if (received !== manifest.sizeBytes || hash.digest('hex') !== manifest.sha256) {
-        throw new UpdateInstallError('The installer did not match the published checksum.');
+        throw new UpdateInstallError('verification', 'The installer did not match the published checksum.');
       }
       await file.sync();
     } finally {
@@ -123,6 +128,12 @@ export class ManagedUpdate {
     if (!this.environment.canUse()) throw new Error('Use an unlocked regular Account Space to manage updates.');
   }
 
+  private async checkRelease(): Promise<UpdateCheckResult> {
+    return await this.environment.check().catch(() => {
+      throw new UpdateInstallError('release', 'The release service could not be checked.');
+    });
+  }
+
   async download(expectedVersion: string, expectedSha: string): Promise<void> {
     this.assertUsable();
     if (this.abort || this.status.phase === 'verifying') throw new Error('An update is already in progress.');
@@ -132,9 +143,9 @@ export class ManagedUpdate {
     let directory: string | undefined;
     let version: string | undefined;
     try {
-      const { state, latest } = await this.environment.check();
+      const { state, latest } = await this.checkRelease();
       if (state !== 'available' || latest.version !== expectedVersion || latest.sha256 !== expectedSha) {
-        throw new UpdateInstallError('The available release changed. Check for updates again.');
+        throw new UpdateInstallError('release', 'The available release changed. Check for updates again.');
       }
       operation.signal.throwIfAborted();
       version = latest.version;
@@ -149,15 +160,15 @@ export class ManagedUpdate {
       const stamp = downloadFileStamp(path);
       const publisher = await inspectDownloadPublisher(path);
       operation.signal.throwIfAborted();
-      if (!stamp || stamp !== downloadFileStamp(path)) throw new UpdateInstallError('The downloaded installer changed. Download a new copy.');
+      if (!stamp || stamp !== downloadFileStamp(path)) throw new UpdateInstallError('verification', 'The downloaded installer changed. Download a new copy.');
       const prior = this.staged?.directory;
       this.staged = { release: latest, directory, path };
       directory = undefined;
       if (prior) void clearStage(prior);
       this.publish({ phase: 'ready', version, publisher });
     } catch (error) {
-      const message = operation.signal.aborted ? 'Download cancelled.' : describeFailure(error);
-      this.publish({ phase: 'failed', version, message });
+      const problem = operation.signal.aborted ? { failure: 'cancelled' as const, message: 'Download cancelled.' } : describeFailure(error);
+      this.publish({ phase: 'failed', version, ...problem });
     } finally {
       if (directory) await clearStage(directory);
       this.abort = undefined;
@@ -166,6 +177,10 @@ export class ManagedUpdate {
 
   cancel(): void {
     this.assertUsable();
+    this.cancelTransfer();
+  }
+
+  cancelTransfer(): void {
     this.abort?.abort();
   }
 
@@ -175,20 +190,20 @@ export class ManagedUpdate {
     if (!staged || this.status.phase !== 'ready' || this.abort) throw new Error('Download and verify the installer first.');
     this.publish({ phase: 'verifying', version: staged.release.version });
     try {
-      const { state, latest } = await this.environment.check();
-      if (state !== 'available' || !sameInstaller(latest, staged.release)) throw new UpdateInstallError('The available release changed. Check for updates again.');
+      const { state, latest } = await this.checkRelease();
+      if (state !== 'available' || !sameInstaller(latest, staged.release)) throw new UpdateInstallError('release', 'The available release changed. Check for updates again.');
       const stamp = downloadFileStamp(staged.path);
       const verified = stamp && await verifyDownload(staged.path, latest.filename, latest);
       this.assertUsable();
       if (verified !== 'verified' || stamp !== downloadFileStamp(staged.path)
         || (process.platform === 'win32' && readFileSync(staged.path + ':Zone.Identifier', 'utf8') !== internetZone)) {
-        throw new UpdateInstallError('The installer changed or could not be verified. Download a new copy.');
+        throw new UpdateInstallError('verification', 'The installer changed or could not be verified. Download a new copy.');
       }
       atomicWrite(this.receiptPath, JSON.stringify({ from: this.environment.currentVersion, target: latest.version }));
-      if (await this.environment.openInstaller(staged.path)) throw new UpdateInstallError('Windows could not open the installer.');
+      if (await this.environment.openInstaller(staged.path)) throw new UpdateInstallError('launch', 'Windows could not open the installer.');
       this.publish({ phase: 'launched', version: latest.version });
     } catch (error) {
-      this.publish({ phase: 'failed', version: staged.release.version, message: describeFailure(error) });
+      this.publish({ phase: 'failed', version: staged.release.version, ...describeFailure(error) });
     }
   }
 }
@@ -209,7 +224,7 @@ async function pruneOldStages(directory: string): Promise<void> {
   }
 }
 
-function describeFailure(error: unknown): string {
-  if (error instanceof UpdateInstallError) return error.message;
-  return 'The installer could not be saved or verified. Try again or open the release page.';
+function describeFailure(error: unknown): Pick<ManagedUpdateStatus, 'failure' | 'message'> {
+  if (error instanceof UpdateInstallError) return { failure: error.failure, message: error.message };
+  return { failure: 'storage', message: 'The installer could not be saved or verified. Try again or open the release page.' };
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { RotateCw } from 'lucide-react';
 import type { BrowserTab, TabProblem } from '../../electron/types';
+import { SafeDiagnostics } from '../panels/SafeDiagnostics';
 
 const reasons: Record<TabProblem, string> = {
   crashed: 'The tab stopped responding. You can reload it or go back.',
@@ -24,6 +25,7 @@ export function PageRecovery({ tab, onReload, onBack }: {
         <button type="button" className="primary-button" onClick={onReload}><RotateCw size={16} />{tab.problem ? 'Reload page' : 'Resume tab'}</button>
         {tab.problem && <button type="button" className="toolbar-button" disabled={!tab.canGoBack} onClick={onBack}>Back</button>}
       </div>
+      {tab.problem && <SafeDiagnostics reason={tab.problem === 'certificate' ? 'PB-RECOVERY-CERTIFICATE' : 'PB-RECOVERY-PAGE'} />}
     </section>
   </div>;
 }
@@ -62,6 +64,7 @@ export function StartupRecovery({ tabs, failedTabId, onRestore }: {
         <button type="button" className="primary-button" disabled={busy || !selected.size} onClick={() => void submit(tabs.filter((tab) => selected.has(tab.id)).map((tab) => tab.id))}>Restore selected tabs</button>
         <button type="button" className="primary-button" disabled={busy} onClick={() => void submit([])}>Start with a new tab</button>
       </div>
+      <SafeDiagnostics reason="PB-RECOVERY-STARTUP" />
     </section>
   </div>;
 }

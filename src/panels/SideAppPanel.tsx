@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import { ArrowLeft, ArrowRight, Asterisk, BookOpen, ExternalLink, LogOut, NotebookPen, Trash2, RotateCw, ShieldAlert, SquarePen } from 'lucide-react';
 import type { SideAppCommand, SideAppId, SideAppSnapshot } from '../../electron/types';
 import { EmptyState } from './common';
+import { SafeDiagnostics } from './SafeDiagnostics';
+import type { DiagnosticReason } from '../lib/safe-diagnostics';
 
 const STATUS_TEXT: Record<SideAppSnapshot['status'], string> = {
   idle: 'Starting…',
@@ -12,6 +14,13 @@ const STATUS_TEXT: Record<SideAppSnapshot['status'], string> = {
   'certificate-error': 'The app’s site certificate could not be verified.',
   'redirect-blocked': 'The app tried to redirect to a site outside the side panel.',
   crashed: 'The panel stopped working.',
+};
+const sideAppDiagnostics: Partial<Record<SideAppSnapshot['status'], DiagnosticReason>> = {
+  offline: 'PB-SIDE-APP-OFFLINE',
+  'certificate-error': 'PB-SIDE-APP-CERTIFICATE',
+  'redirect-blocked': 'PB-SIDE-APP-REDIRECT',
+  failed: 'PB-SIDE-APP-LOAD',
+  crashed: 'PB-SIDE-APP-LOAD',
 };
 
 /**
@@ -52,6 +61,7 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
   const HomeIcon = notes ? BookOpen : SquarePen;
   const ClearIcon = notes ? Trash2 : LogOut;
   const AppIcon = notes ? NotebookPen : Asterisk;
+  const diagnostic = sideAppDiagnostics[app.status] ?? (app.attention === 'human-check' ? 'PB-SIDE-APP-CHECK' : undefined);
   return (
     <div className="side-app">
       <div className="side-app-toolbar" role="toolbar" aria-label={`${app.name} controls`}>
@@ -71,6 +81,7 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
         {recovery && app.canGoBack && <button type="button" onClick={() => run('back')}>Return to previous page</button>}
         <button type="button" onClick={() => run('open-in-tab')}>Open app in a regular tab</button>
       </div>}
+      {diagnostic && <SafeDiagnostics reason={diagnostic} />}
       <div ref={slot} className="side-app-slot" data-side-app={app.id}>
         {/* Seen only while the native view is hidden: loading, a menu open over the chrome, or a resize. */}
         <div className="side-app-placeholder"><AppIcon size={28} /><span>{app.name}</span></div>

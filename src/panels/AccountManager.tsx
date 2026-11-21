@@ -33,17 +33,15 @@ export function AccountManager({ state, onClose, onToast }: { state: BrowserSnap
   const [newLabel, setNewLabel] = useState('');
   const [newColor, setNewColor] = useState<AccountSpaceColor>('indigo');
   const [editLabel, setEditLabel] = useState(selected?.label ?? '');
-  const [modules, setModules] = useState<GoogleModule[]>(selected?.enabledModules ?? []);
   const [browserId, setBrowserId] = useState(state.externalBrowsers[0]?.id ?? 'edge');
   const [clientId, setClientId] = useState('');
   const [recoveryCode, setRecoveryCode] = useState('');
   const [recoveryVerification, setRecoveryVerification] = useState('');
   const [busy, setBusy] = useState(false);
-  const savedModules = selected?.enabledModules.join(',');
   const dialogRef = useRef<HTMLDivElement>(null);
   // Focus moves in and stays in; Escape closes; focus returns afterwards (F-70).
   useModalFocus(dialogRef, onClose, 'button');
-  useEffect(() => { if (selected) { setEditLabel(selected.label); setModules(selected.enabledModules); } }, [selected?.id, selected?.label, savedModules]);
+  useEffect(() => { if (selected) setEditLabel(selected.label); }, [selected?.id, selected?.label]);
   useEffect(() => { setRecoveryCode(''); setRecoveryVerification(''); }, [selected?.id]);
   const run = async (action: () => Promise<unknown>, success?: string) => {
     setBusy(true);
@@ -56,17 +54,16 @@ export function AccountManager({ state, onClose, onToast }: { state: BrowserSnap
     if (!result.ok) throw new Error(result.error?.message ?? 'Google operation failed');
     return result;
   };
-  const addLocal = (event: FormEvent) => {
-    event.preventDefault();
-    void run(async () => { await window.privateBrowser.addLocalAccountSpace(state.activeWorkspaceId, newLabel, newColor); setNewLabel(''); }, 'Local Account Space added');
-  };
-  const addGoogle = () => {
+  const createSpace = (googleSetupPending: boolean) => {
     void run(async () => {
-      const id = await window.privateBrowser.addLocalAccountSpace(state.activeWorkspaceId, newLabel, newColor);
+      const id = await window.privateBrowser.addLocalAccountSpace(state.activeWorkspaceId, newLabel, newColor, googleSetupPending);
       setSelectedId(id);
       setNewLabel('');
-      await requireGoogleSuccess(window.privateBrowser.connectGoogleAccount(id, ['identity'], browserId));
-    }, 'Google Account Space added');
+    }, 'Account Space added');
+  };
+  const addLocal = (event: FormEvent) => {
+    event.preventDefault();
+    createSpace(false);
   };
   const reorder = (direction: -1 | 1) => {
     if (!selected) return;
@@ -79,6 +76,26 @@ export function AccountManager({ state, onClose, onToast }: { state: BrowserSnap
   };
   if (!selected) return null;
   const accountName = selected.email ?? selected.label;
+  const canUseGoogle = !selected.locked && selected.workspaceId !== 'banking';
+  const connecting = selected.googleConnection === 'connecting';
+  const canConnect = !busy && !connecting && state.googleConfiguration.configured && state.externalBrowsers.length > 0;
+  const connectTools = (modules: GoogleModule[]) => {
+    void run(async () => {
+      const result = await window.privateBrowser.connectGoogleAccount(selected.id, modules, browserId);
+      if (result.error?.code === 'GOOGLE_CANCELLED') {
+        onToast(selected.googleSetupPending ? 'Google setup paused. Resume it from this Account Space.' : 'Google authorization cancelled.');
+        return;
+      }
+      if (!result.ok) throw new Error(result.error?.message ?? 'Google operation failed');
+      onToast('Google consent completed');
+    });
+  };
+  const openGoogleWebsite = (url: string) => {
+    void run(async () => {
+      await window.privateBrowser.openInAccountSpace(selected.id, url);
+      onClose();
+    });
+  };
   const changeGoogleAccess = (revoke: boolean) => {
     const question = revoke
       ? `Revoke this app’s Google grant and disconnect its tools for ${accountName}?`
@@ -98,20 +115,58 @@ export function AccountManager({ state, onClose, onToast }: { state: BrowserSnap
       <header><div><span>PRIVATE CONTAINERS</span><h2 id="account-manager-title">Account Spaces</h2><p>Independent website sessions and Google grants inside {state.workspaces.find((item) => item.id === state.activeWorkspaceId)?.name}.</p></div><button className="icon-button" aria-label="Close Account Space manager" onClick={onClose}><X size={18} /></button></header>
       <div className="manager-body">
         <aside className="account-rail">
-          {accounts.map((account) => <button className={account.id === selected.id ? 'active' : ''} key={account.id} disabled={busy} onClick={() => setSelectedId(account.id)}><AccountAvatar account={account} /><span><strong>{account.label}</strong><small>{account.email ?? 'Local only'}</small></span>{account.locked && <LockKeyhole size={13} />}</button>)}
-          <form className="add-account-form" onSubmit={addLocal}><label>New Account Space<input aria-label="New Account Space label" maxLength={80} required value={newLabel} onChange={(event) => setNewLabel(event.target.value)} placeholder="e.g. Client account" /></label><div className="color-row">{ACCOUNT_COLORS.map((color) => <button aria-label={`Use ${color}`} aria-pressed={newColor === color} type="button" className={`color-swatch account-${color} ${newColor === color ? 'active' : ''}`} key={color} onClick={() => setNewColor(color)} />)}</div><div className="add-account-actions"><button className="secondary-button" type="submit" disabled={busy}><Plus size={14} /> Add local</button><button className="secondary-button" type="button" disabled={busy || !state.googleConfiguration.configured || !state.externalBrowsers.length || !newLabel.trim()} onClick={addGoogle}><ExternalLink size={14} /> Add Google</button></div></form>
+          {accounts.map((account) => <button className={account.id === selected.id ? 'active' : ''} key={account.id} disabled={busy} onClick={() => setSelectedId(account.id)}><AccountAvatar account={account} /><span><strong>{account.label}</strong><small>{account.email ?? (account.googleSetupPending ? 'Google setup pending' : 'Local only')}</small></span>{account.locked && <LockKeyhole size={13} />}</button>)}
+          <form className="add-account-form" onSubmit={addLocal}>
+            <label>New Account Space<input aria-label="New Account Space label" maxLength={80} required value={newLabel} onChange={(event) => setNewLabel(event.target.value)} placeholder="e.g. Client account" /></label>
+            <div className="color-row">{ACCOUNT_COLORS.map((color) => <button aria-label={`Use ${color}`} aria-pressed={newColor === color} type="button" className={`color-swatch account-${color} ${newColor === color ? 'active' : ''}`} key={color} onClick={() => setNewColor(color)} />)}</div>
+            <div className="add-account-actions">
+              <button className="secondary-button" type="submit" disabled={busy}><Plus size={14} /> Add local</button>
+              {state.activeWorkspaceId !== 'banking' && <button className="secondary-button" type="button" disabled={busy || !newLabel.trim()} onClick={() => createSpace(true)}>Add for Google tools</button>}
+            </div>
+          </form>
         </aside>
         <main className="account-detail">
           <section className="account-identity"><AccountAvatar account={selected} /><div><span>{selected.kind === 'google' ? 'GOOGLE ACCOUNT SPACE' : 'LOCAL ACCOUNT SPACE'}</span><h2>{selected.displayName ?? selected.label}</h2><p>{selected.email ?? 'No Google API connection. Website sessions remain independent.'}</p></div><span className={`status-chip status-${selected.googleConnection}`}>{selected.googleConnection.replaceAll('-', ' ')}</span></section>
           <AccountAccessOverview account={selected} busy={busy} onChangeAccess={changeGoogleAccess} onClearWebsiteData={clearWebsiteData} />
           <section className="manager-section"><div className="manager-section-heading"><div><h3>Identity & appearance</h3><p>The label and colour are local and never enter plaintext browser state.</p></div><div className="reorder-actions"><button aria-label="Move Account Space earlier" onClick={() => reorder(-1)}>↑</button><button aria-label="Move Account Space later" onClick={() => reorder(1)}>↓</button></div></div><form className="identity-form" onSubmit={(event) => { event.preventDefault(); void run(() => window.privateBrowser.updateAccountSpace(selected.id, editLabel, selected.color), 'Account Space renamed'); }}><input aria-label="Account Space label" maxLength={80} value={editLabel} onChange={(event) => setEditLabel(event.target.value)} /><button className="secondary-button" disabled={busy || editLabel.trim() === selected.label}>Save</button></form><div className="edit-color-row" aria-label="Account Space colour">{ACCOUNT_COLORS.map((color) => <button aria-label={`Change colour to ${color}`} aria-pressed={selected.color === color} type="button" className={`color-swatch account-${color} ${selected.color === color ? 'active' : ''}`} key={color} onClick={() => void run(() => window.privateBrowser.updateAccountSpace(selected.id, undefined, color), 'Account colour updated')} />)}</div></section>
-          <section className="manager-section"><div className="manager-section-heading"><div><h3>Google API connection</h3></div></div>
-            <GoogleHealthCard key={selected.id} account={selected} />
-            {!state.googleConfiguration.configured && <form className="google-config" onSubmit={(event) => { event.preventDefault(); void run(async () => { await window.privateBrowser.configureGoogle(clientId); setClientId(''); }, 'Desktop OAuth client configured'); }}><TriangleAlert size={16} /><p>Google integration needs configuration. Enter only a Desktop OAuth client ID—never a client secret.</p><input aria-label="Google Desktop OAuth client ID" value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder="Desktop client ID" required /><button className="secondary-button" disabled={busy}>Save</button></form>}
-            <div className="module-grid">{GOOGLE_MODULE_OPTIONS.map((module) => <label key={module.id} className={module.highRisk ? 'high-risk' : ''}><input type="checkbox" checked={modules.includes(module.id)} onChange={(event) => setModules((current) => event.target.checked ? [...new Set([...current, module.id])] : current.filter((item) => item !== module.id))} /><span><strong>{module.label}{module.highRisk ? ' · expanded access' : ''}</strong><small>{module.detail}</small></span></label>)}</div>
-            <div className="google-actions"><select aria-label="External browser" value={browserId} onChange={(event) => setBrowserId(event.target.value as typeof browserId)}>{state.externalBrowsers.map((browser) => <option value={browser.id} key={browser.id}>{browser.name}</option>)}</select><button className="primary-button" disabled={busy || !state.googleConfiguration.configured || !state.externalBrowsers.length} onClick={() => void run(() => requireGoogleSuccess(window.privateBrowser.connectGoogleAccount(selected.id, ['identity', ...modules.filter((item) => item !== 'identity')], browserId)), 'Google consent completed')}>{busy ? <LoaderCircle className="spin" size={14} /> : <ExternalLink size={14} />} {selected.googleConnection === 'connected' ? 'Reconnect with selected access' : 'Connect in external browser'}</button></div>
+          <section className="manager-section" aria-labelledby="google-website-heading">
+            <div className="manager-section-heading"><div><h3 id="google-website-heading">Sign into Google websites</h3><p>Sign in inside {selected.label} to keep its website sessions together.</p></div></div>
+            <div className="service-launchers">
+              <button disabled={busy || !canUseGoogle} onClick={() => openGoogleWebsite('https://accounts.google.com/')}><ExternalLink size={16} /> Open Google sign-in</button>
+              <button disabled={busy || !canUseGoogle} onClick={() => openGoogleWebsite('https://mail.google.com/')}><Mail size={16} /> Gmail</button>
+              <button disabled={busy || !canUseGoogle} onClick={() => openGoogleWebsite('https://drive.google.com/')}><HardDrive size={16} /> Drive</button>
+              <button disabled={busy || !canUseGoogle} onClick={() => openGoogleWebsite('https://calendar.google.com/')}><CalendarDays size={16} /> Calendar</button>
+              <button disabled={busy || !canUseGoogle} onClick={() => openGoogleWebsite('https://contacts.google.com/')}><UsersRound size={16} /> Contacts</button>
+            </div>
           </section>
-          <section className="manager-section"><div className="manager-section-heading"><div><h3>Open Google services</h3><p>Each launcher stays inside this Account Space’s isolated website partition.</p></div></div><div className="service-launchers"><button onClick={() => void run(() => window.privateBrowser.openInAccountSpace(selected.id, 'https://mail.google.com/'))}><Mail size={16} /> Gmail</button><button onClick={() => void run(() => window.privateBrowser.openInAccountSpace(selected.id, 'https://drive.google.com/'))}><HardDrive size={16} /> Drive</button><button onClick={() => void run(() => window.privateBrowser.openInAccountSpace(selected.id, 'https://calendar.google.com/'))}><CalendarDays size={16} /> Calendar</button><button onClick={() => void run(() => window.privateBrowser.openInAccountSpace(selected.id, 'https://contacts.google.com/'))}><UsersRound size={16} /> Contacts</button></div></section>
+          <section className="manager-section" aria-labelledby="google-tools-heading">
+            <div className="manager-section-heading"><div><h3 id="google-tools-heading">Connect Google tools</h3><p>Google asks to verify your identity in an external browser. You can then choose access for each feature.</p></div></div>
+            <GoogleHealthCard key={selected.id} account={selected} />
+            {canUseGoogle && <>
+              {selected.googleSetupPending && <p>Setup is pending for {selected.label}. Resume here or delete this Account Space below.</p>}
+              {!state.googleConfiguration.configured && <form className="google-config" onSubmit={(event) => { event.preventDefault(); void run(async () => { await window.privateBrowser.configureGoogle(clientId); setClientId(''); }, 'Desktop OAuth client configured'); }}><TriangleAlert size={16} /><p>Google integration needs configuration. Enter only a Desktop OAuth client ID—never a client secret.</p><input aria-label="Google Desktop OAuth client ID" value={clientId} onChange={(event) => setClientId(event.target.value)} placeholder="Desktop client ID" required /><button className="secondary-button" disabled={busy}>Save</button></form>}
+              <div className="google-actions">
+                <select aria-label="External browser" disabled={busy || connecting} value={browserId} onChange={(event) => setBrowserId(event.target.value as typeof browserId)}>
+                  {state.externalBrowsers.map((browser) => <option value={browser.id} key={browser.id}>{browser.name}</option>)}
+                </select>
+                {connecting ? <button className="secondary-button" onClick={() => void window.privateBrowser.cancelGoogleConnection(selected.id).catch(() => onToast('Could not cancel Google authorization.', 'error'))}>Cancel Google authorization</button>
+                  : selected.googleConnection !== 'connected' && <button className="primary-button" disabled={!canConnect} onClick={() => connectTools(selected.enabledModules.length ? selected.enabledModules : ['identity'])}>
+                    {busy ? <LoaderCircle className="spin" size={14} /> : <ExternalLink size={14} />}
+                    {selected.googleSetupPending ? 'Resume Google setup' : selected.kind === 'google' ? 'Reconnect Google tools' : 'Connect Google identity'}
+                  </button>}
+              </div>
+              {selected.googleConnection === 'connected' && <div className="module-grid" aria-label="Google tool access">
+                {GOOGLE_MODULE_OPTIONS.map((module) => {
+                  const enabled = selected.enabledModules.includes(module.id);
+                  const modules = enabled ? selected.enabledModules.filter((id) => id !== module.id) : [...selected.enabledModules, module.id];
+                  return <article key={module.id} className={module.highRisk ? 'high-risk' : ''}>
+                    <div><strong>{module.label}{module.highRisk ? ' · expanded access' : ''}</strong><small>{module.detail}</small></div>
+                    <button type="button" className="secondary-button" disabled={!canConnect} onClick={() => connectTools(modules)}>{enabled ? 'Turn off' : 'Enable'} {module.label}</button>
+                  </article>;
+                })}
+              </div>}
+            </>}
+          </section>
           {selected.enabledModules.includes('encrypted-backup') && <section className="manager-section"><div className="manager-section-heading"><div><h3>Encrypted app-data backup</h3><p>Google receives AES-256-GCM ciphertext only. My Vault, cookies, tokens, bodies, attachments, downloads and privacy logs are excluded.</p></div></div>{!recoveryCode ? <div className="backup-actions">{!selected.backupEnabled && <button className="secondary-button" onClick={() => void run(async () => setRecoveryCode(await window.privateBrowser.createBackupRecoveryCode(selected.id)))}><KeyRound size={14} /> Create recovery code</button>}{selected.backupEnabled && <button className="secondary-button" onClick={() => void run(() => window.privateBrowser.uploadBackup(selected.id, crypto.randomUUID()), 'Encrypted backup uploaded')}><Cloud size={14} /> Back up now</button>}</div> : <div className="recovery-code"><strong>Save this once-only recovery code</strong><code>{recoveryCode}</code><p>Verify it before backup is enabled. It cannot be recovered by Google or Digitronics.</p><input aria-label="Verify recovery code" value={recoveryVerification} onChange={(event) => setRecoveryVerification(event.target.value)} placeholder="Enter the complete recovery code" /><button className="primary-button" disabled={recoveryVerification !== recoveryCode} onClick={() => void run(async () => { await window.privateBrowser.verifyAndEnableBackup(selected.id, recoveryVerification, true, false); setRecoveryCode(''); setRecoveryVerification(''); }, 'Encrypted backup enabled')}>Verify and enable</button></div>}</section>}
           {!selected.locked && selected.workspaceId !== 'banking' && <AccountPermissionGrants key={selected.id} accountSpaceId={selected.id} />}
           <section className="manager-section danger-zone"><div><h3>Operational privacy</h3><p>Lock closes live views and connections. It is not a second Windows authentication boundary.</p></div><div className="danger-actions"><button onClick={() => void run(() => window.privateBrowser.setAccountSpaceLocked(selected.id, !selected.locked), selected.locked ? 'Account Space reopened' : 'Account Space locked')}>{selected.locked ? <RefreshCw size={14} /> : <LockKeyhole size={14} />} {selected.locked ? 'Reopen' : 'Lock'}</button><button className="destructive-button" disabled={accounts.length <= 1} onClick={() => { if (window.confirm(`Delete Account Space “${selected.label}”? This removes its tabs, history, permissions and Google grant after session erasure.`)) void run(() => window.privateBrowser.deleteAccountSpace(selected.id, 'DELETE_ACCOUNT_SPACE'), 'Account Space deleted'); }}><Trash2 size={14} /> Delete</button></div></section>

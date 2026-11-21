@@ -1,6 +1,7 @@
 import { ArrowLeft, Settings } from 'lucide-react';
 import type { BrowserSnapshot } from '../../electron/types';
 import { PanelHeader } from './common';
+import { SafeDiagnostics } from './SafeDiagnostics';
 
 export function SetupGuide({ state, isDefault, chromeImported, firstLaunch, onAccounts, onImport, onDefault, onVault, onSearch, onExit, onFinish }: {
   state: BrowserSnapshot;
@@ -52,6 +53,7 @@ export function SetupGuide({ state, isDefault, chromeImported, firstLaunch, onAc
         <li>Keep Chrome for workflows that still require an add-on. Chrome add-ons do not transfer with bookmarks and history.</li>
       </ol>
     </details>
+    <SafeDiagnostics reason={account?.locked ? 'PB-SETUP-ACCOUNT-LOCKED' : 'PB-SETUP-REVIEW'} />
     <div className="panel-actions">
       <button type="button" className="primary-button" onClick={onFinish}>Done</button>
       {firstLaunch && <button type="button" className="text-button" onClick={onFinish}>Skip setup</button>}

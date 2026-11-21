@@ -19,6 +19,7 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  powerMonitor,
   safeStorage,
   screen,
   session,
@@ -38,6 +39,8 @@ import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { DownloadHistoryStore } from './download-history.js';
 import { availableDownloadFolder, discardDownloadStage, DownloadFolderStore, finishStagedDownload, safeDownloadFilename, stageDownload } from './download-folder.js';
 import { ManagedUpdate } from './managed-update.js';
+import { canPauseTrackersAt, TRACKER_COMPATIBILITY_MS, TrackerProtection, trackerCategory } from './tracker-protection.js';
+import { BrowserSessionLock } from './browser-session-lock.js';
 import { getDomain } from 'tldts';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
@@ -52,9 +55,9 @@ import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
-import { mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
-import { isPinnablePanelTool, mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
+import { DEFAULT_UI_PREFERENCES, isPinnablePanelTool, mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
   AccountSpaceColor,
@@ -260,35 +263,6 @@ function permissionCapability(
   return undefined;
 }
 
-const TRACKER_HOSTS = [
-  '2mdn.net',
-  'adnxs.com',
-  'adsrvr.org',
-  'amazon-adsystem.com',
-  'app-measurement.com',
-  'clarity.ms',
-  'criteo.com',
-  'criteo.net',
-  'doubleclick.net',
-  'googlesyndication.com',
-  'google-analytics.com',
-  'googleadservices.com',
-  'googletagmanager.com',
-  'connect.facebook.net',
-  'fullstory.com',
-  'analytics.twitter.com',
-  'hotjar.com',
-  'mixpanel.com',
-  'newrelic.com',
-  'optimizely.com',
-  'segment.io',
-  'scorecardresearch.com',
-  'sentry.io',
-  'taboola.com',
-  'quantserve.com',
-  'mc.yandex.ru',
-];
-
 type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string; retainedFileStamp?: string };
 
 class BrowserController {
@@ -300,6 +274,9 @@ class BrowserController {
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly downloadHistory = new DownloadHistoryStore(join(app.getPath('userData'), 'download-history'), safeStorage);
   private readonly downloadHistoryFailures = new Set<AccountSpaceId>();
+  private readonly trackerProtection = new TrackerProtection();
+  private readonly trackerExpiry = new Map<AccountSpaceId, Map<string, ReturnType<typeof setTimeout>>>();
+  private trackerBroadcast?: ReturnType<typeof setTimeout>;
   private readonly downloadFolder = new DownloadFolderStore(join(app.getPath('userData'), 'download-folders'), safeStorage);
   private downloadFolderPickerOpen = false;
   private readonly temporaryPanelTools = new Map<AccountSpaceId, SidePanelTool>();
@@ -329,6 +306,8 @@ class BrowserController {
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private readonly googleChecks = new Map<AccountSpaceId, GoogleConnectionHealth>();
   private expectedInstaller?: ExpectedInstaller;
+  private readonly sessionLock = new BrowserSessionLock(join(app.getPath('userData'), 'browser-session.lock'));
+  private sessionLockWork = Promise.resolve();
   private readonly managedUpdate = new ManagedUpdate({
     directory: join(app.getPath('userData'), 'update-installers'),
     currentVersion: app.getVersion(),
@@ -547,6 +526,21 @@ class BrowserController {
   }
 
   getSnapshot(): BrowserSnapshot {
+    if (this.sessionLock.reason) return {
+      sessionLock: this.sessionLock.reason,
+      workspaces: WORKSPACES,
+      activeWorkspaceId: 'personal',
+      activeTabId: '',
+      tabs: [], bookmarks: [], history: [], downloads: [], privacyLog: [],
+      trackerBlocking: true,
+      activeAccountSpaceId: '' as AccountSpaceId,
+      accountSpaces: [], accountHealth: [],
+      googleConfiguration: { configured: false }, externalBrowsers: [],
+      bookmarkBarVisible: false, ui: { ...DEFAULT_UI_PREFERENCES }, settings: { ...DEFAULT_BROWSER_SETTINGS },
+      availableSpellcheckLanguages: [], assistantPolicy: { cloud: 'unavailable', receipts: [] },
+      windowState: { maximized: false, fullscreen: false, darkMode: nativeTheme.shouldUseDarkColors },
+      shortcutsByAccountSpace: {}, bookmarkIcons: {}, canReopenClosedTab: false, sideApps: [],
+    };
     const persisted = this.store.get();
     const tabs: BrowserTab[] = persisted.tabs.map((tab) => {
       const runtime = this.runtimeTabs.get(tab.id);
@@ -568,10 +562,19 @@ class BrowserController {
     const closedBatch = this.closedTabBatches.get(activeAccountSpaceId);
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
     const downloadAccount = this.activeDownloadAccount(persisted);
+    const activeTab = this.activeTab(persisted);
+    const strictTracking = activeTab.workspaceId === 'banking';
+    const trackerSite = !activeTab.isHome && isAllowedRemoteUrl(activeTab.url) && (downloadAccount || strictTracking)
+      ? this.trackerProtection.status(activeTab.accountSpaceId, safeOrigin(activeTab.url), {
+        enabled: persisted.trackerBlocking,
+        strict: strictTracking || isProtectedPage(activeTab.url) && persisted.trackerBlocking,
+        canPause: Boolean(downloadAccount) && persisted.trackerBlocking && canPauseTrackersAt(activeTab.url)
+          && this.runtimeTabs.get(activeTab.id)?.problem !== 'certificate',
+      }) : undefined;
     return {
       workspaces: WORKSPACES,
       activeWorkspaceId: persisted.activeWorkspaceId,
-      activeTabId: this.activeTab(persisted).id,
+      activeTabId: activeTab.id,
       tabs,
       bookmarks: persisted.bookmarks,
       bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
@@ -582,7 +585,8 @@ class BrowserController {
       downloadFolder: downloadAccount ? this.downloadFolder.status(downloadAccount) : undefined,
       managedUpdate: downloadAccount && process.platform === 'win32' && !this.store.isReadOnly() ? this.managedUpdate.snapshot() : undefined,
       privacyLog: persisted.privacyLog.slice(0, 50),
-      trackerBlocking: persisted.trackerBlocking,
+      trackerBlocking: strictTracking || persisted.trackerBlocking,
+      trackerSite,
       activeAccountSpaceId,
       accountSpaces: persisted.accountSpaces,
       accountHealth: persisted.accountHealth,
@@ -1060,7 +1064,7 @@ class BrowserController {
 
   /** Side apps show only beside an unprotected workspace, never over a menu or in full screen. */
   private layoutSideApps(): void {
-    if (!this.window || this.window.isDestroyed()) return;
+    if (this.sessionIsLocked || !this.window || this.window.isDestroyed()) return;
     const state = this.store.get();
     const accountId = this.activeDownloadAccount(state);
     const tool = this.sidePanelTool(state, accountId);
@@ -1108,11 +1112,11 @@ class BrowserController {
     await this.showActiveTab();
   }
 
-  async addLocalAccountSpace(workspaceId: WorkspaceId, label: string, color: AccountSpaceColor): Promise<AccountSpaceId> {
+  async addLocalAccountSpace(workspaceId: WorkspaceId, label: string, color: AccountSpaceColor, googleSetupPending = false): Promise<AccountSpaceId> {
     const state = this.store.get();
     if (!WORKSPACES.some((workspace) => workspace.id === workspaceId)) throw new Error('Unknown workspace');
     const order = state.accountSpaces.filter((account) => account.workspaceId === workspaceId).length;
-    const record = this.accounts.createLocal({ workspaceId, label, color, order });
+    const record = this.accounts.createLocal({ workspaceId, label, color, order, googleSetupPending });
     try {
       this.hideAllViews();
       this.store.addAccount(record);
@@ -1184,21 +1188,33 @@ class BrowserController {
   }
 
   async connectGoogleAccount(accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) {
-    this.requireAccountMembership(accountSpaceId);
-    const previous = this.accounts.require(accountSpaceId).googleConnection;
-    const connecting = this.accounts.update(accountSpaceId, (account) => { account.googleConnection = 'connecting'; });
-    this.store.refreshAccount(connecting);
+    const account = this.requireAccountMembership(accountSpaceId);
+    if (account.locked || account.workspaceId === 'banking') {
+      return { ok: false, error: { code: 'GOOGLE_POLICY_DENIED', message: 'Google tools are unavailable in this Account Space.', requestId: randomUUID() } } as const;
+    }
+    if (this.googleOAuth.isConnecting(accountSpaceId)) {
+      return { ok: false, error: { code: 'GOOGLE_INTERNAL', message: 'A Google connection is already in progress for this account.', requestId: randomUUID() } } as const;
+    }
+    const previous = this.accounts.require(accountSpaceId);
+    this.store.refreshAccount({ ...previous, googleConnection: 'connecting' });
     this.broadcast();
-    const result = await this.googleOAuth.connect(accountSpaceId, modules, browserId, () => this.store.get().accountSpaces.map((account) => account.id));
-    if (!result.ok) {
+    const selectedModules = previous.googleIdentity ? modules : ['identity' as const];
+    const result = await this.googleOAuth.connect(accountSpaceId, selectedModules, browserId, () => this.store.get().accountSpaces.map((account) => account.id));
+    if (!this.store.get().accountSpaces.some(({ id }) => id === accountSpaceId)) return result;
+    if (!result.ok && result.error?.code !== 'GOOGLE_CANCELLED') {
       const status = result.error?.code === 'GOOGLE_CONFIGURATION_REQUIRED' ? 'not-configured'
         : result.error?.code === 'GOOGLE_SCOPE_MISSING' ? 'partial-scopes'
           : result.error?.code === 'GOOGLE_RECONNECT_REQUIRED' ? 'reconnect-required'
             : result.error?.code === 'GOOGLE_OFFLINE' ? 'offline'
               : 'disconnected';
-      // A failed or cancelled reconnect leaves an existing grant as it was: the
-      // stored token still works, so "disconnected" would be untrue (F-58).
-      this.accounts.update(accountSpaceId, (account) => { account.googleConnection = status === 'disconnected' && account.refreshToken ? previous : status; });
+      // A failed reconnect keeps an existing usable grant. A lock or disconnect
+      // during the consent window takes precedence over the attempted connection.
+      const current = this.accounts.require(accountSpaceId);
+      if (!current.locked && current.googleConnection === previous.googleConnection) {
+        this.accounts.update(accountSpaceId, (record) => {
+          record.googleConnection = status === 'disconnected' && record.refreshToken ? previous.googleConnection : status;
+        });
+      }
     }
     this.store.refreshAccount(this.accounts.require(accountSpaceId));
     this.recordGoogleCheck(accountSpaceId, result);
@@ -1239,13 +1255,7 @@ class BrowserController {
 
   cancelGoogleConnection(accountSpaceId: AccountSpaceId): boolean {
     this.requireAccountMembership(accountSpaceId);
-    const cancelled = this.googleOAuth.cancel(accountSpaceId);
-    if (cancelled) {
-      const record = this.accounts.update(accountSpaceId, (account) => { account.googleConnection = 'disconnected'; });
-      this.store.refreshAccount(record);
-      this.broadcast();
-    }
-    return cancelled;
+    return this.googleOAuth.cancel(accountSpaceId);
   }
 
   async disconnectGoogleAccount(accountSpaceId: AccountSpaceId, revoke = false) {
@@ -1568,7 +1578,7 @@ class BrowserController {
   }
 
   private sendOperationProgress(operationId: string, accountSpaceId: AccountSpaceId, service: 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup', phase: 'started' | 'completed' | 'cancelled' | 'failed'): void {
-    if (!this.window.isDestroyed()) this.window.webContents.send('google:operation-progress', { operationId, accountSpaceId, service, phase });
+    if (!this.sessionIsLocked && !this.window.isDestroyed()) this.window.webContents.send('google:operation-progress', { operationId, accountSpaceId, service, phase });
   }
 
   private requireAccountMembership(accountSpaceId: AccountSpaceId) {
@@ -1596,6 +1606,9 @@ class BrowserController {
   }
 
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
+    this.trackerProtection.clearAccount(accountSpaceId);
+    this.trackerExpiry.get(accountSpaceId)?.forEach((timer) => clearTimeout(timer));
+    this.trackerExpiry.delete(accountSpaceId);
     if (this.pendingChromePasswords?.accountId === accountSpaceId) this.pendingChromePasswords = undefined;
     if (this.pendingChromeImport?.accountSpaceId === accountSpaceId || this.pendingChromeImport?.initiatingAccount === accountSpaceId) {
       this.pendingChromeImport = undefined;
@@ -1626,6 +1639,58 @@ class BrowserController {
       this.downloadItems.delete(id);
       this.downloads.delete(id);
     }
+  }
+
+  get sessionIsLocked(): boolean { return this.sessionLock.reason !== undefined; }
+
+  startSessionLockMonitoring(): void {
+    if (process.platform !== 'win32') return;
+    const onLock = () => {
+      if (this.sessionLock.onWindowsLock(this.store.sessionPrivacyPreferences().lockOnWindowsSession === true)) this.enforceSessionLock();
+    };
+    if (powerMonitor.getSystemIdleState(1) === 'locked') onLock();
+    powerMonitor.on('lock-screen', onLock);
+    powerMonitor.on('unlock-screen', () => {
+      if (!this.sessionLock.onWindowsUnlock()) return;
+      void this.sessionLockWork.then(async () => {
+        if (this.sessionIsLocked) return;
+        this.refreshSessionChrome();
+        await this.showActiveTab();
+        await openPendingSystemLinks();
+      }).catch(() => undefined);
+    });
+    setInterval(() => {
+      if (this.sessionIsLocked) return;
+      const minutes = this.store.sessionPrivacyPreferences().idleLockMinutes;
+      if (minutes && this.sessionLock.checkIdle(powerMonitor.getSystemIdleTime(), minutes)) this.enforceSessionLock();
+    }, 5_000).unref();
+  }
+
+  private enforceSessionLock(): void {
+    // Hide first. Subsequent IPC cannot reopen content while the lock marker is set.
+    this.hideAllViews();
+    this.sideApps.closeAll();
+    this.managedUpdate.cancelTransfer();
+    agentHost?.stop();
+    const state = this.store.get();
+    for (const account of state.accountSpaces) this.cancelAccountOperations(account.id);
+    for (const runtime of this.runtimeTabs.values()) {
+      if (!runtime.view) continue;
+      this.window?.contentView.removeChildView(runtime.view);
+      runtime.view.webContents.close();
+    }
+    this.runtimeTabs.clear();
+    const availableWindow = this.window && !this.window.isDestroyed();
+    if (availableWindow) this.refreshSessionChrome();
+    this.sessionLockWork = Promise.allSettled([
+      this.lockVault(),
+      this.vscodeBridge.disconnect(false),
+      ...[...this.configuredSessions].map((partition) => session.fromPartition(partition).closeAllConnections()),
+    ]).then(() => undefined);
+  }
+
+  private refreshSessionChrome(): void {
+    if (this.window && !this.window.isDestroyed()) this.window.webContents.reloadIgnoringCache();
   }
 
   private queuePermissionPrompt(prompt: PermissionPrompt, respond: (allowed: boolean, displaySourceId?: string) => void, retainAllowOnce = false): void {
@@ -2269,8 +2334,38 @@ class BrowserController {
   }
 
   toggleTrackerBlocking(): void {
+    if (this.store.get().activeWorkspaceId === 'banking') throw new Error('Tracker blocking stays on in Banking.');
     this.store.update((state) => { state.trackerBlocking = !state.trackerBlocking; });
     this.broadcast();
+  }
+
+  setTrackerCompatibility(tabId: string, expectedOrigin: string, paused: boolean): void {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const account = this.activeDownloadAccount(state);
+    if (!account || this.store.isReadOnly() || tab.id !== tabId || tab.isHome
+      || this.runtimeTabs.get(tab.id)?.problem === 'certificate' || !canPauseTrackersAt(tab.url) || safeOrigin(tab.url) !== expectedOrigin) {
+      throw new Error('Tracker compatibility is unavailable on this page.');
+    }
+    if (paused && !state.trackerBlocking) throw new Error('Turn on tracker blocking before pausing it for one site.');
+    this.trackerProtection.pause(account, expectedOrigin, paused);
+    let timers = this.trackerExpiry.get(account);
+    if (!timers) this.trackerExpiry.set(account, timers = new Map());
+    clearTimeout(timers.get(expectedOrigin));
+    timers.delete(expectedOrigin);
+    if (paused) timers.set(expectedOrigin, setTimeout(() => {
+      timers.delete(expectedOrigin);
+      this.scheduleTrackerBroadcast();
+    }, TRACKER_COMPATIBILITY_MS + 50).unref());
+    this.broadcast();
+  }
+
+  private scheduleTrackerBroadcast(): void {
+    if (this.trackerBroadcast) return;
+    this.trackerBroadcast = setTimeout(() => {
+      this.trackerBroadcast = undefined;
+      this.broadcast();
+    }, 300).unref();
   }
 
   toggleDeveloperTools(mode: DevToolsMode): void {
@@ -3461,6 +3556,7 @@ class BrowserController {
   }
 
   private activeDownloadAccount(state = this.store.get()): AccountSpaceId | undefined {
+    if (this.sessionIsLocked) return undefined;
     const id = this.activeAccountSpaceId(state);
     const account = state.accountSpaces.find((candidate) => candidate.id === id);
     return account && isAvailableRegularAccount(state, account) ? id : undefined;
@@ -3707,10 +3803,10 @@ class BrowserController {
   installManagedUpdate(): Promise<void> { return this.managedUpdate.install(); }
 
   async checkForUpdatesInBackground(): Promise<void> {
-    if (this.window.isDestroyed()) return;
+    if (this.sessionIsLocked || this.window.isDestroyed()) return;
     try {
       const result = await this.checkForUpdates();
-      if (result.state === 'available') this.window.webContents.send('updates:available', result);
+      if (!this.sessionIsLocked && result.state === 'available') this.window.webContents.send('updates:available', result);
     } catch {
       // Background checks stay quiet; explicit checks show actionable errors.
     }
@@ -4086,9 +4182,21 @@ class BrowserController {
         deny();
       }
     }, { useSystemPicker: false });
-    ses.webRequest.onBeforeRequest((details, callback) => callback({
-      cancel: this.isBlockedTrackerRequest(details.url) || agentHost?.allowLentRequest(details) === false,
-    }));
+    ses.webRequest.onBeforeRequest((details, callback) => {
+      if (agentHost?.allowLentRequest(details) === false) { callback({ cancel: true }); return; }
+      const category = trackerCategory(details.url);
+      const enabled = this.store.trackerBlockingEnabled();
+      if (!category || (!enabled && !protectedWorkspace)) { callback({ cancel: false }); return; }
+      let top: string | undefined;
+      if (details.resourceType !== 'mainFrame') {
+        try { top = details.frame?.top?.url; } catch { /* The requesting frame may have closed. */ }
+      }
+      const origin = top && isAllowedRemoteUrl(top) ? safeOrigin(top) : undefined;
+      const strict = protectedWorkspace || Boolean(top && isProtectedPage(top));
+      const blocked = this.trackerProtection.shouldBlock(accountSpaceId, category, { origin, strict, enabled });
+      if (blocked && origin) this.scheduleTrackerBroadcast();
+      callback({ cancel: blocked });
+    });
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
     });
@@ -4186,7 +4294,7 @@ class BrowserController {
   }
 
   private async showActiveTab(): Promise<void> {
-    if (this.startingWindow) return;
+    if (this.startingWindow || this.sessionIsLocked) return;
     const state = this.store.get();
     const tab = this.activeTab(state);
     const locked = state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked;
@@ -4211,13 +4319,7 @@ class BrowserController {
   }
 
   private isBlockedTrackerRequest(url: string): boolean {
-    if (!this.store.get().trackerBlocking) return false;
-    try {
-      const hostname = new URL(url).hostname;
-      return TRACKER_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
-    } catch {
-      return false;
-    }
+    return this.store.trackerBlockingEnabled() && Boolean(trackerCategory(url));
   }
 
   private hideAllViews(): void {
@@ -4436,10 +4538,11 @@ function queueSystemLink(url: string): void {
 }
 
 async function openPendingSystemLinks(): Promise<void> {
-  if (!launchWindowReady || processingLaunchUrls || !controller) return;
+  if (!launchWindowReady || processingLaunchUrls || !controller || controller.sessionIsLocked) return;
   processingLaunchUrls = true;
   try {
-    for (let url = pendingLaunchUrls.shift(); url; url = pendingLaunchUrls.shift()) {
+    while (!controller.sessionIsLocked && pendingLaunchUrls.length) {
+      const url = pendingLaunchUrls.shift()!;
       try {
         await controller.openSystemLink(url);
       } catch {
@@ -4490,6 +4593,9 @@ const ipcGuard = new IpcGuard();
 function handle<TArgs extends unknown[], TResult>(channel: string, callback: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>): void {
   ipcMain.handle(channel, async (event, ...args) => {
     assertTrusted(event, channel);
+    if (controller?.sessionIsLocked && channel !== 'browser:get-state' && channel !== 'app:quit') {
+      throw new Error('Private Browser is locked. Unlock Windows to resume.');
+    }
     ipcGuard.check(event.sender.id, channel, args);
     validateIpcArguments(channel, args);
     return callback(event, ...args as TArgs);
@@ -4616,7 +4722,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:delete-reviewed-data', (_event, id: string) => controller!.deleteReviewedBrowsingData(id));
   handle('browser:delete-history-visit', (_event, account: AccountSpaceId, id: string) => controller!.deleteHistoryVisit(account, id));
   handle('browser:open-address-match', (_event, account: AccountSpaceId, source: AddressMatch['source'], id: string) => controller!.openAddressMatch(account, source, id));
-  handle('accounts:add-local', (_event, workspaceId: WorkspaceId, label: string, color: AccountSpaceColor) => controller!.addLocalAccountSpace(workspaceId, label, color));
+  handle('accounts:add-local', (_event, workspaceId: WorkspaceId, label: string, color: AccountSpaceColor, googleSetupPending?: boolean) => controller!.addLocalAccountSpace(workspaceId, label, color, googleSetupPending));
   handle('accounts:update', (_event, id: AccountSpaceId, label?: string, color?: AccountSpaceColor) => controller!.updateAccountSpace(id, label, color));
   handle('accounts:reorder', (_event, workspaceId: WorkspaceId, ids: AccountSpaceId[]) => controller!.reorderAccountSpaces(workspaceId, ids));
   handle('accounts:open-in', (_event, id: AccountSpaceId, url: string) => controller!.openInAccountSpace(id, url));
@@ -4702,6 +4808,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:import-reviewed-chrome-passwords', (_event, id: string) => controller!.importReviewedChromePasswords(id));
   handle('vault:discard-chrome-password-review', (_event, id: string) => controller!.discardChromePasswordReview(id));
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
+  handle('browser:set-tracker-compatibility', (_event, tabId: string, origin: string, paused: boolean) => controller!.setTrackerCompatibility(tabId, origin, paused));
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:control-download', (_event, id: string, action: DownloadAction) => controller!.controlDownload(id, action));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
@@ -4785,11 +4892,13 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:install-verified', () => controller!.installManagedUpdate());
   handle('updates:open-history', () => controller!.openReleaseHistory());
 
+  controller.startSessionLockMonitoring();
   await controller.createWindow();
-  await agentHost.start();
+  if (controller.sessionIsLocked) agentHost.stop();
+  else await agentHost.start();
   setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();
   setInterval(() => void controller?.checkForUpdatesInBackground(), 24 * 60 * 60_000).unref();
-  if (!pendingLaunchUrls.length) await controller.openStartupHome();
+  if (!controller.sessionIsLocked && !pendingLaunchUrls.length) await controller.openStartupHome();
   launchWindowReady = true;
   await openPendingSystemLinks();
   app.on('activate', async () => {

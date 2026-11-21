@@ -506,15 +506,11 @@ only ever receives a `data:` URL, `img-src` in index.html no longer needs `https
 
 ## Tracker Blocking
 
-`TRACKER_HOSTS` is a curated denylist covering common advertising, analytics,
-session-replay and retargeting providers. `onBeforeRequest` matches a request's
-hostname exactly or as a `.suffix`, and cancels on a hit. Every request also
-receives `DNT: 1` and `Sec-GPC: 1`.
-
-- The toggle is persisted state, so it applies to every workspace at once.
-- A URL that fails to parse is treated as not blocked.
-- Blocked requests are cancelled silently: nothing is written to the privacy log
-  and no counter is kept, so the shield button has no audit trail behind it.
+Known tracker domains are classified and blocked by DNS label. The shield shows
+session counts for the active Account Space and exact top-level origin.
+Compatibility lasts ten minutes and can be reset. Banking always blocks
+trackers, and protected pages cannot pause blocking. No request URLs are saved.
+Every request also receives `DNT: 1` and `Sec-GPC: 1`.
 
 ## Privacy Log
 

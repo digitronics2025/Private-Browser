@@ -54,7 +54,7 @@ export class RuntimeStateStore {
     for (const snapshot of initialization.accountStates) this.savedAccounts.set(snapshot.accountSpaceId, snapshot);
     for (const record of initialization.accounts) this.records.set(record.id, record);
     for (const recovery of initialization.accountRecoveries) if (recovery.accountSpaceId) this.recovering.add(recovery.accountSpaceId);
-    this.state = combine(initialization.manifest, initialization.accounts, initialization.accountStates, initialization.accountRecoveries);
+    this.state = combine(initialization.manifest, initialization.accounts, initialization.accountStates, initialization.accountRecoveries, accountStore);
     rememberExternalLinkAccount(this.state);
   }
 
@@ -64,6 +64,15 @@ export class RuntimeStateStore {
 
   isReadOnly(): boolean {
     return this.readOnly;
+  }
+
+  trackerBlockingEnabled(): boolean {
+    return this.state.trackerBlocking;
+  }
+
+  sessionPrivacyPreferences(): { lockOnWindowsSession?: boolean; idleLockMinutes?: number } {
+    const { lockOnWindowsSession, idleLockMinutes } = this.state.ui;
+    return { lockOnWindowsSession, idleLockMinutes };
   }
 
   addressMatches(accountSpaceId: AccountSpaceId, text: string): AddressMatch[] {
@@ -323,8 +332,9 @@ function combine(
   records: AccountSpaceRecord[],
   accountStates: AccountBrowsingStateV2[],
   recoveries: StateRecoveryStatus[],
+  accountStore: AccountStore,
 ): RuntimeBrowserStateV2 {
-  const accountSpaces = records.map(recordToSummary).sort(accountSort);
+  const accountSpaces = records.map((record) => accountStore.toSummary(record)).sort(accountSort);
   const tabs = accountStates.flatMap((state) => state.tabs.map((tab) => ({
     ...tab,
     loading: false,
@@ -368,31 +378,6 @@ function combine(
     accountSpaces,
     accountHealth,
     recovery: firstRecovery,
-  };
-}
-
-function recordToSummary(record: AccountSpaceRecord): AccountSpaceSummary {
-  const avatar = record.googleIdentity?.avatar;
-  return {
-    id: record.id,
-    workspaceId: record.workspaceId,
-    label: record.label,
-    color: record.color,
-    order: record.order,
-    kind: record.kind,
-    email: record.googleIdentity?.email,
-    displayName: record.googleIdentity?.displayName,
-    avatarDataUrl: avatar ? `data:${avatar.mimeType};base64,${avatar.bytesBase64}` : undefined,
-    createdAt: record.createdAt,
-    lastUsedAt: record.lastUsedAt,
-    locked: record.locked,
-    googleConnection: record.googleConnection,
-    websiteStatus: record.websiteStatus,
-    enabledModules: [...record.enabledModules],
-    grantedScopes: [...record.grantedScopes],
-    backupEnabled: record.backup.enabled,
-    backupIncludesOpenTabs: record.backup.includeOpenTabs,
-    backupIncludesHistory: record.backup.includeHistory,
   };
 }
 

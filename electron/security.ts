@@ -142,7 +142,7 @@ export function downloadRisk(filename: string): 'ordinary' | 'dangerous' | 'dece
   return parts.length >= 3 && DISGUISE_TYPES.has(parts.at(-2)!) ? 'deceptive' : 'dangerous';
 }
 
-function isLocalDevelopmentHost(hostname: string): boolean {
+export function isLocalDevelopmentHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, '').replace(/^\[|\]$/g, '');
   return host === 'localhost' || host === '::1' || /^127\.(\d+\.){2}\d+$/.test(host);
 }
