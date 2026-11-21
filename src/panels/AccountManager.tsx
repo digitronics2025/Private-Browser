@@ -1,11 +1,12 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { Cloud, CalendarDays, ExternalLink, HardDrive, KeyRound, LoaderCircle, LogOut, LockKeyhole, Mail, Plus, RefreshCw, Shield, Trash2, TriangleAlert, UsersRound, X } from 'lucide-react';
+import { CalendarDays, ExternalLink, HardDrive, KeyRound, LoaderCircle, LogOut, LockKeyhole, Mail, Plus, RefreshCw, Shield, Trash2, TriangleAlert, UsersRound, X } from 'lucide-react';
 import type { AccountSpaceColor, AccountSpaceSummary, BrowserSnapshot, GoogleModule, GoogleOperationResult } from '../../electron/types';
 import { AccountAvatar } from '../lib/accounts';
 import { useModalFocus } from '../lib/dialog';
 import { AccountPermissionGrants } from './AccountPermissionGrants';
 import { GoogleHealthCard } from './GoogleHealthCard';
 import { BackupRestore } from './BackupRestore';
+import { BackupUpload } from './BackupUpload';
 
 const ACCOUNT_COLORS: AccountSpaceColor[] = ['indigo', 'sky', 'emerald', 'amber', 'rose', 'violet', 'slate'];
 const GOOGLE_MODULE_OPTIONS: Array<{ id: GoogleModule; label: string; detail: string; highRisk?: boolean }> = [
@@ -168,7 +169,21 @@ export function AccountManager({ state, onClose, onToast }: { state: BrowserSnap
               </div>}
             </>}
           </section>
-          {selected.enabledModules.includes('encrypted-backup') && <section className="manager-section"><div className="manager-section-heading"><div><h3>Encrypted app-data backup</h3><p>Google receives AES-256-GCM ciphertext only. My Vault, cookies, tokens, bodies, attachments, downloads and privacy logs are excluded.</p></div></div>{!recoveryCode ? <div className="backup-actions">{!selected.backupEnabled && <button className="secondary-button" onClick={() => void run(async () => setRecoveryCode(await window.privateBrowser.createBackupRecoveryCode(selected.id)))}><KeyRound size={14} /> Create recovery code</button>}{selected.backupEnabled && <button className="secondary-button" onClick={() => void run(() => window.privateBrowser.uploadBackup(selected.id, crypto.randomUUID()), 'Encrypted backup uploaded')}><Cloud size={14} /> Back up now</button>}</div> : <div className="recovery-code"><strong>Save this once-only recovery code</strong><code>{recoveryCode}</code><p>Verify it before backup is enabled. It cannot be recovered by Google or Digitronics.</p><input aria-label="Verify recovery code" value={recoveryVerification} onChange={(event) => setRecoveryVerification(event.target.value)} placeholder="Enter the complete recovery code" /><button className="primary-button" disabled={recoveryVerification !== recoveryCode} onClick={() => void run(async () => { await window.privateBrowser.verifyAndEnableBackup(selected.id, recoveryVerification, true, false); setRecoveryCode(''); setRecoveryVerification(''); }, 'Encrypted backup enabled')}>Verify and enable</button></div>}</section>}
+          {!selected.locked && selected.enabledModules.includes('encrypted-backup') && <section className="manager-section">
+            <div className="manager-section-heading"><div><h3>Encrypted app-data backup</h3><p>Google receives AES-256-GCM ciphertext only. The backup excludes My Vault, cookies, tokens, message bodies, attachments, downloads and privacy logs.</p></div></div>
+            {recoveryCode ? <div className="recovery-code"><strong>Save this once-only recovery code</strong><code>{recoveryCode}</code>
+              <p>Verify the recovery code to enable backup.</p>
+              <input aria-label="Verify recovery code" value={recoveryVerification} onChange={(event) => setRecoveryVerification(event.target.value)} placeholder="Enter the complete recovery code" />
+              <button className="primary-button" disabled={recoveryVerification !== recoveryCode} onClick={() => void run(async () => {
+                await window.privateBrowser.verifyAndEnableBackup(selected.id, recoveryVerification, true, false);
+                setRecoveryCode(''); setRecoveryVerification('');
+              }, 'Encrypted backup enabled')}>Verify and enable</button>
+            </div> : selected.backupEnabled ? selected.id === state.activeAccountSpaceId && selected.googleConnection === 'connected'
+              ? <BackupUpload key={selected.id} account={selected} onToast={onToast} /> : <p>Open this connected Account Space to manage its backup uploads.</p>
+              : <button className="secondary-button" onClick={() => void run(async () => setRecoveryCode(await window.privateBrowser.createBackupRecoveryCode(selected.id)))}>
+                <KeyRound size={14} /> Create recovery code
+              </button>}
+          </section>}
           {!selected.locked && selected.googleConnection === 'connected' && selected.enabledModules.includes('encrypted-backup')
             && <BackupRestore key={selected.id} account={selected} workspaceName={state.workspaces.find((workspace) => workspace.id === selected.workspaceId)?.name ?? selected.workspaceId} onToast={onToast} />}
           {!selected.locked && selected.workspaceId !== 'banking' && <AccountPermissionGrants key={selected.id} accountSpaceId={selected.id} />}

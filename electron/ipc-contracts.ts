@@ -179,8 +179,19 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'backup:upload':
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation');
       if (args[2] !== undefined && args[2] !== 'merge' && args[2] !== 'overwrite') throw new Error('Invalid backup conflict decision'); return;
+    case 'backup:preview-upload':
+      exact(args, 2); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); return;
+    case 'backup:apply-upload':
+      exact(args, 3); requireUuid(args[0], 'backup review'); requireUuid(args[1], 'operation');
+      if (args[2] !== 'merge' && args[2] !== 'overwrite') throw new Error('Invalid backup conflict decision'); return;
+    case 'backup:set-reminder':
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (args[1] !== 0 && args[1] !== 7 && args[1] !== 14 && args[1] !== 30) throw new Error('Invalid backup reminder'); return;
     case 'backup:preview-restore':
-      between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); if (args[2] !== undefined) requireBoundedText(args[2], 'recovery code', 64); return;
+      between(args, 2, 4); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation');
+      if (args[2] !== undefined) requireBoundedText(args[2], 'recovery code', 64);
+      if (args[3] !== undefined) requireNonEmptyText(args[3], 'backup generation', 30); return;
+    case 'backup:cancel-upload':
     case 'backup:apply-restore':
     case 'backup:cancel-restore':
       exact(args, 1); requireUuid(args[0], 'backup review'); return;

@@ -1,11 +1,12 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import type { AccountBrowsingStateV2, AccountSpaceBookmark, AccountSpaceHistoryEntry, AccountSpaceId, BackupRestorePreview, BrowserTab, HistoryEntry, WorkspaceId } from './types.js';
+import type { AccountBrowsingStateV2, AccountSpaceBookmark, AccountSpaceHistoryEntry, AccountSpaceId, BackupGenerationSummary, BackupRestorePreview, BackupUploadPreview, BrowserTab, HistoryEntry, WorkspaceId } from './types.js';
 import { MAX_ACCOUNT_BOOKMARKS, MAX_ACCOUNT_TABS, validateAccountState } from './account-space-state.js';
 import { RETAINED_HISTORY_LIMIT } from './history-query.js';
 import { AccountStore, type SafeStorageAdapter } from './account-store.js';
 
 const BACKUP_AAD = Buffer.from('private-browser-account-space-backup:v1', 'utf8');
 const MAX_BACKUP_BYTES = 8 * 1024 * 1024;
+const MAX_PRIOR_GENERATIONS = 2;
 
 export interface BackupBookmarkFolder {
   id: string;
@@ -14,7 +15,7 @@ export interface BackupBookmarkFolder {
   order: number;
 }
 
-export interface AccountBackupPayload {
+export interface AccountBackupSnapshot {
   version: 1;
   createdAt: string;
   workspaceId?: WorkspaceId;
@@ -23,6 +24,10 @@ export interface AccountBackupPayload {
   settings: { trackerBlocking: boolean };
   openTabs?: Array<Pick<BrowserTab, 'id' | 'workspaceId' | 'accountSpaceId' | 'title' | 'url' | 'isHome'>>;
   history?: HistoryEntry[];
+}
+
+export interface AccountBackupPayload extends AccountBackupSnapshot {
+  generations?: AccountBackupSnapshot[];
 }
 
 export interface EncryptedBackupEnvelope {
@@ -50,6 +55,7 @@ export type BackupWriteResult =
 
 export class AccountBackupManager {
   private readonly pendingRecoveryKeys = new Map<AccountSpaceId, Buffer>();
+  private readonly writes = new Set<AccountSpaceId>();
 
   constructor(
     private readonly accounts: AccountStore,
@@ -78,7 +84,7 @@ export class AccountBackupManager {
     if (!this.encryption.isEncryptionAvailable()) throw new Error('OS encryption is unavailable');
     const wrappedRecoveryKey = this.encryption.encryptString(pending.toString('base64url')).toString('base64');
     this.accounts.update(accountSpaceId, (account) => {
-      account.backup = { enabled: true, wrappedRecoveryKey, includeOpenTabs, includeHistory };
+      account.backup = { enabled: true, wrappedRecoveryKey, includeOpenTabs, includeHistory, enabledAt: this.now().toISOString(), reminderDays: 14 };
     });
     supplied.fill(0);
     pending.fill(0);
@@ -123,32 +129,56 @@ export class AccountBackupManager {
     return payload;
   }
 
+  async reviewUpload(accountSpaceId: AccountSpaceId, payload: AccountBackupPayload, signal?: AbortSignal):
+    Promise<{ details: Omit<BackupUploadPreview, 'id' | 'accountSpaceId'>; expectedEtag: string | null }> {
+    const account = this.accounts.require(accountSpaceId);
+    const key = this.unwrapLocalKey(accountSpaceId);
+    try {
+      const existing = await this.transport.read(accountSpaceId, signal);
+      const remote = existing && decryptCompatibleBackup(existing, key, account.workspaceId);
+      return { expectedEtag: existing?.etag ?? null, details: {
+        local: summarizeBackup(payload), remote: remote && summarizeBackup(remote),
+        merged: remote && summarizeBackup(mergePayloads(remote, payload)),
+        generations: (remote?.generations ?? []).map(summarizeBackup),
+        conflict: Boolean(existing && existing.etag !== account.backup.remoteEtag),
+      } };
+    } finally {
+      key.fill(0);
+    }
+  }
+
   async upload(
     accountSpaceId: AccountSpaceId,
     payload: AccountBackupPayload,
     conflictResolution?: 'merge' | 'overwrite',
     signal?: AbortSignal,
+    reviewedEtag?: string | null,
   ): Promise<BackupWriteResult> {
     const account = this.accounts.require(accountSpaceId);
+    if (this.writes.has(accountSpaceId)) throw new Error('An encrypted backup is already being saved.');
     const key = this.unwrapLocalKey(accountSpaceId);
+    this.writes.add(accountSpaceId);
     try {
       const remote = await this.transport.read(accountSpaceId, signal);
+      if (reviewedEtag !== undefined && (remote?.etag ?? null) !== reviewedEtag) throw new Error('The encrypted backup changed. Review it again.');
       if (remote && remote.etag !== account.backup.remoteEtag && !conflictResolution) {
         return { status: 'conflict', localEtag: account.backup.remoteEtag, remoteEtag: remote.etag };
       }
-      const nextPayload = remote && conflictResolution === 'merge'
-        ? mergePayloads(decryptBackupEnvelope(parseEnvelope(remote.bytes), key), payload)
-        : payload;
-      const envelope = encryptBackupPayload(nextPayload, key);
+      const previous = remote && decryptCompatibleBackup(remote, key, account.workspaceId);
+      const nextPayload = previous && conflictResolution === 'merge' ? mergePayloads(previous, payload) : snapshotForGeneration(payload);
+      const envelope = encryptBackupPayload(retainBackupGenerations(nextPayload, previous), key);
       const bytes = Buffer.from(JSON.stringify(envelope), 'utf8');
       if (bytes.byteLength > MAX_BACKUP_BYTES) throw new Error('Encrypted backup exceeds its size limit');
-      const written = await this.transport.write(accountSpaceId, bytes, remote && conflictResolution !== 'overwrite' ? remote.etag : undefined, signal);
+      signal?.throwIfAborted();
+      const written = await this.transport.write(accountSpaceId, bytes, remote?.etag, signal);
       this.accounts.update(accountSpaceId, (record) => {
         record.backup.remoteEtag = written.etag;
         record.backup.remoteFileId = written.fileId;
+        record.backup.lastUploadedAt = payload.createdAt;
       });
       return { status: 'uploaded', etag: written.etag };
     } finally {
+      this.writes.delete(accountSpaceId);
       key.fill(0);
     }
   }
@@ -162,6 +192,15 @@ export class AccountBackupManager {
     } finally {
       key.fill(0);
     }
+  }
+
+  async restoreGeneration(accountSpaceId: AccountSpaceId, recoveryCode?: string, createdAt?: string, signal?: AbortSignal):
+    Promise<{ payload: AccountBackupSnapshot; generations: BackupGenerationSummary[] }> {
+    const remote = await this.restore(accountSpaceId, recoveryCode, signal);
+    const generations = [snapshotForGeneration(remote), ...(remote.generations ?? [])];
+    const payload = createdAt ? generations.find((item) => item.createdAt === createdAt) : generations[0];
+    if (!payload) throw new Error('This backup generation is no longer available.');
+    return { payload, generations: generations.map(summarizeBackup) };
   }
 
   clearAccount(accountSpaceId: AccountSpaceId): void {
@@ -183,6 +222,37 @@ export class AccountBackupManager {
       throw new Error('Backup restore is disabled because recovery material is unavailable');
     }
   }
+}
+
+function decryptCompatibleBackup(remote: RemoteEncryptedBackup, key: Uint8Array, workspaceId: WorkspaceId): AccountBackupPayload {
+  const payload = decryptBackupEnvelope(parseEnvelope(remote.bytes), key);
+  if (payload.workspaceId && payload.workspaceId !== workspaceId) throw new Error('This backup belongs to a different workspace.');
+  return payload;
+}
+
+export function summarizeBackup(payload: AccountBackupSnapshot): BackupGenerationSummary {
+  return { createdAt: payload.createdAt, bookmarks: payload.bookmarks.length, folders: payload.bookmarkFolders.length,
+    tabs: payload.openTabs?.length ?? 0, history: payload.history?.length ?? 0 };
+}
+
+export function backupUploadRevision(payload: AccountBackupPayload): string {
+  return createHash('sha256').update(JSON.stringify({ ...payload, createdAt: undefined })).digest('hex');
+}
+
+function snapshotForGeneration({ generations: _generations, ...snapshot }: AccountBackupPayload): AccountBackupSnapshot {
+  return snapshot;
+}
+
+function retainBackupGenerations(latest: AccountBackupSnapshot, previous?: AccountBackupPayload): AccountBackupPayload {
+  if (!previous) return latest;
+  const generations = [snapshotForGeneration(previous), ...(previous.generations ?? [])].slice(0, MAX_PRIOR_GENERATIONS);
+  while (generations.length) {
+    const candidate = { ...latest, generations };
+    const paddedSize = Math.ceil(Buffer.byteLength(JSON.stringify(candidate), 'utf8') / 3) * 4 + 160;
+    if (paddedSize <= MAX_BACKUP_BYTES) return candidate;
+    generations.pop();
+  }
+  return latest;
 }
 
 /**
@@ -321,12 +391,20 @@ function parseEnvelope(bytes: Uint8Array): EncryptedBackupEnvelope {
 }
 
 function validatePayload(value: unknown): AccountBackupPayload {
+  const latest = validateSnapshot(value);
+  const generations = (value as Partial<AccountBackupPayload>).generations;
+  if (generations === undefined) return latest;
+  if (!Array.isArray(generations) || generations.length > MAX_PRIOR_GENERATIONS) throw new Error('Invalid backup generations');
+  return { ...latest, generations: generations.map(validateSnapshot) };
+}
+
+function validateSnapshot(value: unknown): AccountBackupSnapshot {
   if (!value || typeof value !== 'object') throw new Error('Invalid backup payload');
   const payload = value as Partial<AccountBackupPayload>;
   if (payload.version !== 1 || typeof payload.createdAt !== 'string' || !Number.isFinite(Date.parse(payload.createdAt)) || !Array.isArray(payload.bookmarks) || !Array.isArray(payload.bookmarkFolders) || !payload.settings || typeof payload.settings.trackerBlocking !== 'boolean') throw new Error('Invalid backup payload');
   if (payload.openTabs && !Array.isArray(payload.openTabs)) throw new Error('Invalid backup tabs');
   if (payload.history && !Array.isArray(payload.history)) throw new Error('Invalid backup history');
-  return payload as AccountBackupPayload;
+  return snapshotForGeneration(payload as AccountBackupPayload);
 }
 
 function mergePayloads(remote: AccountBackupPayload, local: AccountBackupPayload): AccountBackupPayload {

@@ -8,7 +8,7 @@ import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiPr
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
-import type { BackupRestorePreview } from './types.js';
+import type { BackupReminderDays, BackupRestorePreview, BackupUploadPreview } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
 
@@ -102,7 +102,13 @@ const api = {
   createBackupRecoveryCode: (accountSpaceId: AccountSpaceId): Promise<string> => ipcRenderer.invoke('backup:create-recovery', accountSpaceId),
   verifyAndEnableBackup: (accountSpaceId: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean): Promise<void> => ipcRenderer.invoke('backup:verify-enable', accountSpaceId, recoveryCode, includeOpenTabs, includeHistory),
   uploadBackup: (accountSpaceId: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite'): Promise<BackupWriteResult> => ipcRenderer.invoke('backup:upload', accountSpaceId, operationId, conflictResolution),
-  previewBackupRestore: (accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<BackupRestorePreview> => ipcRenderer.invoke('backup:preview-restore', accountSpaceId, operationId, recoveryCode),
+  previewBackupUpload: (id: AccountSpaceId, operation: string): Promise<BackupUploadPreview> => ipcRenderer.invoke('backup:preview-upload', id, operation),
+  applyBackupUpload: (id: string, operation: string, resolution: 'merge' | 'overwrite'): Promise<BackupWriteResult> =>
+    ipcRenderer.invoke('backup:apply-upload', id, operation, resolution),
+  cancelBackupUpload: (id: string): Promise<void> => ipcRenderer.invoke('backup:cancel-upload', id),
+  setBackupReminder: (id: AccountSpaceId, days: BackupReminderDays): Promise<void> => ipcRenderer.invoke('backup:set-reminder', id, days),
+  previewBackupRestore: (accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string, generation?: string): Promise<BackupRestorePreview> =>
+    ipcRenderer.invoke('backup:preview-restore', accountSpaceId, operationId, recoveryCode, generation),
   applyBackupRestore: (id: string): Promise<void> => ipcRenderer.invoke('backup:apply-restore', id),
   cancelBackupRestore: (id: string): Promise<void> => ipcRenderer.invoke('backup:cancel-restore', id),
   disableBackup: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('backup:disable', accountSpaceId),

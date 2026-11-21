@@ -126,6 +126,33 @@ describe('encrypted Account Space backup', () => {
     const { manager } = fixture();
     await expect(manager.restore(ID)).rejects.toThrow(/recovery material is unavailable/);
   });
+
+  it('compares counts against a reviewed revision and retains two encrypted generations', async () => {
+    const { accounts, manager, transport } = fixture();
+    const code = manager.createRecoveryCode(ID);
+    manager.verifyAndEnable(ID, code, false, false);
+    const empty = manager.buildPayload(ID, { bookmarks: [], trackerBlocking: true, openTabs: [], history: [] });
+    const sample = { id: 'one', accountSpaceId: ID, workspaceId: 'personal' as const, title: 'Saved page', url: 'https://example.test/',
+      createdAt: empty.createdAt, location: 'bar' as const, folderPath: [], order: 0, orderPath: [0] };
+    await manager.upload(ID, empty);
+    const current = { ...empty, createdAt: '2026-09-13T10:00:00.000Z', bookmarks: [sample] };
+    const review = await manager.reviewUpload(ID, current);
+    expect(review.details).toMatchObject({ local: { bookmarks: 1 }, remote: { bookmarks: 0 }, merged: { bookmarks: 1 }, conflict: false });
+    transport.remote = { ...transport.remote!, etag: 'another-computer' };
+    await expect(manager.upload(ID, current, 'overwrite', undefined, review.expectedEtag)).rejects.toThrow(/changed/);
+    expect(transport.writes).toHaveLength(1);
+    expect((await manager.reviewUpload(ID, current)).details.conflict).toBe(true);
+    await manager.upload(ID, current, 'merge', undefined, 'another-computer');
+    await manager.upload(ID, { ...empty, createdAt: '2026-09-14T10:00:00.000Z' }, 'overwrite');
+    await manager.upload(ID, { ...empty, createdAt: '2026-09-15T10:00:00.000Z' }, 'overwrite');
+    const older = await manager.restoreGeneration(ID, code, current.createdAt);
+    expect(older.payload.bookmarks.map(({ id }) => id)).toEqual(['one']);
+    expect(older.generations.map(({ createdAt }) => createdAt)).toEqual(['2026-09-15T10:00:00.000Z', '2026-09-14T10:00:00.000Z', current.createdAt]);
+    await expect(manager.restoreGeneration(ID, code, empty.createdAt)).rejects.toThrow(/no longer available/);
+    expect(Buffer.from(transport.remote!.bytes).toString()).not.toContain('Saved page');
+    expect(accounts.toSummary(accounts.require(ID))).toMatchObject({ backupReminderDays: 14,
+      backupLastUploadedAt: '2026-09-15T10:00:00.000Z', backupReminderAt: '2026-09-29T10:00:00.000Z' });
+  });
 });
 
 describe('restoring a backup into an Account Space', () => {

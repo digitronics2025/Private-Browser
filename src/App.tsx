@@ -585,6 +585,7 @@ export default function App() {
             onBackground={(background) => setUi({ newTabBackground: background })}
             onShowRecent={(showRecentOnNewTab) => setUi({ showRecentOnNewTab })}
             onTheme={(theme) => setUi({ theme })}
+            onManageBackup={() => setAccountManagerOpen(true)}
           />
         ) : (
           <div className="page-surface" aria-hidden="true">

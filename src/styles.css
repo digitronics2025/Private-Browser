@@ -1149,3 +1149,7 @@ kbd { font: inherit; }
 .side-app-status { padding: 6px 10px; color: var(--text-muted); font-size: var(--fs-xs); border-bottom: 1px solid var(--border); }
 .side-app-slot { position: relative; min-height: 0; flex: 1; background: var(--surface); }
 .side-app-placeholder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; color: var(--text-subtle); font-size: var(--fs-sm); }
+.backup-counts { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: var(--fs-xs); }
+.backup-counts caption { margin-bottom: 6px; text-align: left; color: var(--text-muted); }
+.backup-counts th, .backup-counts td { text-align: left; overflow-wrap: anywhere; padding: 5px 3px; border-bottom: 1px solid var(--border); }
+.backup-counts small { display: block; color: var(--text-muted); }

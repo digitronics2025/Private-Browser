@@ -88,6 +88,9 @@ export interface AccountSpaceSummary {
   enabledModules: GoogleModule[];
   grantedScopes: string[];
   backupEnabled: boolean;
+  backupLastUploadedAt?: string;
+  backupReminderDays?: BackupReminderDays;
+  backupReminderAt?: string;
   backupIncludesOpenTabs: boolean;
   backupIncludesHistory: boolean;
 }
@@ -211,7 +214,28 @@ export interface BackupRestorePreview {
   accountLabel: string;
   workspaceId: WorkspaceId;
   createdAt: string;
+  generations?: BackupGenerationSummary[];
   counts: { bookmarks: BackupRestoreCount; history: BackupRestoreCount; tabs: BackupRestoreCount };
+}
+
+export interface BackupGenerationSummary {
+  createdAt: string;
+  bookmarks: number;
+  folders: number;
+  tabs: number;
+  history: number;
+}
+
+export type BackupReminderDays = 0 | 7 | 14 | 30;
+
+export interface BackupUploadPreview {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  local: BackupGenerationSummary;
+  remote?: BackupGenerationSummary;
+  merged?: BackupGenerationSummary;
+  generations: BackupGenerationSummary[];
+  conflict: boolean;
 }
 
 export type GoogleService = 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup';

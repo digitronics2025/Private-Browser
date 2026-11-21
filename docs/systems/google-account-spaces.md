@@ -198,6 +198,17 @@ model outside Banking.
 
 ## Encrypted Drive backup
 
+Before uploading, compare this computer's counts with the latest encrypted
+backup and the counts a merge would produce. The confirmation applies to the
+reviewed local data and remote file revision. If either changes, start a new
+review. The newest encrypted backup keeps up to two earlier generations within
+the existing 8 MiB limit. Choose an earlier generation in Restore to review its
+items before adding them. Only ciphertext goes to Drive.
+
+New backups default to a local 14-day reminder. Choose 7, 14 or 30 days, or turn
+it off in the Account Space manager. A due reminder appears on New Tab in the
+owning, unlocked space. Saving a backup advances the reminder date.
+
 Backup uses Node `crypto` AES-256-GCM with a random 256-bit recovery key and a
 versioned authenticated envelope. The recovery code is shown once and must be
 re-entered before its key is wrapped with `safeStorage`. Google receives only

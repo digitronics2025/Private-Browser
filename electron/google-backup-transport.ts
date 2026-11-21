@@ -20,7 +20,10 @@ export class GoogleDriveAppDataTransport implements EncryptedBackupTransport {
     if (!listedResponse.ok) throw new Error('Encrypted backup lookup failed');
     const listed = await readBoundedJson(listedResponse, 64 * 1024) as { files?: Array<{ id?: unknown; name?: unknown }> };
     const file = listed.files?.find((item) => item.name === BACKUP_FILENAME && typeof item.id === 'string');
-    if (!file || typeof file.id !== 'string') return undefined;
+    if (!file || typeof file.id !== 'string') {
+      this.fileIds.delete(accountSpaceId);
+      return undefined;
+    }
     this.fileIds.set(accountSpaceId, file.id);
     const download = await this.authorizedFetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.id)}?alt=media`, token, {}, signal);
     if (!download.ok) throw new Error('Encrypted backup download failed');

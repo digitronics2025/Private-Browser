@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { AccountSpaceSummary, BackupRestorePreview } from '../../electron/types';
+import type { AccountSpaceSummary, BackupGenerationSummary, BackupRestorePreview } from '../../electron/types';
 
 const dataTypes = [
   ['bookmarks', 'Bookmarks'],
@@ -14,6 +14,8 @@ export function BackupRestore({ account, workspaceName, onToast }: {
 }) {
   const [code, setCode] = useState('');
   const [review, setReview] = useState<BackupRestorePreview>();
+  const [generations, setGenerations] = useState<BackupGenerationSummary[]>([]);
+  const [generation, setGeneration] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const request = useRef<string>();
@@ -36,13 +38,14 @@ export function BackupRestore({ account, workspaceName, onToast }: {
     const supplied = code.trim() || undefined;
     setCode('');
     try {
-      const result = await window.privateBrowser.previewBackupRestore(account.id, operation, supplied);
+      const result = await window.privateBrowser.previewBackupRestore(account.id, operation, supplied, generation || undefined);
       if (request.current !== operation) {
         await window.privateBrowser.cancelBackupRestore(result.id);
         return;
       }
       currentReview.current = result.id;
       setReview(result);
+      setGenerations(result.generations ?? []);
     } catch (reason) {
       if (request.current === operation) setError(reason instanceof Error ? reason.message : 'Could not review the backup.');
     } finally {
@@ -84,6 +87,13 @@ export function BackupRestore({ account, workspaceName, onToast }: {
   return <section className="manager-section backup-restore" aria-labelledby="backup-restore-heading">
     <h3 id="backup-restore-heading">Restore an encrypted backup</h3>
     <p>Connect the Google account that created the backup and choose an Account Space in the same workspace.</p>
+    {generations.length > 1 && <label className="bridge-label">Backup generation<select value={generation} disabled={busy} onChange={(event) => {
+      setGeneration(event.currentTarget.value);
+      cancel();
+    }}>
+      <option value="">Latest backup</option>
+      {generations.slice(1).map((item) => <option key={item.createdAt} value={item.createdAt}>{new Date(item.createdAt).toLocaleString()}</option>)}
+    </select></label>}
     {review ? <div className="backup-restore-detail">
       <h4>Restore preview</h4>
       <p>{review.accountLabel} · {workspaceName}</p>
