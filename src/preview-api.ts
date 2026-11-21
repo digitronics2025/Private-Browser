@@ -1,6 +1,6 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import { chromeCollections } from '../electron/chrome-collections';
-import type { ChromeImportOptions, ChromePasswordImportReview } from '../electron/types';
+import type { ChromeImportOptions, ChromePasswordImportReview, GoogleActionReceipt, GoogleMutationConfirmation } from '../electron/types';
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource, PageExcerptReview } from '../electron/types';
@@ -61,7 +61,8 @@ export function installPreviewApi(): void {
   if (!import.meta.env.DEV || 'privateBrowser' in window || new URLSearchParams(location.search).get('preview') === 'bridge') return;
   const params = new URLSearchParams(location.search);
   const overviewFixture = params.get('googleOverview') === 'sample';
-  const googleModules: GoogleModule[] = overviewFixture
+  const googleActionFixture = params.get('googleActions');
+  const googleModules: GoogleModule[] = googleActionFixture ? ['identity', 'gmail-metadata', 'gmail-send', 'drive-files', 'calendar-write'] : overviewFixture
     ? ['identity', 'gmail-metadata', 'drive-files'] : ['identity', 'gmail-metadata', 'drive-files', 'calendar-read'];
   const accounts = [
     account(ids.digitronics, 'digitronics', 'Digitronics', 'indigo'), account(ids.tenten, 'tenten', 'TenTen', 'amber'), account(ids.development, 'development', 'Development', 'violet'),
@@ -70,7 +71,8 @@ export function installPreviewApi(): void {
     account(ids.banking, 'banking', 'Banking', 'rose'),
   ];
   const google = ids.google as AccountSpaceId;
-  const overviewCursor = overviewFixture ? crypto.randomUUID() : undefined;
+  const overviewCursor = overviewFixture || googleActionFixture ? crypto.randomUUID() : undefined;
+  const fixtureReply = crypto.randomUUID();
   const vaultHealthFixture = { id: 'preview-vault-health', label: 'Sample login', username: 'sample@example.test',
     url: 'https://shop.example.test', hasTotp: false, updatedAt: '2026-11-21T10:00:00Z' };
   const conflictFixture = params.get('vaultConflict') === 'sample';
@@ -183,6 +185,29 @@ export function installPreviewApi(): void {
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
+  const fixtureGoogleReviews = new Map<string, string>();
+  const fixtureGoogleReceipts = new Map<string, GoogleActionReceipt>();
+  const fixtureGoogleAccount = (id: AccountSpaceId) => {
+    if (!googleActionFixture || id !== google || state.activeAccountSpaceId !== id) throw new Error('Open the original Account Space.');
+  };
+  const prepareFixtureAction = (id: AccountSpaceId, service: 'gmail' | 'drive' | 'calendar', payload: unknown): GoogleMutationConfirmation => {
+    fixtureGoogleAccount(id);
+    const token = crypto.randomUUID();
+    fixtureGoogleReviews.set(token, JSON.stringify({ service, payload }));
+    return { accountSpaceId: id, service, token, action: 'Google action', target: 'Fixture', expiresAt: new Date(Date.now() + 300_000).toISOString() };
+  };
+  const applyFixtureAction = (id: AccountSpaceId, service: 'gmail' | 'drive' | 'calendar', payload: unknown, token: string) => {
+    fixtureGoogleAccount(id);
+    const reviewed = fixtureGoogleReviews.get(token);
+    fixtureGoogleReviews.delete(token);
+    if (reviewed !== JSON.stringify({ service, payload })) throw new Error('Review this Google action again.');
+    const prior = fixtureGoogleReceipts.get(reviewed);
+    if (prior) return { ok: false, receipt: prior };
+    const confirmed = googleActionFixture !== 'uncertain';
+    const receipt: GoogleActionReceipt = { id: crypto.randomUUID(), state: confirmed ? 'confirmed' : 'unconfirmed', at: new Date().toISOString(), providerId: confirmed ? 'fixture-google-reference' : undefined };
+    fixtureGoogleReceipts.set(reviewed, receipt);
+    return { ok: receipt.state === 'confirmed', receipt };
+  };
   const savedDownloadHistory = new Set<AccountSpaceId>();
   const memorySites = new Map<AccountSpaceId, Set<string>>();
   if (params.get('memorySaver') === 'sample') {
@@ -429,6 +454,11 @@ export function installPreviewApi(): void {
     clearGoogleConfiguration: desktopOnly,
     cancelGoogleConnection: async () => false,
     gmailOverview: desktopOnly,
+    readGmailReplyDraft: async (id, _operation, messageId) => {
+      fixtureGoogleAccount(id);
+      if (messageId !== 'mail-current') throw new Error('The original message is unavailable.');
+      return { ok: true, data: { sourceRevision: fixtureReply, recipient: 'stocks@example.test', subject: 'New stock update' } };
+    },
     googleOverviewPage: async (id, _operation, service, next) => {
       if (!overviewCursor || id !== google || id !== state.activeAccountSpaceId || service === 'calendar') return desktopOnly();
       if (service === 'drive') return { ok: true, data: { page: 1, limited: false, items: [
@@ -442,15 +472,15 @@ export function installPreviewApi(): void {
       ] } };
     },
     searchGmail: desktopOnly,
-    prepareGmailSend: desktopOnly,
-    sendGmail: desktopOnly,
+    prepareGmailSend: async (id, input, revision) => prepareFixtureAction(id, 'gmail', { input, revision }),
+    sendGmail: async (id, _operation, input, token, revision) => applyFixtureAction(id, 'gmail', { input, revision }, token),
     listDriveFiles: desktopOnly,
     createDriveFile: desktopOnly,
-    prepareDriveShare: desktopOnly,
-    shareDriveFile: desktopOnly,
+    prepareDriveShare: async (id, fileId, email, role) => prepareFixtureAction(id, 'drive', { fileId, email, role }),
+    shareDriveFile: async (id, _operation, fileId, email, role, token) => applyFixtureAction(id, 'drive', { fileId, email, role }, token),
     listCalendarEvents: desktopOnly,
-    prepareCalendarWrite: desktopOnly,
-    writeCalendarEvent: desktopOnly,
+    prepareCalendarWrite: async (id, action, input) => prepareFixtureAction(id, 'calendar', { action, input }),
+    writeCalendarEvent: async (id, _operation, action, input, token) => applyFixtureAction(id, 'calendar', { action, input }, token),
     listContacts: desktopOnly,
     previewBackupUpload: async (id) => {
       if (!backupGenerationFixture || id !== google || state.activeAccountSpaceId !== id) throw new Error('Open the enabled backup in its unlocked Account Space.');

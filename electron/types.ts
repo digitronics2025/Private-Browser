@@ -187,6 +187,7 @@ export interface PermissionPromptResponse {
 export interface GoogleOperationResult<T = unknown> {
   ok: boolean;
   data?: T;
+  receipt?: GoogleActionReceipt;
   error?: {
     code:
       | 'GOOGLE_CONFIGURATION_REQUIRED'
@@ -204,6 +205,19 @@ export interface GoogleOperationResult<T = unknown> {
     requestId: string;
     retryAfterSeconds?: number;
   };
+}
+
+export interface GoogleActionReceipt {
+  id: string;
+  state: 'pending' | 'confirmed' | 'unconfirmed';
+  at: string;
+  providerId?: string;
+}
+
+export interface GmailReplyDraft {
+  sourceRevision: string;
+  recipient: string;
+  subject: string;
 }
 
 interface BackupRestoreCount { added: number; duplicates: number; capacityExceeded: number }
