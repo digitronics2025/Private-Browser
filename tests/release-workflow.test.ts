@@ -69,6 +69,16 @@ describe('release workflow', () => {
     expect(step('Verify authenticated download end to end')).toContain('Stable installer verified');
   });
 
+  it('gates the installer artifact on a smoke test of the installed candidate', () => {
+    const smoke = step('Exercise the installed Windows release candidate');
+    expect(smoke).toContain('Start-Process -FilePath $installer.FullName');
+    expect(smoke).toContain('playwright.packaged.config.ts');
+    expect(smoke).toContain('Get-FileHash -LiteralPath $installer.FullName');
+    expect(smoke.trim()).toMatch(/if \(\$testExit -ne 0\) \{ exit \$testExit \}$/);
+    expect(workflow.indexOf(smoke)).toBeGreaterThan(workflow.indexOf(step('Build hardened Windows installer')));
+    expect(workflow.indexOf(smoke)).toBeLessThan(workflow.indexOf('name: private-browser-windows'));
+  });
+
   // F-42: distribution is public, so an installer carrying the shared token is never published.
   it('refuses to publish an installer built with the bundled download token', () => {
     const configured = step('Detect publishing configuration');

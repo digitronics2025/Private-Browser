@@ -442,7 +442,7 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 | --- | --- | --- |
 | `changes` | ubuntu, push only | Summarizes installer inputs against the live release and Worker inputs against the previous push. |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
-| `windows-installer` | windows, 25 min, needs `verify`, `app=true` or dispatch | Reuses the local test build for Electron and Chromium, runs Windows named-pipe tests, then builds the versioned installer with its update bootstrap. Records checksum, SBOM and VSIX smoke evidence. |
+| `windows-installer` | windows, 25 min, needs `verify`, `app=true` or dispatch | Runs the Windows named-pipe and browser suites, builds the versioned installer, then verifies the installed candidate with disposable data. Records scenario results, installer checksum, SBOM and VSIX evidence. |
 | `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer` with `app=true` | Verifies the Windows artifact and its private R2 readback before D1 activation. Records a receipt for the live check and restores the previous release on failure. |
 
 ### codeql.yml
@@ -528,6 +528,19 @@ throws unless there is exactly one; a string-pattern `replace` substitutes only
 the first, so a second binding added later would silently keep the placeholder.
 
 ## The Windows Installer
+
+Before the Windows job publishes an artifact, it installs the exact candidate
+on the disposable Actions runner and runs the packaged smoke journey. The test
+launches the real packaged executable without changing Electron fuses. It
+switches workspaces, imports a sample Chrome bookmark, unlocks an encrypted test
+vault, checks Banking's download restriction, cancels a permitted sample
+download, pairs a fixture client over the Windows named pipe, and validates
+the public update manifest. The focused Windows suite separately tests the
+completed-download and managed-update staging paths. The packaged smoke checks
+for an update and leaves installers unopened.
+
+The job summary lists executed scenarios and the installer SHA-256. The
+`packaged-windows-smoke` artifact preserves the scenario results and timing for seven days.
 
 The electron-builder configuration lives **inline in `package.json`**, in the
 `build` block. In prose, because that file is not one of this doc's `sources`:
