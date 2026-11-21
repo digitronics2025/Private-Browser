@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { AccountSpaceSummary, GoogleOverviewPage, GoogleOverviewService } from '../../electron/types';
 import { GOOGLE_OVERVIEW_MAX_PAGES, GOOGLE_OVERVIEW_PAGE_SIZE, GOOGLE_OVERVIEW_SERVICES, googleOverviewModule } from '../../electron/google-overview';
+import type { GoogleDraftSource } from './GoogleActionComposer';
+
+const GoogleActionComposer = lazy(() => import('./GoogleActionComposer').then(({ GoogleActionComposer }) => ({ default: GoogleActionComposer })));
 
 const labels: Record<GoogleOverviewService, string> = { gmail: 'Gmail', drive: 'Drive', calendar: 'Calendar' };
 const subtitles: Record<GoogleOverviewService, string> = {
@@ -18,6 +21,8 @@ export function GoogleAccountOverview({ account, active, onOpenOriginal }: {
   const [index, setIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [draft, setDraft] = useState<GoogleDraftSource>();
+  const canSchedule = account.enabledModules.includes('calendar-write');
   const request = useRef<string>();
   const current = pages[index];
   const limit = GOOGLE_OVERVIEW_MAX_PAGES * GOOGLE_OVERVIEW_PAGE_SIZE;
@@ -29,6 +34,7 @@ export function GoogleAccountOverview({ account, active, onOpenOriginal }: {
     setPages([]);
     setIndex(0);
     setError('');
+    setDraft(undefined);
   };
 
   useEffect(() => {
@@ -45,6 +51,7 @@ export function GoogleAccountOverview({ account, active, onOpenOriginal }: {
       setService(target);
       setPages([]);
       setIndex(0);
+      setDraft(undefined);
     }
     const operation = crypto.randomUUID();
     request.current = operation;
@@ -67,10 +74,14 @@ export function GoogleAccountOverview({ account, active, onOpenOriginal }: {
     }
   };
 
-  if (!active || !sections.length) return null;
+  if (!active || (!sections.length && !canSchedule)) return null;
   return <section className="manager-section google-account-overview" aria-labelledby="google-overview-heading" aria-busy={busy}>
     <h3 id="google-overview-heading">Google overview</h3>
-    {!service ? <button type="button" className="secondary-button" onClick={() => void load(sections[0])}>Show Google overview</button> : <>
+    {canSchedule && <button type="button" className="secondary-button" onClick={() => setDraft({ kind: 'calendar' })}>Schedule a meeting</button>}
+    {draft && <Suspense fallback={<p role="status">Opening draft…</p>}>
+      <GoogleActionComposer key={draft.kind === 'calendar' ? 'calendar' : `${draft.kind}-${draft.id}`} account={account} source={draft} onClose={() => setDraft(undefined)} />
+    </Suspense>}
+    {!service ? sections.length > 0 && <button type="button" className="secondary-button" onClick={() => void load(sections[0])}>Show Google overview</button> : <>
       <div className="google-overview-actions">
         {sections.map((item) => <button key={item} type="button" className="secondary-button" aria-pressed={service === item}
           disabled={busy} onClick={() => void load(item)}>{labels[item]}</button>)}
@@ -85,8 +96,14 @@ export function GoogleAccountOverview({ account, active, onOpenOriginal }: {
             {item.detail && <small>{item.detail}</small>}
             {item.date && <small>{formatOverviewDate(item.date)}</small>}
           </div>
-          {item.original && <button type="button" className="secondary-button" aria-label={'Open ' + item.title}
-            onClick={() => onOpenOriginal(item.original!)}>Open original</button>}
+          <div className="google-overview-actions">
+            {service === 'gmail' && account.enabledModules.includes('gmail-send') && <button type="button" className="secondary-button" aria-label={'Reply to ' + item.title}
+              onClick={() => setDraft({ kind: 'gmail', id: item.id, title: item.title })}>Reply</button>}
+            {service === 'drive' && account.enabledModules.includes('drive-files') && <button type="button" className="secondary-button" aria-label={'Share ' + item.title}
+              onClick={() => setDraft({ kind: 'drive', id: item.id, title: item.title })}>Share</button>}
+            {item.original && <button type="button" className="secondary-button" aria-label={'Open ' + item.title}
+              onClick={() => onOpenOriginal(item.original!)}>Open original</button>}
+          </div>
         </li>)}
       </ul>}
       {current && !current.items.length && <p>No items on this page.</p>}

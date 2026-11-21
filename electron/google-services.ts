@@ -15,6 +15,7 @@ import type {
 } from './types.js';
 import { requireBoundedStringArray, requireBoundedText } from './account-space-validation.js';
 import { GoogleMutationConfirmations } from './google-confirmations.js';
+import type { GoogleActionReceipts } from './google-action-receipts.js';
 import { GoogleTokenBroker, GoogleTokenError, parseRetryAfter, readBoundedJson } from './google-token-broker.js';
 import { boundedGoogleCursor, calendarOriginal, GOOGLE_OVERVIEW_PAGE_SIZE, googleOverviewModule } from './google-overview.js';
 
@@ -28,6 +29,14 @@ export interface GmailSendInput {
   cc?: string[];
   subject: string;
   body: string;
+}
+
+export interface GmailReplySource {
+  threadId: string;
+  recipient: string;
+  subject: string;
+  messageId: string;
+  references: string;
 }
 
 export interface CalendarWriteInput {
@@ -49,29 +58,57 @@ export interface DriveCreateInput {
 export class GoogleServices {
   constructor(
     private readonly tokens: GoogleTokenBroker,
+    private readonly actionReceipts?: GoogleActionReceipts,
     private readonly confirmations = new GoogleMutationConfirmations(),
     private readonly request: typeof fetch = fetch,
     private readonly wait: (milliseconds: number) => Promise<void> = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
     private readonly random: () => number = Math.random,
   ) {}
 
-  prepareGmailSend(accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string): GoogleMutationConfirmation {
+  prepareGmailSend(accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string, reply?: GmailReplySource): GoogleMutationConfirmation {
     const normalized = normalizeGmailSend(input);
-    return this.confirmations.prepare(accountSpaceId, 'gmail', 'Send email', normalized.to.join(', '), normalized, sourceRevision);
+    if (reply) validateReplyAddress(normalized, reply);
+    return this.confirmations.prepare(accountSpaceId, 'gmail', reply ? 'Send Gmail reply' : 'Send email', normalized.to.join(', '), { normalized, reply }, sourceRevision);
   }
 
-  async sendGmail(accountSpaceId: AccountSpaceId, input: GmailSendInput, confirmationToken: string, sourceRevision?: string, signal?: AbortSignal): Promise<GoogleOperationResult<{ id: string; threadId?: string }>> {
+  async sendGmail(accountSpaceId: AccountSpaceId, input: GmailSendInput, confirmationToken: string, sourceRevision?: string, signal?: AbortSignal,
+    reply?: GmailReplySource): Promise<GoogleOperationResult<{ id: string; threadId?: string }>> {
     const normalized = normalizeGmailSend(input);
     try {
-      this.confirmations.consume(confirmationToken, accountSpaceId, 'gmail', normalized, sourceRevision);
-      const raw = encodeEmail(normalized);
-      const response = await this.apiJson(accountSpaceId, 'gmail-send', 'gmail', 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ raw }),
-      }, false, signal);
-      const record = requireRecord(response);
-      return success({ id: requireString(record.id, 'message id', 512), threadId: optionalString(record.threadId, 512) });
+      if (reply) validateReplyAddress(normalized, reply);
+      const payload = { normalized, reply };
+      this.confirmations.consume(confirmationToken, accountSpaceId, 'gmail', payload, sourceRevision);
+      return await this.reviewedMutation(accountSpaceId, 'gmail', payload, async () => {
+        const response = await this.apiJson(accountSpaceId, 'gmail-send', 'gmail', 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ raw: encodeEmail(normalized, reply), threadId: reply?.threadId }),
+        }, false, signal);
+        const record = requireRecord(response);
+        return { id: requireString(record.id, 'message id', 512), threadId: optionalString(record.threadId, 512) };
+      });
+    } catch (error) { return operationFailure(error); }
+  }
+
+  async readGmailReplySource(accountSpaceId: AccountSpaceId, id: string, signal?: AbortSignal): Promise<GoogleOperationResult<GmailReplySource>> {
+    try {
+      const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(requireIdentifier(id))}`);
+      url.searchParams.set('format', 'metadata');
+      for (const name of ['From', 'Reply-To', 'Subject', 'Message-ID', 'References']) url.searchParams.append('metadataHeaders', name);
+      const message = requireRecord(await this.apiJson(accountSpaceId, 'gmail-metadata', 'gmail', url.href, {}, true, signal));
+      const header = gmailHeader(requireRecord(message.payload));
+      const target = header('Reply-To') || header('From');
+      const match = /^(?:[^<>\r\n]*<([^<>]+)>|([^<>\r\n]+))$/.exec(target);
+      const messageId = header('Message-ID').trim();
+      if (!match || !/^<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+>$/.test(messageId) || messageId.length > 250) {
+        throw new Error('This message cannot be replied to here. Open the original in Gmail.');
+      }
+      const subject = header('Subject').replace(/[\r\n]+/g, ' ').trim();
+      if (subject.length > 220) throw new Error('Open this message in Gmail to reply.');
+      const previous = header('References').match(/<[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+>/g) ?? [];
+      const references = [...previous.filter((item) => item !== messageId && item.length < 115).slice(-4), messageId].join(' ');
+      return success({ threadId: requireIdentifier(requireString(message.threadId, 'thread id', 512)),
+        recipient: requireEmail((match[1] ?? match[2])!), subject, messageId, references });
     } catch (error) { return operationFailure(error); }
   }
 
@@ -217,10 +254,12 @@ export class GoogleServices {
     const payload = { fileId: requireIdentifier(fileId), email: requireEmail(email), role };
     try {
       this.confirmations.consume(token, accountSpaceId, 'drive', payload, sourceRevision);
-      const result = requireRecord(await this.apiJson(accountSpaceId, 'drive-files', 'drive', `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(payload.fileId)}/permissions?sendNotificationEmail=true&fields=id`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'user', role, emailAddress: payload.email }),
-      }, false, signal));
-      return success({ id: requireString(result.id, 'permission id', 512) });
+      return await this.reviewedMutation(accountSpaceId, 'drive', payload, async () => {
+        const result = requireRecord(await this.apiJson(accountSpaceId, 'drive-files', 'drive', `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(payload.fileId)}/permissions?sendNotificationEmail=true&fields=id`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'user', role, emailAddress: payload.email }),
+        }, false, signal));
+        return { id: requireString(result.id, 'permission id', 512) };
+      });
     } catch (error) { return operationFailure(error); }
   }
 
@@ -245,28 +284,30 @@ export class GoogleServices {
     const confirmationPayload = { action, input: normalized };
     try {
       this.confirmations.consume(token, accountSpaceId, 'calendar', confirmationPayload, sourceRevision);
-      const calendarId = encodeURIComponent(normalized.calendarId);
-      if (action === 'delete') {
-        if (!normalized.eventId) throw new Error('Calendar event identifier is required');
-        await this.apiJson(accountSpaceId, 'calendar-write', 'calendar', `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events/${encodeURIComponent(normalized.eventId)}?sendUpdates=all`, { method: 'DELETE' }, false, signal, true);
-        return success({ deleted: true });
-      }
-      const body = {
-        summary: normalized.summary,
-        description: normalized.description || undefined,
-        start: { dateTime: normalized.start },
-        end: { dateTime: normalized.end },
-        attendees: normalized.attendees.map((email) => ({ email })),
-        conferenceData: normalized.createMeet ? { createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } } : undefined,
-      };
-      const eventPath = action === 'update'
-        ? `/events/${encodeURIComponent(normalized.eventId ?? '')}`
-        : '/events';
-      if (action === 'update' && !normalized.eventId) throw new Error('Calendar event identifier is required');
-      const payload = await this.apiJson(accountSpaceId, 'calendar-write', 'calendar', `https://www.googleapis.com/calendar/v3/calendars/${calendarId}${eventPath}?sendUpdates=all&conferenceDataVersion=1`, {
-        method: action === 'update' ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      }, false, signal);
-      return success(parseCalendarEvent(payload));
+      return await this.reviewedMutation<CalendarEventSummary | { deleted: true }>(accountSpaceId, 'calendar', confirmationPayload, async () => {
+        const calendarId = encodeURIComponent(normalized.calendarId);
+        if (action === 'delete') {
+          if (!normalized.eventId) throw new Error('Calendar event identifier is required');
+          await this.apiJson(accountSpaceId, 'calendar-write', 'calendar', `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events/${encodeURIComponent(normalized.eventId)}?sendUpdates=all`, { method: 'DELETE' }, false, signal, true);
+          return { deleted: true };
+        }
+        const body = {
+          summary: normalized.summary,
+          description: normalized.description || undefined,
+          start: { dateTime: normalized.start },
+          end: { dateTime: normalized.end },
+          attendees: normalized.attendees.map((email) => ({ email })),
+          conferenceData: normalized.createMeet ? { createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } } : undefined,
+        };
+        const eventPath = action === 'update'
+          ? `/events/${encodeURIComponent(normalized.eventId ?? '')}`
+          : '/events';
+        if (action === 'update' && !normalized.eventId) throw new Error('Calendar event identifier is required');
+        const payload = await this.apiJson(accountSpaceId, 'calendar-write', 'calendar', `https://www.googleapis.com/calendar/v3/calendars/${calendarId}${eventPath}?sendUpdates=all&conferenceDataVersion=1`, {
+          method: action === 'update' ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        }, false, signal);
+        return parseCalendarEvent(payload);
+      });
     } catch (error) { return operationFailure(error); }
   }
 
@@ -282,7 +323,7 @@ export class GoogleServices {
         contacts.push({
           resourceName: requireString(person.resourceName, 'contact resource', 512),
           displayName: optionalString(name.displayName, 200) ?? email.value,
-          email: requireEmail(email.value),
+          email: requireContactEmail(email.value),
         });
       }
       return success(contacts);
@@ -292,6 +333,27 @@ export class GoogleServices {
   clearAccount(accountSpaceId: AccountSpaceId): void {
     this.tokens.clear(accountSpaceId);
     this.confirmations.clearAccount(accountSpaceId);
+  }
+
+  private async reviewedMutation<T extends object>(accountSpaceId: AccountSpaceId, service: 'gmail' | 'drive' | 'calendar', payload: unknown,
+    perform: () => Promise<T>): Promise<GoogleOperationResult<T>> {
+    const claim = this.actionReceipts?.begin(accountSpaceId, service, payload);
+    if (claim && !claim.fresh) return { ...operationFailure<T>(new Error(claim.receipt.state === 'confirmed'
+      ? 'Google already confirmed this exact action.' : 'The earlier result is unconfirmed. Check the original Google app before acting.')), receipt: claim.receipt };
+    let data: T;
+    try { data = await perform(); }
+    catch (error) {
+      const failure = operationFailure<T>(error);
+      if (!claim) return failure;
+      const rejected = error instanceof GoogleTokenError && ['quota', 'revoked', 'scope-missing'].includes(error.code);
+      try {
+        return { ...failure, receipt: this.actionReceipts?.finish(accountSpaceId, claim.receipt.id, rejected ? 'rejected' : 'unconfirmed') };
+      } catch { return { ...failure, receipt: claim.receipt }; }
+    }
+    if (!claim) return success(data);
+    const providerId = 'id' in data && typeof data.id === 'string' ? data.id : undefined;
+    try { return { ...success(data), receipt: this.actionReceipts?.finish(accountSpaceId, claim.receipt.id, 'confirmed', providerId) }; }
+    catch { return { ...success(data), receipt: { ...claim.receipt, state: 'confirmed', providerId } }; }
   }
 
   private async apiJson(
@@ -372,11 +434,33 @@ function normalizeGmailSend(input: GmailSendInput): Required<GmailSendInput> {
   };
 }
 
-function encodeEmail(input: Required<GmailSendInput>): string {
+function encodeEmail(input: Required<GmailSendInput>, reply?: GmailReplySource): string {
   const lines = [`To: ${input.to.join(', ')}`];
   if (input.cc.length) lines.push(`Cc: ${input.cc.join(', ')}`);
-  lines.push(`Subject: ${input.subject}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', input.body);
+  if (reply) lines.push(`In-Reply-To: ${reply.messageId}`, `References: ${reply.references}`);
+  lines.push(`Subject: ${encodeSubject(input.subject)}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: 8bit', '', input.body);
   return Buffer.from(lines.join('\r\n'), 'utf8').toString('base64url');
+}
+
+function encodeSubject(subject: string): string {
+  if (/^[\x20-\x7e]*$/.test(subject)) return subject;
+  const parts: string[] = [];
+  let part = '';
+  for (const character of subject) {
+    if (Buffer.byteLength(part + character) > 36) {
+      parts.push(part);
+      part = '';
+    }
+    part += character;
+  }
+  parts.push(part);
+  return parts.map((value) => `=?UTF-8?B?${Buffer.from(value).toString('base64')}?=`).join('\r\n ');
+}
+
+function validateReplyAddress(input: Required<GmailSendInput>, reply: GmailReplySource): void {
+  if (input.to.length !== 1 || input.to[0] !== reply.recipient || input.cc.length || input.subject !== reply.subject) {
+    throw new Error('The reply recipient or subject changed. Open the original message again.');
+  }
 }
 
 function normalizeCalendarInput(input: CalendarWriteInput) {
@@ -397,10 +481,13 @@ function normalizeCalendarInput(input: CalendarWriteInput) {
 
 function parseGmailHeader(value: unknown): GmailMessageHeader {
   const record = requireRecord(value);
-  const payload = requireRecord(record.payload);
-  const headers = Array.isArray(payload.headers) ? payload.headers.map(requireRecord) : [];
-  const header = (name: string) => optionalString(headers.find((entry) => String(entry.name).toLowerCase() === name.toLowerCase())?.value, 2000) ?? '';
+  const header = gmailHeader(requireRecord(record.payload));
   return { id: requireString(record.id, 'message id', 512), threadId: requireString(record.threadId, 'thread id', 512), from: header('From'), subject: header('Subject'), date: header('Date') };
+}
+
+function gmailHeader(payload: Record<string, unknown>): (name: string) => string {
+  const headers = Array.isArray(payload.headers) ? payload.headers.map(requireRecord) : [];
+  return (name) => optionalString(headers.find((entry) => String(entry.name).toLowerCase() === name.toLowerCase())?.value, 2000) ?? '';
 }
 
 function parseDriveFile(value: unknown): DriveFileSummary {
@@ -451,7 +538,13 @@ function optionalHttpsUrl(value: unknown): string | undefined {
 
 function requireEmail(value: string): string {
   const email = requireBoundedText(value, 'email address', 320).trim();
-  if (!/^\S+@\S+\.\S+$/.test(email) || /[\r\n]/.test(email)) throw new Error('Invalid email address');
+  if (!/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(email)) throw new Error('Invalid email address');
+  return email;
+}
+
+function requireContactEmail(value: string): string {
+  const email = requireBoundedText(value, 'email address', 320).trim();
+  if (!/^\S+@\S+\.\S+$/.test(email)) throw new Error('Invalid email address');
   return email;
 }
 
