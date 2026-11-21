@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { AGENT_ACTIONS_PER_MINUTE, type AgentMethod } from '@private-browser/bridge-protocol/agent';
+import { canonicalAgentOrigin } from '@private-browser/bridge-protocol/agent-permissions';
 import { stableStringify } from '@private-browser/bridge-protocol';
 import { isAllowedRemoteUrl, isProtectedPage } from './security.js';
 
@@ -39,6 +40,9 @@ const excludedHosts = [
 export function agentUrl(value: string): URL {
   if (!isAllowedRemoteUrl(value)) throw new AgentError('URL_DENIED', 'Choose a supported web address.');
   const url = new URL(value);
+  const rawOrigin = /^https?:\/\/[^/?#]+/iu.exec(value)?.[0];
+  try { if (!rawOrigin || canonicalAgentOrigin(rawOrigin) !== url.origin) throw new Error(); }
+  catch { throw new AgentError('URL_DENIED', 'Choose a supported web address with an unambiguous host.'); }
   let decodedPath: string;
   try { decodedPath = decodeURIComponent(url.pathname); } catch {
     throw new AgentError('URL_DENIED', 'This address has an invalid path.');
@@ -74,10 +78,10 @@ export interface AgentElementAction {
   submit?: boolean;
 }
 
-export function consequentialAction(method: AgentMethod, current: URL, element?: AgentElementAction, destination?: URL): boolean {
+export function consequentialAction(method: AgentMethod, current: URL, element?: AgentElementAction, destination?: URL, allowPublicLink = false): boolean {
   if (method === 'upload_file' || method === 'handle_dialog' || method === 'drag') return true;
   if (destination && current.origin !== destination.origin) return true;
-  if (element?.link && agentUrl(element.link).origin !== current.origin) return true;
+  if (element?.link && agentUrl(element.link).origin !== current.origin && !allowPublicLink) return true;
   if (method === 'press_key') return true;
   if (method !== 'click' && method !== 'type' && method !== 'check' && method !== 'select_option') return false;
   if (/\/(?:oauth2?|consent|authorize)(?:\/|$)/i.test(current.pathname)) return true;
@@ -97,9 +101,9 @@ export function agentError(error: unknown): { code: string; message: string } {
 export class AgentRateLimit {
   private actions: number[] = [];
 
-  take(now = Date.now()): void {
+  take(now = Date.now(), actionsPerMinute = AGENT_ACTIONS_PER_MINUTE): void {
     this.actions = this.actions.filter((at) => now - at < 60_000);
-    if (this.actions.length >= AGENT_ACTIONS_PER_MINUTE) {
+    if (this.actions.length >= actionsPerMinute) {
       throw new AgentError('RATE_LIMIT', 'This client reached its action limit. Try again in one minute.');
     }
     this.actions.push(now);

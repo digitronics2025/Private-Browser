@@ -153,7 +153,8 @@ export function createAgentPage() {
     element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
   };
-  return (command: string, args: { ref?: string; fromRef?: string; toRef?: string; expected?: string; text?: string; submit?: boolean; value?: string; checked?: boolean; key?: string; x?: number; y?: number; expression?: string }) => {
+  return (command: string, args: { ref?: string; fromRef?: string; toRef?: string; expected?: string; expectedOrigin?: string; text?: string; submit?: boolean; value?: string; checked?: boolean; key?: string; x?: number; y?: number; expression?: string }) => {
+    if (args.expectedOrigin !== undefined && location.origin !== args.expectedOrigin) throw new Error('frame changed');
     if (args.expected !== undefined && revision() !== args.expected) throw new Error('page changed');
     if (command === 'snapshot') return snapshot();
     if (command === 'revision') return revision();
@@ -192,7 +193,7 @@ export function createAgentPage() {
     if (command === 'scroll') { window.scrollBy({ left: args.x ?? 0, top: args.y ?? 0, behavior: 'instant' }); return null; }
     if (command === 'key') {
       const active = doc.activeElement;
-      if (!(active instanceof HTMLElement) || containingPrivate(active)) throw new Error('sensitive focus');
+      if (!(active instanceof HTMLElement) || /^(IFRAME|FRAME|OBJECT|EMBED)$/.test(active.tagName) || containingPrivate(active)) throw new Error('sensitive focus');
       if (args.key === 'Enter' && (active instanceof HTMLButtonElement || active instanceof HTMLAnchorElement)) active.click();
       else if (args.key === 'Enter' && isInput(active)) active.form?.requestSubmit();
       else active.dispatchEvent(new KeyboardEvent('keydown', { key: args.key, bubbles: true, cancelable: true }));
@@ -212,6 +213,7 @@ export function createAgentPage() {
       return null;
     }
     const element = target(args.ref!);
+    if (command === 'highlight') return rect(element);
     if (command === 'inspect') return { revision: revision(), ...details(element) };
     if (command === 'file') {
       if (!(element instanceof HTMLInputElement) || element.type !== 'file' || element.disabled) throw new Error('choose a file input');

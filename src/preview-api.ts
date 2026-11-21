@@ -21,6 +21,7 @@ import type { ReferenceSearchInput, TabSetInput } from '../electron/types';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
 import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
+import { defaultClientLimits, newAgentSpaceSettings } from '@private-browser/bridge-protocol/agent-permission-model';
 import type { AgentUiStatus } from '../electron/agent-types';
 
 const WORKSPACES: Workspace[] = [
@@ -231,10 +232,24 @@ export function installPreviewApi(): void {
   const agentState: AgentUiStatus = { enabled: false, paused: false, active: false, clients: [], spaces: [], tabs: [], audit: [],
     command: 'node', commandArgs: ['packages/agent-mcp/dist/cli.js'] };
   const agentTabId = 'aeddf71a-49cd-4ab5-b36f-2244a9258852';
+  const previewOpenWebId = '33442f3e-bbd0-47bf-aea7-c6f48640e83d';
+  const previewAgentId = '39780f65-9ae5-4fde-a090-f35bce8cb7ac';
+  const previewSpaces = (): AgentUiStatus['spaces'] => [
+    { ...newAgentSpaceSettings('Work', 'work'), id: agentTabId, uploadRootPresent: false, migrated: false },
+    { ...newAgentSpaceSettings('Open Web', 'open-web'), id: previewOpenWebId, uploadRootPresent: false, migrated: false },
+  ];
+  if (params.get('preview') === 'agent-settings') {
+    agentState.clients = [{ id: previewAgentId, name: 'Claude Code', limits: defaultClientLimits, active: false, expiresAt: Date.now() + 30 * 60_000 }];
+  }
+  if (params.get('preview') === 'agent-warning') {
+    agentState.enabled = true;
+    agentState.spaces = previewSpaces();
+    agentState.possibleSignIn = previewOpenWebId;
+  }
   if (params.get('preview') === 'agent-action') {
     Object.assign(agentState, {
       enabled: true, active: true, selectedTab: agentTabId,
-      tabs: [{ id: agentTabId, name: 'http://localhost:3000', client: 'Codex', space: 'Agent Account Space', manual: false }],
+      tabs: [{ id: agentTabId, name: 'http://localhost:3000', client: 'Codex', space: 'Work', manual: false, canManual: true }],
       current: { client: 'Codex', step: 'click', tabId: agentTabId },
       pending: { id: '9c7757bc-bf61-4685-9a31-9d38499f4ca0', client: 'Codex', tab: 'Agent Account Space',
         origin: 'http://localhost:3000', action: 'click', target: 'button: Save', formTarget: 'http://localhost:3000/save',
@@ -251,7 +266,7 @@ export function installPreviewApi(): void {
     },
     setAgentsEnabled: async (enabled) => {
       agentState.enabled = enabled === true;
-      agentState.spaces = agentState.enabled ? [{ id: agentTabId, name: 'Agent Account Space' }] : [];
+      agentState.spaces = agentState.enabled ? previewSpaces() : [];
       agentChange();
     },
     beginAgentPairing: async () => {
@@ -270,7 +285,9 @@ export function installPreviewApi(): void {
     openAgentWorkspace: desktopOnly,
     revokeAgent: desktopOnly,
     renewAgent: desktopOnly,
-    setAgentPolicy: desktopOnly,
+    setAgentSpace: desktopOnly,
+    setAgentLimits: desktopOnly,
+    clearAgentOpenWeb: desktopOnly,
     grantAgentUploads: desktopOnly,
     revokeAgentUploads: desktopOnly,
     addAgentSpace: desktopOnly,

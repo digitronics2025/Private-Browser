@@ -9,10 +9,10 @@ import {
   type DeviceIdentity,
 } from '@private-browser/bridge-protocol';
 import {
-  AGENT_HANDSHAKE_ID, AGENT_IDLE_MS, AGENT_MAX_OUTPUT_BYTES, AGENT_WIRE_VERSION, agentHello,
-  agentIdentity, agentKeys, agentTranscript, parseAgentRequest,
+  AGENT_HANDSHAKE_ID, AGENT_MAX_OUTPUT_BYTES, AGENT_WIRE_VERSION, agentHello,
+  agentIdentity, agentKeys, agentTranscript, isAgentMethod, parseAgentRequest, parseAgentRequestEnvelope,
 } from '@private-browser/bridge-protocol/agent';
-import { AgentError, agentError, AgentRateLimit } from './agent-policy.js';
+import { AgentError, agentError } from './agent-policy.js';
 import { writeAgentBytes } from './agent-audit.js';
 
 type Device = ReturnType<typeof agentIdentity.parse>['device'];
@@ -28,9 +28,10 @@ export interface AgentConnection {
 interface AgentPipeOptions {
   root: string;
   identity: DeviceIdentity;
-  authorize(device: Device, code?: string): number | undefined;
+  authorize(device: Device, code?: string): { expiresAt: number; idleMs: number } | 'expired' | undefined;
   opened(connection: AgentConnection): void;
   closed(connection: AgentConnection): void;
+  takeAction(connection: AgentConnection): void;
   request(connection: AgentConnection, request: AgentRequest): Promise<unknown>;
 }
 
@@ -88,7 +89,6 @@ export class AgentPipe {
     const identity = this.options.identity;
     const decoder = new FrameDecoder();
     const abort = new AbortController();
-    const rate = new AgentRateLimit();
     let ephemeral: KeyObject | undefined;
     let keys: ReturnType<typeof agentKeys> | undefined;
     let connection: AgentConnection | undefined;
@@ -119,15 +119,19 @@ export class AgentPipe {
     socket.write(encodeFrame({ ...challenge, signature: signText(identity.privateKey, agentTranscript(challenge)) }));
 
     const respond = async (current: AgentConnection, activeKeys: ReturnType<typeof agentKeys>, raw: unknown) => {
-      const request = parseAgentRequest(raw);
+      const envelope = parseAgentRequestEnvelope(raw);
       let response: unknown;
       try {
-        rate.take();
+        this.options.takeAction(current);
+        if (!isAgentMethod(envelope.method)) throw new AgentError('UNKNOWN_TOOL', 'Unknown Private Browser tool.');
+        let request: AgentRequest;
+        try { request = parseAgentRequest(raw); }
+        catch { throw new AgentError('INVALID_ARGUMENTS', 'Invalid arguments. Check the tool schema.'); }
         const output = await this.options.request(current, request);
         if (Buffer.byteLength(JSON.stringify(output ?? null)) > AGENT_MAX_OUTPUT_BYTES) throw new AgentError('OUTPUT_LIMIT', 'This result exceeds the output limit.');
-        response = { kind: 'result', id: request.id, output };
+        response = { kind: 'result', id: envelope.id, output };
       } catch (error) {
-        response = { kind: 'error', id: request.id, ...agentError(error) };
+        response = { kind: 'error', id: envelope.id, ...agentError(error) };
       }
       if (!abort.signal.aborted) socket.write(encodeFrame(sealPayload(activeKeys.browser, current.id, outgoing++, response)));
     };
@@ -146,14 +150,17 @@ export class AgentPipe {
           if (!connection) {
             const identify = agentIdentity.parse(openPayload(keys.client, frame, AGENT_HANDSHAKE_ID, 0));
             if (!verifyText(identify.device.publicKey, agentTranscript({ transcript, device: identify.device }), identify.signature)) throw new Error('Bad device proof');
-            const expiresAt = this.options.authorize(identify.device, identify.code);
-            if (!expiresAt || expiresAt <= Date.now()) {
-              socket.end(encodeFrame(sealPayload(keys.browser, AGENT_HANDSHAKE_ID, 0, { kind: 'denied' })));
+            const grant = this.options.authorize(identify.device, identify.code);
+            if (!grant || grant === 'expired' || grant.expiresAt <= Date.now()) {
+              socket.end(encodeFrame(sealPayload(keys.browser, AGENT_HANDSHAKE_ID, 0, {
+                kind: 'denied', code: grant ? 'SESSION_EXPIRED' : undefined,
+              })));
               return;
             }
+            const { expiresAt, idleMs } = grant;
             connection = { id: randomUUID(), device: identify.device, expiresAt, abort: abort.signal, close };
             expire = setTimeout(close, expiresAt - Date.now());
-            socket.setTimeout(AGENT_IDLE_MS);
+            socket.setTimeout(idleMs);
             this.options.opened(connection);
             socket.write(encodeFrame(sealPayload(keys.browser, AGENT_HANDSHAKE_ID, 0, { kind: 'welcome', sessionId: connection.id, expiresAt })));
             continue;

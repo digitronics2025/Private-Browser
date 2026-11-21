@@ -51,13 +51,18 @@ describe('Agent IPC parity', () => {
     const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
     const commands = [...preload.matchAll(/ipcRenderer\.invoke\('(agents:[^']+)'/g)].map((match) => match[1]).sort();
     const handlers = [...main.matchAll(/handle\('(agents:[^']+)'/g)].map((match) => match[1]).sort();
-    expect(commands).toHaveLength(21);
+    expect(commands).toHaveLength(23);
     expect(commands).toEqual(handlers);
     const { validateIpcArguments } = await import('../electron/ipc-contracts');
     const uuid = '8ad413e5-a5f1-47fd-9593-5255014d6018';
     expect(() => validateIpcArguments('agents:decide', [uuid, 'allow-all'])).toThrow();
     expect(() => validateIpcArguments('agents:decide', [uuid, 'deny'])).not.toThrow();
-    expect(() => validateIpcArguments('agents:set-policy', [uuid, { profile: 'operate', origins: [], outside: 'deny', secret: true }])).toThrow();
+    expect(() => validateIpcArguments('agents:set-space', [uuid, {
+      name: 'Work', trust: 'work', origins: [], outside: 'view', clientIds: [], downloadQuotaMb: 500,
+      classes: { read: true, view: true, interact: true, diagnostic: true, files: false },
+      uploadRoot: 'private-path',
+    }])).toThrow();
+    expect(() => validateIpcArguments('agents:set-limits', [uuid, { tabs: 8 }])).toThrow();
   });
 });
 

@@ -140,24 +140,32 @@ export class AgentDriver {
     throw new AgentError('WAIT_TIMEOUT', 'The condition was not met before the timeout.');
   }
 
-  async emulate(input: AgentInput<'emulate'>): Promise<void> {
+  async emulate(input: AgentInput<'emulate'>, check: () => void): Promise<void> {
     const presets = { desktop: { width: 1280, height: 800 }, tablet: { width: 768, height: 980 }, mobile: { width: 375, height: 812 } };
     const viewport = input.viewport ?? (input.device && presets[input.device]);
     if (viewport) {
+      check();
       await this.contents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
         ...viewport, deviceScaleFactor: 1, mobile: input.device === 'mobile' || input.device === 'tablet',
       });
     }
     if (input.colorScheme !== undefined || input.reducedMotion !== undefined) {
+      check();
       await this.contents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [
         { name: 'prefers-color-scheme', value: input.colorScheme ?? '' },
         { name: 'prefers-reduced-motion', value: input.reducedMotion === undefined ? '' : input.reducedMotion ? 'reduce' : 'no-preference' },
       ] });
     }
-    if (input.offline !== undefined) await this.contents.debugger.sendCommand('Network.emulateNetworkConditions', {
-      offline: input.offline, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
-    });
-    if (input.cpuThrottle !== undefined) await this.contents.debugger.sendCommand('Emulation.setCPUThrottlingRate', { rate: input.cpuThrottle });
+    if (input.offline !== undefined) {
+      check();
+      await this.contents.debugger.sendCommand('Network.emulateNetworkConditions', {
+        offline: input.offline, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+      });
+    }
+    if (input.cpuThrottle !== undefined) {
+      check();
+      await this.contents.debugger.sendCommand('Emulation.setCPUThrottlingRate', { rate: input.cpuThrottle });
+    }
   }
 
   async audit(signal: AbortSignal): Promise<unknown> {

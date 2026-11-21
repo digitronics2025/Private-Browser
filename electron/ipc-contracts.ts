@@ -1,3 +1,4 @@
+import { agentSpaceSettings, clientLimits } from '@private-browser/bridge-protocol/agent-permissions';
 import {
   requireAccountColor,
   requireAccountLabel,
@@ -41,6 +42,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'agents:grant-uploads':
     case 'agents:revoke-uploads':
     case 'agents:reset-space':
+    case 'agents:clear-open-web':
     case 'agents:select':
     case 'agents:close-tab':
       exact(args, 1); requireUuid(args[0], 'agent record'); return;
@@ -54,15 +56,10 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 2); requireUuid(args[0], 'Agent confirmation');
       if (args[1] !== 'allow' && args[1] !== 'session' && args[1] !== 'deny') throw new Error('Choose an Agent decision');
       return;
-    case 'agents:set-policy': {
-      exact(args, 2); requireUuid(args[0], 'Agent client');
-      const policy = requireExactKeys(args[1], ['profile', 'origins', 'outside']);
-      if (policy.profile !== 'observe' && policy.profile !== 'develop' && policy.profile !== 'operate') throw new Error('Choose an Agent profile');
-      if (policy.outside !== 'observe' && policy.outside !== 'deny') throw new Error('Choose a rule for other origins');
-      if (!Array.isArray(policy.origins) || policy.origins.length > 30) throw new Error('Enter up to 30 origins');
-      for (const origin of policy.origins) requireNonEmptyText(origin, 'Agent origin', 300);
-      return;
-    }
+    case 'agents:set-space':
+      exact(args, 2); requireUuid(args[0], 'Agent space'); agentSpaceSettings.parse(args[1]); return;
+    case 'agents:set-limits':
+      exact(args, 2); requireUuid(args[0], 'Agent client'); clientLimits.parse(args[1]); return;
     case 'browser:open-bookmarks-in-background':
       exact(args, 2); requireAccountSpaceId(args[0]);
       if (!Array.isArray(args[1]) || !args[1].length || args[1].length > MAX_BOOKMARK_BATCH) throw new Error('Select between 1 and 20 bookmarks');

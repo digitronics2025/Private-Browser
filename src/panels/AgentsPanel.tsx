@@ -1,6 +1,7 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { ArrowLeft, Bot, Copy, ShieldCheck, Square } from 'lucide-react';
-import type { AgentPolicy } from '../../electron/agent-policy';
+import { canonicalAgentOrigin, clientLimitSettings } from '@private-browser/bridge-protocol/agent-permission-model';
+import type { AgentSpaceSettings } from '@private-browser/bridge-protocol/agent-permissions';
 import type { AgentDecision, AgentUiStatus } from '../../electron/agent-types';
 import { PanelHeader } from './common';
 import { disposer } from '../lib/subscribe';
@@ -19,114 +20,332 @@ export function useAgentStatus() {
   return status;
 }
 
+type Section = { page: 'overview' | 'audit' } | { page: 'space' | 'limits'; id: string };
+type Space = AgentUiStatus['spaces'][number];
+type Client = AgentUiStatus['clients'][number];
+type Perform = (action: () => Promise<void>, success?: string) => Promise<boolean>;
+
 export function AgentsPanel({ onBack, onToast }: { onBack: () => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const status = useAgentStatus();
+  const [section, navigate] = useState<Section>({ page: 'overview' });
   const [name, setName] = useState('');
-  const [reset, setReset] = useState<string>();
   const [pending, setPending] = useState(false);
-  const perform = async (action: () => Promise<void>) => {
+  const header = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (section.page !== 'overview') header.current?.focus();
+  }, [section]);
+  const perform: Perform = async (action, success) => {
     setPending(true);
-    try { await action(); }
-    catch (error) { onToast(error instanceof Error ? error.message : 'Private Browser could not complete the request.', 'error'); }
-    finally { setPending(false); }
+    try {
+      await action();
+      if (success) onToast(success);
+      return true;
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Private Browser could not complete the request.', 'error');
+      return false;
+    } finally { setPending(false); }
   };
   const api = window.privateBrowser;
+  const overview = () => navigate({ page: 'overview' });
+  const space = section.page === 'space' ? status?.spaces.find(({ id }) => id === section.id) : undefined;
+  const client = section.page === 'limits' ? status?.clients.find(({ id }) => id === section.id) : undefined;
+  const title = space ? 'Edit ' + space.name : client ? 'Client limits' : section.page === 'audit' ? 'Audit log' : 'Agents';
   return <div className="side-panel agents-panel">
-    <button className="updates-back" aria-label="Back to Settings" onClick={onBack}><ArrowLeft size={14} /> Settings</button>
-    <PanelHeader icon={Bot} eyebrow="Private Browser" title="Agents" />
-    {status ? <>
-      <section className="agent-card">
-        <label className="agent-switch"><input type="checkbox" checked={status.enabled} disabled={pending || Boolean(status.unavailable)}
-          onChange={(event) => void perform(() => api.setAgentsEnabled(event.currentTarget.checked))} /> Allow coding agents</label>
-        <p>Connect Claude Code or Codex to tabs in an isolated Agent Account Space.</p>
-        {status.unavailable && <p role="alert">{status.unavailable}</p>}
-        {status.enabled && <div className="agent-buttons">
-          {status.paused
-            ? <button disabled={pending} onClick={() => void perform(api.resumeAgents)}>Resume Agent Mode</button>
-            : <button disabled={pending} onClick={() => void perform(api.beginAgentPairing)}>Generate pairing code</button>}
-          <button disabled={pending} onClick={() => void perform(api.openAgentWorkspace)}>Open Agent Workspace</button>
-          {status.active && <button className="agent-danger" onClick={() => void perform(api.stopAgents)}><Square size={13} /> Stop all agents</button>}
-        </div>}
-        {status.pairing && <div className="agent-pairing" role="status"><strong>Pairing code</strong><output>{status.pairing.code}</output><small>Single use. Expires at {new Date(status.pairing.expiresAt).toLocaleTimeString()}.</small></div>}
+    <button className="updates-back" onClick={section.page === 'overview' ? onBack : overview}>
+      <ArrowLeft size={14} aria-hidden="true" /> {section.page === 'overview' ? 'Settings' : 'Agents'}
+    </button>
+    <div ref={header} tabIndex={-1}><PanelHeader icon={Bot} eyebrow="Private Browser" title={title} /></div>
+    {!status ? <p role="status">Loading Agent settings…</p>
+      : status.unavailable ? <section className="agent-card agent-notice" role="alert"><h3>Agent settings are unavailable</h3>
+        <p>{status.unavailable}</p><p>Agent Mode is paused. Restart Private Browser after restoring the policy.</p>
       </section>
-      {status.enabled && <>
-        <section className="agent-card">
-          <h3>Paired clients</h3>
-          {status.clients.length === 0 && <p>No clients are paired yet.</p>}
-          {status.clients.map((client) => <ClientSettings key={client.id} client={client} disabled={pending} perform={perform} />)}
-        </section>
-        <section className="agent-card">
-          <h3>Agent Account Spaces</h3>
-          {status.spaces.map((space) => <div className="agent-space" key={space.id}>
-            <strong>{space.name}</strong>
-            {reset === space.id ? <>
-              <p>This clears this space’s cookies, cache, and website data.</p>
-              <div className="agent-buttons"><button className="agent-danger" disabled={pending} onClick={() => void perform(async () => {
-                await api.resetAgentSpace(space.id);
-                setReset(undefined);
-              })}>Clear this space</button><button onClick={() => setReset(undefined)}>Cancel</button></div>
-            </> : <button disabled={pending || status.paused} onClick={() => setReset(space.id)}>Reset agent space</button>}
-          </div>)}
-          <form className="agent-buttons" onSubmit={(event) => {
-            event.preventDefault();
-            if (name.trim()) void perform(async () => { await api.addAgentSpace(name.trim()); setName(''); });
-          }}>
-            <input aria-label="New space name" value={name} onChange={(event) => setName(event.target.value)} maxLength={60} placeholder="New space name" />
-            <button disabled={pending || status.paused || !name.trim()}>Add space</button>
-          </form>
-        </section>
-        <SetupCommands status={status} onToast={onToast} />
-      </>}
-      <section className="agent-card">
-        <h3>Audit log</h3>
-        <p>Records tool names, origins, and decisions.</p>
-        <div className="agent-buttons">
-          <button disabled={pending || !status.audit.length} onClick={() => void perform(api.exportAgentAudit)}>Export audit</button>
-          <button disabled={pending || !status.audit.length} onClick={() => void perform(api.clearAgentAudit)}>Clear audit</button>
-        </div>
-        {Boolean(status.audit.length) && <ul className="agent-log">{status.audit.map((item, index) => <li key={`${item.at}-${index}`}>
-          <strong>{item.client} · {item.tool.replaceAll('_', ' ')}</strong>
-          <small>{item.decision} · {new Date(item.at).toLocaleTimeString()}{item.origin ? ` · ${item.origin}` : ''}</small>
-        </li>)}</ul>}
-      </section>
-    </> : <p role="status">Loading Agent settings…</p>}
+        : space ? <SpaceEditor key={space.id} space={space} clients={status.clients} pending={pending} onCancel={overview} perform={perform} />
+          : client ? <LimitsEditor key={client.id} client={client} pending={pending} onCancel={overview} perform={perform} />
+            : section.page === 'audit' ? <AuditViewer status={status} pending={pending} perform={perform} />
+              : <>
+                <section className="agent-card">
+                  <label className="agent-switch"><input type="checkbox" checked={status.enabled} disabled={pending}
+                    onChange={(event) => { const enabled = event.currentTarget.checked; void perform(() => api.setAgentsEnabled(enabled)); }} /> Allow coding agents</label>
+                  <p>Pair a coding agent, then grant access in the space editor.</p>
+                  {status.enabled && <div className="agent-buttons">
+                    {status.paused
+                      ? <button disabled={pending} onClick={() => void perform(api.resumeAgents)}>Resume Agent Mode</button>
+                      : <button disabled={pending} onClick={() => void perform(api.beginAgentPairing)}>Generate pairing code</button>}
+                    <button disabled={pending} onClick={() => void perform(api.openAgentWorkspace)}>Open Agent Workspace</button>
+                    {status.active && <button className="agent-danger" onClick={() => void perform(api.stopAgents)}><Square size={13} /> Stop all agents</button>}
+                  </div>}
+                  {status.pairing && <div className="agent-pairing" role="status"><strong>Pairing code</strong><output>{status.pairing.code}</output>
+                    <small>Single use. Expires at {new Date(status.pairing.expiresAt).toLocaleTimeString()}.</small></div>}
+                </section>
+                {status.enabled && <>
+                  <section className="agent-card">
+                    <h3>Agent Account Spaces</h3>
+                    {status.spaces.map((item) => <div className="agent-space agent-space-summary" key={item.id}>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <small>{item.trust === 'open-web' ? 'Public web · No saved logins' : 'Owner-managed sign-in'}</small>
+                        <small>{item.clientIds.length === 0 ? 'No clients have access'
+                          : item.trust === 'work' && item.origins.length === 0 ? 'No origins added'
+                            : item.clientIds.length + (item.clientIds.length === 1 ? ' client has access' : ' clients have access')}</small>
+                      </div>
+                      <button aria-label={'Edit ' + item.name} disabled={pending || status.paused}
+                        onClick={() => navigate({ page: 'space', id: item.id })}>Edit</button>
+                    </div>)}
+                    <form className="agent-buttons" onSubmit={(event) => {
+                      event.preventDefault();
+                      if (name.trim()) void perform(() => api.addAgentSpace(name.trim()), 'Work space added.').then((saved) => { if (saved) setName(''); });
+                    }}>
+                      <input aria-label="New space name" value={name} onChange={(event) => setName(event.target.value)} maxLength={60} placeholder="New space name" />
+                      <button disabled={pending || status.paused || !name.trim()}>Add space</button>
+                    </form>
+                  </section>
+                  <section className="agent-card">
+                    <h3>Paired clients</h3>
+                    {status.clients.length === 0 && <p>No clients are paired yet.</p>}
+                    {status.clients.map((item) => <div className="agent-space agent-space-summary" key={item.id}>
+                      <div><strong>{item.name}</strong><small>{item.active ? 'Connected' : 'Paired'}</small></div>
+                      <button aria-label={'Limits for ' + item.name} disabled={status.paused} onClick={() => navigate({ page: 'limits', id: item.id })}>Limits</button>
+                    </div>)}
+                  </section>
+                  <SetupCommands status={status} onToast={onToast} />
+                </>}
+                <section className="agent-card"><button className="agent-audit-link" onClick={() => navigate({ page: 'audit' })}>Audit log</button></section>
+              </>}
   </div>;
 }
 
-function ClientSettings({ client, disabled, perform }: {
-  client: AgentUiStatus['clients'][number]; disabled: boolean; perform: (action: () => Promise<void>) => Promise<void>;
+function SpaceEditor({ space, clients, pending, onCancel, perform }: {
+  space: Space; clients: Client[]; pending: boolean; onCancel: () => void; perform: Perform;
 }) {
-  const [profile, setProfile] = useState(client.policy.profile);
-  const [outside, setOutside] = useState(client.policy.outside);
-  const [origins, setOrigins] = useState(client.policy.origins.join('\n'));
+  const api = window.privateBrowser;
+  const { id, uploadRootPresent, migrated } = space;
+  const [draft, setDraft] = useState<AgentSpaceSettings>(() => {
+    const { id: _id, uploadRootPresent: _upload, migrated: _migrated, ...settings } = space;
+    return settings;
+  });
+  const [origin, setOrigin] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const [reset, setReset] = useState(false);
+  const originInput = useRef<HTMLInputElement>(null);
+  let canonical: string | undefined;
+  if (origin.trim()) {
+    try { canonical = canonicalAgentOrigin(origin, true); } catch { /* Keep invalid input visible. */ }
+  }
+  const invalid = Boolean(origin.trim() && !canonical);
+  const commitOrigin = () => {
+    if (draft.trust !== 'work' || !canonical || draft.origins.length >= 30) return;
+    setDraft({ ...draft, origins: [...new Set([...draft.origins, canonical])] });
+    setOrigin('');
+    setSubmitted(false);
+    originInput.current?.focus();
+  };
   const save = (event: FormEvent) => {
     event.preventDefault();
-    void perform(() => window.privateBrowser.setAgentPolicy(client.id, {
-      profile, outside, origins: origins.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean),
-    }));
+    if (origin.trim()) {
+      setSubmitted(true);
+      originInput.current?.focus();
+      return;
+    }
+    void perform(() => api.setAgentSpace(id, draft), 'Space settings saved.').then((saved) => { if (saved) onCancel(); });
   };
-  return <details className="agent-client">
-    <summary>{client.name} <small>{client.active ? 'Connected' : 'Paired'}</small></summary>
-    <form onSubmit={save}>
-      <label>Permission profile<select value={profile} onChange={(event) => setProfile(event.target.value as AgentPolicy['profile'])}>
-        <option value="observe">Observe</option><option value="develop">Develop</option><option value="operate">Operate</option>
-      </select></label>
-      <label>Approved origins <small>One scheme, host and port per line</small>
-        <textarea value={origins} onChange={(event) => setOrigins(event.target.value)} rows={3} placeholder="https://staging.example.com" />
+  const classNames = { read: 'Read', view: 'View', interact: 'Interact', diagnostic: 'Diagnostics' } as const;
+  return <form className="agent-editor" onSubmit={save}>
+    <section className="agent-card">
+      <h3>Trust level</h3>
+      <p>{draft.trust === 'work' ? 'Work · Owner-managed sign-in' : 'Open Web · No saved logins'}</p>
+      {migrated && <p role="status">Saving replaces this space’s migrated client rules for the clients selected below. Review the origins and client access first.</p>}
+    </section>
+    <section className="agent-card">
+      <h3>Allowed origins</h3>
+      {draft.trust === 'open-web' ? <p>Public HTTP and HTTPS. Private network destinations and protected pages are blocked.</p> : <>
+        <label className="agent-field">Add an origin
+          <input ref={originInput} value={origin} maxLength={300} placeholder="https://app.example.com"
+            onChange={(event) => { setOrigin(event.target.value); setSubmitted(false); }}
+            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); if (canonical) commitOrigin(); else setSubmitted(true); } }}
+            aria-invalid={invalid} aria-describedby="agent-origin-preview" />
+        </label>
+        <div className="agent-origin-preview">
+          <div id="agent-origin-preview" aria-live="polite">
+            {invalid ? <small className="agent-danger">Enter a scheme, host and optional port. Remove paths and account information.</small>
+              : canonical ? <><small>Origin preview</small><output>{canonical}</output>
+                {canonical.includes('://*.') && <small className="agent-warning-text">This includes every subdomain.</small>}
+                {canonical.includes('xn--') && <small className="agent-warning-text">Check the ASCII address for look-alike letters.</small>}
+                {submitted && <small className="agent-danger">Select Add before saving.</small>}</>
+                : <small>Enter one origin at a time.</small>}
+          </div>
+          <button type="button" disabled={!canonical || draft.origins.length >= 30} onClick={commitOrigin}>Add</button>
+        </div>
+        {!draft.origins.length ? <p>No origins added.</p> : <ul className="agent-origin-list">{draft.origins.map((item) =>
+          <li key={item}><span>{item}</span><button type="button" aria-label={'Remove ' + item}
+            onClick={() => setDraft({ ...draft, origins: draft.origins.filter((value) => item !== value) })}>Remove</button></li>)}</ul>}
+        <label className="agent-field agent-inline-field">Other origins
+          <select value={draft.outside} onChange={(event) => setDraft({ ...draft, outside: event.target.value as typeof draft.outside })}>
+            <option value="view">Read and view</option><option value="observe">Read only</option><option value="deny">Block</option>
+          </select>
+        </label>
+        {draft.outside !== 'deny' && <small>Signed-out preview</small>}
+      </>}
+    </section>
+    <section className="agent-card">
+      <h3>Allowed actions</h3>
+      <div className="agent-action-options">{Object.entries(classNames).map(([key, label]) => {
+        const action = key as keyof typeof classNames;
+        const disabled = draft.trust === 'open-web' && action === 'diagnostic';
+        return <label key={action}><input type="checkbox" checked={draft.classes[action]} disabled={disabled}
+          onChange={(event) => setDraft({ ...draft, classes: { ...draft.classes, [action]: event.target.checked } })} /> {label}</label>;
+      })}</div>
+      <small>{draft.trust === 'work' ? 'Diagnostics require a listed loopback origin.' : 'Diagnostics are off in Open Web.'}</small>
+    </section>
+    <section className="agent-card">
+      <h3>Files</h3>
+      <label><input type="checkbox" checked={draft.classes.files} disabled={draft.trust === 'work' && !uploadRootPresent}
+        onChange={(event) => setDraft({ ...draft, classes: { ...draft.classes, files: event.target.checked } })} /> Allow downloads and granted uploads</label>
+      <div className="agent-space-summary agent-file-row">
+        <div><strong>Upload folder</strong><small>{uploadRootPresent ? 'Folder selected' : 'No folder selected'}</small></div>
+        <button type="button" disabled={pending} onClick={() => void perform(() => api.grantAgentUploads(id))}>Choose folder</button>
+      </div>
+      {uploadRootPresent && <button type="button" disabled={pending} onClick={() => void perform(() => api.revokeAgentUploads(id), 'Folder grant removed.')}>Remove folder grant</button>}
+      <label className="agent-field agent-inline-field agent-file-row">Download quota (MB)
+        <input type="number" min={1} max={1_000} required value={Number.isFinite(draft.downloadQuotaMb) ? draft.downloadQuotaMb : ''}
+          onChange={(event) => setDraft({ ...draft, downloadQuotaMb: event.target.valueAsNumber })} />
       </label>
-      <label>Other origins<select value={outside} onChange={(event) => setOutside(event.target.value as AgentPolicy['outside'])}>
-        <option value="observe">Read only</option><option value="deny">Block</option>
-      </select></label>
-      <button disabled={disabled}>Save permissions</button>
-    </form>
-    {client.uploadFolder && <p className="agent-upload-path">{client.uploadFolder}</p>}
-    <div className="agent-buttons">
-      <button disabled={disabled} onClick={() => void perform(() => window.privateBrowser.renewAgent(client.id))}>Renew session</button>
-      <button disabled={disabled} onClick={() => void perform(() => window.privateBrowser.grantAgentUploads(client.id))}>Choose upload folder</button>
-      {client.uploadFolder && <button disabled={disabled} onClick={() => void perform(() => window.privateBrowser.revokeAgentUploads(client.id))}>Remove folder grant</button>}
-      <button className="agent-danger" disabled={disabled} onClick={() => void perform(() => window.privateBrowser.revokeAgent(client.id))}>Revoke client</button>
+    </section>
+    <section className="agent-card">
+      <h3>Client access</h3>
+      {!clients.length && <p>No clients are paired yet.</p>}
+      <div className="agent-action-options">{clients.map((item) => <label key={item.id}>
+        <input type="checkbox" checked={draft.clientIds.includes(item.id)}
+          onChange={(event) => setDraft({ ...draft, clientIds: event.target.checked ? [...draft.clientIds, item.id] : draft.clientIds.filter((value) => value !== item.id) })} /> {item.name}
+      </label>)}</div>
+    </section>
+    <section className="agent-card">
+      <h3>Stored site data</h3>
+      <button type="button" className="agent-danger" disabled={pending} onClick={() => setReset(true)}>Reset agent space</button>
+    </section>
+    <div className="agent-buttons agent-edit-footer">
+      <button className="agent-primary" disabled={pending}>Save changes</button>
+      <button type="button" onClick={onCancel}>Cancel</button>
     </div>
-  </details>;
+    {reset && <OwnerDialog title="Clear this space?" onDismiss={() => setReset(false)}>
+      <p>This removes the cookies and site data in {space.name}. Downloaded files stay on disk.</p>
+      <div className="agent-buttons">
+        <button type="button" autoFocus onClick={() => setReset(false)}>Cancel</button>
+        <button type="button" className="agent-danger" disabled={pending} onClick={() =>
+          void perform(() => api.resetAgentSpace(id), 'Site data cleared.').then((saved) => { if (saved) setReset(false); })}>Clear this space</button>
+      </div>
+    </OwnerDialog>}
+  </form>;
+}
+
+function LimitsEditor({ client, pending, onCancel, perform }: { client: Client; pending: boolean; onCancel: () => void; perform: Perform }) {
+  const [draft, setDraft] = useState(client.limits);
+  const [modal, setModal] = useState<'renew' | 'revoke'>();
+  const api = window.privateBrowser;
+  const fields = [
+    { name: 'Actions per minute', field: 'actionsPerMinute', multiplier: 1, unit: '' },
+    { name: 'Open agent tabs', field: 'tabs', multiplier: 1, unit: '' },
+    { name: 'Idle time (minutes)', field: 'idleMs', multiplier: 60_000, unit: ' minutes' },
+    { name: 'Session duration (hours)', field: 'sessionMs', multiplier: 60 * 60_000, unit: ' hours' },
+  ] as const;
+  const expired = !client.expiresAt || client.expiresAt <= Date.now();
+  return <form className="agent-editor" onSubmit={(event) => {
+    event.preventDefault();
+    void perform(() => api.setAgentLimits(client.id, draft), 'Client limits saved.').then((saved) => { if (saved) onCancel(); });
+  }}>
+    <section className="agent-card"><h3>{client.name}</h3>
+      <p>Limits apply across all of this client’s tabs.</p>
+      <div className="agent-limits-grid">
+        {fields.map(({ name, field, multiplier, unit }) => {
+          const { max, min } = clientLimitSettings[field];
+          return <label className="agent-field" key={field}>{name}
+            <input type="number" required min={min / multiplier} max={max / multiplier} step={field === 'sessionMs' ? 'any' : 1}
+              value={Number.isFinite(draft[field]) ? draft[field] / multiplier : ''}
+              onChange={(event) => setDraft({ ...draft, [field]: Math.round(event.target.valueAsNumber * multiplier) })} />
+            <small>Maximum {max / multiplier}{unit}</small>
+          </label>;
+        })}
+      </div>
+    </section>
+    <section className="agent-card agent-notice">
+      <h3>{expired ? 'Session expired' : 'Active session'}</h3>
+      {client.expiresAt && <p>{expired ? 'Expired ' : 'Expires '}{new Date(client.expiresAt).toLocaleString()}. Only you can renew it.</p>}
+      <button type="button" onClick={() => setModal('renew')}>Review renewal</button>
+    </section>
+    <div className="agent-buttons agent-edit-footer">
+      <button className="agent-primary" disabled={pending}>Save limits</button>
+      <button type="button" onClick={onCancel}>Cancel</button>
+      <button type="button" className="agent-danger" disabled={pending} onClick={() => setModal('revoke')}>Revoke client</button>
+    </div>
+    {modal === 'renew' && <RenewalPrompt client={client} pending={pending} dismiss={() => setModal(undefined)}
+      renew={() => void perform(() => api.renewAgent(client.id), 'Session renewed.').then((saved) => { if (saved) setModal(undefined); })} />}
+    {modal === 'revoke' && <OwnerDialog title={'Revoke ' + client.name + '?'} onDismiss={() => setModal(undefined)}>
+      <p>This closes the client’s tabs and removes its access to every space.</p>
+      <div className="agent-buttons"><button type="button" autoFocus onClick={() => setModal(undefined)}>Cancel</button>
+        <button type="button" className="agent-danger" disabled={pending} onClick={() =>
+          void perform(() => api.revokeAgent(client.id), 'Client revoked.').then((saved) => { if (saved) onCancel(); })}>Revoke client</button></div>
+    </OwnerDialog>}
+  </form>;
+}
+
+function OwnerDialog({ title, onDismiss, children }: { title: string; onDismiss: () => void; children: ReactNode }) {
+  const modal = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  useEffect(() => {
+    const dialog = modal.current;
+    const focused = document.activeElement;
+    dialog?.showModal();
+    dialog?.querySelector('button')?.focus();
+    return () => { dialog?.close(); if (focused instanceof HTMLElement && focused.isConnected) focused.focus(); };
+  }, []);
+  return <dialog ref={modal} className="agent-card agent-owner-dialog" aria-labelledby={titleId}
+    onCancel={(event) => { event.preventDefault(); onDismiss(); }}>
+    <h2 id={titleId}>{title}</h2>
+    {children}
+  </dialog>;
+}
+
+function RenewalPrompt({ client, pending, dismiss, renew }: { client: Client; pending: boolean; dismiss: () => void; renew: () => void }) {
+  const minutes = Math.round(client.limits.sessionMs / 60_000);
+  const duration = minutes % 60 ? minutes + ' minutes' : minutes / 60 + (minutes === 60 ? ' hour' : ' hours');
+  return <OwnerDialog title={'Renew ' + client.name + ' session'} onDismiss={dismiss}>
+    <p>Start a fresh {duration} session with the saved permissions. Existing tabs and action approvals will close.</p>
+    <div className="agent-buttons"><button type="button" autoFocus onClick={dismiss}>Cancel</button>
+      <button type="button" className="agent-primary" disabled={pending} onClick={renew}>Renew for {duration}</button>
+    </div>
+  </OwnerDialog>;
+}
+
+function AuditViewer({ status, pending, perform }: { status: AgentUiStatus; pending: boolean; perform: Perform }) {
+  const [space, choose] = useState('');
+  const [confirm, setConfirm] = useState(false);
+  const api = window.privateBrowser;
+  const rows = status.audit.filter((row) => !space || row.spaceId === space);
+  return <section className="agent-card">
+    <label className="agent-field">Space
+      <select value={space} onChange={(event) => choose(event.target.value)}>
+        <option value="">All spaces</option>
+        {status.spaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+      </select>
+    </label>
+    <div className="agent-buttons agent-file-row">
+      <button disabled={pending || !status.audit.length} onClick={() => void perform(api.exportAgentAudit)}>Export audit</button>
+      <button disabled={pending || !status.audit.length} onClick={() => setConfirm(true)}>Clear audit</button>
+    </div>
+    {!rows.length ? <p role="status">No actions recorded in this view.</p> : <ul className="agent-log">
+      {rows.map((row, index) => <li key={row.at + '-' + index}>
+        <div className="agent-log-result"><strong>{row.tool}</strong><span>{row.actionClass ?? 'Action'}</span>
+          <span className={row.decision === 'allowed' ? 'agent-allowed' : 'agent-danger'}>{row.decision === 'denied' ? 'Refused' : row.decision}</span></div>
+        {row.origin && <span>{row.origin}</span>}
+        <small><time dateTime={row.at}>{new Date(row.at).toLocaleTimeString()}</time>{row.decision !== 'allowed' && ' · ' + row.result}</small>
+      </li>)}
+    </ul>}
+    {confirm && <OwnerDialog title="Clear the audit log?" onDismiss={() => setConfirm(false)}>
+      <p>This clears saved agent actions for every space.</p>
+      <div className="agent-buttons"><button type="button" autoFocus onClick={() => setConfirm(false)}>Cancel</button>
+        <button type="button" className="agent-danger" disabled={pending} onClick={() =>
+          void perform(api.clearAgentAudit, 'Audit cleared.').then((saved) => { if (saved) setConfirm(false); })}>Clear audit</button></div>
+    </OwnerDialog>}
+  </section>;
 }
 
 function SetupCommands({ status, onToast }: { status: AgentUiStatus; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
@@ -153,8 +372,17 @@ function SetupCommands({ status, onToast }: { status: AgentUiStatus; onToast: (m
 
 export function AgentWorkspaceView() {
   const status = useAgentStatus();
+  useEffect(() => {
+    const colors = window.matchMedia('(prefers-color-scheme: dark)');
+    const update = () => { document.documentElement.dataset.theme = colors.matches ? 'dark' : 'light'; };
+    update();
+    colors.addEventListener('change', update);
+    return () => colors.removeEventListener('change', update);
+  }, []);
   const [error, setError] = useState('');
   const [responding, setResponding] = useState(false);
+  const [dismissedWarning, setDismissedWarning] = useState(false);
+  const [renewing, setRenewing] = useState<string>();
   const perform = (action: () => Promise<void>) => {
     setError('');
     return action().catch(() => setError('The request could not be completed. Try again.'));
@@ -162,6 +390,10 @@ export function AgentWorkspaceView() {
   const api = window.privateBrowser;
   const tab = status?.tabs.find((item) => item.id === status.selectedTab);
   const card = status?.pending;
+  const warning = status?.possibleSignIn;
+  const expired = status?.clients.filter((client) => client.expiresAt !== undefined && client.expiresAt <= Date.now()) ?? [];
+  const renewal = expired.find((client) => client.id === renewing);
+  useEffect(() => { if (!warning) setDismissedWarning(false); }, [warning]);
   const respond = (decision: AgentDecision) => {
     if (!card || responding) return;
     setResponding(true);
@@ -177,7 +409,7 @@ export function AgentWorkspaceView() {
         {status?.current ? <span>{status.current.client} is controlling this tab <small>· {status.current.step.replaceAll('_', ' ')}</small></span>
           : <span>{tab?.manual ? 'You are controlling this tab' : 'No agent is driving'}</span>}
         {tab && <div className="agent-buttons">
-          <button onClick={() => void perform(() => api.setAgentTabManual(tab.id, !tab.manual))}>{tab.manual ? 'Return control to agent' : 'Take manual control'}</button>
+          {tab.canManual && <button onClick={() => void perform(() => api.setAgentTabManual(tab.id, !tab.manual))}>{tab.manual ? 'Return control to agent' : 'Take manual control'}</button>}
           <button aria-label="Close agent tab" onClick={() => void perform(() => api.closeAgentTab(tab.id))}>Close tab</button>
         </div>}
       </div>
@@ -198,6 +430,22 @@ export function AgentWorkspaceView() {
         {card.canAllowSession && <button disabled={responding} onClick={() => respond('session')}>Allow navigation for this session on this origin</button>}
       </div>
     </section>}
-    {!tab && !card && <p className="agent-workspace-empty">Open a tab from your paired coding agent.</p>}
+    {warning && !dismissedWarning && <OwnerDialog title="Possible sign-in in Open Web" onDismiss={() => setDismissedWarning(true)}>
+      <p>Agent tools are paused. Clearing this space removes cookies, site data and history. Downloads stay in the Open Web folder.</p>
+      <div className="agent-buttons">
+        <button type="button" autoFocus onClick={() => setDismissedWarning(true)}>Keep paused</button>
+        <button type="button" className="agent-danger" onClick={() => void perform(() => api.clearAgentOpenWeb(warning))}>Clear Open Web</button>
+      </div>
+    </OwnerDialog>}
+    {warning && dismissedWarning && <div className="agent-card agent-chrome-alert">
+      <p>Open Web is paused after a possible sign-in.</p><button onClick={() => setDismissedWarning(false)}>Review sign-in warning</button>
+    </div>}
+    {!warning && !tab && !card && expired.length > 0 && <section className="agent-card agent-chrome-alert">
+      <h2>Session expired</h2>
+      <div className="agent-buttons">{expired.map((client) => <button key={client.id} onClick={() => setRenewing(client.id)}>Review renewal for {client.name}</button>)}</div>
+    </section>}
+    {!warning && renewal && <RenewalPrompt client={renewal} pending={false} dismiss={() => setRenewing(undefined)}
+      renew={() => void perform(() => api.renewAgent(renewal.id)).then(() => setRenewing(undefined))} />}
+    {!warning && !tab && !card && !expired.length && <p className="agent-workspace-empty">Open a tab from your paired coding agent.</p>}
   </main>;
 }

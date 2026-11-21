@@ -184,8 +184,12 @@ or owner-only Unix socket. Agent identities and approval state are distinct
 from VS Code and Control Center. Electron keeps signing keys and audit
 records in OS-encrypted storage. The CLI uses DPAPI or Secret Service.
 
-Main checks exact origins on navigation, validates typed inputs, and allows
-only fixed page diagnostics. Human approval happens in trusted Agent
+Main checks the current document and effective space policy on every page
+action. Work allows interaction only on explicitly granted origins and sends
+unlisted pages to a credential-free preview or blocks them. Open Web uses a
+disposable partition and a local public-network guard. The MCP protocol
+cannot grant space access, change policy, or renew sessions. Fixed page
+diagnostics require a granted Work loopback origin. Human approval happens in trusted Agent
 Workspace chrome and binds an action to the session, tab, address and DOM
 revision. Protected addresses are refused. Stop closes sessions, views and
 pending confirmations. A page action already completed by a remote server

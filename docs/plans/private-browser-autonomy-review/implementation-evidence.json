@@ -1,0 +1,44 @@
+{
+  "fullLocalCheck": {
+    "result": "passed",
+    "vitest": 558,
+    "chromiumPreview": 83,
+    "windowsElectron": 69,
+    "configuredWindowsSkips": 2
+  },
+  "finalAgentSmoke": {
+    "result": "passed",
+    "windowsElectron": 4
+  },
+  "finalSettingsChecks": {
+    "result": "passed",
+    "settingsAndWarningScenarios": 8,
+    "seriousOrCriticalAccessibilityViolations": 0
+  },
+  "coverage": {
+    "modules": [
+      "agent-space-policy",
+      "agent-permission-model"
+    ],
+    "branchPercent": 100
+  },
+  "disposablePublicAndRenewalChecks": {
+    "assignedOpenWeb": true,
+    "publicHttps": true,
+    "nativeCredentialFeaturesBlocked": true,
+    "mobileEmulation": true,
+    "learnMoreFound": true,
+    "learnMoreAllowed": true,
+    "signInSignalPausedOpenWeb": true,
+    "ownerClearedFixtureSiteData": true,
+    "publicTypeWithoutSubmit": true,
+    "expiredCallRefused": true,
+    "ownerRenewedConfiguredDuration": true,
+    "stopAndResumePublicSession": true
+  },
+  "claudeCodeConfigCandidate": {
+    "policyTestsPassed": 12,
+    "renderCheck": "passed",
+    "approval": "pending"
+  }
+}

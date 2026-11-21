@@ -426,8 +426,8 @@ zero failures.
 Mode. Its live journey could not run. The same tool sequence ran against a
 disposable local app and Claude Code MCP identity. It reported `develop`,
 zero origins, `observe`, 90 actions/minute, four tabs, 10 minutes idle and a
-fresh 60-minute lease. The public tab opened and snapshot returned an
-actionable link, with no title or heading. Text retrieval returned normally
+fresh 60-minute lease. The public tab opened and snapshot returned a
+link reference, with no title or heading. Text retrieval returned normally
 but the expected heading text was absent. Click and 375 × 812 emulation
 returned the current read-only message. Masked JPEG output, console and
 network tools, and closing and listing tabs succeeded. In the disposable
@@ -449,17 +449,63 @@ sign-in signals.
   and record live connector status and disposable verification.
 - [x] Phase 1. Write the permissions model and threat model, inspect the
   current Agents panel, and prepare static desktop and mobile mockups for review.
-- [ ] Gate G1. Record the owner's explicit approval of the review package.
-- [ ] Phases 2–5. Implement the policy engine, limits, file controls and approved
+- [x] Gate G1. Record the owner's explicit approval of the review package.
+- [x] Phases 2–5. Implement the policy engine, limits, file controls and approved
   settings. Verify I1–I7 and the listed unit, integration, browser and
   accessibility checks.
-- [ ] Phase 6 and Gate G2. Prepare the isolated config change. Obtain explicit
-  approval, then verify the exact Claude Code alias and follow config CI.
+- [x] Phase 6 preparation. Prepare the isolated config change and run its local checks.
+- [ ] Gate G2. Obtain explicit approval, verify the Claude Code alias and behavior,
+  and follow config CI.
 - [ ] Optional Phase 7. Keep example jobs disabled. Obtain Gate G3 for any
   enabled job and Gate G4 where applicable.
 - [ ] Phase 8. Run T3 verification, including real Windows journeys and a
   four-hour unattended session. Release the exact approved revision under
   the repository's SHA-bound installer approval and verify the active build.
+
+## Execution record
+
+Gate G1 was approved by the owner in response to the explicit design-review
+request. Phases 2–5 were implemented in the isolated autonomy worktree.
+
+- Existing Work space IDs and partitions survive migration. The encrypted
+  backup retains the original grants. An owner must renew migrated leases
+  and choose an upload folder for the intended space.
+- Paired clients need explicit space assignments. Work unlisted pages use a
+  signed-out preview. Embedded-frame actions are refused by the top-frame
+  driver, and popups remain blocked.
+- Open Web verifies proxy routing before first use and blocks private
+  destinations, manual control and native sign-in features. The owner can
+  review and clear a possible sign-in in trusted browser chrome.
+- Limits, owner renewal, upload and download controls, encrypted per-space
+  action logs and the reviewed settings screens are wired through trusted IPC.
+
+### Verification before G2
+
+- The full local `npm run check` run passed with 558 unit tests, 83 Chromium
+  preview tests, and 69 Windows Electron tests. Two pre-existing configured
+  Windows tests skipped. Final credential and proxy shutdown changes were
+  covered by a refreshed Electron compile, the four Agent Mode tests and
+  the disposable public-site and renewal journey. The final UI checks added
+  the warning dialog in both themes and sizes, with 10 Agent UI tests passed.
+- The decision engine and origin module reached 100% measured branch
+  coverage. The Windows suite verified masking/redaction, cookie isolation,
+  redirects, embedded-frame and popup denial, private-network blocking,
+  reconnect rate limits and the existing loan and recording flows. Quota
+  and upload path checks passed.
+- A disposable Claude Code MCP identity verified public click, typing without
+  submitting, mobile emulation, a synthetic sign-in warning and clear, a
+  coded expiry refusal, owner renewal, and Stop followed by Resume.
+- Browser UI screenshots are visual evidence. Axe checks at 1440 × 900 and
+  375 × 812 in light and dark found zero serious or critical violations in
+  the reviewed Agent screens.
+
+### Gate G2 and release
+
+The config candidate adds `mcp__private-browser__*` to the tracked project
+settings in a separate worktree. Config policy tests and render checks passed.
+Activation, publishing and live prompt verification await owner approval at
+G2. The shipping revision still requires Phase 8 verification, including the
+four-hour unattended run, applicable CI and the SHA-bound installer approval.
 
 Execute the entire plan end-to-end in full autopilot. Make independent decisions, always choosing the best long-term solutions for security, reliability, scalability, and maintainability.
 

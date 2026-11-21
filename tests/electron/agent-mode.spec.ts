@@ -14,14 +14,32 @@ let client: Client | undefined;
 let root: string;
 let origin: string;
 let posts: number;
+let totalRequests: number;
+let redirectTarget: string;
 let env: Record<string, string>;
 const cli = join(process.cwd(), 'packages/agent-mcp/dist/cli.js');
 
 test.beforeEach(async () => {
   posts = 0;
+  totalRequests = 0;
+  redirectTarget = '';
   server = createServer((request, response) => {
+    totalRequests += 1;
     response.setHeader('Cache-Control', 'no-store');
     if (request.method === 'POST') { posts += 1; response.end('form completed'); return; }
+    if (request.url === '/autonomy-redirect' && redirectTarget) { response.writeHead(302, { Location: redirectTarget }).end(); return; }
+    if (request.url === '/set-fixture-cookie') response.setHeader('Set-Cookie', 'autonomy_fixture=one; Path=/; HttpOnly');
+    if (request.url === '/set-fixture-cookie' || request.url === '/fixture-cookie') {
+      response.setHeader('Content-Type', 'text/html');
+      response.end('<p>' + (request.headers.cookie?.includes('autonomy_fixture=one') ? 'Fixture cookie present' : 'No fixture cookie') + '</p>');
+      return;
+    }
+    if (request.url === '/embedded-fixture' && redirectTarget) {
+      response.setHeader('Content-Type', 'text/html');
+      response.end('<iframe src="' + redirectTarget + '/frame"></iframe><button id="show">Open reference</button>'
+        + '<script>document.querySelector("#show").onclick = () => window.open("' + redirectTarget + '/popup")</script>');
+      return;
+    }
     if (request.url?.startsWith('/broken')) { response.writeHead(500).end('expected fixture failure'); return; }
     if (request.url === '/fixture-download.txt') {
       response.writeHead(200, { 'Content-Disposition': 'attachment; filename="test-download.txt"', 'Content-Type': 'text/plain' }).end('download fixture');
@@ -101,6 +119,20 @@ async function verifyRecordedTest(spec: string): Promise<void> {
   expect(log).toContain('1 passed');
 }
 
+async function grantWork(chrome: Awaited<ReturnType<ElectronApplication['firstWindow']>>, origins = [origin], files = false) {
+  return chrome.evaluate(async ({ origins, files }) => {
+    const status = await window.privateBrowser.getAgentStatus();
+    const space = status.spaces.find((item) => item.trust === 'work');
+    if (!space || !status.clients.length) throw new Error('Missing disposable Work space or paired client.');
+    const { id, uploadRootPresent, migrated, ...settings } = space;
+    await window.privateBrowser.setAgentSpace(id, {
+      ...settings, trust: 'work', origins, outside: 'view', clientIds: [status.clients[0].id],
+      classes: { ...settings.classes, diagnostic: true, files },
+    });
+    return id;
+  }, { origins, files });
+}
+
 async function call(name: AgentMethod, args: Record<string, unknown> = {}) {
   const result = await client!.callTool({ name, arguments: args }, undefined, { timeout: 18_000 });
   const content = Array.isArray(result.content) ? result.content : [];
@@ -133,10 +165,11 @@ test('Agent MCP stdio smoke and isolated security checks', async () => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] });
   }, uploadDir);
   await chrome.evaluate(async () => {
-    const paired = (await window.privateBrowser.getAgentStatus()).clients[0];
-    await window.privateBrowser.grantAgentUploads(paired.id);
+    const work = (await window.privateBrowser.getAgentStatus()).spaces.find((item) => item.trust === 'work')!;
+    await window.privateBrowser.grantAgentUploads(work.id);
   });
 
+  await grantWork(chrome, [origin], true);
   const workspaceOpened = app.waitForEvent('window');
   const open = call('tab_open', { url: origin });
   const workspace = await workspaceOpened;
@@ -293,6 +326,7 @@ test('lends only the owner-selected tab and keeps parallel tasks scoped by tab I
     return window.privateBrowser.lendAgentTab((await window.privateBrowser.getState()).activeTabId, client);
   }, device)).rejects.toThrow('non-protected');
 
+  await grantWork(chrome);
   const firstOpen = call('tab_open', { url: origin + '/parallel-one', label: 'Task one' });
   await approval.getByRole('button', { name: 'Allow navigation for this session on this origin' }).click();
   const first = JSON.parse((await firstOpen).text).untrusted_page_content.tabId as string;
@@ -309,4 +343,120 @@ test('lends only the owner-selected tab and keeps parallel tasks scoped by tab I
   expect(nickname(await snapshot(first)).value).toBe('Task one only');
   expect(nickname(await snapshot(second)).value).toBe('');
   console.log('Agent smoke: consented tab loan, per-action denial, automatic return, Banking refusal, and labeled tab routing passed.');
+});
+
+
+async function addFixtureClient(chrome: Awaited<ReturnType<ElectronApplication['firstWindow']>>) {
+  await chrome.evaluate(async () => {
+    await window.privateBrowser.setAgentsEnabled(true);
+    await window.privateBrowser.beginAgentPairing();
+  });
+  const code = await chrome.evaluate(async () => (await window.privateBrowser.getAgentStatus()).pairing?.code);
+  expect(code).toBeTruthy();
+  const paired = await executeCli(['pair', '--client', 'codex'], code + '\n');
+  expect(paired.code, paired.stderr.split('\n').at(-1)).toBe(0);
+  await startMcp();
+}
+
+test('isolates Work cookies across spaces and opens unlisted redirects in a signed-out view', async () => {
+  test.setTimeout(100_000);
+  let offListHits = 0;
+  const unlisted = createServer((request, response) => {
+    if (request.url === '/frame' || request.url === '/popup') offListHits += 1;
+    response.setHeader('Content-Type', 'text/html');
+    response.end('<h1>Signed-out preview fixture</h1><button>Fixture button</button><p>'
+      + (request.headers.cookie?.includes('autonomy_fixture=one') ? 'Fixture cookie present' : 'No fixture cookie') + '</p>');
+  });
+  await new Promise<void>((resolve) => unlisted.listen(0, '127.0.0.1', resolve));
+  redirectTarget = 'http://127.0.0.1:' + (unlisted.address() as { port: number }).port;
+  try {
+    const chrome = await app.firstWindow();
+    await addFixtureClient(chrome);
+    const beforeGrants = JSON.parse((await call('browser_status')).text);
+    expect(beforeGrants.spaces).toEqual([]);
+    const work = await grantWork(chrome);
+    const second = await chrome.evaluate(async (origin) => {
+      const api = window.privateBrowser;
+      await api.addAgentSpace('Second Work');
+      const status = await api.getAgentStatus();
+      const space = status.spaces.find((item) => item.trust === 'work' && item.name === 'Second Work')!;
+      const { id, uploadRootPresent, migrated, ...settings } = space;
+      await api.setAgentSpace(id, { ...settings, trust: 'work', origins: [origin], outside: 'view', clientIds: [status.clients[0].id] });
+      return id;
+    }, origin);
+    const openedWindow = app.waitForEvent('window');
+    const firstRequest = call('tab_open', { space: work, url: origin + '/set-fixture-cookie' });
+    const workspace = await openedWindow;
+    const confirm = workspace.getByRole('alertdialog', { name: 'Approve agent action' });
+    const allowOnce = () => confirm.getByRole('button', { name: 'Allow once' }).click();
+    await allowOnce();
+    const first = JSON.parse((await firstRequest).text).untrusted_page_content.tabId as string;
+    const secondRequest = call('tab_open', { space: second, url: origin + '/fixture-cookie' });
+    await allowOnce();
+    const other = JSON.parse((await secondRequest).text).untrusted_page_content.tabId as string;
+
+    expect((await call('get_text', { tabId: other })).text).toContain('No fixture cookie');
+    expect((await call('navigate', { tabId: first, url: origin + '/fixture-cookie' })).error).toBeFalsy();
+    expect((await call('get_text', { tabId: first })).text).toContain('Fixture cookie present');
+    expect((await call('navigate', { tabId: first, url: origin + '/embedded-fixture' })).error).toBeFalsy();
+    const tree = JSON.parse((await call('snapshot', { tabId: first })).text).untrusted_page_content;
+    expect(tree.nodes.some((node: { name: string }) => node.name === 'Fixture button')).toBe(false);
+    const popup = tree.nodes.find((node: { name: string }) => node.name === 'Open reference');
+    expect((await call('click', { tabId: first, ref: popup.ref })).error).toBeFalsy();
+    expect(JSON.parse((await call('tabs_list')).text).untrusted_page_content).toHaveLength(2);
+    expect(offListHits).toBe(0);
+
+    const afterRedirect = await call('navigate', { tabId: first, url: origin + '/autonomy-redirect' });
+    expect(afterRedirect.error, afterRedirect.text).toBeFalsy();
+    expect(afterRedirect.text).toContain(redirectTarget);
+    const preview = await call('get_text', { tabId: first });
+    expect(preview.text).toContain('Signed-out preview fixture');
+    expect(preview.text).toContain('No fixture cookie');
+    const observed = JSON.parse((await call('snapshot', { tabId: first })).text).untrusted_page_content;
+    const button = observed.nodes.find((node: { name: string }) => node.name === 'Fixture button');
+    expect((await call('click', { tabId: first, ref: button.ref })).text).toContain('ORIGIN_READ_ONLY');
+    expect((await call('emulate', { tabId: first, viewport: { width: 375, height: 812 } })).error).toBeFalsy();
+    expect((await call('emulate', { tabId: first, offline: true })).text).toContain('ORIGIN_READ_ONLY');
+  } finally {
+    await new Promise<void>((resolve) => { unlisted.close(() => resolve()); unlisted.closeAllConnections(); });
+  }
+});
+
+test('keeps grants and rate accounting across reconnect and refuses local Open Web requests', async () => {
+  const chrome = await app.firstWindow();
+  await addFixtureClient(chrome);
+  const openId = await chrome.evaluate(async () => {
+    const api = window.privateBrowser;
+    const status = await api.getAgentStatus();
+    const space = status.spaces.find((item) => item.trust === 'open-web')!;
+    const { id, uploadRootPresent, migrated, ...settings } = space;
+    await api.setAgentSpace(id, { ...settings, clientIds: [status.clients[0].id] });
+    return id;
+  });
+  const before = await chrome.evaluate(() => window.privateBrowser.getAgentStatus());
+  const policyBefore = before.spaces;
+  const localAlias = new URL(origin);
+  localAlias.hostname = 'localhost.';
+  const openedWindow = app.waitForEvent('window');
+  const local = call('tab_open', { space: openId, url: localAlias.href });
+  await openedWindow;
+  expect((await local).text).toContain('LOAD_FAILED');
+  expect(totalRequests).toBe(0);
+  expect((await call('tab_open', { space: openId, url: origin })).text).toContain('ORIGIN_DENIED');
+  const hostile = await call('browser_status', { limits: { tabs: 1000 }, renew: true });
+  expect(hostile.error).toBe(true);
+  expect((await chrome.evaluate(() => window.privateBrowser.getAgentStatus())).spaces).toEqual(policyBefore);
+
+  await chrome.evaluate(async () => {
+    const api = window.privateBrowser;
+    const client = (await api.getAgentStatus()).clients[0];
+    await api.setAgentLimits(client.id, { ...client.limits, actionsPerMinute: 3 });
+  });
+  expect((await call('browser_status')).error).toBeFalsy();
+  expect((await call('tabs_list')).text).toContain('RATE_LIMIT');
+  await client!.close();
+  client = undefined;
+  await expect.poll(async () => (await chrome.evaluate(() => window.privateBrowser.getAgentStatus())).clients[0].active).toBe(false);
+  await startMcp();
+  expect((await call('browser_status')).text).toContain('RATE_LIMIT');
 });

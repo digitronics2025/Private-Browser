@@ -9,7 +9,7 @@ import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './goo
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
-import type { AgentPolicy } from './agent-policy.js';
+import type { AgentSpaceSettings, ClientLimits } from '@private-browser/bridge-protocol/agent-permissions';
 
 const api = {
   getAgentStatus: (): Promise<AgentUiStatus> => ipcRenderer.invoke('agents:status'),
@@ -20,7 +20,9 @@ const api = {
   openAgentWorkspace: (): Promise<void> => ipcRenderer.invoke('agents:open-workspace'),
   revokeAgent: (id: string): Promise<void> => ipcRenderer.invoke('agents:revoke', id),
   renewAgent: (id: string): Promise<void> => ipcRenderer.invoke('agents:renew', id),
-  setAgentPolicy: (id: string, policy: AgentPolicy): Promise<void> => ipcRenderer.invoke('agents:set-policy', id, policy),
+  setAgentSpace: (id: string, settings: AgentSpaceSettings): Promise<void> => ipcRenderer.invoke('agents:set-space', id, settings),
+  setAgentLimits: (id: string, limits: ClientLimits): Promise<void> => ipcRenderer.invoke('agents:set-limits', id, limits),
+  clearAgentOpenWeb: (id: string): Promise<void> => ipcRenderer.invoke('agents:clear-open-web', id),
   grantAgentUploads: (id: string): Promise<void> => ipcRenderer.invoke('agents:grant-uploads', id),
   revokeAgentUploads: (id: string): Promise<void> => ipcRenderer.invoke('agents:revoke-uploads', id),
   addAgentSpace: (name: string): Promise<void> => ipcRenderer.invoke('agents:add-space', name),

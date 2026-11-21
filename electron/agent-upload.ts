@@ -5,7 +5,8 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } fr
 import { AgentError } from './agent-policy.js';
 import { isSecretPath, resolveInsideWorkspace } from '@private-browser/bridge-protocol/workspace-path';
 
-const UPLOAD_BYTES = 32 * 1024 * 1024;
+const UPLOAD_BYTES = 25 * 1024 * 1024;
+const reservedDevice = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)(?:\.|$)/iu;
 const browserDirectories = /(?:^|[\\/])(?:Private Browser|Private Browser Agents|Partitions|IndexedDB|Local State|Local Storage|Web Data|MyVault)(?:[\\/]|$)/i;
 const blocked = (value: string) => isSecretPath(value) || browserDirectories.test(value);
 const denied = () => new AgentError('UPLOAD_PATH_DENIED', 'Choose an ordinary file in the approved upload folder.');
@@ -28,7 +29,7 @@ export async function verifyUploadFolder(value: string, agentData: string): Prom
 export async function stageAgentUpload(folder: string, value: string, data: string): Promise<{ path: string; clean(): Promise<void> }> {
   const noDrive = value.replace(/^[a-z]:[\\/]/i, '');
   if (!value || value.startsWith('\\\\') || value.includes('\0') || noDrive.includes(':')
-    || noDrive.split(/[\\/]/).some((part) => part === '..' || /[. ]$/.test(part))) throw denied();
+    || noDrive.split(/[\\/]/).some((part) => part === '..' || /[. ]$/.test(part) || reservedDevice.test(part))) throw denied();
   if (folder !== await verifyUploadFolder(folder, data)) throw denied();
   const candidate = isAbsolute(value) ? resolve(value) : resolve(folder, value);
   if (!inside(folder, candidate) || blocked(candidate)) throw denied();
@@ -39,6 +40,7 @@ export async function stageAgentUpload(folder: string, value: string, data: stri
   const handle = await open(canonical, constants.O_RDONLY | (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW));
   try {
     const opened = await handle.stat();
+    if (relative(canonical, await realpath(candidate)) !== '') throw denied();
     if (opened.dev !== metadata.dev || opened.ino !== metadata.ino || !opened.isFile() || opened.nlink !== 1 || opened.size > UPLOAD_BYTES) throw denied();
     const bytes = Buffer.alloc(opened.size + 1);
     try {

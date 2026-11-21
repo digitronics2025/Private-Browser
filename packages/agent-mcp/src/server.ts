@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type CallToolResult, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { AGENT_UNTRUSTED, agentTools, isAgentMethod, type AgentMethod } from '@private-browser/bridge-protocol/agent';
 import { z } from 'zod';
+import { AgentRemoteError } from './client.js';
 
 export function describeAgentTools(): Tool[] {
   return Object.entries(agentTools).map(([name, { description, input }]) => ({
@@ -15,7 +16,7 @@ export function describeAgentTools(): Tool[] {
 type Request = (method: AgentMethod, input: unknown, signal: AbortSignal) => Promise<unknown>;
 
 export async function invokeAgentTool(name: string, input: unknown, signal: AbortSignal, request: Request): Promise<CallToolResult> {
-  if (!isAgentMethod(name)) return failure('Unknown Private Browser tool.');
+  if (!isAgentMethod(name)) return failure('UNKNOWN_TOOL: Unknown Private Browser tool.');
   const valid = agentTools[name].input.safeParse(input ?? {});
   if (!valid.success) return failure('Invalid arguments. Check the tool schema.');
   try {
@@ -31,7 +32,8 @@ export async function invokeAgentTool(name: string, input: unknown, signal: Abor
     }
     return { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
   } catch (error) {
-    return failure(error instanceof Error ? error.message : 'The browser could not complete the tool call.');
+    return failure(error instanceof AgentRemoteError ? error.code + ': ' + error.message
+      : error instanceof Error ? error.message : 'The browser could not complete the tool call.');
   }
 }
 

@@ -50,3 +50,57 @@
   .agent-workspace-heading h1 { font-size: 15px; }
   .agent-confirmation { padding: 10px; }
 }
+
+
+.agent-space-summary { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.agent-space-summary > div { min-width: 0; }
+.agent-space-summary small, .agent-field small, .agent-origin-preview small { display: block; color: var(--text-muted); }
+.agent-space-summary small + small { margin-top: 2px; }
+.agent-field { display: grid; gap: 5px; font-size: var(--fs-md); }
+.agent-field input, .agent-field select { width: 100%; }
+.agent-card .agent-field input, .agent-card .agent-field select { min-height: 34px; background: var(--surface-2); }
+.agent-card select option { color: var(--text); background: var(--surface); }
+.agent-inline-field { grid-template-columns: minmax(0, 1fr) minmax(0, 145px); align-items: center; }
+.agent-origin-preview, .agent-origin-list li { display: flex; align-items: flex-start; justify-content: space-between; gap: 7px; padding: 8px 0; }
+.agent-origin-preview > div, .agent-origin-list li > span { min-width: 0; overflow-wrap: anywhere; }
+.agent-origin-preview output { display: block; color: var(--accent-strong); font-size: var(--fs-sm); }
+.agent-card .agent-danger, .agent-chrome .agent-danger { color: var(--danger); }
+.agent-card .agent-warning-text { color: var(--warn); }
+.agent-card input[aria-invalid="true"] { border-color: var(--danger); }
+.agent-origin-list { margin: 0 0 8px; padding: 0; list-style: none; }
+.agent-origin-list li { border-top: 1px solid var(--border); align-items: center; font-size: var(--fs-sm); }
+.agent-action-options, .agent-limits-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 10px; margin: 8px 0; }
+.agent-action-options label { display: flex; align-items: start; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.agent-editor input[type="checkbox"] { accent-color: var(--accent-strong); }
+.agent-file-row { margin-top: 12px; }
+.agents-panel:has(.agent-editor) { padding-bottom: 0; }
+.agent-edit-footer { position: sticky; z-index: 1; bottom: 0; margin-inline: -16px; padding: 12px 16px; border-top: 1px solid var(--border); background: var(--surface); }
+.agent-edit-footer button { border: 1px solid var(--border-strong); border-radius: 7px; padding: 8px 10px; color: var(--text); background: var(--surface-2); }
+.agents-panel .agent-primary, .agent-workspace .agent-primary { color: var(--on-accent); background: var(--accent-strong); border-color: var(--accent-strong); }
+.agents-panel .agent-primary:hover, .agent-workspace .agent-primary:hover { color: var(--on-accent); background: var(--accent-strong); }
+.agent-notice { background: var(--accent-soft); }
+.agent-notice[role="alert"] { background: var(--danger-soft); }
+.agent-owner-dialog {
+  box-sizing: border-box; width: min(510px, calc(100% - 24px)); max-height: min(80vh, 620px); margin: auto; overflow: auto;
+  color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-md); padding: 16px;
+}
+.agent-workspace .agent-owner-dialog { margin: min(17vh, 145px) auto auto; }
+.agent-owner-dialog::backdrop { background: var(--scrim); }
+.agent-owner-dialog h2 { margin: 0 0 9px; font-size: var(--fs-xl); }
+.agent-log { max-height: none; }
+.agent-log-result { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 5px; }
+.agent-log-result :last-child { text-align: end; }
+.agent-log-result span { text-transform: capitalize; }
+.agent-allowed { color: var(--accent-strong); font-weight: 600; }
+.agent-workspace[data-theme="dark"], :root[data-theme="dark"] .agent-workspace { background: #201b2c; color: var(--text); }
+:root[data-theme="dark"] .agent-chrome { background: #2d243e; }
+:root[data-theme="dark"] .agent-chrome nav button[aria-current="true"] { background: #483568; color: var(--text); }
+:root[data-theme="dark"] .agent-confirmation { background: var(--surface); }
+@media (max-width: 450px) {
+  .agent-inline-field { grid-template-columns: minmax(0, 1fr) minmax(0, 132px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-editor *, .agent-owner-dialog { transition: none; scroll-behavior: auto; }
+}
+
+.agent-chrome-alert { margin: 12px auto; width: min(510px, calc(100% - 24px)); }

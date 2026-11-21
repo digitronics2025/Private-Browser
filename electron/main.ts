@@ -7,7 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { agentDataRoot } from '@private-browser/bridge-protocol/agent-location';
 import { AgentHost } from './agent-host.js';
 import type { AgentDecision } from './agent-types.js';
-import { agentUrl, type AgentPolicy } from './agent-policy.js';
+import { agentUrl } from './agent-policy.js';
+import type { AgentSpaceSettings, ClientLimits } from '@private-browser/bridge-protocol/agent-permissions';
 import {
   app,
   BrowserWindow,
@@ -4252,7 +4253,7 @@ class BrowserController {
 let controller: BrowserController | undefined;
 let vscodeBridge: VscodeBridgeServer | undefined;
 let agentHost: AgentHost | undefined;
-const AGENT_WORKSPACE_Ipc = new Set(['agents:status', 'agents:decide', 'agents:stop', 'agents:select', 'agents:manual', 'agents:close-tab']);
+const AGENT_WORKSPACE_Ipc = new Set(['agents:status', 'agents:decide', 'agents:stop', 'agents:select', 'agents:manual', 'agents:close-tab', 'agents:renew', 'agents:clear-open-web']);
 const pendingLaunchUrls: string[] = [];
 let launchWindowReady = false;
 let processingLaunchUrls = false;
@@ -4393,12 +4394,6 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     commandArgs: app.isPackaged ? [] : [join(import.meta.dirname, '../packages/agent-mcp/dist/cli.js')],
     parent: () => controller?.agentParent(),
     onChange: () => controller?.notifyAgentChange(),
-    discover: async () => {
-      const selected = vscodeBridge?.status().project?.project;
-      if (!selected?.authorized || !vscodeBridge) return [];
-      const info = await vscodeBridge.request('server.discover', { projectId: selected.id }) as ProjectInfo;
-      return info.devServerUrl ? [info.devServerUrl] : [];
-    },
   });
 
   handle('browser:get-state', () => controller!.getSnapshot());
@@ -4410,7 +4405,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('agents:open-workspace', () => agentHost!.workspace.show());
   handle('agents:revoke', (_event, id: string) => agentHost!.revoke(id));
   handle('agents:renew', (_event, id: string) => agentHost!.renew(id));
-  handle('agents:set-policy', (_event, id: string, policy: AgentPolicy) => agentHost!.setPolicy(id, policy));
+  handle('agents:set-space', (_event, id: string, settings: AgentSpaceSettings) => agentHost!.setSpace(id, settings));
+  handle('agents:set-limits', (_event, id: string, limits: ClientLimits) => agentHost!.setLimits(id, limits));
+  handle('agents:clear-open-web', (_event, id: string) => agentHost!.clearOpenWeb(id));
   handle('agents:grant-uploads', (_event, id: string) => agentHost!.grantUploadFolder(id));
   handle('agents:revoke-uploads', (_event, id: string) => agentHost!.revokeUploadFolder(id));
   handle('agents:add-space', (_event, name: string) => agentHost!.addSpace(name));

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { WebContentsView } from 'electron';
 import { AgentDriver } from './agent-driver.js';
-import { agentUrl, AgentError, type AgentPolicy } from './agent-policy.js';
+import { agentUrl, AgentError } from './agent-policy.js';
+import { makeSpace } from './agent-space-policy.js';
 import type { AgentConnection } from './agent-pipe.js';
 import type { AgentTab } from './agent-workspace.js';
 
@@ -23,7 +24,7 @@ export class AgentLentTab {
   private readonly listenCleanup: () => void;
   private readonly files: (() => Promise<void>)[] = [];
 
-  constructor(readonly source: LendableTab, connection: AgentConnection, policy: AgentPolicy, returned: () => void) {
+  constructor(readonly source: LendableTab, connection: AgentConnection, returned: () => void) {
     const contents = source.view.webContents;
     if (!source.current() || contents.isDestroyed() || contents.debugger.isAttached() || contents.isLoadingMainFrame()) {
       throw new AgentError('LOAN_UNAVAILABLE', 'Select a loaded tab with Developer Tools closed.');
@@ -32,9 +33,9 @@ export class AgentLentTab {
     this.contentsId = contents.id;
     this.expiresAt = Math.min(Date.now() + LOAN_MS, connection.expiresAt);
     this.tab = {
-      id: randomUUID(), view: source.view, space: { id: 'lent', name: 'Lent tab' },
-      connection, manual: false, origin: this.origin,
-      policy: { ...policy, origins: [...new Set([...policy.origins, this.origin])] },
+      id: randomUUID(), view: source.view,
+      space: { ...makeSpace('lent', 'Lent tab', 'work'), trust: 'work', clientIds: [connection.device.id], origins: [this.origin], outside: 'deny' },
+      connection, manual: false, origin: this.origin, signedOut: false, partition: contents.session,
       driver: new AgentDriver(contents),
     };
     const starts = (_event: Electron.Event, url: string, _inPlace: boolean, mainFrame: boolean) => {

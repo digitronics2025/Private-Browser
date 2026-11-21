@@ -1,8 +1,8 @@
 # Private Browser permissions model
 
-Proposed for Gate G1. Scope is Agent Mode in the Windows Electron app. The
-current [security contract](../SECURITY.md#agent-mode) and
-[Agent Mode guide](systems/agent-mode.md) apply until the upgrade ships.
+Approved at Gate G1. Scope is Agent Mode in the Windows Electron app. See the
+[security contract](../SECURITY.md#agent-mode) and
+[Agent Mode guide](systems/agent-mode.md) for the runtime and setup.
 
 ## Spaces and access
 
@@ -28,8 +28,8 @@ Migrate every existing Agent space to Work with its existing ID and partition.
 Move existing client restrictions forward as a ceiling, including Block and
 Observe. Preserve the exact origin lists. An empty list remains empty.
 The old Develop shortcut for loopback access becomes an explicit owner grant
-for an exact scheme, host and port. Keep the old upload grant scoped to
-the original client and require a fresh owner choice before a space can use it.
+for an exact scheme, host and port. Keep the old upload grant in the encrypted backup. Require a fresh owner
+choice before a space can use any upload folder.
 Create Open Web as a separate, unassigned space. Its agent access begins only
 after the owner enables it for a paired client. On save, replace the encrypted
 policy atomically. Retain the old encrypted file for rollback. A corrupt file
@@ -46,9 +46,9 @@ cannot make that transition safely. Unlisted subframes in a signed-in Work
 view cannot take action or reuse the Work grant.
 
 Open Web may hold ordinary site state within a session. Reset its ephemeral
-partition when the lease ends, the app stops or the owner clears it. Warn in
-trusted chrome and pause tools if manual password submission or a probable
-authentication cookie on a listed Work origin is detected. Observe signals as
+partition when the lease ends, the app stops or the owner clears it. The browser exposes manual control only in listed Work tabs, so the owner
+signs in there. Warn in trusted chrome and pause tools if a probable
+authentication cookie on a listed Work origin is detected in Open Web. Observe signals as
 booleans only. Never retain credentials, form values, cookie names or cookie
 values. The owner may clear the isolated space or keep it paused. Sites can
 authenticate without these detectable signals. The UI should describe the

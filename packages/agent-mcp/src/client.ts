@@ -8,7 +8,7 @@ import {
 import { isAgentPipeName } from '@private-browser/bridge-protocol/agent-location';
 import {
   AGENT_DISABLED, AGENT_HANDSHAKE_ID, AGENT_WIRE_VERSION, agentChallenge, agentKeys, agentRendezvous,
-  agentResponse, agentTranscript, agentWelcome, type AgentMethod,
+  agentDenial, agentResponse, agentTranscript, agentWelcome, type AgentMethod,
 } from '@private-browser/bridge-protocol/agent';
 import type { StoredAgentIdentity } from './identity.js';
 
@@ -66,6 +66,8 @@ export class AgentRemoteError extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
 
+const expired = () => new AgentRemoteError('SESSION_EXPIRED', 'This session expired. Renew it in Settings → Agents.');
+
 export class AgentClient {
   private sent = 0;
   private received = 0;
@@ -75,6 +77,7 @@ export class AgentClient {
     private readonly session: string,
     private readonly keys: ReturnType<typeof agentKeys>,
     readonly fingerprint: string,
+    private readonly expiresAt: number,
   ) {
     frames.socket.once('close', () => { keys.browser.fill(0); keys.client.fill(0); });
   }
@@ -98,13 +101,15 @@ export class AgentClient {
       frames.send(sealPayload(keys.client, AGENT_HANDSHAKE_ID, 0, {
         kind: 'identify', device, code, signature: signText(identity.identity.privateKey, agentTranscript({ transcript, device })),
       }));
-      const response = agentWelcome.safeParse(openPayload(keys.browser, await frames.read(8_000), AGENT_HANDSHAKE_ID, 0));
+      const welcome = openPayload(keys.browser, await frames.read(8_000), AGENT_HANDSHAKE_ID, 0);
+      const response = agentWelcome.safeParse(welcome);
       if (!response.success) {
         keys.client.fill(0);
         keys.browser.fill(0);
+        if (agentDenial.safeParse(welcome).data?.code === 'SESSION_EXPIRED') throw expired();
         throw new Error('The browser refused this client. Check the code, resume Agent Mode, or pair the client again.');
       }
-      return new AgentClient(frames, response.data.sessionId, keys, rendezvous.fingerprint);
+      return new AgentClient(frames, response.data.sessionId, keys, rendezvous.fingerprint, response.data.expiresAt);
     } catch (error) { frames.socket.destroy(); throw error; }
   }
 
@@ -112,9 +117,14 @@ export class AgentClient {
   close(): void { this.frames.socket.destroy(); }
 
   async request(method: AgentMethod, input: unknown): Promise<unknown> {
+    if (Date.now() >= this.expiresAt) { this.close(); throw expired(); }
     const id = randomUUID();
     this.frames.send(sealPayload(this.keys.client, this.session, this.sent++, { kind: 'request', id, method, input }));
-    const response = agentResponse.parse(openPayload(this.keys.browser, await this.frames.read(130_000), this.session, this.received++));
+    const raw = await this.frames.read(130_000).catch((error) => {
+      if (Date.now() >= this.expiresAt) throw expired();
+      throw error;
+    });
+    const response = agentResponse.parse(openPayload(this.keys.browser, raw, this.session, this.received++));
     if (response.id !== id) { this.close(); throw new Error('The browser response did not match the current call.'); }
     if (response.kind === 'error') throw new AgentRemoteError(response.code, response.message);
     return response.output;

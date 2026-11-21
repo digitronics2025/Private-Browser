@@ -5,10 +5,15 @@ sources:
   - electron/agent-workspace.ts
   - electron/agent-driver.ts
   - electron/agent-policy.ts
+  - electron/agent-space-policy.ts
+  - electron/agent-state.ts
+  - electron/agent-public-proxy.ts
+  - electron/agent-pipe.ts
+  - electron/agent-downloads.ts
   - electron/agent-lent-tab.ts
   - packages/agent-mcp/src/cli.ts
   - packages/bridge-protocol/src/agent.ts
-verified_at: 69109ce
+verified_at: 3efa126
 ---
 
 # Agent Mode
@@ -36,10 +41,19 @@ See the [setup guide](../agents/private-browser.md) and [security contract](../.
   identity in Windows DPAPI or Linux Secret Service. Linux must have an
   unlocked Secret Service and `secret-tool`. The basic-text Electron backend
   is refused.
-- Device names, exact origins, tab identity, and permissions are resolved
-  in main. New destinations and consequential actions pause in trusted
-  chrome. Confirmation binds the precise payload and current page revision.
-  A session-wide approval is limited to navigation to the same exact origin.
+- Electron main resolves paired client, space, current top-frame document and
+  exact origin. Work navigation and consequential actions retain trusted
+  confirmation. An approval binds input and page revision. Navigation
+  approval for the session is scoped to the same space and exact origin.
+- The owner assigns clients to spaces. Work uses explicit origins. Unlisted
+  destinations are blocked or open in a disposable signed-out preview.
+  An authenticated Work view cannot load an unlisted main frame or subframe.
+  Unlisted redirects hand off only as fresh preview GET requests.
+- Open Web uses an in-memory partition and a local public-only proxy with no
+  direct proxy fallback. The proxy rejects nonpublic DNS results and dials the
+  validated address. WebRTC cannot use unproxied UDP. The partition cannot use
+  HTTP authentication, passkey or federated credential APIs, saved logins, or
+  manual control.
 - The owner may take manual control of a tab to enter credentials. That
   detaches the debugger and prevents tool access until control is returned.
   Secrets in sensitive inputs, browser profiles and browser storage remain
@@ -55,10 +69,14 @@ See the [setup guide](../agents/private-browser.md) and [security contract](../.
 - Agent tabs refuse popups and hardware, notification, clipboard and display
   permissions. Script-initiated writes without an exact form authorization
   are blocked. Uploads come from an owner-selected directory and are copied to
-  temporary tab-owned staging. Downloads stay in the space's local directory.
+  temporary tab-owned staging. Downloads stay in the space’s local directory.
+  A short-lived grant binds an agent download to the exact link. Quotas
+  account for concurrent reservations and remove oldest completed files first.
 - Stop and `Ctrl+Shift+.` close pipes and agent tabs, abort waits and discard
-  confirmations. A browser session lasts up to 60 minutes and a connection
-  times out after ten idle minutes. One client can own up to four tabs.
+  confirmations. Default limits are eight hours, 30 idle minutes, eight tabs
+  and 120 actions per minute. Hard limits are 12 hours, 60 idle minutes, 12
+  tabs and 240 actions per minute. Absolute expiry persists across restart.
+  The owner renews in trusted chrome. Rate accounting is per paired client.
 
 ## Lend a tab and run parallel tasks
 
@@ -82,15 +100,18 @@ calls within one connected client so action and approval order remain clear.
 | --- | --- |
 | MCP tool declarations and validation | `packages/bridge-protocol/src/agent.ts` |
 | MCP stdio, doctor and pairing | `packages/agent-mcp/src` |
-| Device, policy, session and confirmations | `electron/agent-host.ts`, `electron/agent-policy.ts` |
+| Device, policy, session and confirmations | `agent-host.ts`, `agent-space-policy.ts`, `agent-state.ts`, `agent-pipe.ts` in Electron |
 | Browser isolation, downloads and requests | `electron/agent-workspace.ts` |
 | DOM, page capture and developer tools | `electron/agent-driver.ts`, `electron/agent-page.ts` |
 | Owner controls | `src/panels/AgentsPanel.tsx` |
 
-`userData/agent-mode` holds the encrypted client list and last 200 audit
-entries. The audit includes action, origin and outcome. Keep individual
-inputs, page text, queries and passwords out of it. Exports require a native
-save dialog. Persistent Chromium data uses random Agent-space partition IDs.
+`userData/agent-mode` holds encrypted policy and retained audit segments.
+A version 1 file is backed up once as `clients.enc.bak`. Existing spaces keep
+their IDs and partitions and retain per-client rules until an explicit
+owner save. Only Work persists Chromium data. Audit rows include class,
+origin and outcome. Up to five 10 MB encrypted segments are retained per
+space. The viewer and native export show recent entries. Typed inputs, page
+text, queries and file paths stay out of the audit.
 
 ## Threat model
 
@@ -100,7 +121,7 @@ save dialog. Persistent Chromium data uses random Agent-space partition IDs.
 | Tampering | A process replays ciphertext or modifies an approval | Independent directional encryption keys, ordered frames, authenticated session IDs, and one-use approvals bound to page revision and exact input. |
 | Repudiation | A client disputes an operation | Local encrypted audit with stable outcome codes. The owner can export or clear records. |
 | Information disclosure | Malicious instructions or secrets appear in a page | Data envelopes, bounded redaction and image masks. A site can deliberately print its own sensitive data in ordinary page text. Keep high-value accounts out of Agent Spaces. |
-| Denial of service | An agent burns resources or a page stalls a call | Per-connection rate limits, frame and output limits, tab caps, idle and absolute expiry, and a chrome stop switch. |
+| Denial of service | An agent burns resources or a page stalls a call | Per-client rate limits, frame and output limits, tab caps, idle and absolute expiry, and a chrome stop switch. |
 | Elevation of privilege | An agent attempts to access a regular signed-in tab | Main resolves Agent IDs and at most one opaque, owner-lent tab ID. The loan expires, forbids origin changes, and confirms every write. Site content shown in a signed-in tab can still include data the owner has chosen to expose to the client. |
 | Supply chain | A compromised MCP dependency adds another route to browser control | Exact dependency version and lockfile, npm audit, a bundled stdio-only client, and no browser capabilities in the CLI. Main validates everything again. |
 
