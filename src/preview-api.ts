@@ -1,4 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
+import { chromeCollections } from '../electron/chrome-collections';
 import type { ChromeImportOptions, ChromePasswordImportReview } from '../electron/types';
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
@@ -156,6 +157,7 @@ export function installPreviewApi(): void {
   const syncDarkMode = () => { state.windowState.darkMode = state.ui.theme === 'system' ? media.matches : state.ui.theme === 'dark'; };
   syncDarkMode();
   const listeners = new Set<(snapshot: BrowserSnapshot) => void>();
+  const chromeSnapshot = (): BrowserSnapshot => structuredClone({ ...state, ...chromeCollections(state, state.activeAccountSpaceId, state.activeWorkspaceId) });
   let backupRestoreReview: BackupRestorePreview | undefined;
   if (params.get('backupRestore') === 'sample') {
     state.accountSpaces.find(({ id }) => id === google)?.enabledModules.push('encrypted-backup');
@@ -283,7 +285,7 @@ export function installPreviewApi(): void {
     groupsByAccount.set(state.activeAccountSpaceId, state.tabGroups);
     const batch = batchesByAccount.get(state.activeAccountSpaceId);
     state.closedTabBatch = batch ? { count: batch.entries.length, groupName: batch.groupName } : undefined;
-    listeners.forEach((listener) => listener(structuredClone(state)));
+    listeners.forEach((listener) => listener(chromeSnapshot()));
   };
   const requireAssistantPolicy = (mode: 'cloud' | 'local') => {
     if (state.assistantPolicy.cloud === 'unavailable') throw new Error('Assistant requests are unavailable in this Account Space.');
@@ -498,7 +500,7 @@ export function installPreviewApi(): void {
       managedUpdate = { phase: 'launched', version: managedUpdate.version };
       publish();
     },
-    getState: async () => structuredClone(state),
+    getState: async () => chromeSnapshot(),
     controlDownload: async (id, action) => {
       const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);
       if (!entry?.canCancel || state.activeWorkspaceId === 'banking') throw new Error('Download is unavailable in this Account Space');

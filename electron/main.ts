@@ -567,7 +567,7 @@ class BrowserController {
       windowState: { maximized: false, fullscreen: false, darkMode: nativeTheme.shouldUseDarkColors },
       shortcutsByAccountSpace: {}, bookmarkIcons: {}, canReopenClosedTab: false, sideApps: [],
     };
-    const persisted = this.store.get();
+    const persisted = this.store.getChromeState();
     const tabs: BrowserTab[] = persisted.tabs.map((tab) => {
       const runtime = this.runtimeTabs.get(tab.id);
       return {
@@ -607,13 +607,13 @@ class BrowserController {
       bookmarks: persisted.bookmarks,
       bookmarkFolders: downloadAccount ? persisted.bookmarkFoldersByAccountSpace?.[downloadAccount] : undefined,
       bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
-      history: persisted.history.slice(0, 100),
+      history: persisted.history,
       ...(downloadAccount ? this.downloadSnapshot(downloadAccount) : { downloads: [] }),
       downloadHistory: !downloadAccount ? undefined : this.downloadHistoryFailures.has(downloadAccount)
         ? 'unavailable' : this.downloadHistory.status(downloadAccount),
       downloadFolder: downloadAccount ? this.downloadFolder.status(downloadAccount) : undefined,
       managedUpdate: downloadAccount && process.platform === 'win32' && !this.store.isReadOnly() ? this.managedUpdate.snapshot() : undefined,
-      privacyLog: persisted.privacyLog.slice(0, 50),
+      privacyLog: persisted.privacyLog,
       trackerBlocking: strictTracking || persisted.trackerBlocking,
       trackerSite,
       memorySaverSite: memorySite && downloadAccount ? { origin: memorySite, keptAwake: this.store.keepsSiteAwake(downloadAccount, memorySite) } : undefined,
