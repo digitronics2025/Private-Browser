@@ -3,10 +3,51 @@ import { dirname } from 'node:path';
 import { safeStorage } from 'electron';
 import { isSafeAiEndpoint } from './security.js';
 import { OllamaLocal } from './ollama-local.js';
-import type { AiProviderInput, AiProviderStatus, LocalAiModels } from './types.js';
+import type { AiProviderCheckResult, AiProviderCheckState, AiProviderInput, AiProviderStatus, LocalAiModels } from './types.js';
 
 type StoredProvider = AiProviderInput & { version: 1 };
 const systemPrompt = 'Answer only from the user-approved webpage context. Clearly say when the context is insufficient. Never request or expose credentials.';
+const maxCloudResponse = 256 * 1024;
+
+class AiResponseError extends Error {
+  constructor(readonly state: AiProviderCheckState, message: string) { super(message); }
+}
+
+function failedCloudResponse(status: number): AiResponseError {
+  if (status === 401 || status === 403) return new AiResponseError('authentication', 'The AI provider refused access. Check authentication and model access.');
+  if (status === 400 || status === 404 || status === 422) return new AiResponseError('model', 'The AI provider rejected the request. Check the model ID and endpoint.');
+  if (status === 429) return new AiResponseError('rate-limit', 'The AI provider is limiting requests. Try again later.');
+  return new AiResponseError('unavailable', 'The AI provider is unavailable. Try again later.');
+}
+
+async function readCloudAnswer(response: Response): Promise<string> {
+  const stream = response.body;
+  if (!stream || Number(response.headers.get('content-length') ?? 0) > maxCloudResponse) {
+    await stream?.cancel().catch(() => undefined);
+    throw new AiResponseError('invalid-response', 'The AI provider returned an empty or oversized response.');
+  }
+  const reader = stream.getReader();
+  const chunks: Buffer[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > maxCloudResponse) {
+        await reader.cancel().catch(() => undefined);
+        throw new AiResponseError('invalid-response', 'The AI provider response exceeded its size limit.');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally { reader.releaseLock(); }
+  let parsed: { choices?: Array<{ message?: { content?: unknown } }> };
+  try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  catch { throw new AiResponseError('invalid-response', 'The AI provider returned an unreadable response.'); }
+  const answer = parsed?.choices?.[0]?.message?.content;
+  if (typeof answer !== 'string' || !answer.trim()) throw new AiResponseError('invalid-response', 'The AI provider returned an empty response.');
+  return answer.trim().slice(0, 30_000);
+}
 
 export class AiProviderStore {
   private config?: StoredProvider;
@@ -33,7 +74,7 @@ export class AiProviderStore {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('OS encryption is unavailable');
     if (this.corrupt) throw new Error('The AI provider file is corrupt; clear it before configuring again');
     const model = input.model.trim();
-    if (!model || model.length > 200) throw new Error('Invalid provider model');
+    if (!model || model.length > 200 || /[\s\p{Cc}]/u.test(model)) throw new Error('Enter a provider model ID without spaces.');
     const request = ++this.configurationRequest;
     let next: StoredProvider;
     if ('mode' in input) {
@@ -60,6 +101,18 @@ export class AiProviderStore {
     return this.status();
   }
 
+  async checkConnection(checkWorkspace: () => void): Promise<AiProviderCheckResult> {
+    const provider = this.config;
+    if (!provider || !this.status().configured) return { state: 'not-configured' };
+    try {
+      await this.ask({ title: 'Private Browser test sample', url: 'Built-in sample', text: 'The fictional shop has two test pages.' },
+        'How many test pages are in the sample?', checkWorkspace);
+      return { state: 'ready' };
+    } catch (error) {
+      return { state: error instanceof AiResponseError ? error.state : 'mode' in provider ? 'local-setup' : 'unavailable' };
+    }
+  }
+
   async ask(context: { title: string; url: string; text: string; dom?: string; screenshotDataUrl?: string }, question: string, checkSource: () => void): Promise<string> {
     const provider = this.config;
     if (!provider) throw new Error('Configure an AI provider first');
@@ -74,6 +127,7 @@ export class AiProviderStore {
     const content = context.screenshotDataUrl
       ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: context.screenshotDataUrl } }]
       : prompt;
+    checkSource();
     const response = await fetch(`${provider.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -91,15 +145,11 @@ export class AiProviderStore {
       redirect: 'error',
       signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) throw new Error(`AI provider returned ${response.status}`);
-    const declared = Number(response.headers.get('content-length') ?? 0);
-    if (declared > 256 * 1024) throw new Error('AI provider response exceeded its size limit');
-    const body = await response.text();
-    if (Buffer.byteLength(body, 'utf8') > 256 * 1024) throw new Error('AI provider response exceeded its size limit');
-    const data = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }> };
-    const answer = data.choices?.[0]?.message?.content?.trim();
-    if (!answer) throw new Error('AI provider returned an empty response');
-    return answer.slice(0, 30_000);
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw failedCloudResponse(response.status);
+    }
+    return readCloudAnswer(response);
   }
 
   private load(): StoredProvider | undefined {

@@ -4,7 +4,7 @@ import type { AccountSpaceId, BrowserSettings, BrowserSettingsPatch, BrowserSnap
 import type { ChromeImportReview } from '../../electron/types';
 import { PanelHeader } from './common';
 import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
-import { MAX_SETTING_URL_LENGTH, MAX_SITE_KEYWORDS, MAX_STARTUP_PAGES, SEARCH_ENGINES, type PresetSearchEngineId } from '../../electron/browser-settings';
+import { DEFAULT_SPELLCHECK, MAX_SETTING_URL_LENGTH, MAX_SITE_KEYWORDS, MAX_STARTUP_PAGES, SEARCH_ENGINES, SPELLCHECK_LANGUAGES, type PresetSearchEngineId, type SpellcheckLanguage, type SpellcheckSettings } from '../../electron/browser-settings';
 import type { Workspace } from '../../electron/types';
 import { SetupGuide } from './SetupGuide';
 
@@ -271,6 +271,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     <div ref={searchSection} className="workspace-behavior">
       <SearchHomeSettings key={workspace.id} workspace={workspace} settings={settings} onToast={onToast} />
     </div>
+    <WritingSettings key={workspace.id} workspace={workspace} writing={settings.spellcheck ?? DEFAULT_SPELLCHECK} available={state.availableSpellcheckLanguages} onToast={onToast} />
     <div ref={chromeImportSection} className="settings-card chrome-import-settings">
       <div className="settings-row"><span><Upload size={17} /></span><div><strong>Import from Chrome</strong><small>Bookmarks, bookmark folders and browsing history stay on this computer.</small></div><button onClick={() => {
         if (chromeImportOpen) { chromeReviewRequest.current += 1; setChromeReview(undefined); setChromeImportOpen(false); }
@@ -425,6 +426,43 @@ function UpdatesPage({ status, result, error, checking, editingPrivate, form, on
  * Search engine, Home page and startup. The main process validates and normalizes
  * every value; a refusal comes back as a toast and the typed text stays put.
  */
+function WritingSettings({ workspace, writing, available, onToast }: {
+  workspace: Workspace;
+  writing: SpellcheckSettings;
+  available: SpellcheckLanguage[];
+  onToast: (message: string, kind?: 'ok' | 'error') => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const languages = writing.languages.filter((language) => available.includes(language));
+  const save = async (next: SpellcheckSettings) => {
+    setSaving(true);
+    try {
+      await window.privateBrowser.setBrowserSettings({ spellcheck: { ...next, languages: next.languages.filter((language) => available.includes(language)) } }, workspace.id);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Could not save spellcheck settings.', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return <fieldset className="settings-card writing-settings" aria-describedby="spelling-description" disabled={saving}>
+    <legend>Spellcheck</legend>
+    <p id="spelling-description">Checks spelling on this device. The browser may download dictionaries. These choices apply to {workspace.name}.</p>
+    <label><input type="checkbox" checked={writing.enabled} onChange={(event) => void save({ ...writing, enabled: event.target.checked })} /> Check spelling</label>
+    {writing.enabled && <div className="writing-languages" role="group" aria-label="Spellcheck languages">
+      {(Object.entries(SPELLCHECK_LANGUAGES) as [SpellcheckLanguage, string][]).map(([value, label]) => {
+        const supported = available.includes(value);
+        return <label key={value}><input type="checkbox" checked={languages.includes(value)} disabled={!supported} onChange={(event) => {
+          const existing = languages.filter((language) => language !== value);
+          void save({ ...writing, languages: event.target.checked ? [...existing, value] : existing });
+        }} /> {label}{!supported && ' (unavailable on this device)'}</label>;
+      })}
+      {languages.length > 0 ? <button type="button" onClick={() => void save({ ...writing, languages: [] })}>Use Windows languages</button>
+        : <small>Using Windows languages</small>}
+    </div>}
+  </fieldset>;
+}
+
 function SearchHomeSettings({ workspace, settings, onToast }: { workspace: Workspace; settings: BrowserSettings; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [customOpen, setCustomOpen] = useState(settings.searchEngine === 'custom');
   const [template, setTemplate] = useState(settings.customSearchTemplate ?? '');

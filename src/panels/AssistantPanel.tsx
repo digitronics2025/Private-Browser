@@ -1,10 +1,20 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Bot, Check, Cloud, Eye, LoaderCircle, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
-import type { AiPagePreview, CloudAiProviderInput, AiProviderStatus, LocalAiModels } from '../../electron/types';
+import type { AiPagePreview, AiProviderCheckState, CloudAiProviderInput, AiProviderStatus, LocalAiModels } from '../../electron/types';
 import { PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
 
 const sentences = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+const checkMessages: Record<AiProviderCheckState, string> = {
+  ready: 'The selected model answered the built-in sample.',
+  'not-configured': 'Save a provider before testing.',
+  authentication: 'The provider refused access. Check the API key and access to this model.',
+  model: 'Check the provider endpoint and model ID.',
+  'rate-limit': 'The provider is limiting requests. Try again later.',
+  'invalid-response': 'The provider returned an empty or unreadable response.',
+  unavailable: 'Could not reach the AI provider. Check the connection and endpoint.',
+  'local-setup': 'Start Ollama with cloud features disabled and check that the selected model is installed.',
+};
 
 function searchWords(text: string): string[] {
   return text.normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '').match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -27,6 +37,7 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState<AiProviderStatus>({ configured: false });
   const [showProviderForm, setShowProviderForm] = useState(false);
+  const [providerCheck, setProviderCheck] = useState<AiProviderCheckState>();
   const [providerForm, setProviderForm] = useState<CloudAiProviderInput>({ endpoint: 'https://openrouter.ai/api/v1', model: '', apiKey: '' });
   const [providerMode, setProviderMode] = useState<'local' | 'cloud'>('local');
   const [local, setLocal] = useState<LocalAiModels>();
@@ -37,6 +48,7 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
   const [passageQuery, setPassageQuery] = useState('');
   const [passages, setPassages] = useState<string[]>();
   useEffect(() => { void window.privateBrowser.getAiProvider().then(setProvider).catch(() => undefined); }, []);
+  useEffect(() => { setProviderCheck(undefined); }, [provider.mode, provider.model, provider.endpoint]);
   const clearContext = async () => {
     setPreview(null);
     setApprovalToken(null);
@@ -96,6 +108,13 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
   };
+  const checkConnection = async () => {
+    setLoading(true);
+    setProviderCheck(undefined);
+    try { setProviderCheck((await window.privateBrowser.checkAiProvider()).state); }
+    catch { setProviderCheck('unavailable'); }
+    finally { setLoading(false); }
+  };
   const ask = async () => {
     if (!approvalToken) return;
     setLoading(true);
@@ -113,12 +132,17 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
       <div className="provider-strip">
         <span className={provider.configured ? 'connected' : ''} />
         <div><strong>{provider.configured ? provider.model : provider.error === 'provider-corrupt' ? 'Provider recovery required' : 'AI provider not connected'}</strong><small>{provider.configured ? isLocal ? 'Local · Ollama' : domainFromUrl(provider.endpoint ?? '') : provider.error === 'provider-corrupt' ? 'Reset the unreadable configuration' : 'Choose an installed local model or a cloud provider'}</small></div>
-        <button onClick={() => {
+        <button disabled={loading} onClick={() => {
           setShowProviderForm((value) => !value);
           setProviderMode(provider.mode ?? 'local');
           setProviderForm((value) => ({ ...value, apiKey: '' }));
         }}>{provider.configured ? 'Change' : 'Connect'}</button>
       </div>
+      {provider.configured && <div className="provider-check">
+        <button className="text-button" type="button" disabled={loading} onClick={() => void checkConnection()}>Test connection</button>
+        <small>Uses a built-in sample.</small>
+        {providerCheck && <p role="status">{checkMessages[providerCheck]}</p>}
+      </div>}
       {showProviderForm && <form className="vault-form provider-form" onSubmit={configureProvider}>
         <label>Provider type<select value={providerMode} onChange={(event) => {
           setProviderMode(event.target.value as 'local' | 'cloud');
@@ -135,13 +159,14 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
           </select></label> : null}
         </> : <>
           <input placeholder="OpenAI-compatible endpoint" required value={providerForm.endpoint} onChange={(event) => setProviderForm({ ...providerForm, endpoint: event.target.value })} />
-          <input placeholder="Model ID" required value={providerForm.model} onChange={(event) => setProviderForm({ ...providerForm, model: event.target.value })} />
+          <input placeholder="Model ID" required maxLength={200} pattern="[^\s]+" title="Enter the model ID without spaces"
+            value={providerForm.model} onChange={(event) => setProviderForm({ ...providerForm, model: event.target.value })} />
           <input placeholder="API key (encrypted)" type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} />
         </>}
         <button className="primary-button" type="submit" disabled={loading || (providerMode === 'local' && !localModel)}>
           <LockKeyhole size={15} />{providerMode === 'local' ? 'Save local model' : 'Save encrypted provider'}
         </button>
-        {(provider.configured || provider.error === 'provider-corrupt') && <button className="text-button danger-text" type="button" onClick={() => { if (window.confirm('Remove the saved AI provider configuration?')) void window.privateBrowser.clearAiProvider().then(async (status) => { setProvider(status); await clearContext(); setShowProviderForm(false); onToast('AI provider removed'); }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error')); }}>{provider.error === 'provider-corrupt' ? 'Reset provider configuration' : 'Remove provider'}</button>}
+        {(provider.configured || provider.error === 'provider-corrupt') && <button className="text-button danger-text" type="button" disabled={loading} onClick={() => { if (window.confirm('Remove the saved AI provider configuration?')) void window.privateBrowser.clearAiProvider().then(async (status) => { setProvider(status); await clearContext(); setShowProviderForm(false); onToast('AI provider removed'); }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error')); }}>{provider.error === 'provider-corrupt' ? 'Reset provider configuration' : 'Remove provider'}</button>}
       </form>}
       {!preview ? (
         <div className="assistant-empty">

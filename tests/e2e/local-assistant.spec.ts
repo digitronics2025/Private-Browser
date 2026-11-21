@@ -35,6 +35,9 @@ test('checks installed local models and labels the saved provider without a key 
   await panel.getByRole('button', { name: 'Save local model' }).click();
   await expect(panel.getByText('Local · Ollama')).toBeVisible();
   await expect(panel.getByText('preview-small:latest', { exact: true })).toBeVisible();
+  await panel.getByRole('button', { name: 'Test connection' }).click();
+  await expect(panel.getByText('The selected model answered the built-in sample.')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Read page locally' })).toBeVisible();
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   await expect(page.evaluate(() => window.privateBrowser.getLocalAiModels())).rejects.toThrow(/workspace/);
 });

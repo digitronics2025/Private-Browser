@@ -242,6 +242,12 @@ The active workspace adds up to eight missing startup pages as background tabs
 and keeps restored tabs in place. Banking opens the local New Tab page and
 disables startup pages and site keywords.
 
+The zoom bubble and site details offer Reset view. Electron's persistent
+Account Space sessions keep site zoom independent across accounts. The
+workspace's Spellcheck controls use the device dictionaries that Electron
+reports as available. Writing is checked locally. The browser may download
+dictionaries if the device needs them.
+
 The bookmark manager prepares one searchable index per bookmark snapshot. It
 renders 75 results per page and preserves the text and folder filters when a
 bookmark is renamed or removed.

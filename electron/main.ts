@@ -41,7 +41,7 @@ import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
-import { mergeBrowserSettings, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, type BrowserSettingsPatch } from './browser-settings.js';
+import { mergeBrowserSettings, nextZoomPercent, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
@@ -164,7 +164,6 @@ interface RuntimeTab {
 type Layout = ContentInsets;
 
 const WHEEL_ZOOM_INTERVAL_MS = 100;
-const ZOOM_PERCENTS = [25, 33, 50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300, 400, 500];
 const MAX_CLOSED_TABS = 25;
 
 const AUTOMATIC_FILL_RETRY_DELAYS_MS = [0, 300, 1_000, 2_500] as const;
@@ -263,6 +262,7 @@ class BrowserController {
   private readonly downloads = new Map<string, LocalDownload>();
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly configuredSessions = new Set<string>();
+  private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
@@ -523,6 +523,7 @@ class BrowserController {
       bookmarkBarVisible: persisted.bookmarkBarVisible,
       ui: persisted.ui,
       settings: settingsForWorkspace(persisted, persisted.activeWorkspaceId),
+      availableSpellcheckLanguages: this.availableSpellcheckLanguages(),
       windowState: {
         maximized: windowReady && this.window.isMaximized(),
         fullscreen: windowReady && this.window.isFullScreen(),
@@ -1554,6 +1555,9 @@ class BrowserController {
       throw new Error('Home, startup pages and site keywords are unavailable in Banking.');
     }
     const next = { ...patch };
+    if (next.spellcheck && next.spellcheck.languages.some((language) => !this.availableSpellcheckLanguages().includes(language))) {
+      throw new Error('A selected spellcheck dictionary is unavailable on this device.');
+    }
     if (next.homePageUrl !== undefined) {
       const url = parseWebAddress(next.homePageUrl);
       if (!url || !isAllowedRemoteUrl(url)) throw new Error('Enter a web address, for example tenten.ma');
@@ -1563,7 +1567,30 @@ class BrowserController {
       const settings = state.workspaceSettings ??= {};
       settings[workspace] = mergeBrowserSettings(settingsForWorkspace(state, workspace), next);
     });
+    if (next.spellcheck) {
+      for (const account of this.store.get().accountSpaces) {
+        if (account.workspaceId !== workspace) continue;
+        const partition = this.store.partitionFor(account.id);
+        if (this.configuredSessions.has(partition)) this.applySpellcheck(session.fromPartition(partition), next.spellcheck);
+      }
+    }
     this.broadcast();
+  }
+
+  private availableSpellcheckLanguages(): SpellcheckLanguage[] {
+    if (this.spellingLanguages) return this.spellingLanguages;
+    const dictionaries = session.defaultSession.availableSpellCheckerLanguages;
+    return this.spellingLanguages ??= (Object.keys(SPELLCHECK_LANGUAGES) as SpellcheckLanguage[])
+      .filter((language) => Boolean(spellingDictionary(dictionaries, language)));
+  }
+
+  private applySpellcheck(ses: Session, spelling: SpellcheckSettings): void {
+    ses.setSpellCheckerEnabled(spelling.enabled);
+    if (!spelling.enabled || process.platform === 'darwin') return;
+    const dictionaries = ses.availableSpellCheckerLanguages;
+    const chosen = spelling.languages.length ? spelling.languages : app.getPreferredSystemLanguages();
+    const matching = chosen.flatMap((language) => spellingDictionary(dictionaries, language) ?? []);
+    ses.setSpellCheckerLanguages([...new Set(matching)]);
   }
 
   setUiPreferences(patch: UiPreferencesPatch): void {
@@ -1721,10 +1748,7 @@ class BrowserController {
 
   private stepZoom(contents: Electron.WebContents, direction: 'in' | 'out' | 'reset'): void {
     const current = Math.round(contents.getZoomFactor() * 100);
-    let next = 100;
-    if (direction === 'in') next = ZOOM_PERCENTS.find((value) => value > current) ?? ZOOM_PERCENTS.at(-1)!;
-    if (direction === 'out') next = [...ZOOM_PERCENTS].reverse().find((value) => value < current) ?? ZOOM_PERCENTS[0];
-    contents.setZoomFactor(next / 100);
+    contents.setZoomFactor(nextZoomPercent(current, direction) / 100);
     this.broadcast();
   }
 
@@ -2337,6 +2361,18 @@ class BrowserController {
 
   getAiProvider() {
     return this.aiProvider.status();
+  }
+
+  checkAiProvider() {
+    const account = this.activeAccountSpaceId(this.store.get());
+    const validateWorkspace = () => {
+      const state = this.store.get();
+      if (account !== this.activeAccountSpaceId(state) || !workspaceVaultPolicy(state.activeWorkspaceId).aiExtraction) {
+        throw new Error('Assistant connection tests are unavailable in this Account Space.');
+      }
+    };
+    validateWorkspace();
+    return this.aiProvider.checkConnection(validateWorkspace);
   }
 
   localAiModels() {
@@ -3320,6 +3356,8 @@ class BrowserController {
   private configureSession(ses: Session, partition: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): void {
     if (this.configuredSessions.has(partition)) return;
     this.configuredSessions.add(partition);
+    const spelling = settingsForWorkspace(this.store.get(), workspaceId).spellcheck;
+    if (spelling) this.applySpellcheck(ses, spelling);
     const protectedWorkspace = WORKSPACES.find((workspace) => workspace.id === workspaceId)!.protected;
     ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
       if (protectedWorkspace || !details.isMainFrame) {
@@ -3936,6 +3974,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('ai:prepare-preview', () => controller!.prepareAiPreview());
   handle('ai:approve-preview', (_event, previewId: string, mode?: 'local' | 'cloud') => controller!.approveAiPreview(previewId, mode));
   handle('ai:provider-status', () => controller!.getAiProvider());
+  handle('ai:check-provider', () => controller!.checkAiProvider());
   handle('ai:local-models', () => controller!.localAiModels());
   handle('ai:configure-provider', (_event, input: AiProviderInput) => controller!.configureAiProvider(input));
   handle('ai:clear-provider', () => controller!.clearAiProvider());
