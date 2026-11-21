@@ -391,6 +391,7 @@ export function installPreviewApi(): void {
     captureDeveloperDiagnostics: desktopOnly,
     clearDeveloperDiagnostics: async () => undefined,
     disconnectBridge: desktopOnly,
+    cancelBridgePairing: desktopOnly,
     selectBridgeProject: desktopOnly,
     runBridgeAction: desktopOnly,
     prepareDeveloperAiPreview: desktopOnly,

@@ -233,7 +233,7 @@ test('shows the synthetic bridge and handles native-only pairing safely', async 
   await page.getByRole('menuitem', { name: 'More tools' }).click();
   await page.getByRole('menuitem', { name: 'Developer Bridge' }).click();
   await expect(page.getByText('VS Code disconnected')).toBeVisible();
-  await page.getByRole('button', { name: 'Pair', exact: true }).click();
+  await page.getByRole('button', { name: 'Generate pairing code', exact: true }).click();
   await expect(page.getByText('VS Code pairing requires the desktop app')).toBeVisible();
   expect(errors).toEqual([]);
 });

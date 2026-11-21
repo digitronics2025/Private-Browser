@@ -500,7 +500,7 @@ const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
   'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
   'browser:reopen-closed-tab', 'browser:stop', 'browser:stop-find', 'browser:toggle-bookmark', 'browser:toggle-bookmark-bar',
-  'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-pair', 'developer:bridge-projects',
+  'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-cancel-pairing', 'developer:bridge-pair', 'developer:bridge-projects',
   'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',
   'google:clear-configuration', 'system:is-default-browser', 'system:open-default-browser-settings', 'system:test-default-browser', 'updates:check', 'updates:clear',
   'updates:open-history', 'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review',

@@ -1,0 +1,1 @@
+Set up the VS Code companion with a guided install, expiring pairing code, and connection details for the current editor window and approved project.

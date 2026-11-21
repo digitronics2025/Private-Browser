@@ -100,6 +100,14 @@ export class VscodeBridgeServer {
     this.error = undefined; this.onChange(); return this.status();
   }
 
+  cancelPairing(): BridgeStatus {
+    this.pairing = undefined;
+    this.error = undefined;
+    if (!this.session) this.activity = 'Pairing cancelled';
+    this.onChange();
+    return this.status();
+  }
+
   setProject(project: ProjectInfo | undefined): void { this.selectedProject = project; this.onChange(); }
 
   async request(method: BridgeMethod, payload: unknown): Promise<unknown> {
@@ -119,6 +127,7 @@ export class VscodeBridgeServer {
   }
 
   async disconnect(revoke: boolean): Promise<void> {
+    this.pairing = undefined;
     this.closeSession(revoke ? 'Pairing revoked' : 'Disconnected');
     this.selectedProject = undefined;
     if (revoke && this.secrets) {
@@ -160,7 +169,7 @@ export class VscodeBridgeServer {
   private handleHello(socket: Socket, raw: unknown): void {
     if (raw && typeof raw === 'object') {
       const range = raw as { minVersion?: number; maxVersion?: number };
-      if ((range.minVersion ?? Infinity) > PROTOCOL_VERSION || (range.maxVersion ?? -Infinity) < PROTOCOL_VERSION) throw new Error('Protocol incompatible. Install Private Browser 0.4.0 and Private Browser Bridge 0.4.0 from the same release.');
+      if ((range.minVersion ?? Infinity) > PROTOCOL_VERSION || (range.maxVersion ?? -Infinity) < PROTOCOL_VERSION) throw new Error('Protocol incompatible. Reinstall the Private Browser Bridge bundled with this browser release.');
     }
     const hello = helloSchema.parse(raw);
     if (hello.challenge !== this.challenge) throw new Error('Bridge challenge mismatch');

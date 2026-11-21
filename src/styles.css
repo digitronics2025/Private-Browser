@@ -651,10 +651,16 @@ kbd { font: inherit; }
 .bridge-tabs button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
 .bridge-pane { display: flex; flex-direction: column; gap: 10px; animation: fade-in var(--motion-slow) var(--ease); }
 @keyframes fade-in { from { opacity: 0; transform: translateY(2px); } }
-.bridge-empty { min-height: 240px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; border: 1px dashed var(--border-strong); border-radius: var(--radius-lg); }
-.bridge-empty > svg { color: var(--accent); }
-.bridge-empty strong { margin-top: 12px; font-size: var(--fs-md); }
-.bridge-empty p { max-width: 260px; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.6; }
+.bridge-pairing-guide { display: grid; justify-items: start; gap: 10px; }
+.bridge-pairing-guide h3, .bridge-pairing-guide p, .bridge-pairing-guide dl { margin: 0; }
+.bridge-pairing-guide ol { display: grid; gap: 12px; padding-inline-start: 22px; margin: 0; }
+.bridge-pairing-guide li p { margin: 4px 0; color: var(--text-muted); }
+.bridge-pairing-guide dl { display: grid; gap: 6px; }
+.bridge-pairing-guide dl > div { display: flex; flex-wrap: wrap; gap: 4px 8px; overflow-wrap: anywhere; }
+.bridge-pairing-guide dt { font-weight: 650; }
+.bridge-pairing-guide dd { margin: 0; color: var(--text-muted); }
+.bridge-pairing-code { display: grid; gap: 4px; margin-block: 8px; }
+.bridge-pairing-code code { font-size: var(--fs-xl); letter-spacing: .15em; }
 .bridge-label { display: flex; flex-direction: column; gap: 6px; color: var(--text-muted); font-size: var(--fs-xs); font-weight: 600; }
 .project-summary { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px; }
 .project-summary > div { display: flex; flex-direction: column; min-width: 0; }

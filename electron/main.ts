@@ -2495,6 +2495,8 @@ class BrowserController {
 
   beginBridgePairing() { this.requireDeveloperWorkspace(); return this.vscodeBridge.beginPairing(); }
 
+  cancelBridgePairing() { this.requireDeveloperWorkspace(); return this.vscodeBridge.cancelPairing(); }
+
   async disconnectBridge(revoke: boolean) {
     await this.vscodeBridge.disconnect(Boolean(revoke));
     return this.vscodeBridge.status();
@@ -4909,6 +4911,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('developer:clear-diagnostics', () => controller!.clearDeveloperDiagnostics());
   handle('developer:bridge-status', () => controller!.getBridgeStatus());
   handle('developer:bridge-pair', () => controller!.beginBridgePairing());
+  handle('developer:bridge-cancel-pairing', () => controller!.cancelBridgePairing());
   handle('developer:bridge-disconnect', (_event, revoke: boolean) => controller!.disconnectBridge(revoke));
   handle('developer:bridge-projects', () => controller!.listBridgeProjects());
   handle('developer:bridge-select-project', (_event, projectId: string) => controller!.selectBridgeProject(projectId));
