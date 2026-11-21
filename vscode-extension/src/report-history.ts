@@ -1,4 +1,4 @@
-import { type ReportHistoryPage, type ReportHistoryQuery, type ReportRunParameters, type TestReport } from '@private-browser/bridge-protocol';
+import { TEST_VIEWPORTS, type ReportHistoryPage, type ReportHistoryQuery, type ReportRunParameters, type TestReport } from '@private-browser/bridge-protocol';
 import { safeLiveOrigin, sanitizeOutput } from './security.js';
 
 export interface StoredReport {
@@ -46,7 +46,9 @@ export function effectiveReportParameters(request: ReportRunParameters): ReportR
   url.search = '';
   url.hash = '';
   const liveUrl = kind === 'live-site' || kind === 'compare' ? safeLiveOrigin(request.liveUrl ?? url.href) : undefined;
-  return { projectId, kind, url: url.href, liveUrl };
+  return { projectId, kind, url: url.href, liveUrl,
+    viewports: request.viewports && TEST_VIEWPORTS.filter((viewport) => request.viewports!.includes(viewport)),
+    fixture: request.fixture, fixtureDigest: request.fixtureDigest, baselineReportId: request.baselineReportId };
 }
 
 export function queryReportHistory(entries: StoredReport[], approvedProjects: Array<{ id: string; name: string }>,

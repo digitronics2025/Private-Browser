@@ -28,7 +28,7 @@ export const bridgeMethodSchema = z.enum([
   'project.list', 'project.authorize', 'project.inspect', 'project.open', 'project.revision', 'source.open',
   'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart',
   'inspect.page', 'inspect.open-source',
-  'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact',
+  'test.configuration', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact',
   'ai.handoff', 'ai.apply-edits',
   'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention',
 ]);
@@ -108,8 +108,13 @@ export const gitRevisionSchema = z.object({
 export type GitRevision = z.infer<typeof gitRevisionSchema>;
 
 export const reportStatusSchema = z.enum(['passed', 'attention', 'failed', 'skipped']);
-export const testKindSchema = z.enum(['quick', 'everything', 'current-page', 'live-site', 'compare', 'responsive', 'accessibility', 'performance', 'record-flow']);
+export const testKindSchema = z.enum(['quick', 'everything', 'current-page', 'live-site', 'compare', 'responsive', 'accessibility', 'performance', 'record-flow', 'baseline', 'baseline-compare']);
 export type TestKind = z.infer<typeof testKindSchema>;
+export const TEST_VIEWPORTS = ['desktop', 'tablet', 'mobile'] as const;
+export const testViewportSchema = z.enum(TEST_VIEWPORTS);
+export type TestViewport = z.infer<typeof testViewportSchema>;
+export const testFixtureSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,39}\.json$/);
+export const testConfigurationSchema = z.object({ fixtures: z.array(testFixtureSchema).max(25) }).strict();
 export const reportFindingSchema = z.object({
   status: reportStatusSchema, title: z.string().max(300), cause: z.string().max(2_000), evidence: z.string().max(8_000),
   location: z.string().max(2_000).optional(), recommendation: z.string().max(2_000),
@@ -125,6 +130,10 @@ export type TestReport = z.infer<typeof testReportSchema>;
 export const reportRunParametersSchema = z.object({
   projectId: z.string().min(8).max(128), kind: testKindSchema,
   url: z.string().max(4096).optional(), liveUrl: z.string().max(4096).optional(),
+  viewports: z.array(testViewportSchema).min(1).max(TEST_VIEWPORTS.length).refine((value) => new Set(value).size === value.length).optional(),
+  fixture: testFixtureSchema.optional(),
+  fixtureDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  baselineReportId: z.string().uuid().optional(),
 }).strict();
 export type ReportRunParameters = z.infer<typeof reportRunParametersSchema>;
 

@@ -12,6 +12,7 @@ import { canSaveReportParameters, effectiveReportParameters, queryReportHistory,
 import { spawnCommand } from './spawn-command.js';
 import { developmentPort, isDevelopmentPortListening, matchesPortConflict, reportedDevelopmentAddress } from './dev-server-status.js';
 import { resolveInspectionSource } from './inspection-source.js';
+import { listTestFixtures, loadTestFixture, scenarioKey, scenarioViewports } from './test-scenario.js';
 import { resolveInsideWorkspace, safeLiveOrigin, sanitizeOutput, stableFingerprint } from './security.js';
 
 type EventSink = (event: string, payload: unknown) => void;
@@ -65,6 +66,10 @@ export class ProjectService {
       case 'server.restart': await this.stopServer(String(this.record(payload).projectId ?? '')); return this.startServer(payload);
       case 'inspect.page': return this.inspectPage(payload);
       case 'inspect.open-source': return this.openInspectedSource(payload);
+      case 'test.configuration': {
+        const folder = await this.folderFor(String(this.record(payload).projectId ?? ''));
+        return { fixtures: await listTestFixtures(folder.uri.fsPath) };
+      }
       case 'test.run': return this.runTest(payload);
       case 'test.rerun': return this.rerun(payload);
       case 'test.save-artifact': return this.saveTestArtifact(payload);
@@ -329,6 +334,7 @@ export class ProjectService {
     const input = this.record(payloadValue);
     const parameters = effectiveReportParameters(reportRunParametersSchema.parse({
       projectId: input.projectId, kind: input.kind, url: input.url, liveUrl: input.liveUrl,
+      viewports: input.viewports, fixture: input.fixture, fixtureDigest: input.fixtureDigest, baselineReportId: input.baselineReportId,
     }));
     const { projectId, kind } = parameters;
     if (this.activeTestRuns.has(projectId)) throw new Error('A project test is already running');
@@ -435,6 +441,7 @@ export class ProjectService {
     if (!url) return ReportStore.skipped(info.project.id, kind, 'No target URL', 'Start the development server or provide a trusted live URL.');
     const parsed = new URL(url);
     const isLive = kind === 'live-site' || kind === 'compare';
+    if (isLive && parameters.fixture) throw new Error('Data fixtures can only be used in local project tests.');
     if (kind !== 'live-site' && !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)) throw new Error('Use Live Website for a non-local target');
     if (isLive && this.liveRunActive) throw new Error('Only one live-site test may run at a time');
     if (isLive) this.liveRunActive = true;
@@ -444,11 +451,28 @@ export class ProjectService {
         this.emit('task.progress', { projectId: info.project.id, activity: 'Testing live site', origin: approvedLiveUrl });
       }
       signal.throwIfAborted();
+      if (parameters.fixture) {
+        const fixture = await loadTestFixture(info.project.path, parameters.fixture);
+        if (parameters.fixtureDigest && fixture.digest !== parameters.fixtureDigest) throw new Error('The fixture changed. Start a new test to approve its current contents.');
+        parameters.fixtureDigest = fixture.digest;
+      }
+      if (kind === 'baseline' || kind === 'baseline-compare') {
+        if (!canSaveReportParameters(parameters)) throw new Error('Choose a local route without account or credential identifiers for the baseline.');
+      }
+      let baselineRoot: string | undefined;
+      if (kind === 'baseline-compare') {
+        const baseline = await this.matchBaseline(parameters);
+        if (!baseline) return ReportStore.skipped(info.project.id, kind, 'No matching baseline', 'Save a baseline with this route, fixture version and viewport set first.');
+        parameters.baselineReportId = baseline.id;
+        baselineRoot = this.reports.artifactRoot(baseline.id);
+      }
       const artifactRoot = this.reports.artifactRoot(reportId); await mkdir(artifactRoot, { recursive: true });
       const runner = join(this.context.extensionPath, 'dist', 'playwright-runner.cjs');
       const target = kind === 'live-site' ? approvedLiveUrl : parsed.toString();
-      const runnerInput = Buffer.from(JSON.stringify({ reportId, projectId: info.project.id, startedAt, kind, url: target, liveUrl: approvedLiveUrl, root: info.project.path, artifactRoot })).toString('base64url');
-      const command: CommandSpec = { id: `playwright:${kind}`, label: `Playwright ${kind}`, executable: process.execPath, args: [runner, runnerInput], cwd: info.project.path, source: 'playwright', category: 'test', fingerprint: stableFingerprint({ runner, kind, root: info.project.path, target, liveUrl: approvedLiveUrl }) };
+      const scenario = { viewports: scenarioViewports(parameters), fixture: parameters.fixture, fixtureDigest: parameters.fixtureDigest, baselineRoot,
+        confineScenario: !isLive && Boolean(parameters.viewports || parameters.fixture || kind === 'baseline' || kind === 'baseline-compare') };
+      const runnerInput = Buffer.from(JSON.stringify({ reportId, projectId: info.project.id, startedAt, kind, url: target, liveUrl: approvedLiveUrl, root: info.project.path, artifactRoot, ...scenario })).toString('base64url');
+      const command: CommandSpec = { id: `playwright:${kind}`, label: `Playwright ${kind}`, executable: process.execPath, args: [runner, runnerInput], cwd: info.project.path, source: 'playwright', category: 'test', fingerprint: stableFingerprint({ runner, kind, root: info.project.path, target, liveUrl: approvedLiveUrl, ...scenario }) };
       await this.approveCommand(info.project.id, command);
       signal.throwIfAborted();
       this.guardCommandStart();
@@ -460,6 +484,27 @@ export class ProjectService {
     } finally {
       if (isLive) this.liveRunActive = false;
     }
+  }
+
+  private async matchBaseline(parameters: ReportRunParameters): Promise<TestReport | undefined> {
+    const expected = scenarioKey(parameters);
+    const viewports = scenarioViewports(parameters);
+    const reports = parameters.baselineReportId
+      ? [await this.reports.get(parameters.baselineReportId).catch(() => undefined)] : await this.reports.list();
+    for (const report of reports) {
+      if (report?.kind !== 'baseline' || report.projectId !== parameters.projectId || report.status === 'failed' || report.status === 'skipped'
+        || !viewports.every((viewport) => report.artifacts.some((item) => item.kind === 'screenshot' && item.name === viewport + '.png'))) continue;
+      const saved = await this.savedRunParameters(report.id).catch(() => undefined);
+      if (saved?.kind === 'baseline' && scenarioKey(saved) === expected) return report;
+    }
+    return undefined;
+  }
+
+  private async savedRunParameters(reportId: string): Promise<ReportRunParameters | undefined> {
+    const session = this.sessionReportRuns.get(reportId);
+    if (session) return session;
+    const saved = await this.context.secrets.get(this.reportParametersKey(reportId));
+    return saved ? reportRunParametersSchema.parse(JSON.parse(saved) as unknown) : undefined;
   }
 
   private async approveLiveSite(projectId: string, urlValue: string): Promise<void> {
@@ -480,11 +525,7 @@ export class ProjectService {
     if (!reportId) throw new Error('No previous test is available for the selected project');
     const report = await this.reports.get(reportId);
     if (report.projectId !== projectId) throw new Error('Select the report’s project before rerunning');
-    let parameters = this.sessionReportRuns.get(reportId);
-    if (!parameters) {
-      const saved = await this.context.secrets.get(this.reportParametersKey(reportId));
-      if (saved) parameters = reportRunParametersSchema.parse(JSON.parse(saved) as unknown);
-    }
+    const parameters = await this.savedRunParameters(reportId);
     if (!parameters || parameters.projectId !== projectId || parameters.kind !== report.kind) {
       throw new Error('The saved parameters are unavailable. Start a new test for this project.');
     }

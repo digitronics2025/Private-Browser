@@ -3,6 +3,7 @@ import { Code2, Copy, FileCode2, LoaderCircle, LockKeyhole, PanelRightClose, Pan
 import { BridgePairingGuide } from './BridgePairingGuide';
 import { DevelopmentServer } from './DevelopmentServer';
 import { DeveloperReportHistory } from './DeveloperReportHistory';
+import { DeveloperTestScenario } from './DeveloperTestScenario';
 import type { AiPagePreview, BridgeStatus, BrowserTab, DeveloperPageInfo, DevToolsMode, GitRevision, ProjectInfo, ProjectSummary, TestKind, TestReport } from '../../electron/types';
 import { PanelHeader } from './common';
 import { ControlCenterSection } from './ControlCenterSection';
@@ -196,6 +197,12 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
       </div>}
 
       {tab === 'test' && <div className="bridge-pane">
+        {connected && project && (() => {
+          const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+          return (major > 0 || minor > 4 || (minor === 4 && patch >= 5)) && <DeveloperTestScenario
+            key={project.project.id} projectId={project.project.id} projectUrl={project.devServerUrl} activeUrl={activeTab.url}
+            disabled={loading || Boolean(testProject)} run={(input) => void runTest('test.run', input)} />;
+        })()}
         <label className="bridge-label">Optional approved live URL<input value={liveUrl} onChange={(event) => setLiveUrl(event.target.value)} placeholder="https://staging.example.com" /></label>
         <div className="bridge-action-grid test-grid">
           {tests.map((item) => <button key={item.kind} disabled={!connected || !project || loading || Boolean(testProject) || ((item.kind === 'live-site' || item.kind === 'compare') && !liveUrl)}
