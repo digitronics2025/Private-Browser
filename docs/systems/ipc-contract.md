@@ -156,6 +156,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `permissions:site` | `getSitePermissions(tabId, origin)` | active tab and exact origin | current policy and grant duration |
 | `permissions:revoke-site` | `revokeSitePermission(tabId, origin, capability)` | active tab, exact origin and supported capability | updated site status |
 | `permissions:list-account` | `listAccountPermissionGrants(id)` | selected Account Space in the active workspace | reusable grants |
+| `google:connection-health` | `getGoogleConnectionHealth(id)` | selected Account Space in the active workspace | typed state, optional last success and retry time |
 
 ### routines:
 

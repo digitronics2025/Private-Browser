@@ -1,0 +1,1 @@
+Account Manager shows the selected Account Space's last successful Google request and what to do if it needs a reconnect, a permission, an internet connection or more time after a quota limit.

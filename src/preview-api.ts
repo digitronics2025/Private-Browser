@@ -297,6 +297,14 @@ export function installPreviewApi(): void {
     onFindResult: () => () => undefined,
     onUpdateAvailable: () => () => undefined,
     onGoogleOperationProgress: () => () => undefined,
+    getGoogleConnectionHealth: async (id) => {
+      const selected = state.accountSpaces.find((account) => account.id === id && account.workspaceId === state.activeWorkspaceId);
+      if (!selected || selected.locked || selected.workspaceId === 'banking') return { state: 'unavailable' };
+      const sample = params.get('googleHealth');
+      if (id === google && sample === 'quota') return { state: 'quota', lastSuccessAt: '2026-11-21T12:00:00Z', retryAt: '2026-11-21T14:00:00Z' };
+      if (id === google && sample === 'reconnect') return { state: 'reconnect', lastSuccessAt: '2026-11-21T12:00:00Z' };
+      return { state: selected.googleConnection === 'connected' ? 'ready' : 'disconnected' };
+    },
     onVaultState: () => () => undefined,
     // Recorded on the document so browser tests can compare it with the visible chrome.
     setLayout: async (layout) => { document.documentElement.dataset.previewLayout = JSON.stringify(layout); },

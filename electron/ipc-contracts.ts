@@ -88,6 +88,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'permissions:respond':
       between(args, 2, 3); requireUuid(args[0], 'permission prompt'); requirePermissionDecision(args[1]);
       if (args[2] !== undefined) requireBoundedText(args[2], 'display source identifier', 512); return;
+    case 'google:connection-health':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'google:configure':
       exact(args, 1); requireBoundedText(args[0], 'Google client identifier', 512); return;
     case 'google:connect':
