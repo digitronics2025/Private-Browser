@@ -5,8 +5,13 @@ import { join } from 'node:path';
 import axe from 'axe-core';
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
+import type { TestViewport } from '@private-browser/bridge-protocol';
+import { loadTestFixture, SCENARIO_VIEWPORTS } from './test-scenario.js';
 
-interface Input { reportId: string; projectId: string; startedAt: string; kind: string; url: string; liveUrl?: string; root: string; artifactRoot: string; }
+interface Input {
+  reportId: string; projectId: string; startedAt: string; kind: string; url: string; liveUrl?: string; root: string; artifactRoot: string;
+  viewports?: TestViewport[]; fixture?: string; fixtureDigest?: string; baselineRoot?: string; confineScenario?: boolean;
+}
 interface Finding { status: 'passed' | 'attention' | 'failed' | 'skipped'; title: string; cause: string; evidence: string; location?: string; recommendation: string; }
 
 async function main(): Promise<void> {
@@ -14,24 +19,108 @@ async function main(): Promise<void> {
   const requireFromProject = createRequire(join(input.root, 'package.json'));
   const { chromium } = requireFromProject('@playwright/test') as typeof import('@playwright/test');
   await mkdir(input.artifactRoot, { recursive: true });
+  const fixture = input.fixture ? await loadTestFixture(input.root, input.fixture) : undefined;
+  if (fixture && fixture.digest !== input.fixtureDigest) throw new Error('The approved fixture changed before the test started.');
+  const mockResponses = new Map(fixture?.responses.map((item) => [item.path, item]));
+  const target = new URL(input.url);
   const browser = await chromium.launch({ headless: input.kind !== 'record-flow' });
   const findings: Finding[] = []; const artifacts: Array<{ id: string; name: string; kind: 'screenshot' | 'trace' | 'diff' | 'test' | 'log'; size: number }> = [];
   const startedAt = input.startedAt;
   try {
-    const viewports = input.kind === 'responsive' ? [{ name: 'desktop', width: 1440, height: 900 }, { name: 'tablet', width: 768, height: 1024 }, { name: 'mobile', width: 375, height: 812 }] : [{ name: 'desktop', width: 1440, height: 900 }];
+    const selected = input.viewports ?? (input.kind === 'responsive' ? ['desktop', 'tablet', 'mobile'] : ['desktop']) as TestViewport[];
+    const viewports = selected.map((name) => ({ name, ...SCENARIO_VIEWPORTS[name] }));
     for (const viewport of viewports) {
-      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: undefined, acceptDownloads: false });
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: undefined,
+        acceptDownloads: false, ...(input.confineScenario ? { serviceWorkers: 'block' as const } : {}) });
+      let redirected = false;
+      if (input.confineScenario || fixture) {
+        await context.route('**/*', async (route) => {
+          const request = route.request();
+          const url = new URL(request.url());
+          if (input.confineScenario && request.isNavigationRequest()) {
+            if (url.origin !== target.origin || request.method() !== 'GET') { await route.abort(); return; }
+            const response = await route.fetch({ maxRedirects: 0, timeout: 15_000 });
+            if (response.status() >= 300 && response.status() < 400) {
+              redirected = true;
+              await route.abort();
+            } else await route.fulfill({ response });
+            return;
+          }
+          const entry = url.origin === target.origin && request.method() === 'GET'
+            && ['xhr', 'fetch'].includes(request.resourceType()) ? mockResponses.get(url.pathname) : undefined;
+          if (entry) await route.fulfill({ status: entry.status, json: entry.json });
+          else await route.continue();
+        });
+      }
       if (input.kind !== 'record-flow') await context.tracing.start({ screenshots: true, snapshots: true, sources: false });
       const page = await context.newPage(); const consoleErrors: string[] = []; const networkErrors: string[] = [];
-      page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text().slice(0, 500)); });
-      page.on('requestfailed', (request) => networkErrors.push(`${request.method()} ${new URL(request.url()).origin}${new URL(request.url()).pathname} — ${request.failure()?.errorText ?? 'failed'}`));
-      const response = await page.goto(input.url, { waitUntil: 'networkidle', timeout: 30_000 });
+      const background = new Set<import('@playwright/test').Request>();
+      const requestCounts = new Map<string, number>();
+      page.on('request', (request) => {
+        if (!['fetch', 'xhr'].includes(request.resourceType())) return;
+        background.add(request);
+        const url = new URL(request.url());
+        const key = url.origin + url.pathname;
+        if (requestCounts.has(key) || requestCounts.size < 100) requestCounts.set(key, (requestCounts.get(key) ?? 0) + 1);
+      });
+      page.on('requestfinished', (request) => background.delete(request));
+      page.on('console', (message) => { if (message.type() === 'error' && consoleErrors.length < 100) consoleErrors.push(message.text().slice(0, 500)); });
+      page.on('requestfailed', (request) => {
+        background.delete(request);
+        if (networkErrors.length < 100) networkErrors.push(`${request.method()} ${new URL(request.url()).origin}${new URL(request.url()).pathname} — ${request.failure()?.errorText ?? 'failed'}`);
+      });
+      let response: import('@playwright/test').Response | null;
+      try {
+        response = await page.goto(input.url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+      } catch (error) {
+        const cause = redirected ? 'The selected route redirected.' : error instanceof Error && error.name === 'TimeoutError'
+          ? 'The document did not load within the navigation budget.' : 'The browser could not load the selected document.';
+        findings.push({ status: 'failed', title: `${viewport.name} document load`, cause,
+          evidence: target.origin + target.pathname, recommendation: 'Check that the development server serves this route.' });
+        await context.close();
+        continue;
+      }
       findings.push({ status: response?.ok() ? 'passed' : 'failed', title: `${viewport.name} page load`, cause: response?.ok() ? 'Page loaded successfully.' : `HTTP ${response?.status() ?? 'failure'}`, evidence: `${new URL(input.url).origin}${new URL(input.url).pathname}`, recommendation: response?.ok() ? 'No action needed.' : 'Check the development server and the first failed request.' });
+      if (response?.ok()) {
+        try { await page.waitForLoadState('networkidle', { timeout: 2_500 }); }
+        catch (error) {
+          if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+          const polling = background.size > 0 || [...requestCounts.values()].some((count) => count >= 3);
+          findings.push({ status: 'attention', title: polling ? `${viewport.name} background requests` : `${viewport.name} loading activity`,
+            cause: polling ? 'The document loaded and background data requests kept it busy.' : 'The document loaded and some resources were still active.',
+            evidence: `Network settling budget 2500 ms. ${background.size} pending data request(s).`,
+            recommendation: 'Review the screenshot alongside the console and request results.' });
+        }
+      }
+      if (input.confineScenario && page.url() !== target.href) {
+        findings.push({ status: 'failed', title: `${viewport.name} route changed`, cause: 'The application moved away from the selected route.',
+          evidence: target.origin + target.pathname, recommendation: 'Select the final local route and run the scenario again.' });
+        await context.close();
+        continue;
+      }
       if (consoleErrors.length) findings.push({ status: 'failed', title: 'Console errors', cause: `${consoleErrors.length} console error(s)`, evidence: consoleErrors.join('\n').slice(0, 8_000), recommendation: 'Open the first traceable source location and fix the root error.' });
       if (networkErrors.length) findings.push({ status: 'failed', title: 'Failed requests', cause: `${networkErrors.length} request(s) failed`, evidence: networkErrors.join('\n').slice(0, 8_000), recommendation: 'Verify the API endpoint and development proxy configuration.' });
-      if (['current-page', 'live-site', 'responsive', 'compare'].includes(input.kind)) {
-        const path = join(input.artifactRoot, `${viewport.name}.png`); await page.screenshot({ path, fullPage: false });
+      if (['current-page', 'live-site', 'responsive', 'compare', 'baseline', 'baseline-compare'].includes(input.kind)) {
+        const path = join(input.artifactRoot, `${viewport.name}.png`);
+        await page.screenshot({ path, fullPage: false, animations: 'disabled', caret: 'hide', timeout: 5_000 });
         artifacts.push({ id: randomUUID(), name: `${viewport.name}.png`, kind: 'screenshot', size: (await stat(path)).size });
+        if (input.kind === 'baseline-compare') {
+          if (!input.baselineRoot) throw new Error('The matching baseline is unavailable.');
+          const baseline = join(input.baselineRoot, `${viewport.name}.png`);
+          if ((await stat(baseline)).size > 8 * 1024 * 1024) throw new Error('The stored baseline is too large.');
+          const previous = PNG.sync.read(await readFile(baseline));
+          const current = PNG.sync.read(await readFile(path));
+          if (previous.width !== current.width || previous.height !== current.height) throw new Error('The baseline viewport dimensions differ.');
+          const result = new PNG({ width: current.width, height: current.height });
+          const changed = pixelmatch(previous.data, current.data, result.data, current.width, current.height, { threshold: 0.1 });
+          const name = viewport.name + '-baseline-diff.png';
+          const diffPath = join(input.artifactRoot, name);
+          await writeFile(diffPath, PNG.sync.write(result));
+          artifacts.push({ id: randomUUID(), name, kind: 'diff', size: (await stat(diffPath)).size });
+          findings.push({ status: changed ? 'attention' : 'passed', title: `${viewport.name} baseline comparison`,
+            cause: `${changed} pixels differ`, evidence: `${((changed / (current.width * current.height)) * 100).toFixed(2)}% changed`,
+            recommendation: changed ? 'Review the differences for this route and fixture.' : 'The screenshot matches the reviewed baseline.' });
+        }
       }
       if (input.kind === 'accessibility') {
         await page.addScriptTag({ content: axe.source });
