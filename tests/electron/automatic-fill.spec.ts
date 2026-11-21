@@ -180,9 +180,9 @@ test('generates a credential in the isolated editor and saves only after explici
   await editor.getByLabel('Username or email').fill('generated@example.test');
   expect(await editor.locator('input:invalid').count()).toBe(0);
   await save.click();
-  await expect(saved).resolves.toMatchObject({ title: 'Generated fixture login' });
+  await expect(saved).resolves.toMatchObject({ label: 'Generated fixture login' });
   const items = await page.evaluate(async () => (await window.privateBrowser.listVault()).items);
-  expect(items.some((item) => item.title === 'Generated fixture login')).toBe(true);
+  expect(items.some((item) => item.label === 'Generated fixture login')).toBe(true);
   expect((await readForm(settingsPage)).password).toBe('');
 
   await page.evaluate(() => window.privateBrowser.navigate('private://home'));

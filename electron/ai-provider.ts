@@ -2,15 +2,16 @@ import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileS
 import { dirname } from 'node:path';
 import { safeStorage } from 'electron';
 import { isSafeAiEndpoint } from './security.js';
-import type { AiProviderInput, AiProviderStatus } from './types.js';
+import { OllamaLocal } from './ollama-local.js';
+import type { AiProviderInput, AiProviderStatus, LocalAiModels } from './types.js';
 
-interface StoredProvider extends AiProviderInput {
-  version: 1;
-}
+type StoredProvider = AiProviderInput & { version: 1 };
+const systemPrompt = 'Answer only from the user-approved webpage context. Clearly say when the context is insufficient. Never request or expose credentials.';
 
 export class AiProviderStore {
   private config?: StoredProvider;
   private corrupt = false;
+  private readonly local = new OllamaLocal();
 
   constructor(private readonly filePath: string) {
     this.config = this.load();
@@ -19,19 +20,28 @@ export class AiProviderStore {
   status(): AiProviderStatus {
     if (this.corrupt) return { configured: false, error: 'provider-corrupt' };
     if (!safeStorage.isEncryptionAvailable()) return { configured: false, error: 'os-encryption-unavailable' };
-    return this.config
-      ? { configured: true, endpoint: this.config.endpoint, model: this.config.model }
-      : { configured: false };
+    if (!this.config) return { configured: false };
+    return 'mode' in this.config
+      ? { configured: true, mode: 'local', model: this.config.model }
+      : { configured: true, mode: 'cloud', endpoint: this.config.endpoint, model: this.config.model };
   }
 
-  configure(input: AiProviderInput): AiProviderStatus {
+  localModels(): Promise<LocalAiModels> { return this.local.models(); }
+
+  async configure(input: AiProviderInput): Promise<AiProviderStatus> {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('OS encryption is unavailable');
     if (this.corrupt) throw new Error('The AI provider file is corrupt; clear it before configuring again');
-    const endpoint = input.endpoint.trim().replace(/\/$/, '');
     const model = input.model.trim();
-    if (!isSafeAiEndpoint(endpoint)) throw new Error('Use a public HTTPS AI endpoint without embedded credentials');
-    if (!model || model.length > 200 || input.apiKey.length > 1000) throw new Error('Invalid provider configuration');
-    this.config = { version: 1, endpoint, model, apiKey: input.apiKey.trim() };
+    if (!model || model.length > 200) throw new Error('Invalid provider model');
+    if ('mode' in input) {
+      await this.local.requireInstalledModel(model);
+      this.config = { version: 1, mode: 'local', model };
+    } else {
+      const endpoint = input.endpoint.trim().replace(/\/$/, '');
+      if (!isSafeAiEndpoint(endpoint)) throw new Error('Use a public HTTPS AI endpoint without embedded credentials');
+      if (input.apiKey.length > 1000) throw new Error('Invalid provider configuration');
+      this.config = { version: 1, endpoint, model, apiKey: input.apiKey.trim() };
+    }
     this.save();
     return this.status();
   }
@@ -43,23 +53,31 @@ export class AiProviderStore {
     return this.status();
   }
 
-  async ask(context: { title: string; url: string; text: string; dom?: string; screenshotDataUrl?: string }, question: string): Promise<string> {
-    if (!this.config) throw new Error('Configure a cloud AI provider first');
+  async ask(context: { title: string; url: string; text: string; dom?: string; screenshotDataUrl?: string }, question: string, checkSource: () => void): Promise<string> {
+    const provider = this.config;
+    if (!provider) throw new Error('Configure an AI provider first');
     const prompt = `Page: ${context.title}\nURL: ${context.url}\n\nApproved context:\n${context.text}${context.dom ? `\n\nApproved structural DOM (no text or values):\n${context.dom}` : ''}\n\nQuestion: ${question}`;
+    if ('mode' in provider) {
+      if (context.screenshotDataUrl) throw new Error('The local assistant uses text previews');
+      return this.local.ask(provider.model, systemPrompt, prompt, () => {
+        if (this.config !== provider) throw new Error('The AI provider changed; approve the context again');
+        checkSource();
+      });
+    }
     const content = context.screenshotDataUrl
       ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: context.screenshotDataUrl } }]
       : prompt;
-    const response = await fetch(`${this.config.endpoint}/chat/completions`, {
+    const response = await fetch(`${provider.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        ...(this.config.apiKey ? { authorization: `Bearer ${this.config.apiKey}` } : {}),
+        ...(provider.apiKey ? { authorization: `Bearer ${provider.apiKey}` } : {}),
       },
       body: JSON.stringify({
-        model: this.config.model,
+        model: provider.model,
         temperature: 0.2,
         messages: [
-          { role: 'system', content: 'Answer only from the user-approved webpage context. Clearly say when the context is insufficient. Never request or expose credentials.' },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content },
         ],
       }),
@@ -82,7 +100,8 @@ export class AiProviderStore {
       if (!safeStorage.isEncryptionAvailable() || !existsSync(this.filePath)) return undefined;
       const encrypted = Buffer.from(readFileSync(this.filePath, 'utf8'), 'base64');
       const parsed = JSON.parse(safeStorage.decryptString(encrypted)) as StoredProvider;
-      if (parsed.version !== 1 || !isSafeAiEndpoint(parsed.endpoint) || !parsed.model) throw new Error('Invalid provider');
+      if (parsed.version !== 1 || typeof parsed.model !== 'string' || !parsed.model || parsed.model.length > 200) throw new Error('Invalid provider');
+      if ('mode' in parsed ? parsed.mode !== 'local' : !isSafeAiEndpoint(parsed.endpoint) || typeof parsed.apiKey !== 'string') throw new Error('Invalid provider');
       return parsed;
     } catch {
       this.corrupt = true;

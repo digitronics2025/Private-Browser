@@ -1,5 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
-import type { AccountSpaceId, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, searchTemplateFor } from '../electron/browser-settings';
 import { parseWebAddress } from '../electron/security';
@@ -131,6 +131,7 @@ export function installPreviewApi(): void {
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
+  let previewProvider: AiProviderStatus = { configured: false };
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
@@ -418,7 +419,19 @@ export function installPreviewApi(): void {
     createBackupRecoveryCode: async () => `PB1-${'A'.repeat(43)}`,
     verifyAndEnableBackup: async (idValue, _code, includeOpenTabsValue, includeHistoryValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.backupEnabled = true; selected.backupIncludesOpenTabs = Boolean(includeOpenTabsValue); selected.backupIncludesHistory = Boolean(includeHistoryValue); publish(); } },
     uploadBackup: async () => ({ status: 'uploaded', etag: 'preview-etag' }),
-    getAiProvider: async () => ({ configured: false }),
+    getAiProvider: async () => previewProvider,
+    getLocalAiModels: async () => {
+      if (state.activeWorkspaceId === 'banking') throw new Error('AI is unavailable in this workspace');
+      return params.get('localAi') === 'sample'
+        ? { state: 'ready', models: ['preview-small:latest', 'preview-large:latest'] } : { state: 'unavailable', models: [] };
+    },
+    configureAiProvider: async (input) => {
+      const provider = input as AiProviderInput;
+      previewProvider = 'mode' in provider ? { configured: true, mode: 'local', model: provider.model }
+        : { configured: true, mode: 'cloud', model: provider.model, endpoint: provider.endpoint };
+      return previewProvider;
+    },
+    clearAiProvider: async () => { previewProvider = { configured: false }; return previewProvider; },
     listChromeProfiles: (async () => {
       if (params.get('chrome') === 'error') throw new Error('The sample Chrome profiles could not be read');
       if (params.get('chrome') === 'empty') return [];
