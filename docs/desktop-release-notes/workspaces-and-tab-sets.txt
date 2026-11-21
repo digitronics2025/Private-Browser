@@ -1,0 +1,1 @@
+See the active workspace and Account Space in the toolbar. Banking stays visible on narrow windows. Review selected open tabs before saving them as a routine or bookmark folder.
