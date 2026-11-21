@@ -30,7 +30,7 @@ import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { AiProviderStore } from './ai-provider.js';
-import { AI_SYSTEM_PROMPT, aiUserPrompt } from './ai-prompt.js';
+import { AI_SYSTEM_PROMPT, assistantQuestion, aiUserPrompt, readAssistantAnswer } from './ai-prompt.js';
 import { WORKSPACES } from './state-store.js';
 import { AccountStore } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
@@ -56,6 +56,7 @@ import type {
   AiPagePreview,
   AiPreviewScope,
   AiRequestReview,
+  AssistantAnswer,
   ControlCenterRecheckInput,
   ControlCenterSendInput,
   AiProviderInput,
@@ -267,7 +268,7 @@ class BrowserController {
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number }>();
-  private assistantReview?: { review: AiRequestReview; preview: AiPagePreview; question: string; expiresAt: number; navigationGeneration: number };
+  private assistantReview?: { review: AiRequestReview; preview: AiPagePreview; question: string; withEvidence: boolean; expiresAt: number; navigationGeneration: number };
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
   private readonly developerPreviewIds = new Set<string>();
@@ -2358,7 +2359,7 @@ class BrowserController {
     return preview;
   }
 
-  reviewAssistantRequest(previewId: string, text: string, questionValue: string): AiRequestReview {
+  reviewAssistantRequest(previewId: string, text: string, questionValue: string, withEvidence = false): AiRequestReview {
     this.assistantReview = undefined;
     const pending = this.pendingAiPreviews.get(previewId);
     if (pending?.navigationGeneration === undefined || pending.expiresAt < Date.now()) {
@@ -2371,6 +2372,7 @@ class BrowserController {
     const question = redactSensitiveText(questionValue.trim());
     if (!question.text) throw new Error('Enter a question before reviewing the request.');
     const redacted = redactSensitiveText(text);
+    const reviewedQuestion = assistantQuestion(question.text, withEvidence);
     const preview = { ...pending.preview, text: redacted.text };
     const review: AiRequestReview = {
       id: randomUUID(),
@@ -2378,14 +2380,14 @@ class BrowserController {
       destination: provider.mode === 'local' ? 'http://127.0.0.1:11434/api/chat' : `${provider.endpoint}/chat/completions`,
       model: provider.model,
       systemPrompt: AI_SYSTEM_PROMPT,
-      userPrompt: aiUserPrompt(preview, question.text),
+      userPrompt: aiUserPrompt(preview, reviewedQuestion),
       redactions: preview.redactions + redacted.redactions + question.redactions,
     };
-    this.assistantReview = { review, preview, question: question.text, expiresAt: pending.expiresAt, navigationGeneration: pending.navigationGeneration };
+    this.assistantReview = { review, preview, question: reviewedQuestion, withEvidence, expiresAt: pending.expiresAt, navigationGeneration: pending.navigationGeneration };
     return review;
   }
 
-  async askReviewedAssistant(id: string): Promise<string> {
+  async askReviewedAssistant(id: string): Promise<AssistantAnswer> {
     const pending = this.assistantReview;
     if (pending?.review.id !== id) throw new Error('Review the request before sending it.');
     this.assistantReview = undefined;
@@ -2404,7 +2406,7 @@ class BrowserController {
     this.addPrivacyEvent(kind, 'Assistant request approved', `${pending.review.redactions} redaction(s)`);
     const answer = await this.aiProvider.ask(pending.preview, pending.question, validate);
     this.addPrivacyEvent(kind, 'Assistant request completed', pending.preview.title);
-    return answer;
+    return readAssistantAnswer(answer, pending.withEvidence, pending.preview.text);
   }
 
   private validateAssistantSource(preview: AiPagePreview, navigationGeneration: number): void {
@@ -4046,7 +4048,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('control-center:send', (_event, input: ControlCenterSendInput) => controller!.sendToControlCenter(input));
   handle('control-center:recheck', (_event, input: ControlCenterRecheckInput) => controller!.recheckControlCenterTask(input));
   handle('ai:prepare-preview', (_event, scope?: AiPreviewScope) => controller!.prepareAiPreview(scope));
-  handle('ai:review-request', (_event, id: string, text: string, question: string) => controller!.reviewAssistantRequest(id, text, question));
+  handle('ai:review-request', (_event, id: string, text: string, question: string, withEvidence?: boolean) => controller!.reviewAssistantRequest(id, text, question, withEvidence));
   handle('ai:send-reviewed', (_event, id: string) => controller!.askReviewedAssistant(id));
   handle('ai:approve-preview', (_event, previewId: string, mode?: 'local' | 'cloud') => controller!.approveAiPreview(previewId, mode));
   handle('ai:provider-status', () => controller!.getAiProvider());

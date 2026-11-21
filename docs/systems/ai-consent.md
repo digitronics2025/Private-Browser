@@ -154,6 +154,11 @@ The Assistant offers four editable prompt presets. Explicit preset saves are
 workspace settings and pass through the same pattern redaction. Preview text
 and answers stay in memory. Copy answer writes to the clipboard on demand.
 
+Product extraction and comparison request source passages by default. Users
+can choose this for other prompts. Each displayed finding includes a quote
+matched against the exact approved excerpt. If the provider returns no
+matching passage, the app displays Insufficient page information.
+
 ### Developer approval — `approveAiPreview(previewId, mode)`
 
 1. The pending entry is fetched and **deleted immediately**, before any check. A

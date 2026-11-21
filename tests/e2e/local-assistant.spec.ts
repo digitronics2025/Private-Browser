@@ -95,9 +95,25 @@ test('uses all four presets, saves edits in the current space and copies an answ
   await panel.getByRole('button', { name: 'Approve and ask once' }).click();
   const copy = panel.getByRole('button', { name: 'Copy answer' });
   await expect(copy).toBeVisible();
+  await expect(panel.getByRole('blockquote', { name: 'Source passage' })).toHaveText('A brass kettle sits on the shelf.');
   await expect(page.locator('html')).not.toHaveAttribute('data-copied-answer', /./);
   await copy.click();
   await expect(page.locator('html')).toHaveAttribute('data-copied-answer', 'The sample shows a brass kettle on the shelf.');
   await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
   await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings.assistantPrompts))).toBeUndefined();
+});
+
+test('reports insufficient information when the reply quotes text outside the approved selection', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 820 });
+  await page.goto('/?localAi=sample&aiSources=unverified');
+  await page.evaluate(() => window.privateBrowser.configureAiProvider({ mode: 'local', model: 'preview-small:latest' }));
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Read selection locally' }).click();
+  await panel.getByRole('combobox', { name: 'Prompt preset' }).selectOption('specs');
+  await expect(panel.getByRole('checkbox', { name: 'Include source passages' })).toBeChecked();
+  await panel.getByRole('button', { name: 'Review request' }).click();
+  await panel.getByRole('button', { name: 'Approve and ask once' }).click();
+  await expect(panel.getByRole('status').filter({ hasText: 'Insufficient page information' })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Copy answer' })).toHaveCount(0);
 });

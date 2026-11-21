@@ -1,0 +1,1 @@
+Assistant product extractions and comparisons show matching source passages. If the reply has no matching source, the panel shows Insufficient page information.

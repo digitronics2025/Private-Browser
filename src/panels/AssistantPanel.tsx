@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Bot, Cloud, Eye, LoaderCircle, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
-import type { AiPagePreview, AiPreviewScope, AiProviderCheckState, AiRequestReview, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
+import type { AiPagePreview, AiPreviewScope, AiProviderCheckState, AiRequestReview, AssistantAnswer, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
 import { ASSISTANT_PRESETS, type AssistantPresetId, type AssistantPresetOverrides } from '../../electron/ai-prompt';
 import { PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
@@ -51,7 +51,9 @@ export function AssistantPanel({ workspace, presets, onToast }: {
   const isLocal = provider.mode === 'local';
   const [question, setQuestion] = useState('Summarize the important points on this page.');
   const [preset, setPreset] = useState<AssistantPresetId | ''>('');
-  const [answer, setAnswer] = useState('');
+  const [withEvidence, setWithEvidence] = useState(false);
+  const [answer, setAnswer] = useState<AssistantAnswer | null>(null);
+  const copyableAnswer = answer?.kind === 'answer' ? answer.text : answer?.kind === 'sources' ? answer.items.map(({ claim }) => claim).join('\n') : '';
   const [passageQuery, setPassageQuery] = useState('');
   const [passages, setPassages] = useState<string[]>();
   useEffect(() => { void window.privateBrowser.getAiProvider().then(setProvider).catch(() => undefined); }, []);
@@ -60,7 +62,7 @@ export function AssistantPanel({ workspace, presets, onToast }: {
     setPreview(null);
     setReview(null);
     setContextText('');
-    setAnswer('');
+    setAnswer(null);
     setPassageQuery('');
     setPassages(undefined);
     // Forgetting the token in the renderer did not invalidate it: the captured
@@ -73,7 +75,7 @@ export function AssistantPanel({ workspace, presets, onToast }: {
   const prepare = async (scope: AiPreviewScope) => {
     setLoading(true);
     setReview(null);
-    setAnswer('');
+    setAnswer(null);
     setPassageQuery('');
     setPassages(undefined);
     try {
@@ -88,7 +90,7 @@ export function AssistantPanel({ workspace, presets, onToast }: {
     if (!preview) return;
     setLoading(true);
     try {
-      setReview(await window.privateBrowser.reviewAssistantRequest(preview.id, contextText, question));
+      setReview(await window.privateBrowser.reviewAssistantRequest(preview.id, contextText, question, withEvidence));
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
   };
@@ -230,6 +232,7 @@ export function AssistantPanel({ workspace, presets, onToast }: {
               const id = event.target.value as AssistantPresetId | '';
               setPreset(id);
               if (id) setQuestion(presets?.[id] ?? ASSISTANT_PRESETS[id].question);
+              setWithEvidence(id === 'specs' || id === 'comparison');
               setReview(null);
             }}>
               <option value="">Custom question</option>
@@ -244,6 +247,10 @@ export function AssistantPanel({ workspace, presets, onToast }: {
                 void savePreset(preset, changes, 'Default prompt restored');
               }}>Restore default</button>}
             </div>}
+            <label className="evidence-option"><input type="checkbox" checked={withEvidence} disabled={loading} onChange={(event) => {
+              setWithEvidence(event.target.checked);
+              setReview(null);
+            }} /> Include source passages</label>
             <button className="primary-button full" type="submit" disabled={loading || !provider.configured || !question.trim()}><ShieldCheck size={16} /> {provider.configured ? 'Review request' : 'Connect provider first'}</button>
           </form>
           {review && <section className="permission-card request-review" aria-label="Request review">
@@ -256,9 +263,17 @@ export function AssistantPanel({ workspace, presets, onToast }: {
           <button className="text-button" onClick={() => void clearContext()}>Clear page context</button>
         </>
       )}
-      {answer && <div className="answer-card"><span>AI ANSWER</span><p>{answer}</p><button type="button" className="text-button" onClick={() => {
-        void window.privateBrowser.copyText(answer).then(() => onToast('Answer copied')).catch((error) => onToast(error instanceof Error ? error.message : 'Could not copy the answer.', 'error'));
-      }}>Copy answer</button></div>}
+      {answer && <div className="answer-card">
+        <span>AI ANSWER</span>
+        {answer.kind === 'answer' && <p>{answer.text}</p>}
+        {answer.kind === 'insufficient' && <p role="status">Insufficient page information. The reply included no source passage from the approved text.</p>}
+        {answer.kind === 'sources' && <ul className="source-findings">{answer.items.map(({ claim, quote }) => <li key={claim}>
+          <p>{claim}</p><blockquote aria-label="Source passage">{quote}</blockquote>
+        </li>)}</ul>}
+        {copyableAnswer && <button type="button" className="text-button" onClick={() => {
+          void window.privateBrowser.copyText(copyableAnswer).then(() => onToast('Answer copied')).catch((error) => onToast(error instanceof Error ? error.message : 'Could not copy the answer.', 'error'));
+        }}>Copy answer</button>}
+      </div>}
     </div>
   );
 }

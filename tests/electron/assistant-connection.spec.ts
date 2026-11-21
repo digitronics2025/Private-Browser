@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron as electron, expect, test } from '@playwright/test';
 
-type Fixture = { mode: 'ok' | 'quota' | 'oversize'; bodies: string[] };
+type Fixture = { mode: 'ok' | 'quota' | 'oversize' | 'evidence'; bodies: string[] };
 
 test('checks the provider with a built-in sample and sends only the separately approved page request', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'private-browser-ai-check-'));
@@ -29,6 +29,10 @@ test('checks the provider with a built-in sample and sends only the separately a
         fixture.bodies.push(String(init?.body ?? ''));
         if (fixture.mode === 'quota') return new Response('provider details', { status: 429 });
         if (fixture.mode === 'oversize') return new Response('x'.repeat(256 * 1024 + 1));
+        if (fixture.mode === 'evidence') return Response.json({ choices: [{ message: { content: JSON.stringify({ findings: [
+          { claim: 'The catalogue lists a brass kettle.', quote: 'A brass kettle sits on the shelf.' },
+          { claim: 'It also lists other items.', quote: 'Other catalogue items.' },
+        ] }) } }] });
         return Response.json({ choices: [{ message: { content: 'Two.' } }] });
       };
     });
@@ -65,13 +69,20 @@ test('checks the provider with a built-in sample and sends only the separately a
     const readBodies = () => app.evaluate(() => (globalThis as typeof globalThis & { __pbAiConnection?: Fixture }).__pbAiConnection!.bodies);
     expect(await readBodies()).toHaveLength(3);
     const send = (id: string) => page.evaluate((value) => window.privateBrowser.sendReviewedAssistant(value), id);
-    await expect(send(review.id)).resolves.toBe('Two.');
+    await expect(send(review.id)).resolves.toEqual({ kind: 'answer', text: 'Two.' });
     await expect(send(review.id)).rejects.toThrow(/review the request/i);
     const sent = await readBodies();
     expect(sent).toHaveLength(4);
     expect(JSON.parse(sent[3]).messages).toEqual([
       { role: 'system', content: review.systemPrompt }, { role: 'user', content: review.userPrompt },
     ]);
+    await app.evaluate(() => { (globalThis as typeof globalThis & { __pbAiConnection?: Fixture }).__pbAiConnection!.mode = 'evidence'; });
+    const evidencePreview = await page.evaluate(() => window.privateBrowser.prepareAiPreview('selection'));
+    const evidence = await page.evaluate(({ id, text }) => window.privateBrowser.reviewAssistantRequest(id, text, 'What is listed?', true), evidencePreview);
+    expect(evidence.userPrompt).toContain('Use this JSON format');
+    await expect(send(evidence.id)).resolves.toEqual({ kind: 'sources', items: [
+      { claim: 'The catalogue lists a brass kettle.', quote: 'A brass kettle sits on the shelf.' },
+    ] });
     await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
     await expect(check()).rejects.toThrow(/unavailable in this Account Space/i);
   } finally {

@@ -7,7 +7,7 @@ import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-prefe
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
-import { AI_SYSTEM_PROMPT, aiUserPrompt } from '../electron/ai-prompt';
+import { AI_SYSTEM_PROMPT, assistantQuestion, aiUserPrompt, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
 import { planBookmarkBatch } from '../electron/bookmark-batch';
@@ -157,7 +157,7 @@ export function installPreviewApi(): void {
   ] : [];
   let previewProvider: AiProviderStatus = { configured: false };
   let assistantPage: AiPagePreview | undefined;
-  let assistantReview: AiRequestReview | undefined;
+  let assistantReview: { data: AiRequestReview; context: string; withEvidence: boolean } | undefined;
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
     state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
@@ -542,27 +542,33 @@ export function installPreviewApi(): void {
       };
       return assistantPage;
     }) satisfies PrivateBrowserApi['prepareAiPreview'],
-    reviewAssistantRequest: async (id, context, questionValue) => {
+    reviewAssistantRequest: async (id, context, questionValue, withEvidence) => {
       if (!assistantPage || assistantPage.id !== id || assistantPage.accountSpaceId !== state.activeAccountSpaceId || assistantPage.tabId !== state.activeTabId) {
         throw new Error('Read the page again before reviewing the request.');
       }
       if (!previewProvider.configured || !previewProvider.mode || !previewProvider.model) throw new Error('Configure an AI provider first.');
       const text = redactSensitiveText(String(context));
       const question = redactSensitiveText(String(questionValue).trim());
-      assistantReview = {
+      const data: AiRequestReview = {
         id: crypto.randomUUID(), mode: previewProvider.mode, model: previewProvider.model,
         destination: previewProvider.mode === 'local' ? 'http://127.0.0.1:11434/api/chat' : `${previewProvider.endpoint}/chat/completions`,
-        systemPrompt: AI_SYSTEM_PROMPT, userPrompt: aiUserPrompt({ ...assistantPage, text: text.text }, question.text),
+        systemPrompt: AI_SYSTEM_PROMPT, userPrompt: aiUserPrompt({ ...assistantPage, text: text.text }, assistantQuestion(question.text, withEvidence === true)),
         redactions: text.redactions + question.redactions,
       };
-      return assistantReview;
+      assistantReview = { data, context: text.text, withEvidence: withEvidence === true };
+      return data;
     },
     sendReviewedAssistant: async (id) => {
       if (!assistantPage || assistantPage.accountSpaceId !== state.activeAccountSpaceId || assistantPage.tabId !== state.activeTabId
-        || assistantReview?.id !== id) throw new Error('Review the request before sending it.');
+        || !assistantReview || assistantReview.data.id !== id) throw new Error('Review the request before sending it.');
+      const { context, withEvidence } = assistantReview;
       assistantReview = undefined;
       assistantPage = undefined;
-      return 'The sample shows a brass kettle on the shelf.';
+      const answer = 'The sample shows a brass kettle on the shelf.';
+      const fixture = withEvidence ? JSON.stringify({ findings: [{
+        claim: answer, quote: params.get('aiSources') === 'unverified' ? 'This passage does not occur in the sample.' : 'A brass kettle sits on the shelf.',
+      }] }) : answer;
+      return readAssistantAnswer(fixture, withEvidence, context);
     },
     revokeAiContext: async () => { assistantReview = undefined; assistantPage = undefined; },
     getLocalAiModels: async () => {

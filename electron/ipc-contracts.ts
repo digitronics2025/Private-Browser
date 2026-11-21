@@ -314,7 +314,9 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if (args[0] !== undefined && args[0] !== 'page' && args[0] !== 'selection') throw new Error('Choose a page or selection to read');
       return;
     case 'ai:review-request':
-      exact(args, 3); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', 12000); requireBoundedText(args[2], 'question', 2000); return;
+      between(args, 3, 4); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', 12000); requireBoundedText(args[2], 'question', 2000);
+      if (args[3] !== undefined && typeof args[3] !== 'boolean') throw new Error('Invalid source passage option');
+      return;
     case 'ai:send-reviewed':
       exact(args, 1); requireUuid(args[0], 'review'); return;
     case 'ai:approve-preview':

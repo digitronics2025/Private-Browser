@@ -645,6 +645,11 @@ export interface AiRequestReview {
   redactions: number;
 }
 
+export type AssistantAnswer =
+  | { kind: 'answer'; text: string }
+  | { kind: 'sources'; items: { claim: string; quote: string }[] }
+  | { kind: 'insufficient' };
+
 export interface AiProviderStatus {
   configured: boolean;
   mode?: 'cloud' | 'local';
