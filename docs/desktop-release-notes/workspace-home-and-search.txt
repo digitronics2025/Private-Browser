@@ -1,0 +1,1 @@
+Each workspace can choose its search engine, Home page, startup pages and site keywords. First-launch setup links to the search choice. Startup pages keep restored tabs and reuse matching pages.

@@ -27,7 +27,7 @@ import { AccountStore, type AccountSpaceRecord } from './account-store.js';
 import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation.js';
 import { pruneBookmarkIcons, sanitizeBookmarkIcons } from './bookmark-icons.js';
 import { isAllowedRemoteUrl } from './security.js';
-import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings } from './browser-settings.js';
+import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings, sanitizeWorkspaceSettings } from './browser-settings.js';
 import { sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
 import { sanitizeBrowserRoutines } from './browser-routines.js';
@@ -388,6 +388,7 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
     privacyLog: sanitizePrivacyLog(input.privacyLog),
     ui,
     settings: sanitizeBrowserSettings(input.settings),
+    workspaceSettings: sanitizeWorkspaceSettings(input.workspaceSettings),
     routines: sanitizeBrowserRoutines(input.routines),
   };
 }

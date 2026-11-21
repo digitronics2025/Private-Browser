@@ -96,6 +96,56 @@ test('New Tab shortcut order and the recent-visit preference survive a restart',
   }
 });
 
+test('keeps Home, site keywords and startup pages in the chosen workspace after restart', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'private-browser-workspace-settings-'));
+  let app = await electron.launch({ args: launchArguments(), env: environment(userData) });
+  try {
+    let page = await app.firstWindow();
+    const before = await page.evaluate(async (url) => {
+      const api = window.privateBrowser;
+      await api.switchWorkspace('personal');
+      await api.setBrowserSettings({ homePage: 'url', homePageUrl: url + '/personal' }, 'personal');
+      await api.setBrowserSettings({ startup: 'pages', startupPages: [url + '/one', url + '/two'], siteKeywords: [
+        { keyword: 'gh', template: url + '/search?q=%s' },
+      ] }, 'personal');
+      await api.goHome();
+      return api.getState();
+    }, origin);
+    expect(before.tabs.find((tab) => tab.id === before.activeTabId)?.url).toBe(origin + '/personal');
+    await page.evaluate(() => window.privateBrowser.navigate('gh daily tabs'));
+    await expect(page.getByRole('tab', { name: 'Results for daily tabs' })).toBeVisible();
+    await page.evaluate(async (url) => {
+      const api = window.privateBrowser;
+      await api.switchWorkspace('tenten');
+      await api.setBrowserSettings({ homePage: 'url', homePageUrl: url + '/tenten' }, 'tenten');
+      await api.goHome();
+    }, origin);
+    await expect(page.evaluate(() => window.privateBrowser.setBrowserSettings({ startup: 'home' }, 'personal'))).rejects.toThrow(/workspace changed/i);
+    await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) =>
+      state.tabs.find((tab) => tab.id === state.activeTabId)?.url))).toBe(origin + '/tenten');
+    const restored = await page.evaluate(async (url) => {
+      const api = window.privateBrowser;
+      await api.switchWorkspace('personal');
+      await api.navigate(url + '/one');
+      return api.getState();
+    }, origin);
+    await app.close();
+    app = await electron.launch({ args: launchArguments(), env: environment(userData) });
+    page = await app.firstWindow();
+    await expect.poll(() => page.evaluate(async (url) => {
+      const state = await window.privateBrowser.getState();
+      return state.tabs.some((tab) => tab.accountSpaceId === state.activeAccountSpaceId && tab.url === url + '/two');
+    }, origin)).toBe(true);
+    const after = await page.evaluate(() => window.privateBrowser.getState());
+    expect(after.activeTabId).toBe(restored.activeTabId);
+    expect(after.tabs.filter((tab) => tab.accountSpaceId === after.activeAccountSpaceId && tab.url === origin + '/one')).toHaveLength(1);
+    expect(after.tabs.some((tab) => tab.workspaceId === 'tenten' && tab.url === origin + '/two')).toBe(false);
+  } finally {
+    await app.close();
+    await rm(userData, { recursive: true, force: true, maxRetries: 4 });
+  }
+});
+
 test('search engine, Home page and startup settings work in the real app and survive a restart', async () => {
   const userData = await mkdtemp(join(tmpdir(), 'private-browser-settings-'));
   let app = await electron.launch({ args: launchArguments(), env: environment(userData) });

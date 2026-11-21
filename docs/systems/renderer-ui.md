@@ -234,6 +234,11 @@ Protection detail is in the shield menu, not on the page.
 
 ## Panels and Their IPC
 
+Settings shows behavior controls for the active workspace. Existing profiles
+inherit their saved settings until a workspace is customized. Users can choose
+a search engine from the Setup guide and configure explicit site keywords.
+The app builds a keyword search only after the user submits the address bar.
+
 The bookmark manager prepares one searchable index per bookmark snapshot. It
 renders 75 results per page and preserves the text and folder filters when a
 bookmark is renamed or removed.

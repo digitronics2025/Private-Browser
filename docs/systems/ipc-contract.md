@@ -173,7 +173,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
 | `ui:set-preferences` | `setUiPreferences(patch)` | non-empty `UiPreferencesPatch`, validated by `requireUiPreferencesPatch` | `void` |
-| `settings:set` | `setBrowserSettings(patch)` | non-empty `BrowserSettingsPatch`, validated by `requireBrowserSettingsPatch` (search template rules, `custom`/`url` need their value); the controller then normalizes `homePageUrl` with `parseWebAddress` | `void` |
+| `settings:set` | `setBrowserSettings(patch, workspace?)` | validated behavior settings, optional expected active workspace | `void` |
 | `bookmarks:move` | `moveBookmark(level, key, toIndex)` | `BookmarkLevelInput`, `BookmarkEntryKeyInput`, integer | `void` |
 | `bookmarks:rename` | `renameBookmark(id, title)` | id, non-blank title ≤ 500 | `void` |
 | `bookmarks:edit-address` | `editBookmarkAddress(id, url)` | bookmark ID and HTTP(S) URL | `void` |

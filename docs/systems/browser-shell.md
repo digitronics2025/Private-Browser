@@ -542,6 +542,11 @@ the whole state file per event.
 
 ## Per-Account-Space Sessions and Permissions
 
+Each workspace can choose Home, its search engine, site keywords and up to
+eight startup addresses. On launch, the active workspace adds missing startup
+pages as background tabs and keeps restored tabs in place. Banking uses the
+local New Tab page and disables startup pages and site keywords.
+
 Site information displays the exact active origin's current policy and grant
 duration. Revoking a grant clears the stored and session entries for that
 account, origin and capability. The page requests permission again on its

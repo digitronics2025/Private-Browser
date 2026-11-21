@@ -334,6 +334,7 @@ export interface BrowserStateManifestV2 {
   ui?: UiPreferences;
   /** Optional: builds before 0.7.0 ignore it and fall back to defaults. */
   settings?: BrowserSettings;
+  workspaceSettings?: Partial<Record<WorkspaceId, BrowserSettings>>;
   routines?: BrowserRoutine[];
 }
 
@@ -577,6 +578,7 @@ export interface RuntimeBrowserStateV2 {
   bookmarkBarVisible: boolean;
   ui: UiPreferences;
   settings: BrowserSettings;
+  workspaceSettings?: Partial<Record<WorkspaceId, BrowserSettings>>;
   routines?: BrowserRoutine[];
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
   bookmarkIconsByAccountSpace: Record<string, Record<string, string>>;

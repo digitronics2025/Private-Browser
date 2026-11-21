@@ -20,7 +20,7 @@ import { findAddressMatches } from './address-matches.js';
 import { queryHistory, RETAINED_HISTORY_LIMIT } from './history-query.js';
 import { defaultBrowserRoutines } from './browser-routines.js';
 import { WORKSPACES } from './state-store.js';
-import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings } from './browser-settings.js';
+import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings, sanitizeWorkspaceSettings } from './browser-settings.js';
 import { DEFAULT_UI_PREFERENCES, sanitizeUiPreferences } from './ui-preferences.js';
 
 export class RuntimeStateStore {
@@ -209,6 +209,7 @@ export class RuntimeStateStore {
       bookmarkBarVisible: next.ui.bookmarkBarMode !== 'hidden',
       ui: next.ui,
       settings: next.settings,
+      workspaceSettings: next.workspaceSettings,
       routines: next.routines,
     };
     for (const account of next.accountSpaces) {
@@ -286,6 +287,7 @@ function combine(
     bookmarkBarVisible: manifest.bookmarkBarVisible,
     ui: sanitizeUiPreferences(manifest.ui, manifest.bookmarkBarVisible),
     settings: sanitizeBrowserSettings(manifest.settings),
+    workspaceSettings: sanitizeWorkspaceSettings(manifest.workspaceSettings),
     routines: manifest.routines ?? defaultBrowserRoutines(manifest.activeAccountSpaceByWorkspace),
     shortcutsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.shortcuts).map((state) => [state.accountSpaceId, state.shortcuts!])),
     bookmarkIconsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.bookmarkIcons).map((state) => [state.accountSpaceId, state.bookmarkIcons!])),
