@@ -1,0 +1,31 @@
+{
+  "disposableStatus": {
+    "client": "Claude Code",
+    "profile": "develop",
+    "outside": "observe",
+    "origins": 0,
+    "actionsPerMinute": 90,
+    "tabs": 4,
+    "idleMs": 600000,
+    "sessionMinutes": 60
+  },
+  "isolation": {
+    "firstAfterSet": "first",
+    "secondBeforeSet": "none",
+    "secondAfterSet": "second",
+    "firstStillIntact": "first"
+  },
+  "public": {
+    "opened": true,
+    "snapshotTitle": false,
+    "snapshotHeading": false,
+    "visibleExampleDomain": false,
+    "clickRefusal": "This client can only read pages at this origin.",
+    "emulateRefusal": "This client can only read pages at this origin.",
+    "screenshot": true,
+    "console": true,
+    "network": true,
+    "closed": true,
+    "noFixtureTabsLeft": true
+  }
+}
