@@ -109,6 +109,8 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
   expect(await openAt(bankingUrl, 'mouse')).toBe('mouse');
   await invoke('open');
   expect((await capture()).calls).toBe(before);
+  expect((await getState()).tabs.filter((tab) => tab.url === origin + '/background-menu')).toHaveLength(0);
+  await page.evaluate((workspaceId) => window.privateBrowser.switchWorkspace(workspaceId), opened.activeWorkspaceId);
   expect((await getState()).tabs.filter((tab) => tab.url === origin + '/background-menu')).toHaveLength(1);
 });
 
@@ -140,16 +142,20 @@ test('a hidden tab cannot take the foreground or open unlimited tabs', async () 
   const page = await application!.firstWindow();
   const origin = `http://127.0.0.1:${port}`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), `${origin}/source`);
+  const workspace = await page.evaluate(() => window.privateBrowser.getState().then((state) => state.activeWorkspaceId));
   await expect.poll(async () => application!.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((contents) => contents.getURL() === url), `${origin}/source`)).toBe(true);
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   await expect.poll(async () => (await page.evaluate(() => window.privateBrowser.getState())).activeWorkspaceId).toBe('banking');
 
   for (let index = 0; index < 8; index += 1) await openFromPage(`${origin}/source`, `${origin}/background-${index}`);
-  await expect.poll(async () => (await page.evaluate(() => window.privateBrowser.getState())).tabs.filter((tab) => tab.url.startsWith(`${origin}/background-`)).length).toBe(5);
-
-  const state = await page.evaluate(() => window.privateBrowser.getState());
-  expect(state.activeWorkspaceId).toBe('banking');
-  expect(state.privacyLog.some((event) => event.title === 'Popups blocked')).toBe(true);
+  const banking = await page.evaluate(() => window.privateBrowser.getState());
+  expect(banking.activeWorkspaceId).toBe('banking');
+  expect(banking.tabs.some((tab) => tab.url.startsWith(`${origin}/background-`))).toBe(false);
+  expect(banking.privacyLog.some((event) => event.title === 'Popups blocked')).toBe(false);
+  await page.evaluate((id) => window.privateBrowser.switchWorkspace(id), workspace);
+  const original = await page.evaluate(() => window.privateBrowser.getState());
+  expect(original.tabs.filter((tab) => tab.url.startsWith(`${origin}/background-`))).toHaveLength(5);
+  expect(original.privacyLog.some((event) => event.title === 'Popups blocked')).toBe(true);
 });
 
 // F-30: locking the account in use used to leave the workspace pointing at it,
