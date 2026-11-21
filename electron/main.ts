@@ -4,6 +4,10 @@ import { writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { agentDataRoot } from '@private-browser/bridge-protocol/agent-location';
+import { AgentHost } from './agent-host.js';
+import type { AgentDecision } from './agent-types.js';
+import { agentUrl, type AgentPolicy } from './agent-policy.js';
 import {
   app,
   BrowserWindow,
@@ -594,13 +598,42 @@ class BrowserController {
   }
 
   broadcast(): void {
+    agentHost?.validateLentTab();
     if (!this.window.isDestroyed()) this.window.webContents.send('browser:state', this.getSnapshot());
   }
 
   isTrustedSender(event: IpcMainInvokeEvent): boolean {
-    return !this.window.isDestroyed()
+    return Boolean(this.window) && !this.window.isDestroyed()
       && event.sender === this.window.webContents
       && event.senderFrame === this.window.webContents.mainFrame;
+  }
+
+  agentParent(): BrowserWindow | undefined {
+    return this.window && !this.window.isDestroyed() ? this.window : undefined;
+  }
+
+  notifyAgentChange(): void { this.agentParent()?.webContents.send('agents:changed'); }
+
+  async lendAgentTab(tabId: string, clientId: string): Promise<void> {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tabId);
+    const view = runtime?.view;
+    if (!agentHost || tab.id !== tabId || tab.isHome || tab.workspaceId === 'banking' || !view || runtime?.problem
+      || runtime?.certificateError || runtime?.automaticFillPending || this.window.isFullScreen()
+      || WORKSPACES.find(({ id }) => id === tab.workspaceId)?.protected) {
+      throw new Error('Select a loaded, non-protected tab before lending it.');
+    }
+    const url = agentUrl(view.webContents.getURL());
+    if (isKnownGoogleWebHost(url.href)) throw new Error('Google account and service pages cannot be lent.');
+    this.fillCapabilities.invalidateTab(tabId);
+    this.fillPicker.close();
+    await agentHost.lendTab({
+      tabId, view,
+      current: () => !this.window.isDestroyed() && !this.window.isFullScreen()
+        && this.activeTab(this.store.get()).id === tabId && this.runtimeTabs.get(tabId)?.view === view
+        && !this.activeTab(this.store.get()).isHome,
+    }, clientId);
   }
 
   focus(): void {
@@ -3120,7 +3153,7 @@ class BrowserController {
     const active = this.activeTab(state);
     const runtime = this.runtimeTabs.get(tabId);
     const contents = runtime?.view?.webContents;
-    if (!tab || active.id !== tabId || !runtime || !contents || tab.isHome) return;
+    if (!tab || active.id !== tabId || !runtime || !contents || tab.isHome || agentHost?.isLentContents(contents.id)) return;
     if (!workspaceVaultPolicy(tab.workspaceId).automaticFill || this.vault.status().lifecycle !== 'unlocked') return;
     if (runtime.navigationGeneration !== generation || runtime.automaticFillGeneration === generation || runtime.automaticFillPending || runtime.certificateError) return;
     if (!isAutomaticFillPageUrl(contents.getURL())) return;
@@ -3561,6 +3594,7 @@ class BrowserController {
     const popupTimes: number[] = [];
     // `popup` is set when the request comes from a popup window this tab opened.
     const openFromPage = ({ url, disposition }: HandlerDetails, popup?: BrowserWindow): WindowOpenHandlerResponse => {
+      if (agentHost?.isLentContents(view.webContents.id)) return { action: 'deny' };
       if (tab.workspaceId === 'banking') {
         this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
         return { action: 'deny' };
@@ -3640,11 +3674,12 @@ class BrowserController {
         () => Boolean(this.developerTarget(tabId)));
     });
     view.webContents.on('before-input-event', (event, input) => {
-      if (this.handleFillPickerKey(tabId, event, input)) return;
+      if (!agentHost?.isLentContents(view.webContents.id) && this.handleFillPickerKey(tabId, event, input)) return;
       this.handleShortcut(event, input);
     });
     // Only genuine user input opens the login picker; nothing the page does can.
     view.webContents.on('input-event', (_event, input) => {
+      if (agentHost?.isLentContents(view.webContents.id)) return;
       if (input.type === 'mouseWheel' || input.type === 'gestureScrollBegin') this.fillPicker.close();
       if (input.type !== 'mouseDown') return;
       this.fillPicker.close();
@@ -3707,7 +3742,7 @@ class BrowserController {
     if (spelling) this.applySpellcheck(ses, spelling);
     const protectedWorkspace = WORKSPACES.find((workspace) => workspace.id === workspaceId)!.protected;
     ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-      if (protectedWorkspace || !details.isMainFrame) {
+      if (protectedWorkspace || !details.isMainFrame || agentHost?.isLentContents(_webContents?.id)) {
         callback(false);
         return;
       }
@@ -3729,7 +3764,7 @@ class BrowserController {
       }
     });
     ses.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => {
-      if (protectedWorkspace || !details.isMainFrame) return false;
+      if (protectedWorkspace || !details.isMainFrame || agentHost?.isLentContents(_webContents?.id)) return false;
       const capability = permissionCapability(permission, details);
       if (!capability) return isAllowedSitePermission(permission, details.requestingUrl ?? requestingOrigin, false, details.isMainFrame);
       const origin = safeOrigin(details.requestingUrl ?? requestingOrigin);
@@ -3742,6 +3777,7 @@ class BrowserController {
       const activeView = this.runtimeTabs.get(active.id)?.view;
       const origin = safeOrigin(request.securityOrigin);
       if (protectedWorkspace
+        || agentHost?.isLentContents(activeView?.webContents.id)
         || active.accountSpaceId !== accountSpaceId
         || origin !== 'https://meet.google.com'
         || !request.userGesture
@@ -3771,7 +3807,9 @@ class BrowserController {
         deny();
       }
     }, { useSystemPicker: false });
-    ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: this.isBlockedTrackerRequest(details.url) }));
+    ses.webRequest.onBeforeRequest((details, callback) => callback({
+      cancel: this.isBlockedTrackerRequest(details.url) || agentHost?.allowLentRequest(details) === false,
+    }));
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
     });
@@ -3780,6 +3818,7 @@ class BrowserController {
     });
     ses.webRequest.onErrorOccurred((details) => this.recordNetworkIssue(details));
     ses.on('will-download', (event, item, sourceContents) => {
+      if (agentHost?.isLentContents(sourceContents?.id)) { event.preventDefault(); return; }
       if (protectedWorkspace) {
         event.preventDefault();
         this.addPrivacyEvent('blocked', 'Download blocked in Banking', 'Banking does not allow saving downloads');
@@ -4070,6 +4109,11 @@ class BrowserController {
 
   private handleShortcut(event: Electron.Event, input: Electron.Input): void {
     if (input.type !== 'keyDown' || input.isAutoRepeat) return;
+    if (input.control && input.shift && !input.alt && !input.meta && (input.code === 'Period' || input.key === '>')) {
+      event.preventDefault();
+      agentHost?.stop();
+      return;
+    }
     // Esc leaves window full screen (F11) the way it leaves page full screen.
     if (input.key === 'Escape' && !this.window.isDestroyed() && this.window.isFullScreen() && !this.htmlFullscreenOwner && !input.control && !input.alt && !input.shift && !input.meta) {
       this.window.setFullScreen(false);
@@ -4085,6 +4129,8 @@ class BrowserController {
 
 let controller: BrowserController | undefined;
 let vscodeBridge: VscodeBridgeServer | undefined;
+let agentHost: AgentHost | undefined;
+const AGENT_WORKSPACE_Ipc = new Set(['agents:status', 'agents:decide', 'agents:stop', 'agents:select', 'agents:manual', 'agents:close-tab']);
 const pendingLaunchUrls: string[] = [];
 let launchWindowReady = false;
 let processingLaunchUrls = false;
@@ -4139,15 +4185,17 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-function assertTrusted(event: IpcMainInvokeEvent): void {
-  if (!controller?.isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+function assertTrusted(event: IpcMainInvokeEvent, channel: string): void {
+  const agentWindow = agentHost?.workspace.isTrustedSender(event);
+  if (agentWindow && AGENT_WORKSPACE_Ipc.has(channel)) return;
+  if (channel === 'agents:decide' || !controller?.isTrustedSender(event)) throw new Error('Untrusted IPC sender');
 }
 
 const ipcGuard = new IpcGuard();
 
 function handle<TArgs extends unknown[], TResult>(channel: string, callback: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>): void {
   ipcMain.handle(channel, async (event, ...args) => {
-    assertTrusted(event);
+    assertTrusted(event, channel);
     ipcGuard.check(event.sender.id, channel, args);
     validateIpcArguments(channel, args);
     return callback(event, ...args as TArgs);
@@ -4212,8 +4260,47 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   }
   const migration = new VaultMigrationService(join(userDataPath, 'vault.enc'), join(userDataPath, 'myvault', 'migration-journal.enc'), safeStorage, vault);
   controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge, controlCenter, fillPreferences);
+  const agentChromeUrl = new URL(process.env.VITE_DEV_SERVER_URL ?? pathToFileURL(join(import.meta.dirname, '../dist/index.html')));
+  agentChromeUrl.hash = 'agent-workspace';
+  agentHost = new AgentHost({
+    data: join(userDataPath, 'agent-mode'),
+    rendezvous: !app.isPackaged && process.env.PRIVATE_BROWSER_AGENT_DATA_DIR || agentDataRoot(),
+    chromeUrl: agentChromeUrl.href,
+    preload: join(import.meta.dirname, 'preload.cjs'),
+    command: app.isPackaged ? join(process.resourcesPath, 'private-browser-agent', 'private-browser-mcp.cmd') : 'node',
+    commandArgs: app.isPackaged ? [] : [join(import.meta.dirname, '../packages/agent-mcp/dist/cli.js')],
+    parent: () => controller?.agentParent(),
+    onChange: () => controller?.notifyAgentChange(),
+    discover: async () => {
+      const selected = vscodeBridge?.status().project?.project;
+      if (!selected?.authorized || !vscodeBridge) return [];
+      const info = await vscodeBridge.request('server.discover', { projectId: selected.id }) as ProjectInfo;
+      return info.devServerUrl ? [info.devServerUrl] : [];
+    },
+  });
 
   handle('browser:get-state', () => controller!.getSnapshot());
+  handle('agents:status', () => agentHost!.status());
+  handle('agents:enable', (_event, enabled: boolean) => agentHost!.enable(enabled));
+  handle('agents:pair', () => agentHost!.beginPairing());
+  handle('agents:stop', () => agentHost!.stop());
+  handle('agents:resume', () => agentHost!.resume());
+  handle('agents:open-workspace', () => agentHost!.workspace.show());
+  handle('agents:revoke', (_event, id: string) => agentHost!.revoke(id));
+  handle('agents:renew', (_event, id: string) => agentHost!.renew(id));
+  handle('agents:set-policy', (_event, id: string, policy: AgentPolicy) => agentHost!.setPolicy(id, policy));
+  handle('agents:grant-uploads', (_event, id: string) => agentHost!.grantUploadFolder(id));
+  handle('agents:revoke-uploads', (_event, id: string) => agentHost!.revokeUploadFolder(id));
+  handle('agents:add-space', (_event, name: string) => agentHost!.addSpace(name));
+  handle('agents:reset-space', (_event, id: string) => agentHost!.resetSpace(id));
+  handle('agents:clear-audit', () => agentHost!.clearAudit());
+  handle('agents:export-audit', () => agentHost!.exportAudit());
+  handle('agents:decide', (_event, id: string, decision: AgentDecision) => agentHost!.decide(id, decision));
+  handle('agents:select', (_event, id: string) => agentHost!.workspace.select(id));
+  handle('agents:manual', (_event, id: string, manual: boolean) => agentHost!.workspace.setManual(id, manual));
+  handle('agents:close-tab', (_event, id: string) => agentHost!.workspace.close(id));
+  handle('agents:lend-tab', (_event, tabId: string, clientId: string) => controller!.lendAgentTab(tabId, clientId));
+  handle('agents:return-tab', () => agentHost!.returnLentTab());
   handle('routines:save', (_event, routine: BrowserRoutine) => controller!.saveRoutine(routine));
   handle('routines:save-tabs', (_event, input: TabSetInput) => controller!.saveTabSet(input));
   handle('routines:open-reference', (_event, input: ReferenceSearchInput) => controller!.openReferenceSearch(input));
@@ -4398,6 +4485,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:open-history', () => controller!.openReleaseHistory());
 
   await controller.createWindow();
+  await agentHost.start();
   setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();
   setInterval(() => void controller?.checkForUpdatesInBackground(), 24 * 60 * 60_000).unref();
   if (!pendingLaunchUrls.length) await controller.openStartupHome();
@@ -4414,6 +4502,7 @@ app.on('before-quit', (event) => {
     event.preventDefault();
     return;
   }
+  agentHost?.stop();
   if (clipboardQuit === 'not-started' && controller?.secretClipboardPending) {
     event.preventDefault();
     clipboardQuit = 'clearing';

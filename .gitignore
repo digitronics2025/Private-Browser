@@ -11,6 +11,7 @@ release/
 release-*/
 build/private-browser-update.json
 build/private-browser-bridge.vsix
+build/private-browser-agent/
 test-results/
 playwright-report/
 .wrangler/

@@ -38,6 +38,11 @@ Workspace policy applies to every Account Space it owns. Moving an Account Space
 between workspaces is unsupported; opening or moving a link requires an explicit
 destination account already in the intended workspace.
 
+Agent Mode uses a separate window and independently generated persistent
+partition IDs. The regular workspace catalog and v1/v2 state formats stay
+stable. Agent spaces are created empty and have their own reset path. See
+[Agent Mode](agent-mode.md).
+
 ## Version-1 compatibility
 
 `PersistedState` version 1 contains active workspace, tabs, active tab per

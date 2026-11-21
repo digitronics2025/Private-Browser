@@ -7,6 +7,8 @@ import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
 import { DEFAULT_SPELLCHECK, MAX_SETTING_URL_LENGTH, MAX_SITE_KEYWORDS, MAX_STARTUP_PAGES, SEARCH_ENGINES, SPELLCHECK_LANGUAGES, type PresetSearchEngineId, type SpellcheckLanguage, type SpellcheckSettings } from '../../electron/browser-settings';
 import type { Workspace } from '../../electron/types';
 import { SetupGuide } from './SetupGuide';
+import { AgentsPanel } from './AgentsPanel';
+import { Bot } from 'lucide-react';
 
 const THEME_OPTIONS = [['system', 'Match Windows'], ['light', 'Light'], ['dark', 'Dark']] as const;
 const BOOKMARK_BAR_OPTIONS = [['always', 'Always'], ['new-tab', 'New Tab only'], ['hidden', 'Hidden']] as const;
@@ -25,7 +27,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
   onToast: (message: string, kind?: 'ok' | 'error') => void;
 }) {
   const [isDefault, setIsDefault] = useState<boolean | null>(null);
-  const [settingsPage, setSettingsPage] = useState<'overview' | 'updates' | 'setup'>(entry);
+  const [settingsPage, setSettingsPage] = useState<'overview' | 'updates' | 'setup' | 'agents'>(entry);
   useEffect(() => { if (entry === 'setup') setSettingsPage('setup'); }, [entry]);
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
@@ -234,6 +236,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       }}
       onExit={exitSetup} onFinish={() => { onUiChange({ offerSetupGuide: false }); exitSetup(); }} />;
   }
+  if (settingsPage === 'agents') return <AgentsPanel onBack={() => setSettingsPage('overview')} onToast={onToast} />;
   if (settingsPage === 'updates') {
     return <UpdatesPage
       status={updateStatus}
@@ -328,6 +331,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     </div>
     <div className="settings-card update-settings"><div className="settings-row"><span><RefreshCw size={17} /></span><div><strong>App updates</strong><small>{checking ? 'Checking the latest stable release…' : updateError ? 'Latest-version check unavailable' : updateResult?.state === 'available' ? `Version ${updateResult.latest.version} is ready` : `Version ${updateResult?.currentVersion ?? updateStatus?.currentVersion ?? ''} is current`}</small></div>{checking ? <b className="pending"><LoaderCircle className="spin" size={13} /> Checking</b> : updateError ? <button onClick={() => setSettingsPage('updates')}>Review</button> : updateResult?.state === 'available' ? <button className="update-ready-button" onClick={() => setSettingsPage('updates')}>Update</button> : <button onClick={() => setSettingsPage('updates')}>Open</button>}</div></div>
     <div className="settings-card"><div className="settings-row"><span><ShieldCheck size={17} /></span><div><strong>Security baseline</strong><small>Sandboxed pages, isolated sessions, strict IPC and encrypted secrets.</small></div>{encryptionAvailable === null ? <b className="pending">Checking…</b> : encryptionAvailable ? <b><Check size={14} /> Active</b> : <b className="failing"><X size={14} /> Encryption unavailable</b>}</div></div>
+    <div className="settings-card"><div className="settings-row"><span><Bot size={17} /></span><div><strong>Agents</strong><small>Claude Code and Codex</small></div><button onClick={() => setSettingsPage('agents')}>Open Agents</button></div></div>
     <div className="about-card"><span><ShieldCheck size={23} /></span><div><strong>Private Browser</strong><small>{updateStatus?.currentVersion ? `Version ${updateStatus.currentVersion} · Digitronics` : 'Digitronics'}</small></div></div>
   </div>;
 }

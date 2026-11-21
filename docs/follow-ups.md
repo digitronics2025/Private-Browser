@@ -219,12 +219,10 @@ node scripts/docs-find.mjs --history "<term from the entry>"
 
 ## Control Center link
 
-- **Agents never drive the browser (2026-09-24, `ControlCenterLink`).** The
-  link is one-way on purpose: the browser sends approved evidence, the Control
-  Center sends nothing back but task status. Letting Control Center agents
-  drive pages would need a separate, empty "Agent" Account Space with no saved
-  logins and no vault, its own threat model, and a change to SECURITY.md —
-  never the operator's signed-in spaces.
+- **Control Center never drives the browser.** The link sends approved evidence
+  and receives task status. Local coding agents use the separately paired
+  [Agent Workspace](systems/agent-mode.md). An owner can lend one eligible
+  tab to a connected client from Private Browser for up to fifteen minutes.
 - **Opening a task's app in Private Browser from the Control Center is not
   built (2026-09-24, `sendToControlCenter`).** It fits the 0.7.0
   default-browser handling (single-instance URLs), which has not shipped.

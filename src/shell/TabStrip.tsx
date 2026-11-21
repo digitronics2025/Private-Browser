@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
-import { ChevronDown, ChevronRight, Globe2, LoaderCircle, Pin, Plus, Volume2, VolumeX, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Globe2, LoaderCircle, Pin, Plus, Volume2, VolumeX, X } from 'lucide-react';
 import type { BrowserTab, TabBatchScope, TabGroup, TabOrganizationAction } from '../../electron/types';
 import { tabBatchTargets } from '../../electron/tab-organization';
 import { BrandMark } from './BrandMark';
@@ -37,6 +37,10 @@ export interface WindowTabStripProps {
   onDuplicate: (id: string) => void;
   onCopyAddress: (url: string) => void;
   onCloseBatch: (id: string, scope: TabBatchScope, confirmedIds: string[]) => void;
+  agentClients?: { id: string; name: string }[];
+  agentLent?: { tabId: string; client: string };
+  onLend?: (tabId: string, clientId: string) => void;
+  onReturn?: () => void;
 }
 
 /**
@@ -44,7 +48,7 @@ export interface WindowTabStripProps {
  * the empty draggable area. The native Windows caption buttons are drawn by the
  * title-bar overlay into the space this strip leaves free on the right.
  */
-export function WindowTabStrip({ tabs, groups, activeTabId, shieldButtonRef, tabSearchButtonRef, shieldOpen, tabSearchOpen, onShield, onTabSearch, onActivate, onClose, onNewTab, onMove, onMute, onOrganize, onCreateGroup, onDuplicate, onCopyAddress, onCloseBatch }: WindowTabStripProps) {
+export function WindowTabStrip({ tabs, groups, activeTabId, shieldButtonRef, tabSearchButtonRef, shieldOpen, tabSearchOpen, onShield, onTabSearch, onActivate, onClose, onNewTab, onMove, onMute, onOrganize, onCreateGroup, onDuplicate, onCopyAddress, onCloseBatch, agentClients, agentLent, onLend, onReturn }: WindowTabStripProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const tabRefs = useRef(new Map<string, HTMLDivElement>());
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -211,9 +215,17 @@ export function WindowTabStrip({ tabs, groups, activeTabId, shieldButtonRef, tab
       >
         <ChevronDown size={16} />
       </button>
+      {agentLent?.tabId === activeTabId && <div className="agent-lent-indicator" role="status">
+        <Bot size={15} /><span>{agentLent.client} is controlling this tab</span>
+        <button onClick={onReturn} aria-label="Stop agent control">Stop</button>
+      </div>}
       <div className="caption-buttons-space" aria-hidden="true" />
       {tabMenu && menu && <MenuSurface label="Tab actions" anchor={tabRefs.current.get(tabMenu.id)} point={menu.point} onClose={() => setMenu(undefined)}>
         <MenuItem label="Duplicate tab" onSelect={() => onDuplicate(tabMenu.id)} />
+        {tabMenu.id === activeTabId && !tabMenu.isHome && tabMenu.workspaceId !== 'banking'
+          && !agentLent && Boolean(agentClients?.length) && <SubmenuItem id="lend-agent-tab" label="Let agent use this tab for 15 minutes">
+            {agentClients?.map(({ id, name }) => <MenuItem key={id} label={name} onSelect={() => onLend?.(tabMenu.id, id)} />)}
+          </SubmenuItem>}
         <MenuItem label="Copy address" disabled={tabMenu.isHome} onSelect={() => onCopyAddress(tabMenu.url)} />
         <MenuItem icon={Pin} label={tabMenu.pinned ? 'Unpin tab' : 'Pin tab'} onSelect={() => onOrganize({ kind: 'pin', tabId: tabMenu.id, pinned: !tabMenu.pinned })} />
         <SubmenuItem id="move-tab-group" label="Move to group">

@@ -407,9 +407,12 @@ manual dispatch. `permissions: contents: read`; concurrency per PR/ref, cancelli
 runs **only for pull requests** — a `main` run is never cancelled. Node 22 with
 npm cache in every job.
 
-**CI levels.** Draft PR: nothing. Ready PR: `verify` on Ubuntu only. `main`: `verify`,
-then Windows + publish only if the app changed. Windows-specific PR: dispatch the
-workflow on its branch (never publishes).
+**CI levels.** Draft PR: nothing. Ready PR: `verify` on Ubuntu only. An app change
+on `main` runs verification and the Windows installer job. An owner-approved
+public release also requires the exact approved commit SHA in the
+`PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED` GitHub Actions repository variable.
+Windows-specific PRs use a manual
+dispatch on their branch to verify and package without publishing.
 
 **No job declares secrets.** Every credential is attached to the one step that
 uses it, so `npm ci` and the test suite never run with production values in their

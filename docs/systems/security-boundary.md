@@ -372,6 +372,11 @@ Electron suite checks that the network, session and renderer User-Agent values
 retain the same unmodified embedded-browser identity, then completes the
 official Turnstile test-key flow.
 
+Agent navigation adds exact-origin policy and checks protected addresses
+before they reach an Agent tab. Tool access resolves only against the Agent
+Workspace registry. See [Agent Mode](agent-mode.md) for the wire and
+sandbox threat model.
+
 ## Related Systems
 
 - [SECURITY.md](../../SECURITY.md) — the trust-boundary model these predicates

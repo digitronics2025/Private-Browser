@@ -37,6 +37,7 @@ import { faviconsByHost } from './lib/format';
 import { disposer } from './lib/subscribe';
 import { DEFAULT_BROWSER_SETTINGS, searchEngineLabel, type BrowserSettings } from '../electron/browser-settings';
 import { isAllowedRemoteUrl, stripTrackingParameters } from '../electron/security';
+import { useAgentStatus } from './panels/AgentsPanel';
 
 type MenuKind = 'browser' | 'profile' | 'shield' | 'tab-search' | 'site-info' | 'zoom';
 
@@ -56,6 +57,7 @@ function shortcutUrl(value: string): string {
 }
 
 export default function App() {
+  const agent = useAgentStatus();
   const [state, setState] = useState<BrowserSnapshot | null>(null);
   const [address, setAddress] = useState('');
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
@@ -479,6 +481,10 @@ export default function App() {
                 submit: (values) => window.privateBrowser.organizeTab({ kind: 'create-group', tabId: id, name: values.name }),
               })}
               onMute={(id, muted) => void act(() => window.privateBrowser.setTabMuted(id, muted))}
+              agentClients={agent?.clients.filter((client) => client.active)}
+              agentLent={agent?.lent}
+              onLend={(id, client) => void act(() => window.privateBrowser.lendAgentTab(id, client))}
+              onReturn={() => void act(() => window.privateBrowser.returnAgentTab())}
             />
             <NavigationToolbar
               tab={activeTab}

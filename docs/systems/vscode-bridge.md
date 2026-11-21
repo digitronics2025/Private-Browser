@@ -89,6 +89,11 @@ The browser accepts no extension-initiated privileged browser request. Incoming
 traffic is limited to 120 messages per minute, and the extension permits at most
 five command starts per minute.
 
+The [Agent Mode](agent-mode.md) channel shares the frame codec, cryptographic
+primitives and file containment checks. Its rendezvous, wire schema, pairing
+records and approvals are separate from VS Code. The only project data shared
+into Agent Mode is the authorized project's loopback server URL.
+
 ## Project and Command Authorization
 
 `adapters.ts` detects npm, pnpm, yarn, bun, or Gradle from lockfiles and trusted

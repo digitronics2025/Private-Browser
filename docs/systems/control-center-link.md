@@ -25,7 +25,8 @@ The Control Center side of the same link is its `docs/systems/connected-apps.md`
 
 **Boundary.** The browser is always the client. The Control Center never sends
 the browser a request, and nothing here gives it any power over the browser,
-its Account Spaces, cookies or the vault. Agents never drive Private Browser.
+its Account Spaces, cookies or the vault. Local coding agents use the separate
+[Agent Mode](agent-mode.md) channel and workspace.
 
 ### Invariants
 

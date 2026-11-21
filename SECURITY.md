@@ -171,6 +171,48 @@ bundles are double-redacted; DOM metadata and screenshots default off. Model
 edits require workspace containment, a matching current file hash, a visible
 VS Code review, and modal approval before `WorkspaceEdit` can apply them.
 
+## Agent Mode
+
+Agent Mode starts off and uses a dedicated Agent Workspace. Agent tabs are
+sandboxed, preload-free views backed by independent persistent Chromium
+partitions. Main resolves tab and space identifiers from a private registry.
+Banking, regular Account Spaces, MyVault, browser import, Google connections,
+sync, clipboard access and device permissions are outside that registry.
+
+Local coding agents connect over stdio and a separate encrypted named pipe
+or owner-only Unix socket. Agent identities and approval state are distinct
+from VS Code and Control Center. Electron keeps signing keys and audit
+records in OS-encrypted storage. The CLI uses DPAPI or Secret Service.
+
+Main checks exact origins on navigation, validates typed inputs, and allows
+only fixed page diagnostics. Human approval happens in trusted Agent
+Workspace chrome and binds an action to the session, tab, address and DOM
+revision. Protected addresses are refused. Stop closes sessions, views and
+pending confirmations. A page action already completed by a remote server
+cannot be undone by Stop.
+
+Tool output marks page content untrusted. Sensitive controls are filtered or
+masked, and request logs omit queries, headers and bodies. Link the
+[Agent Mode threat model](docs/systems/agent-mode.md) when reviewing changes
+to these permissions or to the Agent Workspace boundary.
+
+### Owner-lent tabs
+
+The trusted tab menu lets the owner choose a connected client for one active
+tab. A loan ends after fifteen minutes at most and is scoped to its exact
+origin. Switching browser tabs, crossing that origin, stopping the client,
+opening Developer Tools, or disconnecting ends the loan. The broker assigns a
+temporary ID and never accepts a regular browser tab ID through MCP.
+
+Banking, protected sites, Google account and service pages, pages with
+certificate errors, and views already attached to a debugger are refused.
+The owner sees the active client's name and Stop in the tab strip. Every page
+write requires a separate confirmation in the trusted Agent Workspace. Loans
+block popups, downloads, login picker, automatic fill and new device
+permissions. Downloads, emulation and scripting diagnostics require an Agent
+Account Space. Returning a lent tab detaches the Agent debugger and keeps the
+owner's tab open.
+
 ## Release service
 
 **Distribution is public.** Anyone may download the current stable installer

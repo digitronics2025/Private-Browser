@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
 const playwrightCli = join(process.cwd(), 'node_modules', 'playwright', 'cli.js');
-const playwrightArgs = [playwrightCli, 'test', '--config', 'playwright.electron.config.ts'];
+const playwrightArgs = [playwrightCli, 'test', '--config', 'playwright.electron.config.ts', ...process.argv.slice(2)];
 const executable = process.platform === 'linux' ? 'xvfb-run' : process.execPath;
 const args = process.platform === 'linux' ? ['-a', process.execPath, ...playwrightArgs] : playwrightArgs;
 const env = { ...process.env };

@@ -1,0 +1,17 @@
+{
+  "name": "@private-browser/agent-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": { "private-browser-mcp": "dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run src"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@private-browser/bridge-protocol": "*",
+    "zod": "4.6.7"
+  }
+}
