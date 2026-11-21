@@ -2678,6 +2678,7 @@ class BrowserController {
       tabId: tab.id,
       service: 'browser',
       sourceRevision: aiSourceRevision(tab.accountSpaceId, tab, previewText),
+      capturedAt: report.capturedAt,
       sourceUrl: tab.url,
       title: `Developer diagnosis - ${sanitizeDiagnosticText(tab.title, 200).text}`,
       url: sanitizeDiagnosticUrl(tab.url).text,
@@ -2722,7 +2723,8 @@ class BrowserController {
 
   async controlCenterTasks() {
     this.requireDeveloperWorkspace();
-    return this.controlCenter.tasks();
+    const tab = this.activeTab(this.store.get());
+    return this.controlCenter.tasks({ accountSpaceId: tab.accountSpaceId, url: tab.url });
   }
 
   async sendToControlCenter(input: ControlCenterSendInput) {
@@ -2738,6 +2740,8 @@ class BrowserController {
       sourceUrl: sanitizeDiagnosticUrl(tab.url).text,
       pageOrigin: this.pageOrigin(tab.url),
       evidence: developerEvidence(preview),
+      currentPage: { accountSpaceId: tab.accountSpaceId, url: tab.url },
+      capturedAt: preview.capturedAt,
       ...(screenshot ? { screenshotJpegBase64: screenshot } : {}),
     });
   }
@@ -2745,8 +2749,11 @@ class BrowserController {
   async recheckControlCenterTask(input: ControlCenterRecheckInput) {
     this.requireDeveloperWorkspace();
     const preview = this.consumeDeveloperApproval(input.approvalToken);
+    const tab = this.activeTab(this.store.get());
+    if (!preview.capturedAt) throw new Error('Capture fresh evidence before attaching it.');
+    if (preview.screenshotDataUrl) throw new Error('Capture a re-check before attaching evidence to an existing task.');
     this.addPrivacyEvent('cloud-approved', 'Control Center re-check approved', `${preview.title} · ${input.taskId}`);
-    return this.controlCenter.addEvidence(input.taskId, developerEvidence(preview));
+    return this.controlCenter.addRecheck(input.taskId, { accountSpaceId: tab.accountSpaceId, url: tab.url }, developerEvidence(preview), preview.capturedAt);
   }
 
   /** Spends the approval first, like every AI path, then insists it approved a Developer-panel preview. */

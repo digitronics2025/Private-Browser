@@ -27,6 +27,7 @@ let siteOrigin = '';
 const token = randomBytes(32).toString('base64url');
 const appId = 'e2e-app-0000000000001';
 let taskStatus = 'RUNNING';
+let reachable = true;
 /** The fixture page logs an error until the "fix" lands. */
 let broken = true;
 
@@ -49,6 +50,7 @@ test.beforeAll(async () => {
     const path = new URL(request.url ?? '/', 'http://x').pathname;
     received.push({ path, headers: request.headers, body });
     const send = (status: number, value: unknown) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)); };
+    if (!reachable) return send(503, {});
     if (path === '/api/connected-app/pair') return body?.code === '24681357' ? send(201, { appId, token, identityKey: vectors.identity.publicKey, signature: await sign('pair', body.nonce), kind: 'private-browser' }) : send(400, { error: { code: 'CODE_REJECTED', message: 'Code not accepted.' } });
     // Like the real one, hello needs no token (and the browser sends none).
     if (path === '/api/connected-app/hello') return send(200, { appId: body.appId, identityKey: vectors.identity.publicKey, signature: await sign('hello', body.nonce) });
@@ -132,6 +134,11 @@ test('pairs, sends the exact approved context, follows the task and attaches a r
     await expect(page.getByText('TASK-0001 · The cart crashes')).toBeVisible({ timeout: 10_000 });
     taskStatus = 'COMPLETED';
     broken = false; // the task "fixed" the page
+    await page.evaluate((url) => window.privateBrowser.navigate(url), siteOrigin + '/faq');
+    const original = page.getByRole('button', { name: 'Open original page' });
+    await expect(original).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Check again' })).toHaveCount(0);
+    await original.click();
     await expect(page.getByRole('button', { name: 'Check again' })).toBeVisible({ timeout: 10_000 });
     await page.getByRole('button', { name: 'Check again' }).click();
     await expect(page.getByText(/RE-CHECK FOR TASK-0001/)).toBeVisible({ timeout: 20_000 });
@@ -142,6 +149,14 @@ test('pairs, sends the exact approved context, follows the task and attaches a r
     expect(recheck).not.toContain(MARKER);
     expect(recheck).not.toContain('missing.json');
     expect(recheck).toContain('"title": "Cart"');
+    const receipt = page.getByText(/Evidence attached · browser-recheck-1\.md/);
+    await expect(receipt).toBeVisible();
+    reachable = false;
+    await expect(page.getByText('Control Center not running')).toBeVisible({ timeout: 12_000 });
+    await expect(receipt).toBeVisible();
+    reachable = true;
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await expect(page.getByText('Control Center connected')).toBeVisible();
 
     // Optional evidence for a person to look at: the chrome window only, never the whole screen.
     if (process.env.PB_EVIDENCE_DIR) {
@@ -156,6 +171,7 @@ test('pairs, sends the exact approved context, follows the task and attaches a r
     const status = await page.evaluate(() => window.privateBrowser.getControlCenterStatus());
     expect(JSON.stringify(status)).not.toContain(token);
   } finally {
+    reachable = true;
     await app.close();
     rmSync(profile, { recursive: true, force: true });
   }
