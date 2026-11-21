@@ -1094,6 +1094,15 @@ kbd { font: inherit; }
 .google-account-overview li > div { display: grid; gap: 4px; }
 .google-account-overview small { color: var(--text-muted); }
 .google-overview-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.google-action-composer { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-md); min-width: 0; overflow-wrap: anywhere; }
+.google-action-composer h4, .google-action-composer h5, .google-action-composer p, .google-action-composer dl { margin: 0; }
+.google-action-composer form, .google-action-composer label, .google-action-composer dl { display: grid; gap: 5px; min-width: 0; }
+.google-action-composer form, .google-action-composer dl { gap: 9px; }
+.google-action-composer input:not([type='checkbox']), .google-action-composer textarea, .google-action-composer select { width: 100%; min-width: 0; }
+.google-action-composer textarea { min-height: 90px; resize: vertical; }
+.google-action-composer .google-action-meet { display: flex; align-items: center; }
+.google-action-composer dd { margin: 0; white-space: pre-wrap; }
+.google-action-composer dt { color: var(--text-muted); font-size: 12px; }
 .recovery-code { display: grid; gap: 9px; padding: 14px; border-radius: var(--radius-md); background: var(--ok-soft); }
 .recovery-code strong { font-size: var(--fs-sm); }
 .recovery-code code { padding: 9px; border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--fs-sm); overflow-wrap: anywhere; user-select: all; }

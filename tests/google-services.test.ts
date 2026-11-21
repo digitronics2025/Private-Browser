@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AccountStore, type SafeStorageAdapter } from '../electron/account-store';
 import { GoogleMutationConfirmations } from '../electron/google-confirmations';
 import { GoogleConfigurationStore } from '../electron/google-config';
+import { GoogleActionReceipts } from '../electron/google-action-receipts';
 import { GoogleServices, type CalendarWriteInput, type GmailSendInput } from '../electron/google-services';
 import { scopesForModules } from '../electron/google-scopes';
 import { GoogleTokenBroker } from '../electron/google-token-broker';
@@ -35,8 +36,11 @@ function fixture(request: typeof fetch, seedToken = true) {
   if (seedToken) broker.seedAccessToken(ID, 'access-secret', Date.parse('2026-09-12T11:00:00Z'));
   const confirmations = new GoogleMutationConfirmations(() => new Date('2026-09-12T10:00:00Z'));
   const waits: number[] = [];
-  const services = new GoogleServices(broker, confirmations, request, async (milliseconds) => { waits.push(milliseconds); }, () => 0);
-  return { root, accounts, broker, confirmations, services, waits };
+  const makeServices = () => new GoogleServices(broker, new GoogleActionReceipts({
+    read: (id) => accounts.require(id).googleActionReceipts ?? [],
+    write: (id, receipts) => { accounts.update(id, (record) => { record.googleActionReceipts = receipts; }); },
+  }), confirmations, request, async (milliseconds) => { waits.push(milliseconds); }, () => 0);
+  return { root, accounts, broker, confirmations, services: makeServices(), makeServices, waits };
 }
 
 describe('narrow resilient Google services', () => {
@@ -161,6 +165,41 @@ describe('narrow resilient Google services', () => {
     expect(readFileSync(join(root, 'accounts', `${ID}.account.enc`), 'utf8')).not.toContain('Sensitive body');
   });
 
+  it('uses metadata to reply in the original thread and remembers a confirmed receipt across broker reconstruction', async () => {
+    const request = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (init?.method !== 'POST') {
+        expect(url.pathname).toBe('/gmail/v1/users/me/messages/original');
+        expect(url.searchParams.get('format')).toBe('metadata');
+        expect(url.searchParams.getAll('metadataHeaders')).toEqual(['From', 'Reply-To', 'Subject', 'Message-ID', 'References']);
+        return json({ threadId: 'thread-1', payload: { headers: [
+          { name: 'From', value: 'Sample <original@example.test>' }, { name: 'Reply-To', value: 'support@example.test' },
+          { name: 'Subject', value: 'Exact subject' }, { name: 'Message-ID', value: '<message@example.test>' },
+          { name: 'References', value: '<older@example.test>' },
+        ] } });
+      }
+      const body = JSON.parse(String(init.body)) as { threadId: string; raw: string };
+      expect(body.threadId).toBe('thread-1');
+      expect(Buffer.from(body.raw, 'base64url').toString()).toContain('In-Reply-To: <message@example.test>\r\nReferences: <older@example.test> <message@example.test>');
+      return json({ id: 'sent-2', threadId: 'thread-1' });
+    });
+    const { services, makeServices, accounts } = fixture(request);
+    const source = (await services.readGmailReplySource(ID, 'original')).data!;
+    const input = { to: ['support@example.test'], subject: 'Exact subject', body: 'A private fixture message' };
+    expect(() => services.prepareGmailSend(ID, { ...input, to: ['other@example.test'] }, 'source-1', source)).toThrow(/recipient or subject changed/);
+    expect(() => services.prepareGmailSend(ID, { ...input, to: ['valid@example.test,extra@example.test'] })).toThrow(/Invalid email/);
+    const review = services.prepareGmailSend(ID, input, 'source-1', source);
+    const result = await services.sendGmail(ID, input, review.token, 'source-1', undefined, source);
+    expect(result.receipt).toMatchObject({ state: 'confirmed', providerId: 'sent-2' });
+    const rebuilt = makeServices();
+    const another = rebuilt.prepareGmailSend(ID, input, 'source-2', source);
+    await expect(rebuilt.sendGmail(ID, input, another.token, 'source-2', undefined, source)).resolves.toMatchObject({ ok: false, receipt: result.receipt });
+    expect(request).toHaveBeenCalledTimes(2);
+    const stored = JSON.stringify(accounts.require(ID).googleActionReceipts);
+    expect(stored).not.toContain(input.body);
+    expect(stored).not.toContain(input.to[0]);
+  });
+
   it('confirms calendar invitations and creates a unique Meet request ID', async () => {
     const request = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { conferenceData: { createRequest: { requestId: string } } };
@@ -193,7 +232,11 @@ describe('narrow resilient Google services', () => {
     const offline = fixture(offlineRequest);
     const send = { to: ['recipient@example.test'], subject: 'One try', body: 'Body' };
     const confirmation = offline.services.prepareGmailSend(ID, send);
-    await expect(offline.services.sendGmail(ID, send, confirmation.token)).resolves.toMatchObject({ ok: false, error: { code: 'GOOGLE_OFFLINE' } });
+    const uncertain = await offline.services.sendGmail(ID, send, confirmation.token);
+    expect(uncertain).toMatchObject({ ok: false, error: { code: 'GOOGLE_OFFLINE' }, receipt: { state: 'unconfirmed' } });
+    const followup = offline.makeServices();
+    const retry = followup.prepareGmailSend(ID, send);
+    await expect(followup.sendGmail(ID, send, retry.token)).resolves.toMatchObject({ ok: false, receipt: uncertain.receipt });
     expect(offlineRequest).toHaveBeenCalledOnce();
   });
 

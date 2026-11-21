@@ -166,6 +166,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       between(args, 2, 4); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); if (args[2] !== undefined) requireBoundedText(args[2], 'Google search query', 500); if (args[3] !== undefined) requireBoolean(args[3]); return;
     case 'google:gmail-prepare-send':
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireGmailSend(args[1]); optionalRevision(args[2]); return;
+    case 'google:gmail-reply-draft':
+      exact(args, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); requireIdentifier(args[2]); return;
     case 'google:gmail-send':
       between(args, 4, 5); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); requireGmailSend(args[2]); requireUuid(args[3], 'confirmation'); optionalRevision(args[4]); return;
     case 'google:drive-create':

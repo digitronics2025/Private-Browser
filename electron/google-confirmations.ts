@@ -23,7 +23,7 @@ export class GoogleMutationConfirmations {
     const token = randomUUID();
     const expiresAt = new Date(this.now().getTime() + 5 * 60_000).toISOString();
     const publicValue = { token, accountSpaceId, service, action, target, sourceRevision, expiresAt };
-    this.pending.set(token, { publicValue, payloadHash: hashPayload(payload) });
+    this.pending.set(token, { publicValue, payloadHash: googleMutationDigest(payload) });
     while (this.pending.size > 50) this.pending.delete(this.pending.keys().next().value!);
     return publicValue;
   }
@@ -35,7 +35,7 @@ export class GoogleMutationConfirmations {
     if (pending.publicValue.accountSpaceId !== accountSpaceId
       || pending.publicValue.service !== service
       || pending.publicValue.sourceRevision !== sourceRevision
-      || pending.payloadHash !== hashPayload(payload)) {
+      || pending.payloadHash !== googleMutationDigest(payload)) {
       throw new Error('Google mutation confirmation does not match the exact action');
     }
   }
@@ -45,7 +45,7 @@ export class GoogleMutationConfirmations {
   }
 }
 
-function hashPayload(payload: unknown): string {
+export function googleMutationDigest(payload: unknown): string {
   return createHash('sha256').update(stableStringify(payload)).digest('hex');
 }
 
