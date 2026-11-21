@@ -97,6 +97,21 @@ test('offers first-launch setup once and keeps a skip after restart', async () =
   expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.ui.offerSetupGuide))).toBe(false);
 });
 
+test('reads Google connection health without a network check and rejects another workspace', async () => {
+  const page = await application!.firstWindow();
+  const initial = await page.evaluate(() => window.privateBrowser.getState());
+  const id = initial.activeAccountSpaceId;
+  const health = () => page.evaluate((value) => window.privateBrowser.getGoogleConnectionHealth(value), id);
+  expect(await health()).toMatchObject({ state: 'disconnected' });
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await expect(health()).rejects.toThrow(/active workspace/);
+  const banking = await page.evaluate(async () => {
+    const api = window.privateBrowser;
+    return api.getGoogleConnectionHealth((await api.getState()).activeAccountSpaceId);
+  });
+  expect(banking).toEqual({ state: 'unavailable' });
+});
+
 test('routes an operating-system link back to the last regular account from Banking', async () => {
   const page = await application!.firstWindow();
   const accountSpaceId = await page.evaluate(async () => {

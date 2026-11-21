@@ -121,6 +121,8 @@ import { ExternalBrowserLauncher } from './external-browser.js';
 import { GoogleOAuthManager } from './google-oauth.js';
 import { GoogleTokenBroker } from './google-token-broker.js';
 import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type GmailSendInput } from './google-services.js';
+import { healthFromGoogleConnection, observeGoogleHealth } from './google-connection-health.js';
+import type { GoogleConnectionHealth } from './types.js';
 import { AccountBackupManager, restorableItems, type BackupWriteResult } from './account-backup.js';
 import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
@@ -271,6 +273,7 @@ class BrowserController {
   };
   private readonly faviconCache = new Map<string, string>();
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
+  private readonly googleChecks = new Map<AccountSpaceId, GoogleConnectionHealth>();
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { ...DEFAULT_CONTENT_INSETS };
   private readonly closedTabs = new Map<AccountSpaceId, RecentlyClosedTab[]>();
@@ -1075,8 +1078,40 @@ class BrowserController {
       this.accounts.update(accountSpaceId, (account) => { account.googleConnection = status === 'disconnected' && account.refreshToken ? previous : status; });
     }
     this.store.refreshAccount(this.accounts.require(accountSpaceId));
+    this.recordGoogleCheck(accountSpaceId, result);
     this.broadcast();
     return result;
+  }
+
+  getGoogleConnectionHealth(accountSpaceId: AccountSpaceId): GoogleConnectionHealth {
+    const account = this.requireAccountMembership(accountSpaceId);
+    if (account.locked || account.workspaceId === 'banking' || account.googleConnection === 'account-corrupt') return { state: 'unavailable' };
+    const saved = this.store.recordFor(accountSpaceId);
+    const recent = this.googleChecks.get(accountSpaceId);
+    return {
+      state: this.googleConfiguration.status().configured
+        ? recent?.state ?? healthFromGoogleConnection(account.googleConnection) : 'disconnected',
+      lastSuccessAt: recent?.lastSuccessAt ?? saved.lastGoogleSuccessAt,
+      retryAt: recent?.retryAt,
+    };
+  }
+
+  private recordGoogleCheck(accountSpaceId: AccountSpaceId, result: unknown): void {
+    const recent = this.googleChecks.get(accountSpaceId);
+    const now = Date.now();
+    const visible = observeGoogleHealth(result, recent?.lastSuccessAt, now);
+    if (!visible) return;
+    try {
+      const record = this.store.recordFor(accountSpaceId);
+      if (record.locked || record.workspaceId === 'banking') return;
+      this.googleChecks.set(accountSpaceId, visible);
+      if (visible.state === 'ready' && (!record.lastGoogleSuccessAt || now - Date.parse(record.lastGoogleSuccessAt) >= 60_000)) {
+        const saved = this.accounts.update(accountSpaceId, (account) => { account.lastGoogleSuccessAt = visible.lastSuccessAt; });
+        this.store.refreshAccount(saved);
+      }
+    } catch {
+      // Optional health metadata must not turn a successful user action into a failure.
+    }
   }
 
   cancelGoogleConnection(accountSpaceId: AccountSpaceId): boolean {
@@ -1305,7 +1340,9 @@ class BrowserController {
     this.sendOperationProgress(operationId, accountSpaceId, service, 'started');
     try {
       const result = await task(operation.signal);
-      this.sendOperationProgress(operationId, accountSpaceId, service, operation.signal.aborted ? 'cancelled' : 'completed');
+      if (!operation.signal.aborted) this.recordGoogleCheck(accountSpaceId, result);
+      const failed = result !== null && typeof result === 'object' && 'ok' in result && result.ok === false;
+      this.sendOperationProgress(operationId, accountSpaceId, service, operation.signal.aborted ? 'cancelled' : failed ? 'failed' : 'completed');
       return result;
     } catch (error) {
       this.sendOperationProgress(operationId, accountSpaceId, service, operation.signal.aborted ? 'cancelled' : 'failed');
@@ -1349,6 +1386,7 @@ class BrowserController {
     this.permissions.clearAccount(accountSpaceId);
     this.googleOAuth.clearMemory(accountSpaceId);
     this.googleServices.clearAccount(accountSpaceId);
+    this.googleChecks.delete(accountSpaceId);
     this.backups.clearAccount(accountSpaceId);
     for (const [operationId, operation] of this.operations) {
       if (operation.accountSpaceId !== accountSpaceId) continue;
@@ -3666,6 +3704,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('permissions:list-account', (_event, id: AccountSpaceId) => controller!.listAccountPermissionGrants(id));
   handle('google:configure', (_event, clientId: string) => controller!.configureGoogle(clientId));
   handle('google:clear-configuration', () => controller!.clearGoogleConfiguration());
+  handle('google:connection-health', (_event, id: AccountSpaceId) => controller!.getGoogleConnectionHealth(id));
   handle('google:connect', (_event, id: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) => controller!.connectGoogleAccount(id, modules, browserId));
   handle('google:cancel', (_event, id: AccountSpaceId) => controller!.cancelGoogleConnection(id));
   handle('google:gmail-overview-run', (_event, id: AccountSpaceId, operationId: string) => controller!.gmailOverview(id, operationId));

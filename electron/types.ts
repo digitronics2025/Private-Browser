@@ -132,6 +132,13 @@ export interface AccountSpaceHealth {
     | 'record-unreadable';
 }
 
+export type GoogleHealthState = 'unavailable' | 'disconnected' | 'ready' | 'reconnect' | 'permission' | 'offline' | 'quota';
+export interface GoogleConnectionHealth {
+  state: GoogleHealthState;
+  lastSuccessAt?: string;
+  retryAt?: string;
+}
+
 export type PermissionCapability =
   | 'notifications'
   | 'microphone'
