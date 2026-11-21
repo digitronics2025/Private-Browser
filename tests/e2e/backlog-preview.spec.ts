@@ -20,6 +20,23 @@ test('filters retained downloads and removes only the selected list entry', asyn
   await expect(panel.getByText('Downloaded files will appear here.')).toBeVisible();
 });
 
+test('chooses a per-space download folder and switches between asking and automatic saving', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/?downloadFolder=sample&downloads=sample');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Downloads' }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Choose folder' }).click();
+  await expect(panel.getByText('Sample invoices')).toBeVisible();
+  await expect(panel.getByLabel('Ask where to save')).toBeChecked();
+  await panel.getByLabel('Ask where to save').uncheck();
+  await expect(panel.getByText('New files with the same name get a number.', { exact: false })).toBeVisible();
+  await expect(panel.getByLabel('Downloads this session')).toHaveText(/active.*downloaded.*stopped/i);
+  await panel.getByRole('button', { name: 'Use default' }).click();
+  await expect(panel.getByText('Windows default')).toBeVisible();
+  await expect(panel.getByLabel('Ask where to save')).toBeChecked();
+});
+
 test('reports unavailable desktop actions without fabricating successful results', async ({ page }) => {
   await page.goto('/');
   const status = await page.evaluate(async () => {

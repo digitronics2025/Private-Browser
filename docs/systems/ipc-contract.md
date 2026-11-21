@@ -159,6 +159,8 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
 | `browser:set-download-history` | `setDownloadHistory(accountId, enabled)` | current regular Account Space and whether to retain new finished downloads | `void` |
 | `browser:remove-download-entry` | `removeDownloadEntry(accountId, id)` | current regular Account Space and finished download ID | `void` |
+| `browser:choose-download-folder` | `chooseDownloadFolder(accountId)` | current regular Account Space, native picker | `void` |
+| `browser:set-download-folder-mode` | `setDownloadFolderMode(accountId, mode)` | current regular Account Space, ask/automatic/default | `void` |
 | `permissions:site` | `getSitePermissions(tabId, origin)` | active tab and exact origin | current policy and grant duration |
 | `permissions:revoke-site` | `revokeSitePermission(tabId, origin, capability)` | active tab, exact origin and supported capability | updated site status |
 | `permissions:list-account` | `listAccountPermissionGrants(id)` | selected Account Space in the active workspace | reusable grants |
@@ -428,8 +430,9 @@ preload and the renderer.
 These two are deliberately different, and the `Pick` is where the split is
 declared: `loading`, `canGoBack`, `canGoForward`, `favicon`,
 `developerToolsAllowed` and `developerToolsOpen` are runtime-only.
-The snapshot also truncates `history` to 100 and `privacyLog` to 50, and adds
-`downloads`, which is never persisted.
+The snapshot truncates history to 100 and the privacy log to 50. Downloads
+exposes current-account entries, session counts and the chosen folder name.
+Optional retained entries and the folder path stay encrypted on disk.
 The History panel requests pages from the separate history query. Only the
 active regular Account Space may query its retained history.
 

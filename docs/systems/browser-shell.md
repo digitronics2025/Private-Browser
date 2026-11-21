@@ -447,28 +447,20 @@ in the active workspace, or `null` to return to the defaults.
 
 ## Downloads
 
-The Downloads panel can pause, resume or cancel eligible transfers in the
-active Account Space. Retry resumes an interrupted native transfer when
-Electron can still resume it. A terminal interruption points back to the
-original page. Installers show Waiting for verification while the published
-checksum is checked.
+`configureSession` tracks downloads in memory and refuses them in Banking.
+Snapshots show entries and session counts for the unlocked active account,
+with paths kept in main. Main checks ownership on every file action.
+The panel supports pause, resume and cancel when Electron allows them.
 
-`will-download` is registered per session inside `configureSession`. Each download
-becomes a `DownloadEntry` in an in-memory `Map` keyed by a fresh `randomUUID()`:
+The native picker saves a per-account folder in Windows protected storage.
+Ask starts the save dialog there. Automatic saving stages ordinary files,
+then uses exclusive placement and numbers duplicates. Risky types still ask.
+Open and Show folder require a finished file. Open allows documents, images,
+media and archives plus installers checked against the published release.
 
-- Progress and completion update the entry and broadcast. Electron chooses the
-  save path. Banking refuses downloads before writing any file.
-- Snapshots expose downloads only for the unlocked active Account Space and
-  omit file paths. Main checks ownership again on each file action.
-- `downloadRisk` checks the saved filename. Only documents, images, media and
-  archives are ordinary. Open and Show folder require an existing completed
-  file. Open allows risky files only after app installer verification.
-- An optional per-account history keeps the last 100 finished entries across
-  restarts. Windows protected storage encrypts filenames, saved paths and
-  origin/time metadata. The history keeps only origins from remote URLs.
-  Reopening an ordinary saved file checks its original file stamp. Installers
-  still require the current session's release verification. Removing an entry
-  or deleting the Account Space leaves downloaded files on disk.
+Optional encrypted history keeps the last 100 finished entries, including
+file paths and stamps, origin and time. Reopen rechecks the stamp. Installers
+need current verification. List and Account Space removal leave files intact.
 
 ## Downloads — checksum verification
 

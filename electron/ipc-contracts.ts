@@ -346,6 +346,12 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 2); requireAccountSpaceId(args[0]);
       if (typeof args[1] !== 'boolean') throw new Error('Choose whether to keep download history');
       return;
+    case 'browser:choose-download-folder':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'browser:set-download-folder-mode':
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (args[1] !== 'ask' && args[1] !== 'automatic' && args[1] !== 'default') throw new Error('Invalid download folder option');
+      return;
     case 'browser:remove-download-entry':
       exact(args, 2); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'download identifier', 128); return;
     case 'browser:control-download':

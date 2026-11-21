@@ -154,6 +154,7 @@ export function installPreviewApi(): void {
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
   const savedDownloadHistory = new Set<AccountSpaceId>();
+  const previewDownloadFolders = new Map<AccountSpaceId, { name: string; ask: boolean }>();
   if (params.get('downloadHistory') === 'sample') {
     savedDownloadHistory.add(google);
     sampleDownloads.push({ id: 'preview-download-history', accountSpaceId: google, filename: 'Statement.pdf',
@@ -161,6 +162,7 @@ export function installPreviewApi(): void {
       receivedBytes: 1920, totalBytes: 1920, extension: 'PDF', risk: 'ordinary', retained: true });
   }
   state.downloadHistory = savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
+  state.downloadFolder = { ask: true, available: true };
   const workspaceSettings: Partial<Record<WorkspaceId, BrowserSettings>> = {};
   const siteZoom = new Map<string, number>();
   const siteZoomKey = (account: string, url: string) => JSON.stringify([account, new URL(url).origin]);
@@ -192,6 +194,16 @@ export function installPreviewApi(): void {
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     state.downloadHistory = state.activeWorkspaceId === 'banking' ? undefined : savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
+    state.downloadFolder = state.activeWorkspaceId === 'banking' ? undefined : {
+      ask: true, available: true, ...previewDownloadFolders.get(state.activeAccountSpaceId),
+    };
+    state.downloadBatch = state.activeWorkspaceId === 'banking' ? undefined
+      : state.downloads.filter((download) => download.id !== 'preview-download-history').reduce((status, download) => {
+        if (download.state === 'progressing' || download.canCancel) status.active++;
+        else if (download.state === 'completed') status.completed++;
+        else status.stopped++;
+        return status;
+      }, { active: 0, completed: 0, stopped: 0 });
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
     state.bookmarkUndo = undo ? { kind: undo.kind, count: undo.before.length } : undefined;
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
@@ -523,6 +535,22 @@ export function installPreviewApi(): void {
       if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking') throw new Error('Download history is unavailable in this Account Space');
       if (enabled) savedDownloadHistory.add(id);
       else savedDownloadHistory.delete(id);
+      publish();
+    },
+    chooseDownloadFolder: async (id) => {
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking') throw new Error('Download folders are unavailable in this Account Space.');
+      if (params.get('downloadFolder') !== 'sample') throw new Error('Choose a real download folder in the desktop app.');
+      previewDownloadFolders.set(id, { name: 'Sample invoices', ask: previewDownloadFolders.get(id)?.ask ?? true });
+      publish();
+    },
+    setDownloadFolderMode: async (id, mode) => {
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking') throw new Error('Download folders are unavailable in this Account Space.');
+      if (mode === 'default') previewDownloadFolders.delete(id);
+      else {
+        const selected = previewDownloadFolders.get(id);
+        if (!selected) throw new Error('Choose a download folder first.');
+        previewDownloadFolders.set(id, { ...selected, ask: mode === 'ask' });
+      }
       publish();
     },
     removeDownloadEntry: async (id, downloadId) => {

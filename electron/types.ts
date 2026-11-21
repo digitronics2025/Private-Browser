@@ -512,9 +512,13 @@ export interface DownloadEntry {
   origin?: string;
   finishedAt?: string;
   retained?: boolean;
+  destinationNote?: 'folder-unavailable' | 'saved-in-temporary-folder';
 }
 
 export type DownloadHistoryStatus = 'off' | 'on' | 'unavailable';
+export type DownloadFolderMode = 'ask' | 'automatic' | 'default';
+export interface DownloadFolderStatus { ask: boolean; available: boolean; name?: string }
+export interface DownloadBatchStatus { active: number; completed: number; stopped: number }
 
 export type DownloadAction = 'pause' | 'resume' | 'retry' | 'cancel';
 
@@ -537,6 +541,8 @@ export interface BrowserSnapshot {
   history: HistoryEntry[];
   downloads: DownloadEntry[];
   downloadHistory?: DownloadHistoryStatus;
+  downloadFolder?: DownloadFolderStatus;
+  downloadBatch?: DownloadBatchStatus;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
   /** Present after Account Spaces initialization; contains renderer-safe data only. */
