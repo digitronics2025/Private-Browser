@@ -492,6 +492,13 @@ kbd { font: inherit; }
 .google-health-card small, .google-health-card p { color: var(--text-muted); font-size: var(--fs-sm); }
 .google-health-card p { margin: 3px 0 0; }
 .site-info-url { overflow-wrap: anywhere; font-size: var(--fs-xs); color: var(--text-muted); }
+.site-info-facts bdi { overflow-wrap: anywhere; }
+.site-address-check { margin: 0 10px 6px; border-top: 1px solid var(--border); font-size: var(--fs-sm); }
+.site-address-check summary { cursor: pointer; padding: 6px 0; }
+.site-address-check form, .site-address-check label { display: grid; gap: 5px; }
+.site-address-check input { min-width: 0; width: 100%; }
+.site-address-check button { justify-self: start; }
+.site-address-check .site-info-facts, .site-address-check p { margin: 0; }
 
 /* Profile menu */
 .profile-menu { width: 340px; }

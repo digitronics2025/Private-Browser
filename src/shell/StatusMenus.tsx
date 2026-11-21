@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Code2, Globe2, Landmark, Minus, Plus, Layers, LockKeyhole, ScrollText, Search, Settings, Shield, ShieldAlert, ShieldCheck, TriangleAlert } from 'lucide-react';
 import type { AccountSpaceSummary, BrowserSnapshot, BrowserTab, Workspace } from '../../electron/types';
+import { inspectWebAddress, MAX_ADDRESS_CHECK_LENGTH, type AddressCheck, type AddressClue } from '../../electron/security';
 import { domainFromUrl } from '../lib/format';
 import { BrandMark } from './BrandMark';
 import { MenuHeading, MenuItem, MenuSeparator, MenuSurface } from './Menu';
@@ -44,6 +45,20 @@ export function ShieldStatusMenu({ anchor, state, workspace, onClose, onToggleTr
   );
 }
 
+function siteConnectionStatus(tab: BrowserTab, host: string) {
+  if (tab.isHome) return { ok: true, icon: Search, title: 'Private Browser page', detail: 'Search or enter an address.' };
+  if (tab.problem === 'certificate') return { ok: false, icon: TriangleAlert, title: 'Site certificate could not be verified',
+    detail: 'Private Browser blocked this connection. Check the address before trying again.' };
+  if (tab.securityWarning === 'insecure') return { ok: false, icon: TriangleAlert, title: 'Connection is not secure',
+    detail: `Don't enter passwords or payment details on ${host}. Information you send could be read or changed.` };
+  if (tab.securityWarning === 'idn') return { ok: false, icon: TriangleAlert, title: 'Check this address carefully',
+    detail: `${host} uses international characters that can imitate another website's name.` };
+  if (tab.url.startsWith('https:')) return { ok: true, icon: LockKeyhole, title: 'Connection is secure',
+    detail: `Your information is encrypted on its way to ${host}.` };
+  return { ok: false, icon: Code2, title: 'Local development page',
+    detail: `${host} is served from this computer without encryption. Use it only for your own development work.` };
+}
+
 export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, onOpenPrivacy, onResetZoom, onToggleDeveloperTools }: {
   anchor: HTMLElement | null;
   tab: BrowserTab;
@@ -54,20 +69,9 @@ export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, o
   onResetZoom: () => void;
   onToggleDeveloperTools: () => void;
 }) {
-  const host = domainFromUrl(tab.url);
-  const encrypted = tab.url.startsWith('https:');
-  // Only an https URL may be described as encrypted. Plain-HTTP loopback pages
-  // carry no warning chip (they are local development servers), but they are
-  // still unencrypted and must never be called secure.
-  const status = tab.isHome
-    ? { ok: true, icon: Search, title: 'Private Browser page', detail: 'Search or enter an address.' }
-    : tab.securityWarning === 'insecure'
-      ? { ok: false, icon: TriangleAlert, title: 'Connection is not secure', detail: `Don't enter passwords or payment details on ${host}. Information you send could be read or changed.` }
-      : tab.securityWarning === 'idn'
-        ? { ok: false, icon: TriangleAlert, title: 'Check this address carefully', detail: `${host} uses international characters that can imitate another website's name.` }
-        : encrypted
-          ? { ok: true, icon: LockKeyhole, title: 'Connection is secure', detail: `Your information is encrypted on its way to ${host}.` }
-          : { ok: false, icon: Code2, title: 'Local development page', detail: `${host} is served from this computer without encryption. Use it only for your own development work.` };
+  const address = tab.isHome ? undefined : inspectWebAddress(tab.url);
+  const current = address && 'host' in address ? address : undefined;
+  const status = siteConnectionStatus(tab, current?.host ?? domainFromUrl(tab.url));
   const zoom = tab.zoomPercent ?? 100;
   return (
     <MenuSurface anchor={anchor} label="Site information" role="dialog" className="site-info-menu" onClose={onClose}>
@@ -78,8 +82,12 @@ export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, o
       <dl className="site-info-facts">
         <div><dt>Account Space</dt><dd>{account.label}</dd></div>
         <div><dt>Tracker blocking</dt><dd>{trackerBlocking ? 'On' : 'Paused'}</dd></div>
-        {!tab.isHome && <div><dt>Address</dt><dd className="site-info-url">{tab.url}</dd></div>}
+        {current && <>
+          <div><dt>Host</dt><dd><bdi dir="ltr">{current.host}</bdi></dd></div>
+          <div><dt>Destination</dt><dd className="site-info-url"><bdi dir="ltr">{current.destination}</bdi></dd></div>
+        </>}
       </dl>
+      <AddressCheckPanel key={'address:' + tab.id + ':' + tab.url} initialAddress={current?.destination ?? ''} />
       {!tab.isHome && <SitePermissions key={tab.id + ':' + tab.url} tab={tab} />}
       <MenuSeparator />
       {zoom !== 100 && <MenuItem icon={Globe2} label={`Reset view (${zoom}%)`} onSelect={onResetZoom} />}
@@ -87,6 +95,38 @@ export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, o
       <MenuItem icon={ScrollText} label="Privacy log" onSelect={onOpenPrivacy} />
     </MenuSurface>
   );
+}
+
+const ADDRESS_CLUES: Record<AddressClue, string> = {
+  unencrypted: 'HTTP leaves information sent to this address unencrypted.',
+  international: 'This host contains international characters. Compare the full host with the site you expect.',
+  'ip-address': 'This host is an IP address.',
+  'custom-port': 'This address uses a non-default port.',
+};
+
+function AddressCheckPanel({ initialAddress }: { initialAddress: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [input, setInput] = useState(initialAddress);
+  const [result, setResult] = useState<AddressCheck>();
+  return <details className="site-address-check" onToggle={(event) => setExpanded(event.currentTarget.open)}>
+    <summary>Check this address</summary>
+    {expanded && <form onSubmit={(event) => { event.preventDefault(); setResult(inspectWebAddress(input)); }}>
+      <label>Address to check<input type="text" value={input} maxLength={MAX_ADDRESS_CHECK_LENGTH} autoComplete="off"
+        spellCheck={false} onChange={(event) => { setInput(event.currentTarget.value); setResult(undefined); }} /></label>
+      <button type="submit" disabled={!input.trim()}>Check locally</button>
+      <p>This check stays on this device. Verify the site before sharing information.</p>
+      {result && <div role="status">
+        {'issue' in result ? <p>{result.issue === 'credentials' ? 'This address contains sign-in details. Use the site address alone.' : 'Enter an HTTP or HTTPS website address.'}</p> : <>
+          <dl className="site-info-facts">
+            <div><dt>Host</dt><dd><bdi dir="ltr">{result.host}</bdi></dd></div>
+            <div><dt>Destination</dt><dd className="site-info-url"><bdi dir="ltr">{result.destination}</bdi></dd></div>
+          </dl>
+          {result.clues.length ? <ul>{result.clues.map((clue) => <li key={clue}>{ADDRESS_CLUES[clue]}</li>)}</ul>
+            : <p>No address warnings detected by this check.</p>}
+        </>}
+      </div>}
+    </form>}
+  </details>;
 }
 
 export function ZoomMenu({ anchor, zoom, onZoom, onClose }: {
