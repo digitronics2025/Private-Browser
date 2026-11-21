@@ -39,6 +39,19 @@ try {
   $quote = [string][char]34
   $expected = $quote + $exe + $quote + " " + $quote + "%1" + $quote
   if ($open -ne $expected -or -not (Test-Path -LiteralPath $exe)) { throw "The registered URL command does not reference the installed executable" }
+  $agent = Join-Path $installed "resources\private-browser-agent"
+  foreach ($file in @("private-browser-mcp.cmd", "cli.cjs", "node.exe", "LICENSE.node.txt")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $agent $file) -PathType Leaf)) { throw "The installer is missing an Agent CLI file: $file" }
+  }
+  $agentRuntime = Join-Path $agent "node.exe"
+  $agentCli = Join-Path $agent "cli.cjs"
+  $ErrorActionPreference = "Continue"
+  $doctor = & $agentRuntime $agentCli doctor --client codex 2>&1 | Out-String
+  $doctorExit = $LASTEXITCODE
+  $ErrorActionPreference = "Stop"
+  if ($doctorExit -ne 1 -or $doctor -notmatch "protocol 1" -or $doctor -notmatch "Allow coding agents") {
+    throw "The installed Agent CLI did not report its protocol and disabled state"
+  }
   if ((ExistingChoice "http") -ne $httpBefore -or (ExistingChoice "https") -ne $httpsBefore) { throw "Installing changed a Windows default browser choice" }
 } finally {
   if (Test-Path -LiteralPath $uninstaller) {
@@ -49,7 +62,7 @@ try {
 if ((Get-ItemProperty -LiteralPath $registered -Name "Private Browser" -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath $client) -or (Test-Path -LiteralPath $handler)) {
   throw "Uninstall left a stale Private Browser registration"
 }
-Write-Output "Verified installed HTTP and HTTPS registration and clean uninstall"
+Write-Output "Verified installed HTTP and HTTPS registration, Agent CLI files, and clean uninstall"
 `;
 
 execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', smokeScript], {

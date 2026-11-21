@@ -9,6 +9,7 @@
   "private": true,
   "workspaces": [
     "packages/bridge-protocol",
+    "packages/agent-mcp",
     "vscode-extension"
   ],
   "overrides": {
@@ -25,10 +26,14 @@
     "extension:package": "npm run bridge:build && npm run package --workspace private-browser-bridge",
     "extension:validate": "node scripts/stage-vsix.mjs --validate-only",
     "extension:stage": "node scripts/stage-vsix.mjs",
-    "build": "npm run bridge:build && npm run typecheck && vite build && npm run electron:compile && npm run extension:compile",
+    "agent:build": "npm run build --workspace @private-browser/agent-mcp",
+    "agent:test": "npm run test --workspace @private-browser/agent-mcp",
+    "agent:smoke": "node scripts/run-electron-tests.mjs agent-mode.spec.ts",
+    "agent:stage": "node scripts/stage-agent-mcp.mjs",
+    "build": "npm run bridge:build && npm run typecheck && vite build && npm run electron:compile && npm run extension:compile && npm run agent:build",
     "electron:compile": "npm run bridge:build && tsc -p tsconfig.electron.json",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run && npm run bridge:test && npm run extension:test && vitest run --config cloudflare/vitest.config.ts",
+    "typecheck": "tsc --noEmit && npm run typecheck --workspace @private-browser/agent-mcp",
+    "test": "vitest run && npm run bridge:test && npm run extension:test && npm run agent:test && vitest run --config cloudflare/vitest.config.ts",
     "test:watch": "vitest",
     "test:e2e": "npm run build && npm run test:e2e:only",
     "test:e2e:only": "playwright test",
@@ -45,11 +50,12 @@
     "docs:find": "node scripts/docs-find.mjs",
     "docs:stale": "node scripts/docs-guard.mjs stale",
     "check": "npm run secrets:check && npm run docs:check && npm run bridge:build && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run extension:package && npm run extension:validate && npm run build && npm run test:e2e:only && npm run test:electron:ci && npm run worker:build",
-    "dist": "npm run extension:package && npm run build && electron-builder --win nsis --x64 --publish never && npm run extension:stage && node scripts/verify-windows-registration.mjs",
+    "dist": "npm run extension:package && npm run build && npm run agent:stage && electron-builder --win nsis --x64 --publish never && npm run extension:stage && node scripts/verify-windows-registration.mjs",
     "start": "electron dist-electron/main.js"
   },
   "dependencies": {
     "@private-browser/bridge-protocol": "*",
+    "axe-core": "4.14.1",
     "google-auth-library": "^11.0.2",
     "hash-wasm": "^4.12.0",
     "lucide-react": "^0.468.0",
@@ -70,6 +76,7 @@
     "cross-env": "^7.0.3",
     "electron": "44.10.2",
     "electron-builder": "^26.15.3",
+    "esbuild": "0.25.12",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vitest": "^5.0.0",
@@ -108,7 +115,8 @@
           "private-browser-update.json",
           "private-browser-bridge.vsix"
         ]
-      }
+      },
+      { "from": "build/private-browser-agent", "to": "private-browser-agent" }
     ],
     "win": {
       "target": "nsis",
