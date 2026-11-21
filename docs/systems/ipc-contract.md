@@ -134,6 +134,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:activate-tab` | `activateTab(tabId)` | `tabId: string` | `void` |
 | `browser:switch-workspace` | `switchWorkspace(workspaceId)` | `workspaceId: WorkspaceId` | `void` |
 | `browser:set-layout` | `setLayout(layout)` | `{ top; left; right; bottom }` (`ContentInsets`) — finite 0–4000 | `void` |
+| `browser:set-split-view` | `setSplitView(tabId?)` | Optional second tab ID in the active Account Space | `void` |
 | `side-app:set-bounds` | `setSideAppBounds(id, rect)` | `'claude' \| 'easynote'`, `{ x; y; width; height }` finite 0–16000 (no other keys) or `null` | `void` |
 | `side-app:command` | `sideAppCommand(id, command)` | `'claude' \| 'easynote'`, `'back' \| 'forward' \| 'reload' \| 'home' \| 'open-in-tab'` | `void` |
 | `side-app:clear-data` | `clearSideAppData(id)` | `'claude' \| 'easynote'` | `void` |
@@ -352,6 +353,7 @@ These channels flow the other way, via `webContents.send` in `main.ts` and
 | Channel | Preload method | Payload | Sent when |
 | --- | --- | --- | --- |
 | `browser:state` | `onState(cb)` | `BrowserSnapshot` | every `broadcast()` in the controller |
+| `downloads:progress` | `onDownloadProgress(cb)` | active Account Space, revision and progress byte counts | byte changes for its active downloads, collected every 120 ms |
 | `browser:command` | `onCommand(cb)` | `Shortcut` (`{ command, index? }`) | a shortcut resolved while a page view had focus |
 | `browser:find-result` | `onFindResult(cb)` | `FindResult` | Chromium reported find-in-page matches for the active tab |
 | `updates:available` | `onUpdateAvailable(cb)` | `UpdateCheckResult` | a background check found a newer version |
@@ -361,8 +363,10 @@ Each helper wraps the caller's callback in a listener that strips the
 `removeListener`. App.tsx relies on that by returning the helper's result straight
 out of a `useEffect`.
 
-`browser:state` is a full snapshot every time — there are no deltas, and there is
-no acknowledgement. The snapshot now also carries `ui` (`UiPreferences`),
+`browser:state` sends a full snapshot without acknowledgement. Download byte
+updates go to the Downloads panel, which compares their revision with the latest
+snapshot. Start, pause, resume, interruption and completion use the full snapshot.
+The snapshot also carries `ui` (`UiPreferences`),
 `settings` (`BrowserSettings`; the renderer merges it over `DEFAULT_BROWSER_SETTINGS`
 like `ui`, so a snapshot without it still renders),
 `windowState` (`maximized`, `fullscreen`, `darkMode`), `shortcutsByAccountSpace`

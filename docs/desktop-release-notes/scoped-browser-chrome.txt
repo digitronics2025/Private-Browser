@@ -1,0 +1,1 @@
+Keep other Account Spaces’ tabs, bookmarks and recent browsing history out of the current window’s state.

@@ -405,6 +405,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 2); requireNonEmptyText(args[0], 'download identifier', 200);
       if (args[1] !== 'pause' && args[1] !== 'resume' && args[1] !== 'retry' && args[1] !== 'cancel') throw new Error('Invalid download action');
       return;
+    case 'browser:set-split-view':
+      between(args, 0, 1); if (args[0] !== undefined) requireNonEmptyText(args[0], 'tab identifier', 200); return;
     case 'browser:activate-tab':
     case 'browser:duplicate-tab':
     case 'browser:reopen-recent-tab':

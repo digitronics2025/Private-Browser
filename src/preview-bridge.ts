@@ -21,6 +21,7 @@ export function installLocalBridgePreview(): void {
   const target = {
     getState: async () => snapshot,
     onState: () => () => undefined,
+    onDownloadProgress: () => () => undefined,
     onCommand: () => () => undefined,
     onFindResult: () => () => undefined,
     onUpdateAvailable: () => () => undefined,

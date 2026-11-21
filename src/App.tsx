@@ -207,18 +207,21 @@ export default function App() {
     };
   }, []);
 
-  // Freeze the page, then hide the live view, so menus and dialogs can draw over
-  // the content area. Protected pages come back as null and show a plain backdrop.
+  // Paint a backdrop before hiding the native view. A ready still can replace
+  // the backdrop while preparing the overlay. The menu never waits for capture.
   useEffect(() => {
     if (state?.sessionLock) return;
     let cancelled = false;
     if (overlayOpen) {
       setOverlayReady(false);
+      setFrozenFrame('');
       void (async () => {
-        const frame = await window.privateBrowser.freezeContent().catch(() => null);
-        if (cancelled) return;
-        setFrozenFrame(frame ?? '');
+        let preparing = true;
+        void window.privateBrowser.freezeContent().then((frame) => {
+          if (frame && preparing && !cancelled) setFrozenFrame(frame);
+        }).catch(() => undefined);
         await nextPaint();
+        preparing = false;
         if (cancelled) return;
         await window.privateBrowser.setOverlayOpen(overlayOpen).catch(() => undefined);
         if (!cancelled) setOverlayReady(true);
@@ -507,6 +510,8 @@ export default function App() {
               onShield={() => setMenu((current) => (current === 'shield' ? null : 'shield'))}
               onTabSearch={() => setMenu((current) => (current === 'tab-search' ? null : 'tab-search'))}
               onActivate={(id) => void act(() => window.privateBrowser.activateTab(id))}
+              splitView={state.splitView}
+              onSplit={(id) => void act(() => window.privateBrowser.setSplitView(id))}
               onClose={(id) => void act(() => window.privateBrowser.closeTab(id))}
               onNewTab={() => void act(() => window.privateBrowser.newTab())}
               onMove={(id, index) => void act(() => window.privateBrowser.moveTab(id, index))}

@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Download, FileDown } from 'lucide-react';
 import { downloadOpenBlock } from '../../electron/download-safety';
-import type { BrowserSnapshot, DownloadEntry } from '../../electron/types';
+import type { BrowserSnapshot, DownloadByteProgress, DownloadEntry } from '../../electron/types';
 import { EmptyState, PanelHeader } from './common';
 import { humanBytes } from '../lib/format';
 
@@ -33,6 +33,25 @@ function publisherText(publisher: DownloadEntry['publisher']): string {
 export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
+  const [byteProgress, setByteProgress] = useState<DownloadByteProgress>();
+  const accountSpaceId = state.activeAccountSpaceId;
+  useEffect(() => {
+    let mounted = true;
+    const receive = (next: DownloadByteProgress) => {
+      if (!mounted || next.accountSpaceId !== accountSpaceId) return;
+      setByteProgress((prior) => !prior || next.revision > prior.revision ? next : prior);
+    };
+    const unsubscribe = window.privateBrowser.onDownloadProgress(receive);
+    void window.privateBrowser.getState().then((snapshot) => {
+      const { activeAccountSpaceId, downloadProgressRevision } = snapshot;
+      if (downloadProgressRevision === undefined) return;
+      receive({ accountSpaceId: activeAccountSpaceId, revision: downloadProgressRevision,
+        entries: snapshot.downloads.filter((item) => item.state === 'progressing') });
+    }).catch(() => undefined);
+    return () => { mounted = false; unsubscribe(); };
+  }, [accountSpaceId]);
+  const sizes = byteProgress?.accountSpaceId === accountSpaceId && byteProgress.revision > (state.downloadProgressRevision ?? 0)
+    ? new Map(byteProgress.entries.map((entry) => [entry.id, entry])) : undefined;
   const needle = query.trim().toLowerCase();
   const visible = state.downloads.filter((item) => (status === 'all' || item.state === status)
     && `${item.filename} ${item.origin ?? ''}`.toLowerCase().includes(needle));
@@ -79,7 +98,8 @@ export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onT
       </>}
     </div>}
     <div className="download-list">{visible.map((item) => {
-      const progress = item.totalBytes ? Math.min(100, Math.round(item.receivedBytes / item.totalBytes * 100)) : undefined;
+      const { receivedBytes, totalBytes } = (item.state === 'progressing' && sizes?.get(item.id)) || item;
+      const progress = totalBytes ? Math.min(100, Math.round(receivedBytes / totalBytes * 100)) : undefined;
       const blocked = downloadOpenBlock(item);
       const type = item.risk === 'deceptive' ? ' · Deceptive double extension'
         : item.risk === 'dangerous' ? ' · May run code' : '';
@@ -90,9 +110,9 @@ export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onT
           <small>{item.checksum === 'checking' ? 'Waiting for verification' : item.paused ? 'Paused' : statusText[item.state]}</small>
           {item.origin && <small className="download-origin">{item.origin}</small>}
           {item.finishedAt && <small><time dateTime={item.finishedAt}>{dateTime.format(new Date(item.finishedAt))}</time></small>}
-          {item.state === 'progressing' && <small>{item.totalBytes
-            ? `${humanBytes(item.receivedBytes)} of ${humanBytes(item.totalBytes)}`
-            : `${humanBytes(item.receivedBytes)} downloaded`}</small>}
+          {item.state === 'progressing' && <small>{totalBytes
+            ? `${humanBytes(receivedBytes)} of ${humanBytes(totalBytes)}`
+            : `${humanBytes(receivedBytes)} downloaded`}</small>}
           {item.state === 'progressing' && <div className="progress" role="progressbar" aria-label={item.filename} aria-valuenow={progress}>
             <span style={{ width: `${progress ?? 0}%` }} />
           </div>}

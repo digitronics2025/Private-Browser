@@ -1,4 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
+import { chromeCollections } from '../electron/chrome-collections';
 import type { ChromeImportOptions, ChromePasswordImportReview } from '../electron/types';
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
@@ -10,6 +11,7 @@ import type { BrowserSettings, BrowserSettingsPatch, ManagedUpdateStatus, Pinnab
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { canPauseTrackersAt, TrackerProtection } from '../electron/tracker-protection';
 import { memorySaverOrigin } from '../electron/memory-saver';
+import { MIN_SPLIT_WIDTH, splitPageAllowed } from '../electron/split-view';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
@@ -159,6 +161,7 @@ export function installPreviewApi(): void {
   const syncDarkMode = () => { state.windowState.darkMode = state.ui.theme === 'system' ? media.matches : state.ui.theme === 'dark'; };
   syncDarkMode();
   const listeners = new Set<(snapshot: BrowserSnapshot) => void>();
+  const chromeSnapshot = (): BrowserSnapshot => structuredClone({ ...state, ...chromeCollections(state, state.activeAccountSpaceId, state.activeWorkspaceId) });
   let backupRestoreReview: BackupRestorePreview | undefined;
   let backupUploadReview: BackupUploadPreview | undefined;
   const backupGenerationFixture = params.get('backupGenerations') === 'sample';
@@ -252,6 +255,9 @@ export function installPreviewApi(): void {
     savedBookmarkFolders.set(id, result.folders);
     publish();
   };
+  const splitPairs = new Map<AccountSpaceId, Pick<NonNullable<BrowserSnapshot['splitView']>, 'leftTabId' | 'rightTabId'>>();
+  let splitInsets = 0;
+  const splitSuspended = () => state.windowState.fullscreen || window.innerWidth - splitInsets < MIN_SPLIT_WIDTH;
   const publish = () => {
     state.bookmarkFolders = getPreviewFolders(state.activeAccountSpaceId);
     state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
@@ -264,6 +270,16 @@ export function installPreviewApi(): void {
     const privateWorkspace = state.activeWorkspaceId === 'banking';
     state.trackerBlocking = privateWorkspace || trackerBlocking;
     const activeTrackingTab = state.tabs.find(({ id }) => id === state.activeTabId);
+    const pair = splitPairs.get(state.activeAccountSpaceId);
+    state.splitView = undefined;
+    if (pair) {
+      const left = state.tabs.find((tab) => tab.id === pair.leftTabId);
+      const right = state.tabs.find((tab) => tab.id === pair.rightTabId);
+      if (!left || !right || !splitPageAllowed(left) || !splitPageAllowed(right)) splitPairs.delete(state.activeAccountSpaceId);
+      else if (!assistantUnavailable && (activeTrackingTab === left || activeTrackingTab === right)) {
+        state.splitView = { ...pair, suspended: splitSuspended() };
+      }
+    }
     state.trackerSite = activeTrackingTab && !activeTrackingTab.isHome ? trackers.status(state.activeAccountSpaceId,
       new URL(activeTrackingTab.url).origin, { enabled: trackerBlocking, strict: privateWorkspace,
         canPause: !privateWorkspace && trackerBlocking && canPauseTrackersAt(activeTrackingTab.url) }) : undefined;
@@ -297,7 +313,7 @@ export function installPreviewApi(): void {
     groupsByAccount.set(state.activeAccountSpaceId, state.tabGroups);
     const batch = batchesByAccount.get(state.activeAccountSpaceId);
     state.closedTabBatch = batch ? { count: batch.entries.length, groupName: batch.groupName } : undefined;
-    listeners.forEach((listener) => listener(structuredClone(state)));
+    listeners.forEach((listener) => listener(chromeSnapshot()));
   };
   const requireAssistantPolicy = (mode: 'cloud' | 'local') => {
     if (state.assistantPolicy.cloud === 'unavailable') throw new Error('Assistant requests are unavailable in this Account Space.');
@@ -310,6 +326,7 @@ export function installPreviewApi(): void {
     publish();
   };
   media.addEventListener('change', () => { syncDarkMode(); publish(); });
+  globalThis.addEventListener('resize', () => { if (state.splitView && state.splitView.suspended !== splitSuspended()) publish(); });
   const activeTab = () => state.tabs.find((tab) => tab.id === state.activeTabId)!;
   const reopenPreviewTab = (id?: string) => {
     const closed = closedByAccount.get(state.activeAccountSpaceId);
@@ -549,7 +566,7 @@ export function installPreviewApi(): void {
       managedUpdate = { phase: 'launched', version: managedUpdate.version };
       publish();
     },
-    getState: async () => structuredClone(state),
+    getState: async () => chromeSnapshot(),
     controlDownload: async (id, action) => {
       const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);
       if (!entry?.canCancel || state.activeWorkspaceId === 'banking') throw new Error('Download is unavailable in this Account Space');
@@ -701,6 +718,7 @@ export function installPreviewApi(): void {
       return queryHistory(scope, state.activeAccountSpaceId, input as Parameters<PrivateBrowserApi['queryHistory']>[1]);
     }) satisfies PrivateBrowserApi['queryHistory'],
     onState: (callback) => { listeners.add(callback as (snapshot: BrowserSnapshot) => void); return () => listeners.delete(callback as (snapshot: BrowserSnapshot) => void); },
+    onDownloadProgress: () => () => undefined,
     onCommand: () => () => undefined,
     onFindResult: () => () => undefined,
     onUpdateAvailable: () => () => undefined,
@@ -715,7 +733,11 @@ export function installPreviewApi(): void {
     },
     onVaultState: () => () => undefined,
     // Recorded on the document so browser tests can compare it with the visible chrome.
-    setLayout: async (layout) => { document.documentElement.dataset.previewLayout = JSON.stringify(layout); },
+    setLayout: async (layout) => {
+      document.documentElement.dataset.previewLayout = JSON.stringify(layout);
+      splitInsets = layout.left + layout.right;
+      if (state.splitView && state.splitView.suspended !== splitSuspended()) publish();
+    },
     setOverlayOpen: async () => undefined,
     // A normal browser has no native view to place; record the slot for browser tests instead.
     setSideAppBounds: async (_id, rect) => { document.documentElement.dataset.previewSideApp = JSON.stringify(rect); },
@@ -814,6 +836,19 @@ export function installPreviewApi(): void {
     },
     toggleBookmarkBar: async () => { state.ui = mergeUiPreferences(state.ui, { bookmarkBarMode: state.ui.bookmarkBarMode === 'hidden' ? 'always' : 'hidden' }); publish(); },
     activateTab: async (value) => { const tab = state.tabs.find((item) => item.id === value); if (tab) { tab.sleeping = undefined; state.activeTabId = tab.id; publish(); } },
+    setSplitView: async (otherTabId) => {
+      const id = state.activeAccountSpaceId;
+      if (otherTabId === undefined) splitPairs.delete(id);
+      else {
+        const active = activeTab();
+        const other = state.tabs.find((tab) => tab.id === otherTabId && tab.accountSpaceId === id);
+        if (!regularPanelAccount() || !other || other === active || !splitPageAllowed(active) || !splitPageAllowed(other)
+          || active.developerToolsOpen || other.developerToolsOpen) throw new Error('Choose two regular pages in this Account Space.');
+        if (splitSuspended()) throw new Error('Widen the browser to open two pages side by side.');
+        splitPairs.set(id, { leftTabId: active.id, rightTabId: other.id });
+      }
+      publish();
+    },
     newTab: async () => { const id = `preview-${crypto.randomUUID()}`; state.tabs.push(homeTab(id, state.activeWorkspaceId, state.activeAccountSpaceId)); state.activeTabId = id; publish(); },
     closeTab: async (value) => {
       const tab = state.tabs.find((item) => item.id === value);

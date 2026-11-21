@@ -1179,3 +1179,6 @@ kbd { font: inherit; }
 .vault-conflict ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
 .vault-conflict li { display: grid; overflow-wrap: anywhere; }
 .vault-conflict li small { color: var(--text-muted); }
+.split-controls { display: flex; align-items: center; gap: 3px; margin: 0 4px; }
+.split-controls button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-muted); }
+.split-controls button:not(:disabled):hover, .split-controls button:focus-visible { background: var(--hover); color: var(--text); }
