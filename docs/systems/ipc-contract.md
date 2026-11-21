@@ -281,6 +281,7 @@ the main process; `VaultItemMeta` carries `hasTotp`, never the secret.
 | `updates:clear` | `clearUpdateService()` | — | `UpdateServiceStatus` |
 | `updates:check` | `checkForUpdates()` | — | `UpdateCheckResult` |
 | `updates:open-page` | `openUpdatePage()` | — | `void` |
+| `updates:open-history` | `openReleaseHistory()` | — | `void` |
 
 There is no mechanical rule mapping a channel name to a method name. Four break
 the obvious one: `ai:provider-status` is `getAiProvider`, `system:copy` is

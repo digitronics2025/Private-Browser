@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
+import { desktopReleaseNotes } from './desktop-release-notes.mjs';
 
 const [installerPath, objectKey] = process.argv.slice(2);
 const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
@@ -32,7 +33,7 @@ const metadata = {
   sizeBytes: statSync(installerPath).size,
   sha256,
   commitSha,
-  releaseNotes: `Private Browser ${packageJson.version} stable release.`,
+  releaseNotes: desktopReleaseNotes(commitSha, process.env.PREVIOUS_RELEASE_REVISION),
   publishedAt: new Date().toISOString(),
 };
 const response = await fetch(`${endpoint}/api/v1/admin/releases`, {

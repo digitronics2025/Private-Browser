@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { DEVELOPER_PROFILE, renderDownloadPage } from '../../cloudflare/src/page';
 
 function monitorBrowser(page: import('@playwright/test').Page) {
   const consoleErrors: string[] = [];
@@ -52,10 +53,38 @@ test('shows a focused full-width download action when a newer release exists', a
   const box = await download.boundingBox();
   expect(box?.width).toBeGreaterThan(240);
   await expect(page.getByText('Build 83')).toBeVisible();
+  await expect(page.getByText('WHAT CHANGED SINCE YOUR VERSION')).toBeVisible();
+  await expect(page.getByText('Review release highlights before installing a new browser version.')).toBeVisible();
   // F-36: releases are unsigned, so the page must not promise a signed installer.
   await expect(page.getByText(/checksum is checked/)).toBeVisible();
   await expect(page.getByText(/\bsigned\b/i)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Release history', exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => {
+    const state = await window.privateBrowser.getState();
+    return state.tabs.find((tab) => tab.id === state.activeTabId)?.url;
+  })).toBe('https://private-browser-downloads.digitronics-electro.workers.dev/#release-history');
   expectNoBrowserIssues();
+});
+
+test('shows escaped release highlights and the full changelog on the download page', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 820 });
+  const published = '2026-11-21T11:00:00Z';
+  await page.setContent(renderDownloadPage({
+    developer: DEVELOPER_PROFILE, history: [], canonicalUrl: 'https://example.test/',
+    downloadUrl: 'https://example.test/installer', renderedAt: published,
+    release: {
+      id: 'stable-example', app_id: 'private-browser', version: '0.6.40', build_number: 251,
+      object_key: 'fixture', filename: 'Private-Browser-Setup.exe', size_bytes: 123, sha256: 'a'.repeat(64),
+      commit_sha: 'b'.repeat(40), content_type: 'application/octet-stream', channel: 'stable',
+      release_notes: 'Reviewed example <note> stays visible.', published_at: published, is_active: 1,
+    },
+  }));
+  await expect(page.getByRole('heading', { name: 'Latest release highlights' })).toBeVisible();
+  await expect(page.getByText('Reviewed example <note> stays visible.')).toBeVisible();
+  await expect(page.locator('note')).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Full changelog' })).toHaveAttribute(
+    'href', 'https://github.com/digitronics2025/Private-Browser/blob/main/CHANGELOG.md',
+  );
 });
 
 test('keeps loading and failure states explicit and retryable', async ({ page }) => {

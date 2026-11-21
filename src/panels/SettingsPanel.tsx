@@ -144,6 +144,7 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
       onBack={() => { setUpdateForm((value) => ({ ...value, accessToken: '' })); setSettingsPage('overview'); }}
       onCheck={() => void checkUpdates()}
       onOpenDownload={() => void window.privateBrowser.openUpdatePage().catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}
+      onOpenHistory={() => void window.privateBrowser.openReleaseHistory().catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}
       onOpenDeveloper={() => void window.privateBrowser.newTab('development', 'https://dr-badawi-abdalsalam.com/')}
       onTogglePrivate={() => { setEditingUpdates((value) => !value); setUpdateForm((value) => ({ ...value, accessToken: '' })); }}
       onConfigure={configureUpdates}
@@ -202,6 +203,7 @@ interface UpdatesPageProps {
   onBack: () => void;
   onCheck: () => void;
   onOpenDownload: () => void;
+  onOpenHistory: () => void;
   onOpenDeveloper: () => void;
   onTogglePrivate: () => void;
   onConfigure: (event: FormEvent) => void;
@@ -209,7 +211,7 @@ interface UpdatesPageProps {
   onDisconnect: () => void;
 }
 
-function UpdatesPage({ status, result, error, checking, editingPrivate, form, onBack, onCheck, onOpenDownload, onOpenDeveloper, onTogglePrivate, onConfigure, onFormChange, onDisconnect }: UpdatesPageProps) {
+function UpdatesPage({ status, result, error, checking, editingPrivate, form, onBack, onCheck, onOpenDownload, onOpenHistory, onOpenDeveloper, onTogglePrivate, onConfigure, onFormChange, onDisconnect }: UpdatesPageProps) {
   const latest = result?.latest;
   const available = result?.state === 'available';
   const state = checking ? 'checking' : error ? 'error' : available ? 'available' : result ? 'current' : 'checking';
@@ -250,7 +252,12 @@ function UpdatesPage({ status, result, error, checking, editingPrivate, form, on
         <div><dt>Installer</dt><dd>{humanBytes(latest.sizeBytes)} · Windows x64</dd></div>
         <div><dt>Source</dt><dd><code>{latest.commitSha.slice(0, 12)}</code></dd></div>
       </dl>
-      <div className="release-notes"><small>WHAT'S NEW</small><p>{latest.releaseNotes || 'Stability and security improvements.'}</p></div>
+      <div className="release-notes">
+        <small>{state === 'available' ? 'WHAT CHANGED SINCE YOUR VERSION' : 'LATEST RELEASE HIGHLIGHTS'}</small>
+        {state === 'available' && <p>Highlights from version {latest.version}. See release history for earlier versions.</p>}
+        <p>{latest.releaseNotes || 'No highlights were published for this release.'}</p>
+        <button className="text-button" type="button" onClick={onOpenHistory}><ExternalLink size={14} /> Release history</button>
+      </div>
       <div className="release-checksum"><ShieldCheck size={14} /><div><small>SHA-256 CHECKSUM</small><code>{latest.sha256}</code></div></div>
       <p className="updates-verified-note">Private Browser remembers this checksum and verifies the downloaded installer before it can be opened.</p>
       <small className="updates-checked-at">Checked {timeAgo(result.checkedAt)} · Automatically checked every 24 hours</small>

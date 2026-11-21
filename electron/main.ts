@@ -109,7 +109,7 @@ import type { PairDialogValue } from './myvault/secure-dialog-contract.js';
 import { VaultMigrationService } from './myvault/vault-migration.js';
 import { canInstallPasskeyProvider, InternalPasskeyController, type PasskeyOptIns } from './myvault/passkey-controller.js';
 import { PlatformUnlockError, WindowsHelloSigner } from './myvault/windows-hello.js';
-import { UpdateServiceStore } from './update-service.js';
+import { PUBLIC_UPDATE_ENDPOINT, UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
 import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
 import { IpcGuard } from './ipc-guard.js';
@@ -2717,6 +2717,10 @@ class BrowserController {
     await this.newTab('development', result.latest.downloadPageUrl);
   }
 
+  async openReleaseHistory(): Promise<void> {
+    await this.newTab('development', PUBLIC_UPDATE_ENDPOINT + '/#release-history');
+  }
+
   async checkForUpdatesInBackground(): Promise<void> {
     if (this.window.isDestroyed()) return;
     try {
@@ -3664,6 +3668,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:clear', () => controller!.clearUpdateService());
   handle('updates:check', () => controller!.checkForUpdates());
   handle('updates:open-page', () => controller!.openUpdatePage());
+  handle('updates:open-history', () => controller!.openReleaseHistory());
 
   await controller.createWindow();
   setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();

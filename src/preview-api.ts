@@ -490,7 +490,7 @@ export function installPreviewApi(): void {
           sizeBytes: 115_638_545,
           sha256: '259a374e199949d72b7fa87c6aed3eef9834340b99ed5dfd17da68038a922eec',
           commitSha: 'fabad9b310b10efcc7332e88599620db8d437b2a',
-          releaseNotes: 'Latest stable security, privacy, and reliability improvements.',
+          releaseNotes: 'Review release highlights before installing a new browser version.',
           downloadUrl: 'https://private-browser-downloads.digitronics-electro.workers.dev/download/latest.exe?expires=9999999999&signature=preview',
           downloadPageUrl: 'https://private-browser-downloads.digitronics-electro.workers.dev/download?expires=9999999999&signature=preview',
           expiresAt: '2286-11-20T17:46:39.000Z',
@@ -498,6 +498,7 @@ export function installPreviewApi(): void {
         checkedAt: new Date().toISOString(),
       };
     },
+    openReleaseHistory: async () => handlers.navigate('https://private-browser-downloads.digitronics-electro.workers.dev/#release-history'),
     listVault: async () => ({ available: true, items: [], lifecycle: 'unlocked', sync: 'idle', dirty: false, generation: 1 }),
     getVaultMigrationStatus: async () => ({ legacyAvailable: false }),
     // The Control Center link, paired, with one task (docs/systems/control-center-link.md).
