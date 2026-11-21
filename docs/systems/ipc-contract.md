@@ -171,6 +171,9 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `settings:set` | `setBrowserSettings(patch)` | non-empty `BrowserSettingsPatch`, validated by `requireBrowserSettingsPatch` (search template rules, `custom`/`url` need their value); the controller then normalizes `homePageUrl` with `parseWebAddress` | `void` |
 | `bookmarks:move` | `moveBookmark(level, key, toIndex)` | `BookmarkLevelInput`, `BookmarkEntryKeyInput`, integer | `void` |
 | `bookmarks:rename` | `renameBookmark(id, title)` | id, non-blank title ≤ 500 | `void` |
+| `bookmarks:edit-address` | `editBookmarkAddress(id, url)` | bookmark ID and HTTP(S) URL | `void` |
+| `bookmarks:change-many` | `changeBookmarks(account, ids, destination?)` | active account, 1–200 IDs, optional folder | changed count |
+| `bookmarks:undo-many` | `undoBookmarks(account)` | active account | restored count |
 | `bookmarks:remove` | `removeBookmark(id)` | id | `void` |
 | `bookmarks:rename-folder` | `renameBookmarkFolder(level, name, nextName)` | level, two non-blank names ≤ 200 | `void` |
 | `bookmarks:remove-folder` | `removeBookmarkFolder(level, name)` | level, name | `void` |

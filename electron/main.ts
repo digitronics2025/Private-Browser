@@ -46,6 +46,7 @@ import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
   AccountSpaceColor,
   AccountSpaceBrowserTab,
+  AccountSpaceBookmark,
   AccountSpaceId,
   ExternalBrowserId,
   GoogleModule,
@@ -133,6 +134,7 @@ import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } fr
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
 import { showPageContextMenu } from './page-context-menu.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
+import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
 
 interface RuntimeTab {
   view?: WebContentsView;
@@ -269,6 +271,7 @@ class BrowserController {
   private expectedInstaller?: ExpectedInstaller;
   private layout: Layout = { ...DEFAULT_CONTENT_INSETS };
   private readonly closedTabs = new Map<AccountSpaceId, RecentlyClosedTab[]>();
+  private readonly bookmarkUndo = new Map<AccountSpaceId, BookmarkUndo<AccountSpaceBookmark>>();
   private readonly closedTabBatches = new Map<AccountSpaceId, {
     entries: Array<{ tab: AccountSpaceBrowserTab; index: number }>;
     groups: TabGroup[];
@@ -474,6 +477,7 @@ class BrowserController {
       };
     });
     const activeAccountSpaceId = this.activeAccountSpaceId(persisted);
+    const bookmarkUndo = this.bookmarkUndo.get(activeAccountSpaceId);
     const closedBatch = this.closedTabBatches.get(activeAccountSpaceId);
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
     return {
@@ -482,6 +486,7 @@ class BrowserController {
       activeTabId: this.activeTab(persisted).id,
       tabs,
       bookmarks: persisted.bookmarks,
+      bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
       history: persisted.history.slice(0, 100),
       downloads: this.activeDownloadAccount(persisted)
         ? [...this.downloads.values()]
@@ -1281,6 +1286,7 @@ class BrowserController {
     for (const key of [...this.faviconCache.keys()]) if (key.startsWith(`${accountSpaceId}:`)) this.faviconCache.delete(key);
     this.closedTabs.delete(accountSpaceId);
     this.closedTabBatches.delete(accountSpaceId);
+    this.bookmarkUndo.delete(accountSpaceId);
   }
 
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
@@ -1651,6 +1657,42 @@ class BrowserController {
     this.requireActiveBookmark(id);
     this.store.update((state) => { state.bookmarks = removeBookmark(state.bookmarks, id); });
     this.broadcast();
+  }
+
+  updateBookmarkAddress(id: string, url: string): void {
+    this.requireEditableBookmarkAccount(this.requireActiveBookmark(id).accountSpaceId);
+    this.store.update((state) => { state.bookmarks = editBookmarkAddress(state.bookmarks, id, url); });
+    this.broadcast();
+  }
+
+  changeBookmarks(accountSpaceId: AccountSpaceId, ids: string[], destination?: BookmarkLevelInput): number {
+    this.requireEditableBookmarkAccount(accountSpaceId);
+    const plan = changeBookmarkBatch(this.store.get().bookmarks, accountSpaceId, ids, destination);
+    if (!plan.undo) return 0;
+    this.store.update((state) => { state.bookmarks = plan.bookmarks; });
+    this.bookmarkUndo.set(accountSpaceId, plan.undo);
+    this.broadcast();
+    return plan.undo.before.length;
+  }
+
+  undoBookmarks(accountSpaceId: AccountSpaceId): number {
+    this.requireEditableBookmarkAccount(accountSpaceId);
+    const undo = this.bookmarkUndo.get(accountSpaceId);
+    if (!undo) return 0;
+    const result = restoreBookmarkBatch(this.store.get().bookmarks, accountSpaceId, undo);
+    if (result.restored) this.store.update((state) => { state.bookmarks = result.bookmarks; });
+    this.bookmarkUndo.delete(accountSpaceId);
+    this.broadcast();
+    return result.restored;
+  }
+
+  private requireEditableBookmarkAccount(accountSpaceId: AccountSpaceId): void {
+    const { state, accountSpaceId: active } = this.activeBookmarkScope();
+    if (active !== accountSpaceId) throw new Error('The Account Space changed. Return to the original space.');
+    const account = this.requireAccountMembership(accountSpaceId);
+    if (account.locked || state.accountHealth.some((item) => item.accountSpaceId === active && item.status === 'account-corrupt')) {
+      throw new Error('This Account Space is unavailable for bookmark changes.');
+    }
   }
 
   renameBookmarkFolder(level: BookmarkLevelInput, name: string, nextName: string): void {
@@ -3535,6 +3577,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('bookmarks:move', (_event, level: BookmarkLevelInput, key: BookmarkEntryKeyInput, toIndex: number) => controller!.moveBookmark(level, key, toIndex));
   handle('bookmarks:rename', (_event, id: string, title: string) => controller!.renameBookmark(id, title));
   handle('bookmarks:remove', (_event, id: string) => controller!.removeBookmark(id));
+  handle('bookmarks:edit-address', (_event, id: string, url: string) => controller!.updateBookmarkAddress(id, url));
+  handle('bookmarks:change-many', (_event, id: AccountSpaceId, ids: string[], destination?: BookmarkLevelInput) => controller!.changeBookmarks(id, ids, destination));
+  handle('bookmarks:undo-many', (_event, id: AccountSpaceId) => controller!.undoBookmarks(id));
   handle('bookmarks:rename-folder', (_event, level: BookmarkLevelInput, name: string, nextName: string) => controller!.renameBookmarkFolder(level, name, nextName));
   handle('bookmarks:remove-folder', (_event, level: BookmarkLevelInput, name: string) => controller!.removeBookmarkFolder(level, name));
   handle('bookmarks:export', () => controller!.exportBookmarks());

@@ -18,6 +18,47 @@ test('separates file type, checksum and publisher and only enables eligible file
   await expect(mismatch.getByRole('button', { name: 'Show folder' })).toBeEnabled();
 });
 
+test('reviews and moves or deletes duplicate bookmark entries without merging them', async ({ page }) => {
+  await page.setViewportSize({ width: 520, height: 810 });
+  await page.goto('/?bookmarks=duplicates');
+  await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
+  await page.keyboard.press('Control+Shift+O');
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await expect(panel.getByRole('heading', { name: 'Bookmarks' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Duplicate addresses' }).click();
+  const choose = async () => {
+    await panel.getByRole('checkbox', { name: 'Select Invoices' }).check();
+    await panel.getByRole('checkbox', { name: 'Select Invoice reference' }).check();
+  };
+  await choose();
+  await panel.getByRole('button', { name: 'Move selected' }).click();
+  const move = panel.getByRole('region', { name: 'Choose a bookmark destination' });
+  await expect(move.getByRole('listitem').filter({ hasText: /^Bookmarks bar \/ Finance$/ })).toBeVisible();
+  await move.getByLabel('Move to').selectOption({ label: 'Other bookmarks' });
+  await move.getByRole('button', { name: 'Move 2 bookmarks' }).click();
+  await expect(panel.getByRole('button', { name: 'Undo bookmark change' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Undo bookmark change' }).click();
+  await expect(panel.getByText('2 bookmarks restored.')).toBeVisible();
+
+  await choose();
+  await panel.getByRole('button', { name: 'Delete selected' }).click();
+  const deletion = panel.getByRole('region', { name: 'Review bookmark deletion' });
+  await expect(deletion.getByText('2 bookmarks from 2 folders')).toBeVisible();
+  await expect(deletion.getByText('Other bookmarks / Archive')).toBeVisible();
+  await deletion.getByRole('button', { name: 'Delete 2 bookmarks' }).click();
+  await expect(panel.getByRole('checkbox', { name: 'Select Invoices' })).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Undo bookmark change' }).click();
+  await expect(panel.getByRole('checkbox', { name: 'Select Invoices' })).toBeVisible();
+
+  await panel.getByRole('button', { name: 'Edit address for Invoices' }).click();
+  const editor = page.getByRole('dialog', { name: 'Edit bookmark address' });
+  await editor.getByLabel('URL').fill('https://billing.example.com/invoices?year=2025');
+  await editor.getByRole('button', { name: 'Save' }).click();
+  await expect(panel.getByRole('checkbox', { name: 'Select Invoices' })).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Duplicate addresses' }).click();
+  await expect(panel.getByRole('checkbox', { name: 'Select Invoice reference' })).toBeVisible();
+});
+
 for (const width of [1280, 390]) {
   test('finds and switches to a local tab at ' + width + 'px', async ({ page }) => {
     await page.setViewportSize({ width, height: 840 });

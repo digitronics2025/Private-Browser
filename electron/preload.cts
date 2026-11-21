@@ -90,6 +90,10 @@ const api = {
   moveBookmark: (level: BookmarkLevelInput, key: BookmarkEntryKeyInput, toIndex: number): Promise<void> => ipcRenderer.invoke('bookmarks:move', level, key, toIndex),
   renameBookmark: (id: string, title: string): Promise<void> => ipcRenderer.invoke('bookmarks:rename', id, title),
   removeBookmark: (id: string): Promise<void> => ipcRenderer.invoke('bookmarks:remove', id),
+  editBookmarkAddress: (id: string, url: string): Promise<void> => ipcRenderer.invoke('bookmarks:edit-address', id, url),
+  changeBookmarks: (account: AccountSpaceId, ids: string[], destination?: BookmarkLevelInput): Promise<number> =>
+    ipcRenderer.invoke('bookmarks:change-many', account, ids, destination),
+  undoBookmarks: (account: AccountSpaceId): Promise<number> => ipcRenderer.invoke('bookmarks:undo-many', account),
   renameBookmarkFolder: (level: BookmarkLevelInput, name: string, nextName: string): Promise<void> => ipcRenderer.invoke('bookmarks:rename-folder', level, name, nextName),
   removeBookmarkFolder: (level: BookmarkLevelInput, name: string): Promise<void> => ipcRenderer.invoke('bookmarks:remove-folder', level, name),
   exportBookmarks: (): Promise<boolean> => ipcRenderer.invoke('bookmarks:export'),

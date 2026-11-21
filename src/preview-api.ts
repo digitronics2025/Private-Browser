@@ -1,11 +1,12 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
-import type { AccountSpaceId, Bookmark, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AccountSpaceId, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, searchTemplateFor } from '../electron/browser-settings';
 import { parseWebAddress } from '../electron/security';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
 import { planBookmarkBatch } from '../electron/bookmark-batch';
+import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from '../electron/bookmark-maintenance';
 import { canonicalRoutineUrl, defaultBrowserRoutines, requireBrowserRoutine } from '../electron/browser-routines';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
@@ -74,6 +75,7 @@ export function installPreviewApi(): void {
       bookmark('preview-marketing', 'Campaign planner', 'https://planner.example.com/', ['Marketing'], [3, 0]),
       ...Array.from({ length: 14 }, (_, index) => bookmark(`preview-extra-${index}`, `Supplier portal ${index + 1}`, `https://supplier${index + 1}.example.com/`, [], [4 + index])),
       bookmark('preview-other', 'Reading list article', 'https://news.example.com/article', [], [0], 'other'),
+      ...(params.get('bookmarks') === 'duplicates' ? [bookmark('preview-duplicate', 'Invoice reference', 'https://billing.example.com/invoices', ['Archive'], [1, 0], 'other')] : []),
       ...(params.get('bookmarks') === 'large' ? Array.from({ length: 24_900 }, (_, index) => bookmark(
         'preview-large-' + index, 'Sample bookmark ' + index, 'https://bookmarks.example.test/' + index,
         ['Import folder ' + Math.floor(index / 100)], [100 + Math.floor(index / 100), index % 100], 'other',
@@ -129,9 +131,12 @@ export function installPreviewApi(): void {
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
+  const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
+    const undo = bookmarkUndos.get(state.activeAccountSpaceId);
+    state.bookmarkUndo = undo ? { kind: undo.kind, count: undo.before.length } : undefined;
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
     state.canReopenClosedTab = state.recentlyClosedTabs.length > 0;
     state.routines = state.activeWorkspaceId === 'banking' ? [] : routines;
@@ -371,6 +376,33 @@ export function installPreviewApi(): void {
     moveBookmark: async (levelValue, keyValue, indexValue) => { state.bookmarks = reorderBookmarkEntry(state.bookmarks, state.activeAccountSpaceId, levelValue as { location: 'bar'; path: string[] }, keyValue as { kind: 'bookmark'; id: string }, Number(indexValue)); publish(); },
     renameBookmark: async (idValue, titleValue) => { state.bookmarks = renameBookmark(state.bookmarks, String(idValue), String(titleValue)); publish(); },
     removeBookmark: async (idValue) => { state.bookmarks = removeBookmark(state.bookmarks, String(idValue)); publish(); },
+    editBookmarkAddress: async (idValue, address) => {
+      const id = String(idValue);
+      if (!state.bookmarks.some((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId)) throw new Error('Bookmark is unavailable');
+      state.bookmarks = editBookmarkAddress(state.bookmarks, id, String(address));
+      publish();
+    },
+    changeBookmarks: async (account, ids, destination) => {
+      const current = state.activeAccountSpaceId;
+      if (account !== current) throw new Error('The Account Space changed');
+      const result = changeBookmarkBatch(state.bookmarks, current, ids as string[], destination as BookmarkLevelInput | undefined);
+      if (!result.undo) return 0;
+      state.bookmarks = result.bookmarks;
+      bookmarkUndos.set(current, result.undo);
+      publish();
+      return result.undo.before.length;
+    },
+    undoBookmarks: async (account) => {
+      const current = state.activeAccountSpaceId;
+      if (account !== current) throw new Error('The Account Space changed');
+      const undo = bookmarkUndos.get(current);
+      if (!undo) return 0;
+      const result = restoreBookmarkBatch(state.bookmarks, current, undo);
+      state.bookmarks = result.bookmarks;
+      bookmarkUndos.delete(current);
+      publish();
+      return result.restored;
+    },
     setShortcutTiles: async (idValue, tilesValue) => { if (tilesValue === null) delete state.shortcutsByAccountSpace[String(idValue)]; else state.shortcutsByAccountSpace[String(idValue)] = tilesValue as ShortcutTile[]; publish(); },
     toggleTrackerBlocking: async () => { state.trackerBlocking = !state.trackerBlocking; publish(); },
     switchAccountSpace: async (value) => { const id = value as AccountSpaceId; const selected = state.accountSpaces.find((item) => item.id === id); if (!selected || selected.locked) throw new Error('Account Space is unavailable'); state.activeAccountSpaceId = id; state.activeWorkspaceId = selected.workspaceId; state.activeTabId = state.tabs.find((tab) => tab.accountSpaceId === id)!.id; publish(); },
