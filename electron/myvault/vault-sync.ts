@@ -25,15 +25,38 @@ function isUnauthorized(status: number): boolean {
 async function readJson(response: Response): Promise<unknown> {
   const declared = Number(response.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) throw new Error('MyVault response is too large');
-  const text = await response.text();
-  if (text.length > MAX_RESPONSE_BYTES) throw new Error('MyVault response is too large');
-  return JSON.parse(text) as unknown;
+  if (!response.body) throw new Error('MyVault response is missing');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    void reader.cancel().catch(() => undefined);
+  }, 12_000).unref();
+  try {
+    const parts: string[] = [];
+    let length = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (timedOut) throw new Error('The MyVault response timed out');
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_RESPONSE_BYTES) throw new Error('MyVault response is too large');
+      parts.push(decoder.decode(value, { stream: true }));
+    }
+    return JSON.parse(parts.join('') + decoder.decode()) as unknown;
+  } finally {
+    clearTimeout(deadline);
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 function parseRemote(value: unknown): RemoteVault {
   if (!value || typeof value !== 'object') throw new Error('Invalid MyVault sync response');
   const remote = value as Partial<RemoteVault>;
-  if (!Number.isSafeInteger(remote.version) || Number(remote.version) < 1 || typeof remote.updatedAt !== 'string' || !isVaultEnvelope(remote.envelope)) throw new Error('Invalid MyVault sync response');
+  if (!Number.isSafeInteger(remote.version) || Number(remote.version) < 1 || typeof remote.updatedAt !== 'string' || remote.updatedAt.length > 30
+    || !Number.isFinite(Date.parse(remote.updatedAt)) || !isVaultEnvelope(remote.envelope)) throw new Error('Invalid MyVault sync response');
   return remote as RemoteVault;
 }
 

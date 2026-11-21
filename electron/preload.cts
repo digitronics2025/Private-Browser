@@ -9,6 +9,7 @@ import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './goo
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
 import type { BackupReminderDays, BackupRestorePreview, BackupUploadPreview, GoogleOverviewPage, GoogleOverviewService } from './types.js';
+import type { VaultConflictReview } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
 
@@ -224,8 +225,9 @@ const api = {
   requestVaultPairing: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-pairing'),
   lockVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:lock'),
   syncVaultNow: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:sync'),
-  getVaultConflictReview: (): Promise<{ local: VaultItemMeta[]; cloud: VaultItemMeta[] }> => ipcRenderer.invoke('vault:conflict-review'),
-  resolveVaultConflict: (choice: 'cloud' | 'local'): Promise<VaultStatus> => ipcRenderer.invoke('vault:resolve-conflict', choice),
+  getVaultConflictReview: (): Promise<VaultConflictReview> => ipcRenderer.invoke('vault:conflict-review'),
+  resolveVaultConflict: (choice: 'cloud' | 'local', reviewId: string): Promise<VaultStatus> => ipcRenderer.invoke('vault:resolve-conflict', choice, reviewId),
+  showVaultConflictRecovery: (): Promise<void> => ipcRenderer.invoke('vault:show-conflict-recovery'),
   getVaultMigrationStatus: (): Promise<{ legacyAvailable: boolean }> => ipcRenderer.invoke('vault:migration-status'),
   migrateLegacyVault: (): Promise<{ sourceCount: number; importedCount: number; skippedCount: number; validatedCount: number; phase: string }> => ipcRenderer.invoke('vault:migrate-legacy'),
   cleanupLegacyVault: (): Promise<boolean> => ipcRenderer.invoke('vault:cleanup-legacy'),

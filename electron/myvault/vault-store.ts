@@ -1,5 +1,6 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { isEncryptedField, isVaultEnvelope, serializeVaultArchive } from './security/vault-crypto.js';
 import type { EncryptedField, VaultEnvelope } from './types.js';
 
@@ -90,6 +91,7 @@ export class MyVaultDiskStore {
   readonly envelopePath: string;
   readonly connectionPath: string;
   readonly platformUnlockPath: string;
+  readonly conflictRecoveryPath: string;
   private blocked?: StoreBlockReason;
   private recoveryPath?: string;
 
@@ -102,6 +104,7 @@ export class MyVaultDiskStore {
     this.envelopePath = join(directory, 'envelope.myvault');
     this.connectionPath = join(directory, 'connection.enc');
     this.platformUnlockPath = join(directory, 'platform-unlock.enc');
+    this.conflictRecoveryPath = join(directory, 'conflict-recovery');
   }
 
   load(): StoreSnapshot {
@@ -118,6 +121,22 @@ export class MyVaultDiskStore {
     this.assertWritable();
     if (!isVaultEnvelope(envelope)) throw new Error('Unsupported MyVault envelope');
     atomicWrite(this.envelopePath, serializeVaultArchive(envelope));
+  }
+
+  saveConflictRecovery(local: VaultEnvelope, cloud: VaultEnvelope): void {
+    this.assertWritable();
+    if (!isVaultEnvelope(local) || !isVaultEnvelope(cloud) || local.vaultId !== cloud.vaultId) throw new Error('The conflict copies do not belong to the same vault');
+    const folder = join(this.conflictRecoveryPath, `${timestampForPath(this.now())}-${randomUUID()}`);
+    for (const [name, envelope] of [['local', local], ['cloud', cloud]] as const) {
+      const path = join(folder, `${name}.myvault`);
+      const encrypted = serializeVaultArchive(envelope);
+      atomicWrite(path, encrypted);
+      if (readFileSync(path, 'utf8') !== encrypted) throw new Error('The encrypted recovery copy could not be verified');
+    }
+  }
+
+  hasConflictRecovery(): boolean {
+    return existsSync(this.conflictRecoveryPath);
   }
 
   writeConnection(connection: BrokerConnectionState): void {

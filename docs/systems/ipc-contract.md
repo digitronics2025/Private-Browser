@@ -290,7 +290,8 @@ All are intents; the main process opens secure dialogs for anything secret.
 | `vault:list`, `vault:request-unlock`, `vault:hello-unlock`, `vault:hello-enable`, `vault:hello-disable`, `vault:request-pairing`, `vault:lock`, `vault:sync`, `vault:acknowledge-recovery` | — | `VaultStatus` |
 | `vault:reconnect` | — | `VaultStatus | undefined` (sync only when unlocked) |
 | `vault:conflict-review` | — | `{ local, cloud }` metadata lists |
-| `vault:resolve-conflict` | `'cloud' | 'local'` | `VaultStatus` |
+| `vault:resolve-conflict` | Cloud or local choice and review UUID | `VaultStatus` |
+| `vault:show-conflict-recovery` | none | Opens the local encrypted recovery folder |
 | `vault:migration-status`, `vault:migrate-legacy`, `vault:cleanup-legacy` | — | migration status / report / `boolean` |
 | `vault:open-editor` | `origin?: string` | `VaultItemMeta | undefined` |
 | `vault:review-chrome-passwords` | native file picker | one-time review with counts and skip metadata |

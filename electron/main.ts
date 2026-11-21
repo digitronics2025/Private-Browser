@@ -66,6 +66,7 @@ import type {
   AccountSpaceId,
   ExternalBrowserId,
   GoogleModule,
+  VaultConflictSide,
   GoogleOperationResult,
   GoogleOverviewPage,
   GoogleOverviewService,
@@ -372,6 +373,7 @@ class BrowserController {
   private readonly fillCapabilities = new FillCapabilityStore();
   private readonly fillPicker: FillPicker = new FillPicker(() => this.window, { choose: (choice) => void this.handleFillPickerChoice(choice) });
   private readonly vaultSync: VaultSyncController;
+  private vaultConflictOwner?: { id: string; account: AccountSpaceId };
   private dirtySyncTimer?: NodeJS.Timeout;
   private readonly passkeyController = new InternalPasskeyController();
   private readonly passkeyOptIns: PasskeyOptIns = { global: false, workspaces: {}, sites: {} };
@@ -3486,6 +3488,7 @@ class BrowserController {
       dirty: status.dirty,
       platformUnlock: status.platformUnlockEnrolled ? 'enrolled' as const : this.probeWindowsHello() ? 'available' as const : 'unavailable' as const,
       generation: status.generation,
+      conflictRecoveryAvailable: status.lifecycle === 'unlocked' && this.activeVaultPolicy().vaultSurface && Boolean(this.vault.conflictRecoveryFolder()),
     };
   }
 
@@ -3547,6 +3550,8 @@ class BrowserController {
 
   async lockVault() {
     this.secureDialogs.closeAll();
+    this.vaultConflictOwner = undefined;
+    this.vaultSync.clearConflictReview();
     this.fillPicker.close();
     this.fillCapabilities.invalidateAll();
     if (this.dirtySyncTimer) clearTimeout(this.dirtySyncTimer);
@@ -3578,17 +3583,47 @@ class BrowserController {
 
   async getVaultConflictReview() {
     this.assertVaultSurface();
-    const review = await this.vault.conflictReview();
-    const project = (item: (typeof review.local)[number]) => ({ ...item, label: item.title, url: item.url ?? '' });
-    return { local: review.local.map(project), cloud: review.cloud.map(project) };
+    const account = this.activeAccountSpaceId(this.store.get());
+    const review = await this.vaultSync.reviewConflict();
+    this.assertVaultSurface();
+    if (account !== this.activeAccountSpaceId(this.store.get())) throw new Error('The Account Space changed. Review the conflict again.');
+    this.vaultConflictOwner = { id: review.id, account };
+    const describe = (entries: typeof review.local, other: typeof review.local, updatedAt: string): VaultConflictSide => {
+      const counterpart = new Map(other.map((item) => [item.id, item]));
+      const changes: VaultConflictSide['changes'] = [];
+      for (const item of entries) {
+        const prior = counterpart.get(item.id);
+        if (prior && prior.updatedAt === item.updatedAt && prior.title === item.title && prior.username === item.username
+          && prior.type === item.type && prior.url === item.url && prior.favorite === item.favorite) continue;
+        changes.push({ id: item.id, label: item.title, username: item.username, kind: prior ? 'changed' : 'only-copy' });
+      }
+      return { updatedAt, entries: entries.length, changes };
+    };
+    return { id: review.id, cloudVersion: review.cloudVersion, local: describe(review.local, review.cloud, review.localUpdatedAt),
+      cloud: describe(review.cloud, review.local, review.cloudUpdatedAt) };
   }
 
-  async resolveVaultConflict(choice: 'cloud' | 'local') {
+  async resolveVaultConflict(choice: 'cloud' | 'local', reviewId: string) {
     this.assertVaultSurface();
-    if (choice === 'cloud') await this.vaultSync.chooseCloud();
-    else if (choice === 'local') await this.vaultSync.chooseLocal();
-    else throw new Error('Choose the cloud or local vault explicitly');
+    const owner = this.vaultConflictOwner;
+    if (!owner || owner.id !== reviewId || owner.account !== this.activeAccountSpaceId(this.store.get())) {
+      throw new Error('Review the current MyVault conflict in this Account Space first.');
+    }
+    this.vaultConflictOwner = undefined;
+    const assertOwner = () => {
+      this.assertVaultSurface();
+      if (owner.account !== this.activeAccountSpaceId(this.store.get())) throw new Error('The Account Space changed. Review the conflict again.');
+    };
+    await this.vaultSync.resolveConflict(choice, reviewId, assertOwner);
     return this.listVault();
+  }
+
+  async showVaultConflictRecovery(): Promise<void> {
+    this.assertVaultSurface();
+    if (this.vault.status().lifecycle !== 'unlocked') throw new Error('Unlock MyVault to open its recovery folder.');
+    const path = this.vault.conflictRecoveryFolder();
+    if (!path) throw new Error('No conflict recovery files are present.');
+    if (await shell.openPath(path)) throw new Error('Windows could not open the recovery folder.');
   }
 
   migrationStatus() {
@@ -5457,7 +5492,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:sync', () => controller!.syncVaultNow());
   handle('vault:reconnect', () => controller!.listVault().lifecycle === 'unlocked' ? controller!.syncVaultNow() : undefined);
   handle('vault:conflict-review', () => controller!.getVaultConflictReview());
-  handle('vault:resolve-conflict', (_event, choice: 'cloud' | 'local') => controller!.resolveVaultConflict(choice));
+  handle('vault:resolve-conflict', (_event, choice: 'cloud' | 'local', reviewId: string) => controller!.resolveVaultConflict(choice, reviewId));
+  handle('vault:show-conflict-recovery', () => controller!.showVaultConflictRecovery());
   handle('vault:migration-status', () => controller!.migrationStatus());
   handle('vault:migrate-legacy', () => controller!.migrateLegacyVault());
   handle('vault:cleanup-legacy', () => controller!.cleanupLegacyVault());
