@@ -241,6 +241,7 @@ export class RuntimeStateStore {
       delete state.activeTabByAccountSpace[id];
       delete state.shortcutsByAccountSpace[id];
       delete state.bookmarkIconsByAccountSpace[id];
+      if (state.bookmarkFoldersByAccountSpace) delete state.bookmarkFoldersByAccountSpace[id];
       if (state.sidePanelsByAccountSpace) delete state.sidePanelsByAccountSpace[id];
       if (state.activeAccountSpaceByWorkspace[account.workspaceId] === id) state.activeAccountSpaceByWorkspace[account.workspaceId] = replacement.id;
     });
@@ -295,6 +296,7 @@ export class RuntimeStateStore {
         tabs: tabs.map(({ loading: _loading, canGoBack: _back, canGoForward: _forward, favicon: _favicon, developerToolsAllowed: _tools, developerToolsOpen: _toolsOpen, securityWarning: _warning, audible: _audible, muted: _muted, zoomPercent: _zoom, problem: _problem, ...tab }) => tab),
         activeTabId: next.activeTabByAccountSpace[account.id],
         bookmarks: bookmarksByAccount.get(account.id) ?? [],
+        ...(next.bookmarkFoldersByAccountSpace?.[account.id]?.length ? { bookmarkFolders: next.bookmarkFoldersByAccountSpace[account.id] } : {}),
         history: historyByAccount.get(account.id) ?? [],
         ...(next.historyTrimmedByAccountSpace?.[account.id] ? { historyTrimmed: true } : {}),
         ...(next.tabGroupsByAccountSpace?.[account.id]?.length ? { tabGroups: next.tabGroupsByAccountSpace[account.id] } : {}),
@@ -370,6 +372,7 @@ function combine(
     tabs,
     activeTabByAccountSpace,
     bookmarks: accountStates.flatMap((state) => state.bookmarks),
+    bookmarkFoldersByAccountSpace: Object.fromEntries(accountStates.flatMap((state) => state.bookmarkFolders?.length ? [[state.accountSpaceId, state.bookmarkFolders]] : [])),
     history: accountStates.flatMap((state) => state.history),
     historyTrimmedByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.historyTrimmed).map((state) => [state.accountSpaceId, true as const])),
     tabGroupsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.tabGroups?.length).map((state) => [state.accountSpaceId, state.tabGroups!])),

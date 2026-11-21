@@ -8,6 +8,7 @@ export interface PromptField {
   type?: 'text' | 'url';
   maxLength?: number;
   placeholder?: string;
+  options?: Array<{ value: string; label: string }>;
   /** May be submitted empty. */
   optional?: boolean;
 }
@@ -26,6 +27,7 @@ export function PromptDialog({ request, onDone }: { request: PromptRequest; onDo
   const titleId = useId();
   const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(request.fields.map((field) => [field.name, field.value])));
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -66,7 +68,15 @@ export function PromptDialog({ request, onDone }: { request: PromptRequest; onDo
         <h2 id={titleId}>{request.title}</h2>
         {request.description && <p>{request.description}</p>}
         {request.fields.map((field) => (
-          <label key={field.name}>
+          field.options ? <div key={field.name} className="prompt-options">
+            <label><span>Find a folder</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+            <label><span>{field.label}</span><select value={values[field.name] ?? ''}
+              onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}>
+              <option value="" disabled>Choose a folder</option>
+              {field.options.filter((item) => item.value === values[field.name] || item.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))
+                .slice(0, 100).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select></label>
+          </div> : <label key={field.name}>
             <span>{field.label}</span>
             <input
               type={field.type === 'url' ? 'text' : 'text'}

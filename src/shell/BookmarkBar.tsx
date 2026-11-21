@@ -1,6 +1,6 @@
-import { useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { ChevronsRight, Copy, ExternalLink, FileDown, Folder, FolderOpen, Globe2, Pencil, Star, Trash2, Upload, X } from 'lucide-react';
-import type { Bookmark, BookmarkBarMode, BookmarkLevelInput } from '../../electron/types';
+import type { Bookmark, BookmarkBarMode, BookmarkFolder, BookmarkLevelInput } from '../../electron/types';
 import { bookmarkEntries, type BookmarkTreeEntry } from '../../electron/bookmark-tree';
 import { domainFromUrl } from '../lib/format';
 import { MenuItem, MenuSeparator, MenuSurface, SubmenuItem } from './Menu';
@@ -46,30 +46,33 @@ function BookmarkIcon({ item, favicons }: { item: Bookmark; favicons: Map<string
 }
 
 /** Recursive folder contents for dropdown menus. */
-export function BookmarkFolderContents({ items, path, favicons, onOpen }: { items: Bookmark[]; path: string[]; favicons: Map<string, string>; onOpen: (id: string) => void }) {
-  const entries = bookmarkEntries(items, path);
+export function BookmarkFolderContents({ items, path, folders = [], favicons, onOpen }: { items: Bookmark[]; path: string[]; folders?: BookmarkFolder[]; favicons: Map<string, string>; onOpen: (id: string) => void }) {
+  const entries = bookmarkEntries(items, path, folders);
   if (!entries.length) return <p className="menu-empty">This folder is empty</p>;
-  return <BookmarkMenuEntries entries={entries} path={path} favicons={favicons} onOpen={onOpen} />;
+  return <BookmarkMenuEntries entries={entries} path={path} folders={folders} favicons={favicons} onOpen={onOpen} />;
 }
 
-function BookmarkMenuEntries({ entries, path, favicons, onOpen }: { entries: BookmarkTreeEntry[]; path: string[]; favicons: Map<string, string>; onOpen: (id: string) => void }) {
+function BookmarkMenuEntries({ entries, path, folders, favicons, onOpen }: { entries: BookmarkTreeEntry[]; path: string[]; folders: BookmarkFolder[]; favicons: Map<string, string>; onOpen: (id: string) => void }) {
   return (
     <>
       {entries.map((entry) => entry.kind === 'bookmark'
         ? <MenuItem key={entry.item.id} leading={<BookmarkIcon item={entry.item} favicons={favicons} />} label={entry.item.title || domainFromUrl(entry.item.url)} title={entry.item.url} onSelect={() => onOpen(entry.item.id)} />
         : (
           <SubmenuItem key={`${path.join('/')}/${entry.name}`} id={`folder:${[...path, entry.name].join('')}`} icon={Folder} label={entry.name}>
-            <BookmarkFolderContents items={entry.descendants} path={[...path, entry.name]} favicons={favicons} onOpen={onOpen} />
+            <BookmarkFolderContents items={entry.descendants} path={[...path, entry.name]} folders={folders} favicons={favicons} onOpen={onOpen} />
           </SubmenuItem>
         ))}
     </>
   );
 }
 
-export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks: Bookmark[]; mode: BookmarkBarMode; favicons: Map<string, string>; actions: BookmarkActions }) {
+export function BookmarkBar({ bookmarks, savedFolders, mode, favicons, actions }: { bookmarks: Bookmark[]; savedFolders: BookmarkFolder[]; mode: BookmarkBarMode; favicons: Map<string, string>; actions: BookmarkActions }) {
   const barItems = useMemo(() => bookmarks.filter((item) => item.location === 'bar'), [bookmarks]);
   const otherItems = useMemo(() => bookmarks.filter((item) => item.location === 'other'), [bookmarks]);
-  const entries = useMemo(() => bookmarkEntries(barItems, []), [barItems]);
+  const barFolders = useMemo(() => savedFolders.filter((item) => item.location === 'bar'), [savedFolders]);
+  const otherFolders = useMemo(() => savedFolders.filter((item) => item.location === 'other'), [savedFolders]);
+  const entries = useMemo(() => bookmarkEntries(barItems, [], barFolders), [barItems, barFolders]);
+  const hasOther = Boolean(otherItems.length || otherFolders.length);
   const [visibleCount, setVisibleCount] = useState(entries.length);
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -162,6 +165,14 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
             onPointerMove: moveDrag,
             onPointerCancel: () => setDrag(null),
             onLostPointerCapture: () => setDrag(null),
+            onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+              if (!event.altKey || !event.shiftKey || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return;
+              event.preventDefault();
+              event.stopPropagation();
+              const destination = index + (event.key === 'ArrowLeft' ? -1 : 1);
+              if (destination >= 0 && destination < visible.length) actions.move(level,
+                entry.kind === 'bookmark' ? { kind: 'bookmark', id: entry.item.id } : { kind: 'folder', name: entry.name }, destination);
+            },
           };
           if (entry.kind === 'bookmark') {
             return (
@@ -204,7 +215,7 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
             </button>
           );
         })}
-        {!entries.length && !otherItems.length && !hintDismissed && mode === 'always' && (
+        {!entries.length && !hasOther && !hintDismissed && mode === 'always' && (
           <span className="bookmark-bar-hint">
             For quick access, star pages or
             <button type="button" className="link-button" onClick={actions.importBookmarks}>import bookmarks</button>
@@ -217,7 +228,7 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
           <ChevronsRight size={16} />
         </button>
       )}
-      {otherItems.length > 0 && (
+      {hasOther && (
         <button type="button" className={`bookmark-item bookmark-other ${menu?.kind === 'other' ? 'open' : ''}`} aria-haspopup="menu" aria-expanded={menu?.kind === 'other'} onClick={(event) => setMenu(menu?.kind === 'other' ? null : { kind: 'other', anchor: event.currentTarget })}>
           <Folder size={15} /><span>Other bookmarks</span>
         </button>
@@ -231,17 +242,17 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
 
       {menu?.kind === 'folder' && (
         <MenuSurface anchor={menu.anchor} label={menu.name} className="bookmark-menu" onClose={() => setMenu(null)}>
-          <BookmarkFolderContents items={menu.items} path={[menu.name]} favicons={favicons} onOpen={actions.open} />
+          <BookmarkFolderContents items={menu.items} path={[menu.name]} folders={barFolders} favicons={favicons} onOpen={actions.open} />
         </MenuSurface>
       )}
       {menu?.kind === 'overflow' && (
         <MenuSurface anchor={menu.anchor} placement="bottom-end" label="More bookmarks" className="bookmark-menu" onClose={() => setMenu(null)}>
-          <BookmarkMenuEntries entries={overflow} path={[]} favicons={favicons} onOpen={actions.open} />
+          <BookmarkMenuEntries entries={overflow} path={[]} folders={barFolders} favicons={favicons} onOpen={actions.open} />
         </MenuSurface>
       )}
       {menu?.kind === 'other' && (
         <MenuSurface anchor={menu.anchor} placement="bottom-end" label="Other bookmarks" className="bookmark-menu" onClose={() => setMenu(null)}>
-          <BookmarkFolderContents items={otherItems} path={[]} favicons={favicons} onOpen={actions.open} />
+          <BookmarkFolderContents items={otherItems} path={[]} folders={otherFolders} favicons={favicons} onOpen={actions.open} />
         </MenuSurface>
       )}
       {menu?.kind === 'context-bookmark' && (
@@ -255,7 +266,7 @@ export function BookmarkBar({ bookmarks, mode, favicons, actions }: { bookmarks:
       )}
       {menu?.kind === 'context-folder' && (
         <MenuSurface point={menu.point} label={`${menu.name} folder actions`} className="context-menu" onClose={() => setMenu(null)}>
-          <MenuItem icon={ExternalLink} label={`Open bookmarks… (${menu.items.length})`} onSelect={() => actions.openAll(menu.items)} />
+          <MenuItem icon={ExternalLink} label={`Open bookmarks… (${menu.items.length})`} disabled={!menu.items.length} onSelect={() => actions.openAll(menu.items)} />
           <MenuSeparator />
           <MenuItem icon={Pencil} label="Rename folder…" onSelect={() => actions.renameFolder(level, menu.name)} />
           <MenuItem icon={Trash2} danger label="Delete folder…" onSelect={() => actions.removeFolder(level, menu.name, menu.items.length)} />

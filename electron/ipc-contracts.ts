@@ -299,13 +299,22 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'bookmarks:import-html':
     case 'bookmarks:undo-many':
       exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'bookmarks:add-folder':
+      exact(args, 3); requireAccountSpaceId(args[0]); requireBookmarkLevel(args[1]); requireNonEmptyText(args[2], 'folder name', 200); return;
+    case 'bookmarks:move-folder':
+      exact(args, 3); requireAccountSpaceId(args[0]); requireBookmarkLevel(args[1]); requireBookmarkLevel(args[2]); return;
+    case 'bookmarks:save-to-folder':
+      exact(args, 4); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'tab identifier', 200);
+      requireNonEmptyText(args[2], 'page address', 4096); requireBookmarkLevel(args[3]); return;
     case 'bookmarks:remove':
     case 'browser:open-bookmark':
       exact(args, 1); requireBoundedText(args[0], 'bookmark identifier', 200); return;
     case 'bookmarks:rename-folder':
-      exact(args, 3); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200); requireNonEmptyText(args[2], 'folder name', 200); return;
+      between(args, 3, 4); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200); requireNonEmptyText(args[2], 'folder name', 200);
+      if (args[3] !== undefined) requireAccountSpaceId(args[3]); return;
     case 'bookmarks:remove-folder':
-      exact(args, 2); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200); return;
+      between(args, 2, 3); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200);
+      if (args[2] !== undefined) requireAccountSpaceId(args[2]); return;
     case 'shortcuts:set': {
       exact(args, 2); requireAccountSpaceId(args[0]);
       if (args[1] === null) return;

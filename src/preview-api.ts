@@ -22,7 +22,7 @@ import { appendTabSetBookmarks, resolveTabSet } from '../electron/tab-sets';
 import type { ReferenceSearchInput, TabSetInput } from '../electron/types';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
-import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
+import { createBookmarkFolder, editBookmarkFolder, moveTabWithinAccountSpace, nextBookmarkOrder, rememberBookmarkFolders, removeBookmark, renameBookmark, reorderBookmarkLevel } from '../electron/bookmark-tree';
 import type { AgentUiStatus } from '../electron/agent-types';
 
 const WORKSPACES: Workspace[] = [
@@ -215,7 +215,17 @@ export function installPreviewApi(): void {
   const assistantReceipts = new Map<AccountSpaceId, AssistantReceipt[]>();
   let vaultClipboardUntil: number | undefined;
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
+  const savedBookmarkFolders = new Map([[google, rememberBookmarkFolders(state.bookmarks.filter((item) => item.accountSpaceId === google), [])]]);
+  const getPreviewFolders = (id: AccountSpaceId) => savedBookmarkFolders.get(id) ?? [];
+  const updatePreviewFolder = (id: AccountSpaceId, source: BookmarkLevelInput, destination?: BookmarkLevelInput) => {
+    if (id !== state.activeAccountSpaceId) throw new Error('The Account Space changed');
+    const result = editBookmarkFolder(state.bookmarks, getPreviewFolders(id), id, source, destination);
+    state.bookmarks = result.bookmarks;
+    savedBookmarkFolders.set(id, result.folders);
+    publish();
+  };
   const publish = () => {
+    state.bookmarkFolders = getPreviewFolders(state.activeAccountSpaceId);
     state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
     const assistantUnavailable = state.activeWorkspaceId === 'banking' || state.accountSpaces.some((account) => account.id === state.activeAccountSpaceId && account.locked);
     state.assistantPolicy = assistantUnavailable ? { cloud: 'unavailable', receipts: [] } : {
@@ -355,8 +365,19 @@ export function installPreviewApi(): void {
     stopFindInPage: async () => undefined,
     setTabMuted: desktopOnly,
     hardReload: async () => handlers.reload(),
-    renameBookmarkFolder: desktopOnly,
-    removeBookmarkFolder: desktopOnly,
+    addBookmarkFolder: async (id, parent, name) => {
+      if (id !== state.activeAccountSpaceId) throw new Error('The Account Space changed');
+      savedBookmarkFolders.set(id, createBookmarkFolder(state.bookmarks.filter((item) => item.accountSpaceId === id), getPreviewFolders(id), parent, name));
+      publish();
+    },
+    moveBookmarkFolder: async (id, source, parent) => {
+      const name = source.path.at(-1);
+      if (!name) throw new Error('Choose a folder to move');
+      updatePreviewFolder(id, source, { location: parent.location, path: [...parent.path, name] });
+    },
+    renameBookmarkFolder: async (parent, name, next, id) => updatePreviewFolder(id ?? state.activeAccountSpaceId,
+      { ...parent, path: [...parent.path, name] }, { ...parent, path: [...parent.path, next.trim()] }),
+    removeBookmarkFolder: async (parent, name, id) => updatePreviewFolder(id ?? state.activeAccountSpaceId, { ...parent, path: [...parent.path, name] }),
     exportBookmarks: desktopOnly,
     quit: desktopOnly,
     deleteAccountSpace: desktopOnly,
@@ -826,7 +847,27 @@ export function installPreviewApi(): void {
       state.bookmarks = existing ? state.bookmarks.filter((item) => item !== existing) : [...state.bookmarks, { id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, title: tab.title, url: tab.url, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order: 99, orderPath: [99] }];
       publish();
     },
-    moveBookmark: async (levelValue, keyValue, indexValue) => { state.bookmarks = reorderBookmarkEntry(state.bookmarks, state.activeAccountSpaceId, levelValue as { location: 'bar'; path: string[] }, keyValue as { kind: 'bookmark'; id: string }, Number(indexValue)); publish(); },
+    saveBookmarkToFolder: async (id, tabId, url, folder) => {
+      const tab = activeTab();
+      if (id !== state.activeAccountSpaceId || tab.id !== tabId || tab.url !== url || tab.isHome) throw new Error('The page changed');
+      const owned = state.bookmarks.filter((item) => item.accountSpaceId === id);
+      const existing = owned.find((item) => item.url === url);
+      if (existing) {
+        await handlers.changeBookmarks(id, [existing.id], folder);
+        return;
+      }
+      const orderPath = nextBookmarkOrder(owned, getPreviewFolders(id), folder);
+      state.bookmarks.push({ id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: id, title: tab.title, url,
+        location: folder.location, folderPath: [...folder.path], order: orderPath[0], orderPath, createdAt: new Date().toISOString() });
+      publish();
+    },
+    moveBookmark: async (level, key, index) => {
+      const id = state.activeAccountSpaceId;
+      const result = reorderBookmarkLevel(state.bookmarks, getPreviewFolders(id), id, level, key, index);
+      state.bookmarks = result.bookmarks;
+      savedBookmarkFolders.set(id, result.folders);
+      publish();
+    },
     renameBookmark: async (idValue, titleValue) => { state.bookmarks = renameBookmark(state.bookmarks, String(idValue), String(titleValue)); publish(); },
     removeBookmark: async (idValue) => { state.bookmarks = removeBookmark(state.bookmarks, String(idValue)); publish(); },
     editBookmarkAddress: async (idValue, address) => {
@@ -838,7 +879,7 @@ export function installPreviewApi(): void {
     changeBookmarks: async (account, ids, destination) => {
       const current = state.activeAccountSpaceId;
       if (account !== current) throw new Error('The Account Space changed');
-      const result = changeBookmarkBatch(state.bookmarks, current, ids as string[], destination as BookmarkLevelInput | undefined);
+      const result = changeBookmarkBatch(state.bookmarks, current, ids as string[], destination as BookmarkLevelInput | undefined, getPreviewFolders(current));
       if (!result.undo) return 0;
       state.bookmarks = result.bookmarks;
       bookmarkUndos.set(current, result.undo);

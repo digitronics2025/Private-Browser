@@ -987,8 +987,16 @@ kbd { font: inherit; }
 .claude-excerpt-dialog { width: min(520px, 94vw); }
 .claude-excerpt-dialog pre { max-height: 40vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 10px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); }
 .prompt-dialog label { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); font-size: var(--fs-sm); }
-.prompt-dialog input { height: 38px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--field); color: var(--text); font-size: var(--fs-md); outline: none; }
-.prompt-dialog input:focus { border-color: var(--accent-ring); box-shadow: 0 0 0 1px var(--accent-ring); background: var(--field-focus); }
+.prompt-dialog input, .prompt-dialog select { height: 38px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--field); color: var(--text); font-size: var(--fs-md); outline: none; min-width: 0; }
+.prompt-dialog input:focus, .prompt-dialog select:focus { border-color: var(--accent-ring); box-shadow: 0 0 0 1px var(--accent-ring); background: var(--field-focus); }
+.prompt-options { display: grid; gap: 10px; min-width: 0; }
+.bookmark-folder-tree ul { list-style: none; margin: 0; padding: 0 0 0 12px; }
+.bookmark-folder-tree summary { margin: 3px 0; color: var(--text-muted); cursor: pointer; }
+.bookmark-folder-tree button { text-align: left; overflow-wrap: anywhere; }
+.bookmark-folder-row { display: flex; align-items: center; gap: 3px; }
+.bookmark-folder-row button { min-width: 0; }
+.bookmark-folders summary { font-size: var(--fs-sm); cursor: pointer; }
+.bookmark-folder-tree button[aria-pressed='true'] { color: var(--accent); }
 .browsing-data-dialog { max-height: calc(100vh - 24px); overflow: auto; }
 .browsing-data-dialog fieldset, .browsing-data-review { min-width: 0; margin: 0; padding: 0; border: 0; display: grid; gap: 10px; }
 .browsing-data-dialog label.browsing-data-choice { flex-direction: row; align-items: center; }
