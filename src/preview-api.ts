@@ -1,8 +1,10 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
+import type { ChromeImportOptions } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
-import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, searchTemplateFor } from '../electron/browser-settings';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
+import type { BrowserSettings } from '../electron/types';
 import { parseWebAddress } from '../electron/security';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
@@ -141,6 +143,9 @@ export function installPreviewApi(): void {
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
+  const workspaceSettings: Partial<Record<WorkspaceId, BrowserSettings>> = {};
+  let pendingChromeImport: { id: string; options: ChromeImportOptions; owner: AccountSpaceId } | undefined;
+  const chromeUndo = new Map<AccountSpaceId, { bookmark: boolean; history: boolean }>();
   let sampleGrants: PermissionGrantSummary[] = params.get('permissions') === 'sample' ? [
     { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
     { origin: 'https://mail.google.com', capability: 'notifications', duration: 'session' },
@@ -148,6 +153,7 @@ export function installPreviewApi(): void {
   let previewProvider: AiProviderStatus = { configured: false };
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
+    state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
@@ -294,6 +300,14 @@ export function installPreviewApi(): void {
     onFindResult: () => () => undefined,
     onUpdateAvailable: () => () => undefined,
     onGoogleOperationProgress: () => () => undefined,
+    getGoogleConnectionHealth: async (id) => {
+      const selected = state.accountSpaces.find((account) => account.id === id && account.workspaceId === state.activeWorkspaceId);
+      if (!selected || selected.locked || selected.workspaceId === 'banking') return { state: 'unavailable' };
+      const sample = params.get('googleHealth');
+      if (id === google && sample === 'quota') return { state: 'quota', lastSuccessAt: '2026-11-21T12:00:00Z', retryAt: '2026-11-21T14:00:00Z' };
+      if (id === google && sample === 'reconnect') return { state: 'reconnect', lastSuccessAt: '2026-11-21T12:00:00Z' };
+      return { state: selected.googleConnection === 'connected' ? 'ready' : 'disconnected' };
+    },
     onVaultState: () => () => undefined,
     // Recorded on the document so browser tests can compare it with the visible chrome.
     setLayout: async (layout) => { document.documentElement.dataset.previewLayout = JSON.stringify(layout); },
@@ -308,14 +322,20 @@ export function installPreviewApi(): void {
     freezeContent: async () => null,
     toggleFullscreen: async () => { state.windowState.fullscreen = !state.windowState.fullscreen; publish(); },
     // Same rules as the main process: validated patch, Home address normalized, Banking Home is the New Tab page.
-    setBrowserSettings: async (value) => {
+    setBrowserSettings: async (value, workspace) => {
       const patch = requireBrowserSettingsPatch(value);
+      const active = state.activeWorkspaceId;
+      if (workspace !== undefined && workspace !== active) throw new Error('The workspace changed. Reopen its settings.');
+      if (active === 'banking' && (patch.homePage !== undefined || patch.homePageUrl !== undefined
+        || patch.startup !== undefined || patch.startupPages !== undefined || patch.siteKeywords !== undefined)) {
+        throw new Error('Home, startup pages and site keywords are unavailable in Banking.');
+      }
       if (patch.homePageUrl !== undefined) {
         const url = parseWebAddress(patch.homePageUrl);
         if (!url) throw new Error('Enter a web address, for example tenten.ma');
         patch.homePageUrl = url;
       }
-      state.settings = mergeBrowserSettings(state.settings, patch);
+      workspaceSettings[active] = mergeBrowserSettings(state.settings, patch);
       publish();
     },
     goHome: async () => {
@@ -398,7 +418,7 @@ export function installPreviewApi(): void {
       const tab = activeTab();
       if (text === 'private://home') Object.assign(tab, { url: text, title: 'New tab', isHome: true, developerToolsAllowed: false });
       else {
-        const url = /^https?:\/\//.test(text) ? text : searchTemplateFor(state.settings).replace('%s', () => encodeURIComponent(text));
+        const url = resolveWorkspaceNavigation(text, state.settings, state.activeWorkspaceId === 'banking');
         Object.assign(tab, { url, title: new URL(url).hostname, isHome: false, zoomPercent: 100, securityWarning: url.startsWith('http:') ? 'insecure' : undefined, developerToolsAllowed: canUseDeveloperTools(tab.workspaceId, false, url) });
       }
       publish();
@@ -523,6 +543,45 @@ export function installPreviewApi(): void {
       if (params.get('chrome') === 'empty') return [];
       return [{ id: 'Default', name: 'Sample Chrome profile', isDefault: true, hasBookmarks: true, hasHistory: true }];
     }) satisfies PrivateBrowserApi['listChromeProfiles'],
+    previewChromeImport: (async (value: unknown) => {
+      const options = value as ChromeImportOptions;
+      const destination = state.accountSpaces.find((item) => item.id === options.accountSpaceId && item.workspaceId === state.activeWorkspaceId);
+      if (!destination || destination.locked || destination.workspaceId === 'banking' || options.profileId !== 'Default') throw new Error('Choose an available regular Account Space and sample profile');
+      const key = 'preview-import-' + destination.id;
+      const addBookmark = options.bookmarks && !state.bookmarks.some((item) => item.id === key);
+      const addHistory = options.history && !state.history.some((item) => item.id === key);
+      const skipped = { bookmarks: Number(options.bookmarks && !addBookmark), history: Number(options.history && !addHistory), passwords: 0 };
+      const timestamp = '2026-09-12T10:00:00.000Z';
+      const id = crypto.randomUUID();
+      pendingChromeImport = { id, options, owner: state.activeAccountSpaceId };
+      return {
+        id, accountSpaceId: destination.id, result: { imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 }, skipped, warnings: [] },
+        duplicates: skipped.bookmarks + skipped.history, unsupported: 0, overLimit: 0,
+        folders: addBookmark ? [{ location: 'bar', path: ['Sample folder'], count: 1 }] : [], moreFolders: 0,
+        historyRange: addHistory ? { from: timestamp, through: timestamp } : undefined,
+      };
+    }) satisfies PrivateBrowserApi['previewChromeImport'],
+    confirmChromeImport: async (id) => {
+      const pending = pendingChromeImport;
+      if (!pending || pending.id !== id || pending.owner !== state.activeAccountSpaceId) throw new Error('Preview this Chrome import again.');
+      pendingChromeImport = undefined;
+      return handlers.importChrome(pending.options);
+    },
+    discardChromeImport: async (id) => { if (pendingChromeImport?.id === id) pendingChromeImport = undefined; },
+    canUndoChromeImport: async (id) => typeof id === 'string' && chromeUndo.has(id as AccountSpaceId),
+    undoChromeImport: async (id) => {
+      const destination = state.accountSpaces.find((item) => item.id === id && item.workspaceId === state.activeWorkspaceId && item.workspaceId !== 'banking' && !item.locked);
+      if (!destination) throw new Error('Choose an available regular Account Space');
+      const undo = chromeUndo.get(destination.id);
+      const key = 'preview-import-' + destination.id;
+      const bookmarks = state.bookmarks.length;
+      const history = state.history.length;
+      if (undo?.bookmark) state.bookmarks = state.bookmarks.filter((item) => item.id !== key || item.title !== 'Sample imported page');
+      if (undo?.history) state.history = state.history.filter((item) => item.id !== key);
+      chromeUndo.delete(destination.id);
+      publish();
+      return { bookmarks: bookmarks - state.bookmarks.length, history: history - state.history.length };
+    },
     importChrome: (async (value: unknown) => {
       const { profileId, accountSpaceId, workspaceId, bookmarks, history } = value as Parameters<PrivateBrowserApi['importChrome']>[0];
       const destination = state.accountSpaces.find((item) => item.id === accountSpaceId && item.workspaceId === workspaceId);
@@ -536,6 +595,7 @@ export function installPreviewApi(): void {
       const addHistory = history && !state.history.some((item) => item.id === id);
       if (addBookmark) state.bookmarks.push({ id, accountSpaceId, workspaceId, title, url, createdAt: timestamp, location: 'bar', folderPath: ['Sample folder'], order: 500, orderPath: [500, 0] });
       if (addHistory) state.history.push({ id, accountSpaceId, workspaceId, title, url, visitedAt: timestamp });
+      if (addBookmark || addHistory) chromeUndo.set(accountSpaceId, { bookmark: addBookmark, history: addHistory });
       publish();
       return {
         imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 },
@@ -598,7 +658,8 @@ export function installPreviewApi(): void {
       };
     },
     openReleaseHistory: async () => handlers.navigate('https://private-browser-downloads.digitronics-electro.workers.dev/#release-history'),
-    listVault: async () => ({ available: true, items: [], lifecycle: 'unlocked', sync: 'idle', dirty: false, generation: 1 }),
+    listVault: async () => ({ available: true, items: [], lifecycle: params.get('vaultGuide') ? 'locked' : 'unlocked',
+      platformUnlock: params.get('vaultGuide') === 'enrolled' ? 'enrolled' : undefined, sync: 'idle', dirty: false, generation: 1 }),
     getVaultMigrationStatus: async () => ({ legacyAvailable: false }),
     // The Control Center link, paired, with one task (docs/systems/control-center-link.md).
     getControlCenterStatus: async () => ({ state: 'connected', url: 'http://127.0.0.1:4317', fingerprint: '4F1C 9A2E 77D0 13B8 C6E5 0A94 2D61 F3B7' }),

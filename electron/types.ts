@@ -132,6 +132,13 @@ export interface AccountSpaceHealth {
     | 'record-unreadable';
 }
 
+export type GoogleHealthState = 'unavailable' | 'disconnected' | 'ready' | 'reconnect' | 'permission' | 'offline' | 'quota';
+export interface GoogleConnectionHealth {
+  state: GoogleHealthState;
+  lastSuccessAt?: string;
+  retryAt?: string;
+}
+
 export type PermissionCapability =
   | 'notifications'
   | 'microphone'
@@ -334,6 +341,7 @@ export interface BrowserStateManifestV2 {
   ui?: UiPreferences;
   /** Optional: builds before 0.7.0 ignore it and fall back to defaults. */
   settings?: BrowserSettings;
+  workspaceSettings?: Partial<Record<WorkspaceId, BrowserSettings>>;
   routines?: BrowserRoutine[];
 }
 
@@ -561,6 +569,18 @@ export interface ChromeImportResult {
   warnings: string[];
 }
 
+export interface ChromeImportReview {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  result: ChromeImportResult;
+  duplicates: number;
+  unsupported: number;
+  overLimit: number;
+  folders: Array<{ location: Bookmark['location']; path: string[]; count: number }>;
+  moreFolders: number;
+  historyRange?: { from: string; through: string };
+}
+
 export interface RuntimeBrowserStateV2 {
   version: 2;
   activeWorkspaceId: WorkspaceId;
@@ -577,6 +597,7 @@ export interface RuntimeBrowserStateV2 {
   bookmarkBarVisible: boolean;
   ui: UiPreferences;
   settings: BrowserSettings;
+  workspaceSettings?: Partial<Record<WorkspaceId, BrowserSettings>>;
   routines?: BrowserRoutine[];
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
   bookmarkIconsByAccountSpace: Record<string, Record<string, string>>;

@@ -1,9 +1,12 @@
-import { DEFAULT_SEARCH_TEMPLATE, isAllowedRemoteUrl } from './security.js';
+import { DEFAULT_SEARCH_TEMPLATE, isAllowedRemoteUrl, normalizeNavigationInput, parseWebAddress } from './security.js';
+import { WORKSPACE_IDS } from './account-space-validation.js';
+import type { WorkspaceId } from './types.js';
 
 export type SearchEngineId = 'duckduckgo' | 'google' | 'bing' | 'brave' | 'startpage' | 'ecosia' | 'custom';
 export type PresetSearchEngineId = Exclude<SearchEngineId, 'custom'>;
 export type HomePageMode = 'new-tab' | 'url';
-export type StartupMode = 'continue' | 'home';
+export type StartupMode = 'continue' | 'home' | 'pages';
+export interface SiteKeyword { keyword: string; template: string }
 
 /**
  * Behaviour settings, as opposed to `UiPreferences` (layout and theme). The main
@@ -17,6 +20,8 @@ export interface BrowserSettings {
   /** Present only when `homePage` is `url`. */
   homePageUrl?: string;
   startup: StartupMode;
+  startupPages?: string[];
+  siteKeywords?: SiteKeyword[];
 }
 
 export type BrowserSettingsPatch = Partial<BrowserSettings>;
@@ -32,8 +37,10 @@ export const SEARCH_ENGINES: Record<PresetSearchEngineId, { label: string; templ
 
 export const SEARCH_ENGINE_IDS: readonly SearchEngineId[] = [...Object.keys(SEARCH_ENGINES) as PresetSearchEngineId[], 'custom'];
 export const HOME_PAGE_MODES: readonly HomePageMode[] = ['new-tab', 'url'];
-export const STARTUP_MODES: readonly StartupMode[] = ['continue', 'home'];
+export const STARTUP_MODES: readonly StartupMode[] = ['continue', 'home', 'pages'];
 export const MAX_SETTING_URL_LENGTH = 2048;
+export const MAX_STARTUP_PAGES = 8;
+export const MAX_SITE_KEYWORDS = 8;
 
 export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   searchEngine: 'duckduckgo',
@@ -41,7 +48,7 @@ export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   startup: 'continue',
 };
 
-const PATCH_KEYS = new Set(['searchEngine', 'customSearchTemplate', 'homePage', 'homePageUrl', 'startup']);
+const PATCH_KEYS = new Set(['searchEngine', 'customSearchTemplate', 'homePage', 'homePageUrl', 'startup', 'startupPages', 'siteKeywords']);
 
 function member<T extends string>(values: readonly T[], value: unknown): value is T {
   return typeof value === 'string' && (values as readonly string[]).includes(value);
@@ -79,6 +86,30 @@ export function isHomePageUrl(value: unknown): value is string {
   return typeof value === 'string' && value.length <= MAX_SETTING_URL_LENGTH && isAllowedRemoteUrl(value);
 }
 
+function requireStartupPages(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > MAX_STARTUP_PAGES) throw new Error('Choose up to eight startup pages.');
+  const pages = new Set<string>();
+  for (const candidate of value) {
+    if (typeof candidate !== 'string' || candidate.length > MAX_SETTING_URL_LENGTH) throw new Error('Enter a web address for each startup page.');
+    const url = parseWebAddress(candidate);
+    if (!url || !isHomePageUrl(url)) throw new Error('Enter a web address for each startup page.');
+    pages.add(url);
+  }
+  return [...pages];
+}
+
+function requireSiteKeywords(value: unknown): SiteKeyword[] {
+  if (!Array.isArray(value) || value.length > MAX_SITE_KEYWORDS) throw new Error('Choose up to eight site keywords.');
+  const used = new Set<string>();
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.keyword !== 'string') throw new Error('Enter a site keyword.');
+    const keyword = item.keyword.trim().toLowerCase();
+    if (!/^[a-z][a-z0-9-]{0,15}$/.test(keyword) || used.has(keyword)) throw new Error('Use a unique site keyword of up to 16 letters, digits or hyphens.');
+    used.add(keyword);
+    return { keyword, template: requireSearchTemplate(item.template) };
+  });
+}
+
 /**
  * Read settings from disk. Each bad field falls back on its own: a bad setting
  * must never put the browser into recovery mode or cost the other fields.
@@ -98,7 +129,31 @@ export function sanitizeBrowserSettings(value: unknown): BrowserSettings {
     if (isHomePageUrl(input.homePageUrl)) settings.homePageUrl = input.homePageUrl;
     else settings.homePage = DEFAULT_BROWSER_SETTINGS.homePage;
   }
+  if (input.startupPages !== undefined) {
+    try {
+      const pages = requireStartupPages(input.startupPages);
+      if (pages.length) settings.startupPages = pages;
+    } catch { /* Ignore invalid stored startup pages. */ }
+  }
+  if (settings.startup === 'pages' && !settings.startupPages?.length) settings.startup = 'continue';
+  if (input.siteKeywords !== undefined) {
+    try {
+      const keywords = requireSiteKeywords(input.siteKeywords);
+      if (keywords.length) settings.siteKeywords = keywords;
+    } catch { /* Ignore invalid stored keyword entries. */ }
+  }
   return settings;
+}
+
+export function sanitizeWorkspaceSettings(value: unknown): Partial<Record<WorkspaceId, BrowserSettings>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const input = value as Partial<Record<WorkspaceId, unknown>>;
+  return Object.fromEntries([...WORKSPACE_IDS].filter((id) => input[id] && typeof input[id] === 'object' && !Array.isArray(input[id]))
+    .map((id) => [id, sanitizeBrowserSettings(input[id])]));
+}
+
+export function settingsForWorkspace(state: { settings: BrowserSettings; workspaceSettings?: Partial<Record<WorkspaceId, BrowserSettings>> }, workspace: WorkspaceId): BrowserSettings {
+  return state.workspaceSettings?.[workspace] ?? state.settings;
 }
 
 /**
@@ -120,8 +175,11 @@ export function requireBrowserSettingsPatch(value: unknown): BrowserSettingsPatc
     patch.homePageUrl = input.homePageUrl.trim();
   }
   if ('startup' in input) { if (!member(STARTUP_MODES, input.startup)) throw new Error('Invalid startup choice'); patch.startup = input.startup; }
+  if ('startupPages' in input) patch.startupPages = requireStartupPages(input.startupPages);
+  if ('siteKeywords' in input) patch.siteKeywords = requireSiteKeywords(input.siteKeywords);
   if (patch.searchEngine === 'custom' && patch.customSearchTemplate === undefined) throw new Error('Enter a search address');
   if (patch.homePage === 'url' && patch.homePageUrl === undefined) throw new Error('Enter a web address');
+  if (patch.startup === 'pages' && !patch.startupPages?.length) throw new Error('Add at least one startup page.');
   return patch;
 }
 
@@ -140,6 +198,15 @@ export function searchTemplateFor(settings: BrowserSettings): string {
 
 export function searchEngineLabel(settings: BrowserSettings): string | undefined {
   return settings.searchEngine === 'custom' ? undefined : SEARCH_ENGINES[settings.searchEngine].label;
+}
+
+export function resolveWorkspaceNavigation(value: string, settings: BrowserSettings, protectedWorkspace: boolean): string {
+  if (!protectedWorkspace && settings.siteKeywords?.length) {
+    const match = /^([a-z][a-z0-9-]{0,15})\s+(.+)$/is.exec(value.trim());
+    const keyword = match && settings.siteKeywords.find((entry) => entry.keyword === match[1].toLowerCase());
+    if (match && keyword) return keyword.template.replace('%s', encodeURIComponent(match[2].trim()));
+  }
+  return normalizeNavigationInput(value, searchTemplateFor(settings));
 }
 
 /** What Home means for a tab. Protected workspaces (Banking) always get the New Tab page. */

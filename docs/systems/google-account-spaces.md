@@ -11,6 +11,7 @@ sources:
   - electron/google-backup-transport.ts
   - electron/google-config.ts
   - electron/google-confirmations.ts
+  - electron/google-connection-health.ts
   - electron/google-oauth.ts
   - electron/google-scopes.ts
   - electron/google-services.ts
@@ -36,6 +37,12 @@ history, exact-origin permission grants and an optional Google API grant.
 Start here for any account, Google OAuth, Google service, permission, migration,
 recovery or encrypted-backup change. The integration never exposes a partition
 key, refresh token or Google subject to the renderer.
+
+Account Manager displays the selected account's last successful Google
+request and the next step for reconnect, missing permission, offline or
+quota responses. An explicit Google operation updates these states. The
+card reads local status and performs no Google request. The last successful
+time is saved with the encrypted account record and removed on disconnect.
 
 ## Security invariants
 

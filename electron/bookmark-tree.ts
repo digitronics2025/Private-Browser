@@ -20,19 +20,29 @@ export type BookmarkTreeEntry<T extends Bookmark = Bookmark> =
   | { kind: 'bookmark'; order: number; item: T }
   | { kind: 'folder'; order: number; name: string; descendants: T[] };
 
-export function appendImportedBookmarks(current: Bookmark[], incoming: Bookmark[]): number {
-  const identity = (item: Bookmark) => JSON.stringify([item.accountSpaceId, item.location, item.folderPath, item.title, item.url]);
-  const existing = new Set(current.map(identity));
-  let imported = 0;
+export function bookmarkImportIdentity(item: Bookmark): string {
+  return JSON.stringify([item.accountSpaceId, item.location, item.folderPath, item.title, item.url]);
+}
+
+export function planImportedBookmarks(current: Bookmark[], incoming: Bookmark[]) {
+  const existing = new Set(current.map(bookmarkImportIdentity));
+  const accepted: Bookmark[] = [];
+  let duplicates = 0;
+  let overLimit = 0;
   for (const item of incoming) {
-    if (current.length >= 25_000) break;
-    const key = identity(item);
-    if (existing.has(key)) continue;
+    const key = bookmarkImportIdentity(item);
+    if (existing.has(key)) { duplicates += 1; continue; }
     existing.add(key);
-    current.push(item);
-    imported += 1;
+    if (current.length + accepted.length >= 25_000) { overLimit += 1; continue; }
+    accepted.push(item);
   }
-  return imported;
+  return { accepted, duplicates, overLimit };
+}
+
+export function appendImportedBookmarks(current: Bookmark[], incoming: Bookmark[]): number {
+  const { accepted } = planImportedBookmarks(current, incoming);
+  current.push(...accepted);
+  return accepted.length;
 }
 
 export function bookmarkOrder(item: Bookmark, depth: number): number {

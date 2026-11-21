@@ -12,10 +12,11 @@ test('opens or skips setup without stopping browsing and can return from Setting
   await expect(panel.getByText('Optional vault pairing')).toBeVisible();
   await panel.getByRole('button', { name: 'Choose Chrome data' }).click();
   await expect(panel.getByLabel('Chrome profile')).toContainText('Sample Chrome profile');
+  await panel.getByRole('button', { name: 'Preview import' }).click();
   await panel.getByRole('button', { name: 'Import selected data' }).click();
   await expect(panel.getByText('Import complete')).toBeVisible();
   await panel.getByRole('button', { name: 'Setup guide', exact: true }).click();
-  await expect(panel.getByText('Imported on this browser')).toBeVisible();
+  await expect(panel.getByText('A Chrome import has run')).toBeVisible();
   await panel.getByRole('button', { name: 'Skip setup', exact: true }).click();
   await expect(main.getByRole('button', { name: 'Open setup guide' })).toHaveCount(0);
   await expect(panel.getByRole('button', { name: 'Setup guide', exact: true })).toBeVisible();

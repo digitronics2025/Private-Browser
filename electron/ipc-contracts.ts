@@ -88,6 +88,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'permissions:respond':
       between(args, 2, 3); requireUuid(args[0], 'permission prompt'); requirePermissionDecision(args[1]);
       if (args[2] !== undefined) requireBoundedText(args[2], 'display source identifier', 512); return;
+    case 'google:connection-health':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'google:configure':
       exact(args, 1); requireBoundedText(args[0], 'Google client identifier', 512); return;
     case 'google:connect':
@@ -142,7 +144,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'ui:set-preferences':
       exact(args, 1); requireUiPreferencesPatch(args[0]); return;
     case 'settings:set':
-      exact(args, 1); requireBrowserSettingsPatch(args[0]); return;
+      between(args, 1, 2); requireBrowserSettingsPatch(args[0]); if (args[1] !== undefined) requireWorkspaceId(args[1]); return;
     case 'browser:home':
       exact(args, 0); return;
     case 'browser:address-matches':
@@ -241,6 +243,13 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       }
       return;
     }
+    case 'browser:confirm-chrome-import':
+    case 'browser:discard-chrome-import':
+      exact(args, 1); requireNonEmptyText(args[0], 'import preview identifier', 100); return;
+    case 'browser:can-undo-chrome-import':
+    case 'browser:undo-chrome-import':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'browser:preview-chrome-import':
     case 'browser:import-chrome': {
       exact(args, 1);
       const input = requireObject(args[0]);

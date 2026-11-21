@@ -1,0 +1,1 @@
+Preview a Chrome import by destination, bookmark folder and history dates. Review duplicates and unsupported records before saving. Undo removes only untouched records added by the latest import in the session.

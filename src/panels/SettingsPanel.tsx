@@ -1,15 +1,17 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Bookmark, Home, Search, Palette, Check, ChevronRight, Code2, Download, ExternalLink, Globe2, LoaderCircle, LockKeyhole, RefreshCw, Settings, Shield, ShieldCheck, Upload, TriangleAlert, X } from 'lucide-react';
 import type { AccountSpaceId, BrowserSettings, BrowserSettingsPatch, BrowserSnapshot, ChromeImportResult, ChromeProfileSource, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, UiPreferences, UiPreferencesPatch } from '../../electron/types';
+import type { ChromeImportReview } from '../../electron/types';
 import { PanelHeader } from './common';
 import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
-import { SEARCH_ENGINES, type PresetSearchEngineId } from '../../electron/browser-settings';
+import { MAX_SETTING_URL_LENGTH, MAX_SITE_KEYWORDS, MAX_STARTUP_PAGES, SEARCH_ENGINES, type PresetSearchEngineId } from '../../electron/browser-settings';
+import type { Workspace } from '../../electron/types';
 import { SetupGuide } from './SetupGuide';
 
 const THEME_OPTIONS = [['system', 'Match Windows'], ['light', 'Light'], ['dark', 'Dark']] as const;
 const BOOKMARK_BAR_OPTIONS = [['always', 'Always'], ['new-tab', 'New Tab only'], ['hidden', 'Hidden']] as const;
 const HOME_PAGE_OPTIONS = [['new-tab', 'New Tab page'], ['url', 'Web address']] as const;
-const STARTUP_OPTIONS = [['continue', 'Continue where you left off'], ['home', 'Also open Home page']] as const;
+const STARTUP_OPTIONS = [['continue', 'Continue where you left off'], ['home', 'Also open Home page'], ['pages', 'Also open selected pages']] as const;
 
 export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, onOpenVault, onSetupExit, onUiChange, onToast }: {
   state: BrowserSnapshot;
@@ -42,9 +44,36 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
   const [chromeImportOpen, setChromeImportOpen] = useState(false);
   const [chromeLoading, setChromeLoading] = useState(false);
   const [chromeResult, setChromeResult] = useState<ChromeImportResult | null>(null);
+  const [chromeReview, setChromeReview] = useState<ChromeImportReview>();
+  const chromeReviewRequest = useRef(0);
+  const [chromeUndo, setChromeUndo] = useState(false);
   const [bookmarkHtmlResult, setBookmarkHtmlResult] = useState<{ imported: number; skipped: number }>();
   const chromeImportSection = useRef<HTMLDivElement>(null);
-  const chromeDestinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && account.workspaceId !== 'banking');
+  const searchSection = useRef<HTMLDivElement>(null);
+  const workspace = state.workspaces.find((item) => item.id === state.activeWorkspaceId)!;
+  const chromeDestinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && account.workspaceId !== 'banking' && !account.locked);
+  useEffect(() => {
+    const id = chromeReview?.id;
+    return () => { if (id) void window.privateBrowser.discardChromeImport(id).catch(() => undefined); };
+  }, [chromeReview?.id]);
+  useEffect(() => {
+    chromeReviewRequest.current += 1;
+    setChromeReview(undefined);
+  }, [state.activeAccountSpaceId]);
+  useEffect(() => {
+    if (chromeDestinations.length && !chromeDestinations.some((account) => account.id === chromeAccountSpaceId)) {
+      setChromeAccountSpaceId(chromeDestinations.find((account) => account.id === state.activeAccountSpaceId)?.id ?? chromeDestinations[0].id);
+    }
+  }, [state.accountSpaces, state.activeAccountSpaceId, state.activeWorkspaceId, chromeAccountSpaceId]);
+  useEffect(() => {
+    setChromeUndo(false);
+    if (!chromeImportOpen || state.activeWorkspaceId === 'banking') return;
+    let current = true;
+    void window.privateBrowser.canUndoChromeImport(chromeAccountSpaceId).then((available) => {
+      if (current) setChromeUndo(available);
+    }).catch(() => undefined);
+    return () => { current = false; };
+  }, [chromeAccountSpaceId, chromeImportOpen, state.activeWorkspaceId]);
   // null while the first status is still in flight — better than claiming
   // 'Active' before anything has been checked, which is what it used to do.
   const encryptionAvailable = updateStatus ? updateStatus.error !== 'os-encryption-unavailable' : null;
@@ -127,15 +156,42 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setChromeLoading(false); }
   };
-  const importChrome = async () => {
+  const previewChrome = async () => {
     setChromeLoading(true);
+    const request = ++chromeReviewRequest.current;
     try {
       const destination = state.accountSpaces.find((account) => account.id === chromeAccountSpaceId);
       if (!destination || destination.workspaceId === 'banking') throw new Error('Choose a non-Banking Account Space');
-      const result = await window.privateBrowser.importChrome({ profileId: chromeProfileId, workspaceId: destination.workspaceId, accountSpaceId: destination.id, bookmarks: chromeBookmarks, history: chromeHistory });
+      setChromeResult(null);
+      const review = await window.privateBrowser.previewChromeImport({
+        profileId: chromeProfileId, workspaceId: destination.workspaceId, accountSpaceId: destination.id, bookmarks: chromeBookmarks, history: chromeHistory,
+      });
+      if (request === chromeReviewRequest.current) setChromeReview(review);
+      else await window.privateBrowser.discardChromeImport(review.id);
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setChromeLoading(false); }
+  };
+  const confirmChrome = async () => {
+    if (!chromeReview) return;
+    setChromeLoading(true);
+    try {
+      const result = await window.privateBrowser.confirmChromeImport(chromeReview.id);
       setChromeResult(result);
-      if (!ui.importedChromeData && result.imported.bookmarks + result.imported.history > 0) onUiChange({ importedChromeData: true });
+      if (result.imported.bookmarks + result.imported.history > 0) {
+        setChromeUndo(true);
+        if (!ui.importedChromeData) onUiChange({ importedChromeData: true });
+      }
       onToast(`Imported ${result.imported.bookmarks} bookmarks and ${result.imported.history} history entries`);
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setChromeReview(undefined); setChromeLoading(false); }
+  };
+  const undoChrome = async () => {
+    setChromeLoading(true);
+    try {
+      const removed = await window.privateBrowser.undoChromeImport(chromeAccountSpaceId);
+      setChromeUndo(false);
+      setChromeResult(null);
+      onToast(`Removed ${removed.bookmarks} imported bookmarks and ${removed.history} history entries`);
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setChromeLoading(false); }
   };
@@ -167,6 +223,10 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     return <SetupGuide state={state} isDefault={isDefault} firstLaunch={ui.offerSetupGuide}
       chromeImported={ui.importedChromeData} onAccounts={onManageAccounts} onVault={onOpenVault}
       onDefault={() => void runDefaultBrowserAction(window.privateBrowser.openDefaultBrowserSettings)}
+      onSearch={() => {
+        exitSetup();
+        requestAnimationFrame(() => searchSection.current?.querySelector('select')?.focus());
+      }}
       onImport={() => {
         exitSetup();
         void openChromeImport();
@@ -208,11 +268,35 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
         <button type="button" onClick={() => void runDefaultBrowserAction(window.privateBrowser.testDefaultBrowser)}>Test with a link</button>
       </div>
     </div>
-    <SearchHomeSettings settings={settings} onToast={onToast} />
+    <div ref={searchSection} className="workspace-behavior">
+      <SearchHomeSettings key={workspace.id} workspace={workspace} settings={settings} onToast={onToast} />
+    </div>
     <div ref={chromeImportSection} className="settings-card chrome-import-settings">
-      <div className="settings-row"><span><Upload size={17} /></span><div><strong>Import from Chrome</strong><small>Bookmarks, bookmark folders and browsing history stay on this computer.</small></div><button onClick={() => chromeImportOpen ? setChromeImportOpen(false) : void openChromeImport()}>{chromeImportOpen ? 'Close' : 'Import'}</button></div>
+      <div className="settings-row"><span><Upload size={17} /></span><div><strong>Import from Chrome</strong><small>Bookmarks, bookmark folders and browsing history stay on this computer.</small></div><button onClick={() => {
+        if (chromeImportOpen) { chromeReviewRequest.current += 1; setChromeReview(undefined); setChromeImportOpen(false); }
+        else void openChromeImport();
+      }}>{chromeImportOpen ? 'Close' : 'Import'}</button></div>
       {chromeImportOpen && <div className="chrome-import-form">
-        {chromeLoading && !chromeProfiles.length ? <div className="import-loading"><LoaderCircle className="spin" size={15} /> Detecting Chrome profiles…</div> : chromeProfiles.length > 0 ? <>
+        {chromeReview ? <div className="import-review">
+          <strong>Review Chrome import</strong>
+          <p>Destination · {state.accountSpaces.find((account) => account.id === chromeReview.accountSpaceId)?.label ?? 'Account Space unavailable'}</p>
+          <p>{chromeReview.result.imported.bookmarks} bookmarks · {chromeReview.result.imported.history} history entries to add</p>
+          <p>{chromeReview.duplicates} duplicates · {chromeReview.unsupported} unsupported · {chromeReview.overLimit} over the storage limit</p>
+          {chromeReview.historyRange && <p>History dates · {formatReleaseDate(chromeReview.historyRange.from)} to {formatReleaseDate(chromeReview.historyRange.through)}</p>}
+          {chromeReview.folders.length > 0 && <details>
+            <summary>Bookmark folders</summary>
+            <ul>{chromeReview.folders.map((folder) => <li key={JSON.stringify([folder.location, folder.path])}>
+              {folder.location === 'bar' ? 'Bookmarks bar' : 'Other bookmarks'}{folder.path.length ? ' / ' + folder.path.join(' / ') : ''} · {folder.count}
+            </li>)}</ul>
+            {chromeReview.moreFolders > 0 && <p>{chromeReview.moreFolders} more folders</p>}
+          </details>}
+          {chromeReview.result.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+          <div className="panel-actions">
+            <button type="button" disabled={chromeLoading || chromeReview.result.imported.bookmarks + chromeReview.result.imported.history === 0}
+              onClick={() => void confirmChrome()}>Import selected data</button>
+            <button type="button" disabled={chromeLoading} onClick={() => setChromeReview(undefined)}>Change selection</button>
+          </div>
+        </div> : chromeLoading && !chromeProfiles.length ? <div className="import-loading"><LoaderCircle className="spin" size={15} /> Detecting Chrome profiles…</div> : chromeProfiles.length > 0 ? <>
           <label><span>Chrome profile</span><select value={chromeProfileId} onChange={(event) => setChromeProfileId(event.target.value)}>{chromeProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}{profile.isDefault ? ' (Default)' : ''}</option>)}</select></label>
           <label><span>Import into Account Space</span><select disabled={!chromeDestinations.length} value={chromeAccountSpaceId} onChange={(event) => setChromeAccountSpaceId(event.target.value as AccountSpaceId)}>{chromeDestinations.map((account) => <option value={account.id} key={account.id}>{account.label}</option>)}</select></label>
           {!chromeDestinations.length && <p className="import-note">Chrome data cannot be imported into Banking. Switch to another workspace first.</p>}
@@ -220,12 +304,16 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
             <label><input type="checkbox" checked={chromeBookmarks} onChange={(event) => setChromeBookmarks(event.target.checked)} /> <span><strong>Bookmarks</strong><small>Includes the full Chrome bookmarks bar and folder hierarchy.</small></span></label>
             <label><input type="checkbox" checked={chromeHistory} onChange={(event) => setChromeHistory(event.target.checked)} /> <span><strong>Browsing history</strong><small>Up to 10,000 recent Chrome pages.</small></span></label>
           </div>
-          <button className="primary-button full" disabled={chromeLoading || !chromeDestinations.length || (!chromeBookmarks && !chromeHistory)} onClick={() => void importChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Import selected data</button>
+          <button className="primary-button full" disabled={chromeLoading || !chromeDestinations.length || (!chromeBookmarks && !chromeHistory)} onClick={() => void previewChrome()}>{chromeLoading ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />} Preview import</button>
         </> : !chromeLoading ? <p className="import-note">Choose a bookmark HTML export below, or open Chrome once to create a local profile.</p> : null}
         <div className="password-import-row"><div><strong>Bookmark HTML file</strong><small>Imports saved web addresses and folders into the current Account Space.</small></div>
           <button type="button" disabled={chromeLoading || state.activeWorkspaceId === 'banking'} onClick={() => void importBookmarkHtml()}>Choose HTML</button>
         </div>
         {bookmarkHtmlResult && <p className="import-note" role="status">{bookmarkHtmlResult.imported} {bookmarkHtmlResult.imported === 1 ? 'bookmark' : 'bookmarks'} imported · {bookmarkHtmlResult.skipped} skipped</p>}
+        {chromeUndo && <div className="panel-actions">
+          <button type="button" disabled={chromeLoading} onClick={() => void undoChrome()}>Undo last Chrome import</button>
+          <small className="import-note">Available this session. Bookmarks you edited stay.</small>
+        </div>}
         <div className="password-import-row"><div><strong>Saved passwords</strong><small>Chrome protects direct access. Export passwords as CSV, then select that file here. Secrets go straight into MyVault and never enter the page.</small></div><button disabled={chromeLoading} onClick={() => void importChromePasswords()}>Choose CSV</button></div>
         <p className="import-limit"><Shield size={13} /> Cookies, signed-in sessions, payment cards, extensions and Chrome account tokens are intentionally not copied.</p>
         {chromeResult && <div className="import-result"><Check size={15} /><div><strong>Import complete</strong><small>{chromeResult.imported.bookmarks} bookmarks · {chromeResult.imported.history} history · {chromeResult.imported.passwords} passwords</small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords > 0 && <small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords} duplicate or unsafe entries skipped</small>}{chromeResult.warnings.map((warning) => <small className="warning" key={warning}>{warning}</small>)}</div></div>}
@@ -337,16 +425,23 @@ function UpdatesPage({ status, result, error, checking, editingPrivate, form, on
  * Search engine, Home page and startup. The main process validates and normalizes
  * every value; a refusal comes back as a toast and the typed text stays put.
  */
-function SearchHomeSettings({ settings, onToast }: { settings: BrowserSettings; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+function SearchHomeSettings({ workspace, settings, onToast }: { workspace: Workspace; settings: BrowserSettings; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [customOpen, setCustomOpen] = useState(settings.searchEngine === 'custom');
   const [template, setTemplate] = useState(settings.customSearchTemplate ?? '');
   const [homeEditing, setHomeEditing] = useState(settings.homePage === 'url');
   const [homeUrl, setHomeUrl] = useState(settings.homePageUrl ?? '');
+  const [startupEditing, setStartupEditing] = useState(settings.startup === 'pages');
+  const storedPages = settings.startupPages?.join('\n') ?? '';
+  const storedKeywords = settings.siteKeywords?.map(({ keyword, template }) => keyword + ' ' + template).join('\n') ?? '';
+  const [pages, setPages] = useState(storedPages);
+  const [keywords, setKeywords] = useState(storedKeywords);
   useEffect(() => { setCustomOpen(settings.searchEngine === 'custom'); setTemplate(settings.customSearchTemplate ?? ''); }, [settings.searchEngine, settings.customSearchTemplate]);
   useEffect(() => { setHomeEditing(settings.homePage === 'url'); setHomeUrl(settings.homePageUrl ?? ''); }, [settings.homePage, settings.homePageUrl]);
+  useEffect(() => { setStartupEditing(settings.startup === 'pages'); setPages(storedPages); }, [settings.startup, storedPages]);
+  useEffect(() => setKeywords(storedKeywords), [storedKeywords]);
   const save = async (patch: BrowserSettingsPatch, done?: string) => {
     try {
-      await window.privateBrowser.setBrowserSettings(patch);
+      await window.privateBrowser.setBrowserSettings(patch, workspace.id);
       if (done) onToast(done);
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
@@ -357,8 +452,20 @@ function SearchHomeSettings({ settings, onToast }: { settings: BrowserSettings; 
   };
   const saveTemplate = (event: FormEvent) => { event.preventDefault(); void save({ searchEngine: 'custom', customSearchTemplate: template }, 'Search engine saved'); };
   const saveHome = (event: FormEvent) => { event.preventDefault(); void save({ homePage: 'url', homePageUrl: homeUrl }, 'Home page saved'); };
+  const savePages = (event: FormEvent) => {
+    event.preventDefault();
+    void save({ startup: 'pages', startupPages: pages.split('\n').map((line) => line.trim()).filter(Boolean) }, 'Startup pages saved');
+  };
+  const saveKeywords = (event: FormEvent) => {
+    event.preventDefault();
+    const siteKeywords = keywords.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [, keyword = '', template = ''] = /^(\S+)\s+(.+)$/.exec(line) ?? [];
+      return { keyword, template };
+    });
+    void save({ siteKeywords }, 'Site keywords saved');
+  };
   return <>
-    <div className="settings-card"><div className="settings-row"><span><Search size={17} /></span><div><strong>Search engine</strong><small>Used when what you type in the address bar is not a web address.</small></div></div>
+    <div className="settings-card"><div className="settings-row"><span><Search size={17} /></span><div><strong>Search engine</strong><small>Used for address-bar searches in {workspace.name}.</small></div></div>
       <label className="settings-field"><span>Search with</span><select aria-label="Search engine" value={customOpen ? 'custom' : settings.searchEngine} onChange={(event) => chooseEngine(event.target.value)}>
         {(Object.keys(SEARCH_ENGINES) as PresetSearchEngineId[]).map((id) => <option value={id} key={id}>{SEARCH_ENGINES[id].label}</option>)}
         <option value="custom">Custom…</option>
@@ -369,15 +476,39 @@ function SearchHomeSettings({ settings, onToast }: { settings: BrowserSettings; 
         <small>Must start with https:// and contain %s where the search words go.</small>
       </form>}
     </div>
-    <div className="settings-card"><div className="settings-row"><span><Home size={17} /></span><div><strong>Home page</strong><small>What the Home button and Alt+Home open. Banking always opens the New Tab page.</small></div></div>
+    {workspace.protected ? <p className="import-note">Banking opens the local New Tab page. Startup pages and site keywords are unavailable here.</p> : <>
+    <div className="settings-card"><div className="settings-row"><span><Home size={17} /></span><div><strong>Home page</strong><small>What Home and Alt+Home open in {workspace.name}.</small></div></div>
       <div className="segmented" role="radiogroup" aria-label="Home page">{HOME_PAGE_OPTIONS.map(([mode, label]) => { const active = (homeEditing ? 'url' : settings.homePage) === mode; return <button type="button" key={mode} role="radio" aria-checked={active} className={active ? 'active' : ''} onClick={() => { if (mode === 'url') { setHomeEditing(true); return; } setHomeEditing(false); void save({ homePage: 'new-tab' }); }}>{label}</button>; })}</div>
       {homeEditing && <form className="settings-inline-form" onSubmit={saveHome}>
         <input aria-label="Home page address" inputMode="url" required maxLength={2048} placeholder="tenten.ma" value={homeUrl} onChange={(event) => setHomeUrl(event.target.value)} spellCheck={false} />
         <button type="submit" aria-label="Save Home page">Save</button>
       </form>}
     </div>
-    <div className="settings-card"><div className="settings-row"><span><RefreshCw size={17} /></span><div><strong>On startup</strong><small>Your open tabs always come back. Choose whether the Home page opens as well.</small></div></div>
-      <div className="segmented" role="radiogroup" aria-label="On startup">{STARTUP_OPTIONS.map(([mode, label]) => <button type="button" key={mode} role="radio" aria-checked={settings.startup === mode} className={settings.startup === mode ? 'active' : ''} onClick={() => void save({ startup: mode })}>{label}</button>)}</div>
+    <div className="settings-card"><div className="settings-row"><span><RefreshCw size={17} /></span><div><strong>On startup</strong><small>When {workspace.name} starts, keep restored tabs and optionally add other pages.</small></div></div>
+      <div className="segmented" role="radiogroup" aria-label="On startup">{STARTUP_OPTIONS.map(([mode, label]) => {
+        const selected = (startupEditing ? 'pages' : settings.startup) === mode;
+        return <button type="button" key={mode} role="radio" aria-checked={selected} className={selected ? 'active' : ''} onClick={() => {
+          setStartupEditing(mode === 'pages');
+          if (mode !== 'pages') void save({ startup: mode });
+        }}>{label}</button>;
+      })}</div>
+      {startupEditing && <form className="workspace-settings-form" onSubmit={savePages}>
+        <label>Startup addresses<textarea rows={3} maxLength={MAX_STARTUP_PAGES * (MAX_SETTING_URL_LENGTH + 1)}
+          value={pages} onChange={(event) => setPages(event.currentTarget.value)} spellCheck={false} /></label>
+        <small>Enter one web address per line. Up to eight pages.</small>
+        <button type="submit" className="secondary-button" disabled={!pages.trim()}>Save startup pages</button>
+      </form>}
     </div>
+    <div className="settings-card">
+      <div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Site keywords</strong><small>Type a keyword and your search words, then press Enter.</small></div></div>
+      <form className="workspace-settings-form" onSubmit={saveKeywords}>
+        <label>Keywords and search addresses<textarea rows={3} maxLength={MAX_SITE_KEYWORDS * (MAX_SETTING_URL_LENGTH + 18)}
+          value={keywords} onChange={(event) => setKeywords(event.currentTarget.value)}
+          placeholder="gh https://github.com/search?q=%s" spellCheck={false} /></label>
+        <small>Enter one keyword and HTTPS search address per line. Use %s for the search words.</small>
+        <button type="submit" className="secondary-button">Save site keywords</button>
+      </form>
+    </div>
+    </>}
   </>;
 }

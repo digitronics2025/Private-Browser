@@ -41,6 +41,18 @@ export function VaultPanel({ workspaceId, activeOrigin, onOpenFull, onToast }: {
       <PanelHeader icon={KeyRound} eyebrow="MyVault broker" title="MyVault" />
       {onOpenFull && <button className="text-button" onClick={onOpenFull}><Eye size={14} /> Open full metadata view</button>}
       <div className={`vault-health ${status.available ? '' : 'warning'}`}><ShieldCheck size={16} /><div><strong>{status.lifecycle === 'unlocked' ? 'Unlocked on this device' : status.lifecycle === 'recovery-required' ? 'Recovery required' : status.lifecycle === 'unconfigured' ? 'Connection required' : 'Locked'}</strong><span>{status.sync === 'dirty' ? 'Encrypted changes are waiting to sync.' : status.lifecycle === 'unlocked' && workspaceId !== 'banking' ? 'Saved logins autofill matching HTTPS sign-in pages.' : status.lifecycle === 'unlocked' ? 'Fill asks you to confirm the site first. Passwords are never copied or saved from pages here.' : 'Passwords stay outside this interface and browser pages.'}</span></div></div>
+      <details className="vault-setup-guide settings-card">
+        <summary>Setup and recovery</summary>
+        <dl>
+          <div><dt>Enrollment code expired</dt><dd>On an authorized MyVault device, generate a fresh code. In Private Browser choose Connect with one-time code and enter it in the secure window.</dd></div>
+          <div><dt>Windows Hello unavailable</dt><dd>{status.platformUnlock === 'enrolled'
+            ? 'Hello is enrolled. If it fails, choose Use master password instead.'
+            : 'Choose Unlock in secure window and use your master password. If Hello is available after unlocking, choose Turn on Windows Hello unlock.'}</dd></div>
+          <div><dt>Master password forgotten</dt><dd>Try an already enrolled Windows Hello unlock. Keep your encrypted vault and recovery copies while you check recovery options on an authorized MyVault device.</dd></div>
+          <div><dt>Offline</dt><dd>Unlock a paired vault in the secure window. When the connection returns, use Sync to send pending encrypted changes.</dd></div>
+          <div><dt>Device access revoked</dt><dd>Review this browser’s device authorization from an authorized MyVault device. Preserve the local encrypted vault and any unsynced changes while resolving access.</dd></div>
+        </dl>
+      </details>
       {status.lifecycle === 'unconfigured' && <button className="primary-button full" onClick={() => void window.privateBrowser.requestVaultPairing().then((result) => { setStatus(result); setItems(result.items); }).catch((error) => onToast(error.message, 'error'))}><Cloud size={16} /> Connect with one-time code</button>}
       {status.lifecycle === 'recovery-required' && <button className="recovery-button" onClick={() => void window.privateBrowser.acknowledgeVaultRecovery().then((result) => { setStatus(result); setItems(result.items); }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}>Keep recovery copy and continue</button>}
       {status.lifecycle === 'locked' && status.platformUnlock === 'enrolled' && <><button className="primary-button full" onClick={() => void hello(() => window.privateBrowser.unlockVaultWithHello())}><Fingerprint size={16} /> Unlock with Windows Hello</button><button className="text-button" onClick={() => void unlock()}><LockKeyhole size={14} /> Use master password instead</button></>}

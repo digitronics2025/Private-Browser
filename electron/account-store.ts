@@ -82,6 +82,7 @@ export interface AccountSpaceRecord {
   createdAt: string;
   updatedAt: string;
   lastUsedAt: string;
+  lastGoogleSuccessAt?: string;
   locked: boolean;
   googleConnection: GoogleConnectionStatus;
   websiteStatus: AccountSpaceSummary['websiteStatus'];
@@ -227,6 +228,7 @@ export class AccountStore {
   disconnectGoogle(id: AccountSpaceId): AccountSpaceRecord {
     return this.update(id, (record) => {
       record.refreshToken = undefined;
+      delete record.lastGoogleSuccessAt;
       record.grantedScopes = [];
       record.enabledModules = [];
       record.googleConnection = 'disconnected';
@@ -338,6 +340,8 @@ function validateRecord(value: unknown, expectedId: AccountSpaceId): AccountSpac
     createdAt,
     updatedAt,
     lastUsedAt,
+    lastGoogleSuccessAt: typeof input.lastGoogleSuccessAt === 'string' && input.lastGoogleSuccessAt.length <= 30
+      && Number.isFinite(Date.parse(input.lastGoogleSuccessAt)) ? new Date(input.lastGoogleSuccessAt).toISOString() : undefined,
     locked: input.locked === true,
     googleConnection,
     websiteStatus,

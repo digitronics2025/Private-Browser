@@ -9,6 +9,11 @@ verified_at: dcd6823a
 
 # MyVault broker
 
+The Vault panel has a local setup and recovery guide. It explains which action
+to try for an expired enrollment code, unavailable Windows Hello, a forgotten
+master password, an offline connection or revoked device access. Opening the
+guide performs no credential operation.
+
 > Last verified: 2026-09-25
 
 ## Agent Brief

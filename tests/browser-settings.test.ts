@@ -5,9 +5,11 @@ import {
   requireBrowserSettingsPatch,
   requireSearchTemplate,
   resolveHomeUrl,
+  resolveWorkspaceNavigation,
   sanitizeBrowserSettings,
   searchEngineLabel,
   searchTemplateFor,
+  settingsForWorkspace,
 } from '../electron/browser-settings';
 
 describe('browser settings', () => {
@@ -74,5 +76,22 @@ describe('browser settings', () => {
     expect(resolveHomeUrl(home, false)).toBe('https://tenten.ma/');
     expect(resolveHomeUrl(home, true)).toBe('private://home');
     expect(resolveHomeUrl(DEFAULT_BROWSER_SETTINGS, false)).toBe('private://home');
+  });
+
+  it('preserves legacy settings and restricts startup pages and explicit site keywords by workspace', () => {
+    const legacy = sanitizeBrowserSettings({ searchEngine: 'google', homePage: 'url', homePageUrl: 'https://example.test/old' });
+    const patch = requireBrowserSettingsPatch({
+      startup: 'pages', startupPages: ['example.test/start', 'https://example.test/start'],
+      siteKeywords: [{ keyword: 'GH', template: 'https://example.test/search?q=%s' }],
+    });
+    const personal = mergeBrowserSettings(legacy, patch);
+    const state = { settings: legacy, workspaceSettings: { personal } };
+    expect(settingsForWorkspace(state, 'tenten')).toEqual(legacy);
+    expect(settingsForWorkspace(state, 'personal').startupPages).toEqual(['https://example.test/start']);
+    expect(resolveWorkspaceNavigation('gh privacy & tabs', personal, false)).toBe('https://example.test/search?q=privacy%20%26%20tabs');
+    expect(resolveWorkspaceNavigation('gh privacy & tabs', personal, true)).toBe('https://www.google.com/search?q=gh%20privacy%20%26%20tabs');
+    expect(() => requireBrowserSettingsPatch({ startup: 'pages', startupPages: [] })).toThrow();
+    expect(() => requireBrowserSettingsPatch({ startupPages: ['file:///fixture'] })).toThrow();
+    expect(() => requireBrowserSettingsPatch({ siteKeywords: [{ keyword: 'gh', template: 'http://example.test?q=%s' }] })).toThrow();
   });
 });

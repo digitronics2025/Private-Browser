@@ -156,6 +156,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `permissions:site` | `getSitePermissions(tabId, origin)` | active tab and exact origin | current policy and grant duration |
 | `permissions:revoke-site` | `revokeSitePermission(tabId, origin, capability)` | active tab, exact origin and supported capability | updated site status |
 | `permissions:list-account` | `listAccountPermissionGrants(id)` | selected Account Space in the active workspace | reusable grants |
+| `google:connection-health` | `getGoogleConnectionHealth(id)` | selected Account Space in the active workspace | typed state, optional last success and retry time |
 
 ### routines:
 
@@ -173,7 +174,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
 | `ui:set-preferences` | `setUiPreferences(patch)` | non-empty `UiPreferencesPatch`, validated by `requireUiPreferencesPatch` | `void` |
-| `settings:set` | `setBrowserSettings(patch)` | non-empty `BrowserSettingsPatch`, validated by `requireBrowserSettingsPatch` (search template rules, `custom`/`url` need their value); the controller then normalizes `homePageUrl` with `parseWebAddress` | `void` |
+| `settings:set` | `setBrowserSettings(patch, workspace?)` | validated behavior settings, optional expected active workspace | `void` |
 | `bookmarks:move` | `moveBookmark(level, key, toIndex)` | `BookmarkLevelInput`, `BookmarkEntryKeyInput`, integer | `void` |
 | `bookmarks:rename` | `renameBookmark(id, title)` | id, non-blank title ≤ 500 | `void` |
 | `bookmarks:edit-address` | `editBookmarkAddress(id, url)` | bookmark ID and HTTP(S) URL | `void` |
@@ -184,6 +185,8 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `bookmarks:remove-folder` | `removeBookmarkFolder(level, name)` | level, name | `void` |
 | `bookmarks:export` | `exportBookmarks()` | — | `boolean` (false when the save dialog was cancelled) |
 | `bookmarks:import-html` | `importBookmarkHtml(accountSpaceId)` | active regular Account Space, native file picker | imported/skipped counts or cancelled |
+| `browser:preview-chrome-import`, `browser:confirm-chrome-import`, `browser:discard-chrome-import` | prepare, confirm or discard an import review | typed options or one-use review ID | scoped summary or import result |
+| `browser:can-undo-chrome-import`, `browser:undo-chrome-import` | inspect or undo the last Chrome import this session | destination in the active regular workspace | availability or removed counts |
 | `shortcuts:set` | `setShortcutTiles(accountSpaceId, tiles)` | Account Space id, ≤ 12 `ShortcutTile` with HTTP(S) URLs, or `null` | `void` |
 | `app:quit` | `quit()` | — | `void` |
 
