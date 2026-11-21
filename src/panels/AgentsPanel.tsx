@@ -98,12 +98,17 @@ function ClientSettings({ client, disabled, perform }: {
 }) {
   const [profile, setProfile] = useState(client.policy.profile);
   const [outside, setOutside] = useState(client.policy.outside);
-  const [origins, setOrigins] = useState(client.policy.origins.join('\n'));
+  const [session, setSession] = useState(client.policy.session);
+  const [draftOrigins, setDraftOrigins] = useState<string>();
+  const origins = draftOrigins ?? client.policy.origins.join('\n');
   const save = (event: FormEvent) => {
     event.preventDefault();
-    void perform(() => window.privateBrowser.setAgentPolicy(client.id, {
-      profile, outside, origins: origins.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean),
-    }));
+    void perform(async () => {
+      await window.privateBrowser.setAgentPolicy(client.id, {
+        profile, outside, session, origins: origins.split(/[\r\n]+/).map((line) => line.trim()).filter(Boolean),
+      });
+      setDraftOrigins(undefined);
+    });
   };
   return <details className="agent-client">
     <summary>{client.name} <small>{client.active ? 'Connected' : 'Paired'}</small></summary>
@@ -112,13 +117,19 @@ function ClientSettings({ client, disabled, perform }: {
         <option value="observe">Observe</option><option value="develop">Develop</option><option value="operate">Operate</option>
       </select></label>
       <label>Approved origins <small>One scheme, host and port per line</small>
-        <textarea value={origins} onChange={(event) => setOrigins(event.target.value)} rows={3} placeholder="https://staging.example.com" />
+        <textarea value={origins} onChange={(event) => setDraftOrigins(event.target.value)} rows={3} placeholder="https://staging.example.com" />
       </label>
       <label>Other origins<select value={outside} onChange={(event) => setOutside(event.target.value as AgentPolicy['outside'])}>
         <option value="observe">Read only</option><option value="deny">Block</option>
       </select></label>
+      <label>Session length<select value={session} onChange={(event) => setSession(event.target.value as AgentPolicy['session'])}>
+        <option value="1h">1 hour</option><option value="8h">8 hours</option><option value="open">While Private Browser is open</option>
+      </select></label>
       <button disabled={disabled}>Save permissions</button>
     </form>
+    <p>Session expiry {client.expiresAt === undefined ? 'pending first connection' : (
+      <time dateTime={new Date(client.expiresAt).toISOString()}>{new Date(client.expiresAt).toLocaleString()}</time>
+    )}</p>
     {client.uploadFolder && <p className="agent-upload-path">{client.uploadFolder}</p>}
     <div className="agent-buttons">
       <button disabled={disabled} onClick={() => void perform(() => window.privateBrowser.renewAgent(client.id))}>Renew session</button>
@@ -195,7 +206,8 @@ export function AgentWorkspaceView() {
       <div className="agent-buttons">
         <button autoFocus disabled={responding} onClick={() => respond('deny')}>Deny</button>
         <button disabled={responding} onClick={() => respond('allow')}>Allow once</button>
-        {card.canAllowSession && <button disabled={responding} onClick={() => respond('session')}>Allow navigation for this session on this origin</button>}
+        {card.canAllowSession && <button disabled={responding} onClick={() => respond('session')}>Allow for this session</button>}
+        {card.canAllowAlways && <button disabled={responding} onClick={() => respond('always')}>Always allow on this site</button>}
       </div>
     </section>}
     {!tab && !card && <p className="agent-workspace-empty">Open a tab from your paired coding agent.</p>}

@@ -1,16 +1,29 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { AGENT_ACTIONS_PER_MINUTE, type AgentMethod } from '@private-browser/bridge-protocol/agent';
+import { AGENT_ACTIONS_PER_MINUTE, AGENT_SESSION_MS, type AgentMethod } from '@private-browser/bridge-protocol/agent';
 import { stableStringify } from '@private-browser/bridge-protocol';
 import { isAllowedRemoteUrl, isProtectedPage } from './security.js';
 
 export type AgentProfile = 'observe' | 'develop' | 'operate';
+export type AgentSessionLength = '1h' | '8h' | 'open';
 export interface AgentPolicy {
   profile: AgentProfile;
   origins: string[];
   outside: 'observe' | 'deny';
+  session: AgentSessionLength;
 }
 
-export const DEFAULT_AGENT_POLICY: AgentPolicy = { profile: 'develop', origins: [], outside: 'observe' };
+export const DEFAULT_AGENT_POLICY: AgentPolicy = { profile: 'develop', origins: [], outside: 'observe', session: '1h' };
+export const MAX_AGENT_ORIGINS = 30;
+
+export function isAgentSessionLength(value: unknown): value is AgentSessionLength {
+  return value === '1h' || value === '8h' || value === 'open';
+}
+
+export function agentSessionMs(session: AgentSessionLength): number {
+  if (session === 'open') return 24 * AGENT_SESSION_MS;
+  if (session === '8h') return 8 * AGENT_SESSION_MS;
+  return AGENT_SESSION_MS;
+}
 export const CONFIRMATION_MS = 120_000;
 
 const actionWords = [

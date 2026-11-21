@@ -7,9 +7,10 @@ describe('Agent permissions', () => {
     expect(agentAccess(DEFAULT_AGENT_POLICY, agentUrl('http://localhost:8080'))).toBe('drive');
     expect(agentAccess(DEFAULT_AGENT_POLICY, agentUrl('https://localhost.example.test'))).toBe('observe');
     const origins = ['https://dev.example.test:3000'];
-    expect(agentAccess({ profile: 'observe', origins, outside: 'deny' }, agentUrl(origins[0]))).toBe('observe');
-    expect(agentAccess({ profile: 'operate', origins, outside: 'deny' }, agentUrl(origins[0]))).toBe('drive');
-    expect(agentAccess({ profile: 'operate', origins, outside: 'deny' }, agentUrl('https://dev.example.test:3001'))).toBe('deny');
+    expect(agentAccess({ ...DEFAULT_AGENT_POLICY, profile: 'observe', origins, outside: 'deny' }, agentUrl(origins[0]))).toBe('observe');
+    const operate = { ...DEFAULT_AGENT_POLICY, profile: 'operate', origins, outside: 'deny' } as const;
+    expect(agentAccess(operate, agentUrl(origins[0]))).toBe('drive');
+    expect(agentAccess(operate, agentUrl('https://dev.example.test:3001'))).toBe('deny');
     expect(() => exactAgentOrigin('https://dev.example.test/app')).toThrow();
   });
 

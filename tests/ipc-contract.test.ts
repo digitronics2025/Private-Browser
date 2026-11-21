@@ -57,7 +57,13 @@ describe('Agent IPC parity', () => {
     const uuid = '8ad413e5-a5f1-47fd-9593-5255014d6018';
     expect(() => validateIpcArguments('agents:decide', [uuid, 'allow-all'])).toThrow();
     expect(() => validateIpcArguments('agents:decide', [uuid, 'deny'])).not.toThrow();
-    expect(() => validateIpcArguments('agents:set-policy', [uuid, { profile: 'operate', origins: [], outside: 'deny', secret: true }])).toThrow();
+    expect(() => validateIpcArguments('agents:decide', [uuid, 'always'])).not.toThrow();
+    const policy = { profile: 'operate', origins: [], outside: 'deny' };
+    for (const session of ['1h', '8h', 'open']) {
+      expect(() => validateIpcArguments('agents:set-policy', [uuid, { ...policy, session }])).not.toThrow();
+    }
+    expect(() => validateIpcArguments('agents:set-policy', [uuid, { ...policy, session: 'forever' }])).toThrow();
+    expect(() => validateIpcArguments('agents:set-policy', [uuid, { ...policy, session: 'open', secret: true }])).toThrow();
   });
 });
 
