@@ -20,7 +20,7 @@ export function SetupGuide({ state, isDefault, chromeImported, firstLaunch, onAc
   const items = [
     { title: 'Account Spaces', detail: account?.locked ? 'Current Account Space is locked' : account ? account.label + ' is ready' : 'Choose an Account Space',
       action: 'Manage Account Spaces', run: onAccounts, disabled: protectedSpace },
-    { title: 'Chrome data', detail: chromeImported ? 'Imported on this browser' : 'Optional bookmarks and history import',
+    { title: 'Chrome data', detail: chromeImported ? 'A Chrome import has run' : 'Optional bookmarks and history import',
       action: 'Choose Chrome data', run: onImport, disabled: protectedSpace },
     { title: 'Default browser', detail: isDefault === true ? 'Ready in Windows' : isDefault === false ? 'Optional Windows setting' : 'Checking Windows association…',
       action: 'Open Windows Default Apps', run: onDefault, disabled: protectedSpace },

@@ -561,6 +561,18 @@ export interface ChromeImportResult {
   warnings: string[];
 }
 
+export interface ChromeImportReview {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  result: ChromeImportResult;
+  duplicates: number;
+  unsupported: number;
+  overLimit: number;
+  folders: Array<{ location: Bookmark['location']; path: string[]; count: number }>;
+  moreFolders: number;
+  historyRange?: { from: string; through: string };
+}
+
 export interface RuntimeBrowserStateV2 {
   version: 2;
   activeWorkspaceId: WorkspaceId;

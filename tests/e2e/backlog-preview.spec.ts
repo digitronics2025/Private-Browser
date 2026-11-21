@@ -124,6 +124,13 @@ test('labels the preview and exercises Chrome import and protected browsing', as
   await page.getByRole('menuitem', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.getByLabel('Chrome profile')).toContainText('Sample Chrome profile');
+  await page.getByRole('button', { name: 'Preview import' }).click();
+  await expect(page.getByText('Review Chrome import')).toBeVisible();
+  await expect(page.getByText(/History dates/)).toBeVisible();
+  await page.getByText('Bookmark folders', { exact: true }).click();
+  await expect(page.getByText('Bookmarks bar / Sample folder · 1')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) =>
+    state.bookmarks.some((item) => item.title === 'Sample imported page')))).toBe(false);
   await page.getByRole('button', { name: 'Import selected data' }).click();
   await expect(page.getByText('Import complete')).toBeVisible();
   await expect(page.getByText('1 bookmarks · 1 history · 0 passwords')).toBeVisible();

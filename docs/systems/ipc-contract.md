@@ -184,6 +184,8 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `bookmarks:remove-folder` | `removeBookmarkFolder(level, name)` | level, name | `void` |
 | `bookmarks:export` | `exportBookmarks()` | — | `boolean` (false when the save dialog was cancelled) |
 | `bookmarks:import-html` | `importBookmarkHtml(accountSpaceId)` | active regular Account Space, native file picker | imported/skipped counts or cancelled |
+| `browser:preview-chrome-import`, `browser:confirm-chrome-import`, `browser:discard-chrome-import` | prepare, confirm or discard an import review | typed options or one-use review ID | scoped summary or import result |
+| `browser:can-undo-chrome-import`, `browser:undo-chrome-import` | inspect or undo the last Chrome import this session | destination in the active regular workspace | availability or removed counts |
 | `shortcuts:set` | `setShortcutTiles(accountSpaceId, tiles)` | Account Space id, ≤ 12 `ShortcutTile` with HTTP(S) URLs, or `null` | `void` |
 | `app:quit` | `quit()` | — | `void` |
 

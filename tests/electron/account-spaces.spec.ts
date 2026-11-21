@@ -1,6 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -95,6 +95,43 @@ test('offers first-launch setup once and keeps a skip after restart', async () =
   await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open setup guide' })).toHaveCount(0);
   expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.ui.offerSetupGuide))).toBe(false);
+});
+
+test('previews a native Chrome import and undoes its untouched records only', async () => {
+  test.skip(process.platform !== 'win32', 'The disposable Chrome path in this test uses the Windows profile convention');
+  const page = await application!.firstWindow();
+  const localRoot = join(userDataPath, 'disposable-local-data');
+  const chromeProfile = join(localRoot, 'Google', 'Chrome', 'User Data', 'Default');
+  mkdirSync(chromeProfile, { recursive: true });
+  writeFileSync(join(chromeProfile, 'Bookmarks'), JSON.stringify({ roots: { bookmark_bar: { children: [
+    { type: 'folder', name: 'Reviewed folder', children: [
+      { type: 'url', name: 'Keep edited bookmark', url: 'https://example.test/import/first' },
+      { type: 'url', name: 'Undo this bookmark', url: 'https://example.test/import/second' },
+    ] },
+    { type: 'url', name: 'Unsupported fixture', url: 'file:///not-a-bookmark' },
+  ] } } }));
+  await application!.evaluate((_electron, directory) => { process.env.LOCALAPPDATA = directory; }, localRoot);
+  const initial = await page.evaluate((url) => window.privateBrowser.navigate(url + '/unrelated').then(async () => {
+    await window.privateBrowser.toggleBookmark();
+    return window.privateBrowser.getState();
+  }), origin);
+  const options = { profileId: 'Default', accountSpaceId: initial.activeAccountSpaceId, workspaceId: initial.activeWorkspaceId, bookmarks: true, history: false };
+  const review = await page.evaluate((value) => window.privateBrowser.previewChromeImport(value), options);
+  expect(review.result.imported.bookmarks).toBe(2);
+  expect(review.unsupported).toBe(1);
+  expect(review.folders).toEqual([{ location: 'bar', path: ['Reviewed folder'], count: 2 }]);
+  const read = () => page.evaluate(() => window.privateBrowser.getState().then((state) => state.bookmarks));
+  expect(await read()).toEqual(initial.bookmarks);
+  const confirm = () => page.evaluate((id) => window.privateBrowser.confirmChromeImport(id), review.id);
+  await expect(confirm()).resolves.toMatchObject({ imported: { bookmarks: 2 } });
+  await expect(confirm()).rejects.toThrow(/Preview this Chrome import again/i);
+  const edited = (await read()).find((item) => item.title === 'Keep edited bookmark')!;
+  await page.evaluate((id) => window.privateBrowser.renameBookmark(id, 'I edited this'), edited.id);
+  await expect(page.evaluate((id) => window.privateBrowser.undoChromeImport(id), options.accountSpaceId)).resolves.toEqual({ bookmarks: 1, history: 0 });
+  const after = await read();
+  expect(after).toHaveLength(initial.bookmarks.length + 1);
+  expect(after.find((item) => item.id === edited.id)?.title).toBe('I edited this');
+  expect(after).toContainEqual(initial.bookmarks[0]);
 });
 
 test('imports standard bookmark HTML into the selected native Account Space', async () => {
