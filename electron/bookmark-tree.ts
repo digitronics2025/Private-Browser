@@ -20,6 +20,21 @@ export type BookmarkTreeEntry<T extends Bookmark = Bookmark> =
   | { kind: 'bookmark'; order: number; item: T }
   | { kind: 'folder'; order: number; name: string; descendants: T[] };
 
+export function appendImportedBookmarks(current: Bookmark[], incoming: Bookmark[]): number {
+  const identity = (item: Bookmark) => JSON.stringify([item.accountSpaceId, item.location, item.folderPath, item.title, item.url]);
+  const existing = new Set(current.map(identity));
+  let imported = 0;
+  for (const item of incoming) {
+    if (current.length >= 25_000) break;
+    const key = identity(item);
+    if (existing.has(key)) continue;
+    existing.add(key);
+    current.push(item);
+    imported += 1;
+  }
+  return imported;
+}
+
 export function bookmarkOrder(item: Bookmark, depth: number): number {
   return item.orderPath?.[depth] ?? item.order;
 }

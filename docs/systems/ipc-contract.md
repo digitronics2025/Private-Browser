@@ -183,6 +183,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `bookmarks:rename-folder` | `renameBookmarkFolder(level, name, nextName)` | level, two non-blank names ≤ 200 | `void` |
 | `bookmarks:remove-folder` | `removeBookmarkFolder(level, name)` | level, name | `void` |
 | `bookmarks:export` | `exportBookmarks()` | — | `boolean` (false when the save dialog was cancelled) |
+| `bookmarks:import-html` | `importBookmarkHtml(accountSpaceId)` | active regular Account Space, native file picker | imported/skipped counts or cancelled |
 | `shortcuts:set` | `setShortcutTiles(accountSpaceId, tiles)` | Account Space id, ≤ 12 `ShortcutTile` with HTTP(S) URLs, or `null` | `void` |
 | `app:quit` | `quit()` | — | `void` |
 
