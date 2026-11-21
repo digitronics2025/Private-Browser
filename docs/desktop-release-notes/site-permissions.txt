@@ -1,0 +1,1 @@
+Review a site's permissions and how long they last from the address bar. Revoke a grant there or filter the Account Space's grants by origin and capability.

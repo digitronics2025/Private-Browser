@@ -59,6 +59,7 @@ export default function App() {
   const [address, setAddress] = useState('');
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
   const [accountManagerOpen, setAccountManagerOpen] = useState(false);
+  const [settingsEntry, setSettingsEntry] = useState<'overview' | 'setup'>('overview');
   const [vaultFullOpen, setVaultFullOpen] = useState(false);
   const [menu, setMenu] = useState<MenuKind | null>(null);
   const [findOpen, setFindOpen] = useState(false);
@@ -230,7 +231,8 @@ export default function App() {
     setPendingUi((current) => ({ ...current, ...patch }));
     void act(() => window.privateBrowser.setUiPreferences(patch));
   };
-  const openTool = (tool: SidePanelTool) => {
+  const openTool = (tool: SidePanelTool, entry: 'overview' | 'setup' = 'overview') => {
+    if (tool === 'settings') setSettingsEntry(entry);
     setUi({ sidePanelOpen: true, sidePanelTool: tool });
     // Only an explicit user action transfers focus, never startup or fullscreen restoration.
     requestAnimationFrame(() => {
@@ -415,7 +417,9 @@ export default function App() {
       case 'automations': return <AutomationPanel state={state} onToast={showToast} />;
       case 'downloads': return <DownloadsPanel state={state} onToast={showToast} />;
       case 'privacy': return <PrivacyPanel state={state} />;
-      case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} onUiChange={setUi} onToast={showToast} />;
+      case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} entry={settingsEntry}
+        onSetupExit={() => setSettingsEntry('overview')} onManageAccounts={() => setAccountManagerOpen(true)}
+        onOpenVault={() => openTool('vault')} onUiChange={setUi} onToast={showToast} />;
       case 'bookmarks': return <BookmarksPanel key={activeAccount.id} bookmarks={accountBookmarks} favicons={favicons} undo={state.bookmarkUndo}
         onOpen={bookmarkActions.open} onRename={bookmarkActions.rename} onRemove={bookmarkActions.remove}
         onImport={bookmarkActions.importBookmarks} onExport={bookmarkActions.exportBookmarks}
@@ -472,6 +476,7 @@ export default function App() {
             />
             <NavigationToolbar
               tab={activeTab}
+              workspace={workspace}
               account={activeAccount}
               address={address}
               addressRef={addressRef}
@@ -531,6 +536,10 @@ export default function App() {
             customized={Boolean(customShortcuts)}
             history={recentHistory}
             showRecent={ui.showRecentOnNewTab}
+            setupGuide={ui.offerSetupGuide && !workspace.protected ? {
+              open: () => openTool('settings', 'setup'),
+              dismiss: () => setUi({ offerSetupGuide: false }),
+            } : undefined}
             bookmarks={accountBookmarks}
             favicons={favicons}
             background={ui.newTabBackground}

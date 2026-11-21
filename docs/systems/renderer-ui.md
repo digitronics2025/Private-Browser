@@ -146,9 +146,10 @@ controls otherwise — then the always-visible security chip, the input, a zoom
 magnifier when not 100 % (opens `ZoomMenu`: −, +, Reset; it stays while that
 bubble is open so Reset does not pull its anchor away), the MyVault key (not in Development) and the bookmark star.
 `SiteInfoMenu` explains the connection state, Account Space and tracker
-blocking. The profile avatar has an Account Space colour ring and a "!" badge only
-for `reconnect-required`, `partial-scopes` or `account-corrupt`
-(`accountNeedsAction`).
+blocking. The profile button shows the workspace and account names on wide
+windows and keeps the Banking lock and label visible on narrow windows. The
+accessible description names the workspace at every width. The account avatar
+displays an action badge when `accountNeedsAction` reports a problem.
 
 ## Menus, Overlays and the Freeze-Frame
 
@@ -218,6 +219,11 @@ asserts `#root` scrollLeft 0 and no `.app-shell` overflow.
 
 ## New Tab Page
 
+A fresh browser offers the optional Setup guide alongside search. Skip setup
+saves the choice locally. Settings can reopen the guide at any time in regular
+workspaces. The guide opens existing Account Space, Chrome import, Windows
+default browser and vault actions only when the user chooses a step.
+
 Brand mark and "Private Browser" heading, a search field that calls `navigate`,
 the workspace and Account Space, up to 12 shortcut tiles, recently visited and
 bookmark cards, and a Customize popover with theme, backgrounds and a recent-visit
@@ -237,7 +243,7 @@ bookmark is renamed or removed.
 | `assistant` | `getAiProvider`, `getLocalAiModels`, `configureAiProvider`, `clearAiProvider`, `prepareAiPreview`, `approveAiPreview`, `askAi`, `revokeAiContext` |
 | `developer` | bridge status/pair/disconnect/install, project list/select/action, page inspection, DevTools, developer AI preview, `copyText`; the Tasks tab ([ControlCenterSection.tsx](../../src/panels/ControlCenterSection.tsx)) uses the `control-center:*` methods ([control-center-link.md](control-center-link.md)) |
 | `vault` | `listVault`, unlock/pair/lock/sync/conflict intents, Windows Hello unlock/enable/disable intents, `openVaultEditor`, `requestSaveFromPage`, migration, generators, `copyPassword`, `copyTotp`, `autofill` |
-| `automations` | `routines:*`; edit targets, choose focus, run and manually check off steps |
+| `automations` | `routines:*`; edit targets, preview a tab set, save it as a routine or bookmark folder, run and manually check off steps |
 | `downloads` | `openDownload`, `showDownload` |
 | `privacy` | none |
 | `settings` | default browser; Search engine (preset `<select>` or a custom `https://…%s` address), Home page (New Tab page or a web address) and On startup, through `setBrowserSettings`; update service, Chrome import, `setUiPreferences` (theme, bar mode) |
@@ -254,6 +260,8 @@ focus stays inside, Escape denies or closes, focus returns afterwards. The
 permission prompt is keyed by prompt id and its Allow buttons arm after 500 ms.
 A page URL change never overwrites an address the user is editing. Routines preview
 their destinations and open or reuse tabs only after the user presses Run.
+Tab-set previews list the eligible tabs in the current Account Space and recheck
+the selected addresses before saving them locally.
 
 ## Keyboard
 

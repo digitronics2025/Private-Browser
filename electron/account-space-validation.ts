@@ -23,7 +23,7 @@ const GOOGLE_MODULES = new Set<GoogleModule>([
   'contacts-read',
   'encrypted-backup',
 ]);
-const PERMISSION_CAPABILITIES = new Set<PermissionCapability>([
+export const PERMISSION_CAPABILITIES: readonly PermissionCapability[] = [
   'notifications',
   'microphone',
   'camera',
@@ -34,7 +34,7 @@ const PERMISSION_CAPABILITIES = new Set<PermissionCapability>([
   'clipboard-write',
   'file-system',
   'download',
-]);
+];
 const PERMISSION_DECISIONS = new Set<PermissionDecision>(['allow-once', 'allow-session', 'allow-always', 'deny']);
 
 export const ACCOUNT_LABEL_MAX_LENGTH = 80;
@@ -83,7 +83,7 @@ export function requireGoogleModules(value: unknown): GoogleModule[] {
 }
 
 export function requirePermissionCapability(value: unknown): PermissionCapability {
-  if (typeof value !== 'string' || !PERMISSION_CAPABILITIES.has(value as PermissionCapability)) {
+  if (typeof value !== 'string' || !PERMISSION_CAPABILITIES.includes(value as PermissionCapability)) {
     throw new Error('Invalid permission capability');
   }
   return value as PermissionCapability;

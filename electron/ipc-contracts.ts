@@ -5,6 +5,7 @@ import {
   requireBoundedStringArray,
   requireBoundedText,
   requireGoogleModules,
+  requirePermissionCapability,
   requirePermissionDecision,
   requireWorkspaceId,
 } from './account-space-validation.js';
@@ -28,6 +29,20 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       args[1].forEach((id) => requireNonEmptyText(id, 'bookmark identifier', 128)); return;
     case 'routines:save':
       exact(args, 1); requireBrowserRoutine(args[0]); return;
+    case 'routines:save-tabs': {
+      exact(args, 1);
+      const input = requireExactKeys(args[0], ['accountSpaceId', 'kind', 'name', 'tabs']);
+      requireAccountSpaceId(input.accountSpaceId);
+      if (input.kind !== 'routine' && input.kind !== 'bookmarks') throw new Error('Choose how to save the tabs');
+      requireNonEmptyText(input.name, 'tab set name', 80);
+      if (!Array.isArray(input.tabs) || !input.tabs.length || input.tabs.length > MAX_ROUTINE_ITEMS) throw new Error('Choose between 1 and 20 tabs');
+      for (const item of input.tabs) {
+        const tab = requireExactKeys(item, ['id', 'url']);
+        requireNonEmptyText(tab.id, 'tab identifier', 200);
+        if (!isAllowedRemoteUrl(requireNonEmptyText(tab.url, 'tab address', 4096))) throw new Error('Choose a web page');
+      }
+      return;
+    }
     case 'routines:delete':
     case 'routines:run':
     case 'routines:reset-checklist':
@@ -63,6 +78,13 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'accounts:delete':
       exact(args, 2); requireAccountSpaceId(args[0]);
       if (args[1] !== 'DELETE_ACCOUNT_SPACE') throw new Error('Exact Account Space deletion confirmation is required'); return;
+    case 'permissions:site':
+      exact(args, 2); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 2048); return;
+    case 'permissions:revoke-site':
+      exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 2048);
+      requirePermissionCapability(args[2]); return;
+    case 'permissions:list-account':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'permissions:respond':
       between(args, 2, 3); requireUuid(args[0], 'permission prompt'); requirePermissionDecision(args[1]);
       if (args[2] !== undefined) requireBoundedText(args[2], 'display source identifier', 512); return;
@@ -250,6 +272,10 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if (typeof input.taskId !== 'string' || !/^TASK-\d{1,8}$/.test(input.taskId)) throw new Error('Invalid Control Center task'); return;
     }
     // Channels that take one identifier chosen from state the renderer was given.
+    case 'browser:control-download':
+      exact(args, 2); requireNonEmptyText(args[0], 'download identifier', 200);
+      if (args[1] !== 'pause' && args[1] !== 'resume' && args[1] !== 'retry' && args[1] !== 'cancel') throw new Error('Invalid download action');
+      return;
     case 'browser:activate-tab':
     case 'browser:duplicate-tab':
     case 'browser:reopen-recent-tab':

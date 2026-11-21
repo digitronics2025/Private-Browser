@@ -21,7 +21,7 @@ function tileHue(value: string): number {
   return hash;
 }
 
-export function NewTabPage({ searchPrompt, workspace, account, shortcuts, customized, history, showRecent, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onMoveShortcut, onResetShortcuts, onBackground, onShowRecent, onTheme }: {
+export function NewTabPage({ searchPrompt, workspace, account, shortcuts, customized, history, showRecent, setupGuide, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onMoveShortcut, onResetShortcuts, onBackground, onShowRecent, onTheme }: {
   searchPrompt: string;
   workspace: Workspace;
   account: AccountSpaceSummary;
@@ -29,6 +29,7 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
   customized: boolean;
   history: HistoryEntry[];
   showRecent: boolean;
+  setupGuide?: { open: () => void; dismiss: () => void };
   bookmarks: Bookmark[];
   favicons: Map<string, string>;
   background: NewTabBackground;
@@ -72,6 +73,13 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
           <span className="ntp-space-dot" style={{ '--workspace-color': workspace.color } as CSSProperties} aria-hidden="true" />
           {account.label === workspace.name ? workspace.name : `${workspace.name} · ${account.label}`}
         </p>
+        {setupGuide && <section className="ntp-setup" aria-label="First launch">
+          <span>Your browser is ready. Review optional setup whenever you like.</span>
+          <div>
+            <button type="button" className="secondary-button" onClick={setupGuide.open}>Open setup guide</button>
+            <button type="button" className="text-button" onClick={setupGuide.dismiss}>Skip setup</button>
+          </div>
+        </section>}
 
         <section className="ntp-shortcuts" aria-label="Shortcuts">
           {shortcuts.map((tile) => {

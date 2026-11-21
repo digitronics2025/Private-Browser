@@ -151,7 +151,11 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:import-chrome-passwords` | `importChromePasswords()` | — | `ChromeImportResult` |
 | `browser:toggle-tracker-blocking` | `toggleTrackerBlocking()` | — | `void` |
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
+| `browser:control-download` | `controlDownload(id, action)` | current account download and pause, resume, retry or cancel | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
+| `permissions:site` | `getSitePermissions(tabId, origin)` | active tab and exact origin | current policy and grant duration |
+| `permissions:revoke-site` | `revokeSitePermission(tabId, origin, capability)` | active tab, exact origin and supported capability | updated site status |
+| `permissions:list-account` | `listAccountPermissionGrants(id)` | selected Account Space in the active workspace | reusable grants |
 
 ### routines:
 
@@ -161,6 +165,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `routines:delete` | `deleteRoutine(id)` | routine ID | `void` |
 | `routines:run` | `runRoutine(id)` | routine ID | `RoutineRunResult` |
 | `routines:mark-checklist` | `markRoutineChecklist(id, index, done)` | routine ID, item index, boolean | `void` |
+| `routines:save-tabs` | `saveTabSet(input)` | current regular account, up to 20 tab IDs and reviewed URLs, local destination and name | saved count |
 | `routines:reset-checklist` | `resetRoutineChecklist(id)` | routine ID | `void` |
 
 ### ui:, bookmarks:, shortcuts:, app:

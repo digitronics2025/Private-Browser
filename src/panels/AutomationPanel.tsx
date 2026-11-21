@@ -1,10 +1,19 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Play, Plus, Shield, Zap } from 'lucide-react';
-import type { AccountSpaceId, BrowserRoutine, BrowserSnapshot, RoutineRunResult } from '../../electron/types';
+import type { AccountSpaceId, BrowserRoutine, BrowserSnapshot, BrowserTab, RoutineRunResult, TabSetInput } from '../../electron/types';
 import { MAX_ROUTINE_ITEMS } from '../../electron/browser-routines';
+import { canSaveTabInSet } from '../../electron/tab-sets';
 import { EmptyState, PanelHeader } from './common';
 
 const completedTime = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+interface TabSetDraft {
+  accountSpaceId: AccountSpaceId;
+  kind: TabSetInput['kind'];
+  tabs: BrowserTab[];
+  selected: Set<string>;
+  name: string;
+}
 
 export function AutomationPanel({ state, onToast }: {
   state: BrowserSnapshot;
@@ -13,6 +22,9 @@ export function AutomationPanel({ state, onToast }: {
   const [draft, setDraft] = useState<BrowserRoutine>();
   const [busy, setBusy] = useState(false);
   const [lastRun, setLastRun] = useState<{ id: string; result: RoutineRunResult }>();
+  const [tabSet, setTabSet] = useState<TabSetDraft>();
+  useEffect(() => { setTabSet(undefined); }, [state.activeAccountSpaceId]);
+  const eligibleTabs = state.tabs.filter((tab) => canSaveTabInSet(tab, state.activeAccountSpaceId));
   const accounts = state.accountSpaces.filter((account) => account.workspaceId !== 'banking');
   const nameOf = (id: AccountSpaceId) => {
     const account = accounts.find((item) => item.id === id);
@@ -48,10 +60,53 @@ export function AutomationPanel({ state, onToast }: {
   const start = (routine: BrowserRoutine) => void operate(async () => {
     setLastRun({ id: routine.id, result: await window.privateBrowser.runRoutine(routine.id) });
   });
+  const previewTabs = (kind: TabSetInput['kind']) => {
+    const tabs = eligibleTabs.map((tab) => ({ ...tab }));
+    const selected = new Set(tabs.slice(0, MAX_ROUTINE_ITEMS).map((tab) => tab.id));
+    setTabSet({ accountSpaceId: state.activeAccountSpaceId, kind, tabs, selected, name: '' });
+  };
+  const visibleSet = tabSet?.accountSpaceId === state.activeAccountSpaceId ? tabSet : undefined;
 
   return <div className="side-panel">
     <PanelHeader icon={Zap} eyebrow="Account Spaces" title="Routines" />
-    {draft ? <form className="settings-card routine-form" onSubmit={(event) => {
+    {visibleSet ? <form className="settings-card routine-form" onSubmit={(event) => {
+      event.preventDefault();
+      const { accountSpaceId, kind, name, tabs, selected } = visibleSet;
+      void operate(async () => {
+        const saved = await window.privateBrowser.saveTabSet({ accountSpaceId, kind, name,
+          tabs: tabs.filter((tab) => selected.has(tab.id)).map(({ id, url }) => ({ id, url })),
+        });
+        setTabSet(undefined);
+        onToast(kind === 'routine' ? 'Routine saved with ' + saved + ' tabs.'
+          : saved ? saved + (saved === 1 ? ' bookmark added.' : ' bookmarks added.') : 'The selected pages are already in this folder.');
+      });
+    }}>
+      <label>{visibleSet.kind === 'routine' ? 'Routine name' : 'Bookmarks bar folder'}<input required maxLength={80}
+        value={visibleSet.name} onChange={(event) => setTabSet({ ...visibleSet, name: event.target.value })} /></label>
+      <fieldset className="routine-checklist">
+        <legend>Tabs in {nameOf(visibleSet.accountSpaceId)}</legend>
+        <p role="status">{visibleSet.selected.size} selected (up to {MAX_ROUTINE_ITEMS})</p>
+        {visibleSet.tabs.map((tab) => {
+          const checked = visibleSet.selected.has(tab.id);
+          return <label key={tab.id}>
+            <input type="checkbox" checked={checked} disabled={busy || (!checked && visibleSet.selected.size >= MAX_ROUTINE_ITEMS)}
+              onChange={(event) => {
+                const selected = new Set(visibleSet.selected);
+                if (event.currentTarget.checked) selected.add(tab.id);
+                else selected.delete(tab.id);
+                setTabSet({ ...visibleSet, selected });
+              }} />
+            <span>{tab.title || 'Untitled page'}<small>{tab.url}</small></span>
+          </label>;
+        })}
+      </fieldset>
+      <div className="panel-actions">
+        <button type="submit" disabled={busy || !visibleSet.selected.size || !visibleSet.name.trim()}>
+          {visibleSet.kind === 'routine' ? 'Save routine' : 'Add bookmarks'}
+        </button>
+        <button type="button" disabled={busy} onClick={() => setTabSet(undefined)}>Cancel</button>
+      </div>
+    </form> : draft ? <form className="settings-card routine-form" onSubmit={(event) => {
       event.preventDefault();
       void operate(async () => { await window.privateBrowser.saveRoutine(draft); setDraft(undefined); });
     }}>
@@ -89,7 +144,11 @@ export function AutomationPanel({ state, onToast }: {
       </fieldset>
       <div className="panel-actions"><button type="submit" disabled={busy}>Save routine</button><button type="button" disabled={busy} onClick={() => setDraft(undefined)}>Cancel</button></div>
     </form> : <>
-      <div className="panel-actions"><button type="button" onClick={() => setDraft({ id: crypto.randomUUID(), name: '', links: [newLink()], focusIndex: 0, checklist: [] })}><Plus size={14} /> New routine</button></div>
+      <div className="panel-actions">
+        <button type="button" onClick={() => setDraft({ id: crypto.randomUUID(), name: '', links: [newLink()], focusIndex: 0, checklist: [] })}><Plus size={14} /> New routine</button>
+        <button type="button" disabled={!eligibleTabs.length} onClick={() => previewTabs('routine')}>Save open tabs as a routine</button>
+        <button type="button" disabled={!eligibleTabs.length} onClick={() => previewTabs('bookmarks')}>Bookmark this set</button>
+      </div>
       <div className="automation-list">{(state.routines ?? []).map((routine) => <details key={routine.id} className="settings-card routine-details">
         <summary>{routine.name}</summary>
         <ol className="routine-preview">
