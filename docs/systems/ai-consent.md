@@ -171,6 +171,12 @@ A local model remains available in eligible spaces. The encrypted account
 keeps its last twelve request attempts with purpose, provider origin and
 time. Receipt data excludes prompts, page details and answers.
 
+The Assistant can add up to three selected excerpts from other open tabs in
+the same Account Space. Review each excerpt and its origin, edit or remove
+it, and approve the combined request. The browser rechecks every included
+tab and navigation before sending. Source evidence is matched against the
+individual approved excerpts.
+
 ### Developer approval — `approveAiPreview(previewId, mode)`
 
 1. The pending entry is fetched and **deleted immediately**, before any check. A

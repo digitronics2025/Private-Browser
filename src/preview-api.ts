@@ -1,13 +1,13 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { ChromeImportOptions } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
-import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt } from '../electron/types';
+import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
-import { AI_SYSTEM_PROMPT, assistantQuestion, aiUserPrompt, readAssistantAnswer } from '../electron/ai-prompt';
+import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
 import { planBookmarkBatch } from '../electron/bookmark-batch';
@@ -158,7 +158,8 @@ export function installPreviewApi(): void {
   ] : [];
   let previewProvider: AiProviderStatus = { configured: false };
   let assistantPage: AiPagePreview | undefined;
-  let assistantReview: { data: AiRequestReview; context: string; withEvidence: boolean } | undefined;
+  let assistantReview: { data: AiRequestReview; context: string[]; withEvidence: boolean } | undefined;
+  const assistantExtraSources = new Map<string, AssistantSelectionSource>();
   let timeoutFixtureUsed = false;
   let previewRequest: { id: string; finish: (answer: AssistantAnswer) => void } | undefined;
   const disabledCloudAccounts = new Set<AccountSpaceId>();
@@ -555,6 +556,7 @@ export function installPreviewApi(): void {
       if (state.activeWorkspaceId === 'banking') throw new Error('AI is unavailable in this workspace');
       if (params.get('localAi') !== 'sample') throw new Error('A sample reading page is unavailable.');
       assistantReview = undefined;
+      assistantExtraSources.clear();
       assistantPage = {
         id: crypto.randomUUID(), accountSpaceId: state.activeAccountSpaceId, tabId: state.activeTabId,
         service: 'browser', sourceRevision: 'preview-ai-page', sourceUrl: 'https://example.test/article',
@@ -563,21 +565,44 @@ export function installPreviewApi(): void {
       };
       return assistantPage;
     }) satisfies PrivateBrowserApi['prepareAiPreview'],
-    reviewAssistantRequest: async (id, context, questionValue, withEvidence) => {
+    prepareAssistantSource: async (id, tabId) => {
+      requireAssistantPolicy('local');
+      const tab = state.tabs.find((item) => item.id === tabId && item.accountSpaceId === state.activeAccountSpaceId && !item.isHome);
+      if (!tab || state.activeTabId === tab.id || assistantPage?.id !== id) throw new Error('Choose another open webpage in this Account Space.');
+      const source: AssistantSelectionSource = {
+        id: crypto.randomUUID(), tabId: tab.id, title: tab.title, url: new URL(tab.url).origin,
+        text: 'The additional catalogue lists a ceramic mug.', redactions: 0,
+      };
+      assistantExtraSources.set(source.id, source);
+      return source;
+    },
+    reviewAssistantRequest: async (id, context, questionValue, withEvidence, edits) => {
       if (!assistantPage || assistantPage.id !== id || assistantPage.accountSpaceId !== state.activeAccountSpaceId || assistantPage.tabId !== state.activeTabId) {
         throw new Error('Read the page again before reviewing the request.');
       }
       if (!previewProvider.configured || !previewProvider.mode || !previewProvider.model) throw new Error('Configure an AI provider first.');
       requireAssistantPolicy(previewProvider.mode);
       const text = redactSensitiveText(String(context));
+      const additional = ((edits ?? []) as AssistantSelectionEdit[]).map((edit) => {
+        const source = assistantExtraSources.get(edit.id);
+        if (!source) throw new Error('Read the added source again.');
+        const excerpt = redactSensitiveText(edit.text);
+        return { ...source, text: excerpt.text, redactions: excerpt.redactions };
+      });
+      const includeCurrent = !additional.length || Boolean(text.text.trim());
+      const excerpts = [...(includeCurrent ? [{ ...assistantPage, text: text.text, redactions: text.redactions }] : []), ...additional];
+      if (excerpts.reduce((total, excerpt) => total + excerpt.text.length, 0) > MAX_ASSISTANT_CONTEXT) {
+        throw new Error('Reduce the combined excerpts to 12,000 characters.');
+      }
       const question = redactSensitiveText(String(questionValue).trim());
+      const parent = additional.length ? { title: 'Reviewed webpages', url: 'See source origins below' } : assistantPage;
       const data: AiRequestReview = {
         id: crypto.randomUUID(), mode: previewProvider.mode, model: previewProvider.model,
         destination: previewProvider.mode === 'local' ? 'http://127.0.0.1:11434/api/chat' : `${previewProvider.endpoint}/chat/completions`,
-        systemPrompt: AI_SYSTEM_PROMPT, userPrompt: aiUserPrompt({ ...assistantPage, text: text.text }, assistantQuestion(question.text, withEvidence === true)),
-        redactions: text.redactions + question.redactions,
+        systemPrompt: AI_SYSTEM_PROMPT, userPrompt: aiUserPrompt({ ...parent, text: formatAssistantExcerpts(excerpts, additional.length > 0) }, assistantQuestion(question.text, withEvidence === true)),
+        redactions: excerpts.reduce((total, source) => total + source.redactions, question.redactions),
       };
-      assistantReview = { data, context: text.text, withEvidence: withEvidence === true };
+      assistantReview = { data, context: excerpts.map((source) => source.text), withEvidence: withEvidence === true };
       return data;
     },
     sendReviewedAssistant: async (id) => {
@@ -595,6 +620,7 @@ export function installPreviewApi(): void {
         return new Promise<AssistantAnswer>((finish) => { previewRequest = { id: data.id, finish }; });
       }
       assistantPage = undefined;
+      assistantExtraSources.clear();
       const answer = 'The sample shows a brass kettle on the shelf.';
       const fixture = withEvidence ? JSON.stringify({ findings: [{
         claim: answer, quote: params.get('aiSources') === 'unverified' ? 'This passage does not occur in the sample.' : 'A brass kettle sits on the shelf.',
@@ -620,6 +646,7 @@ export function installPreviewApi(): void {
     revokeAiContext: async () => {
       assistantReview = undefined;
       assistantPage = undefined;
+      assistantExtraSources.clear();
       previewRequest?.finish({ kind: 'cancelled' });
       previewRequest = undefined;
     },

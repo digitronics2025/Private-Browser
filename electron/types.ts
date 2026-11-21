@@ -636,6 +636,14 @@ export interface AiApproval {
 
 export type AiPreviewScope = 'page' | 'selection';
 
+export interface AssistantSelectionEdit { id: string; text: string }
+export interface AssistantSelectionSource extends AssistantSelectionEdit {
+  tabId: string;
+  title: string;
+  url: string;
+  redactions: number;
+}
+
 export interface AssistantReceipt {
   at: string;
   mode: 'local' | 'cloud';

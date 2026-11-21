@@ -409,7 +409,7 @@ export default function App() {
         const app = state.sideApps.find((app) => app.id === ui.sidePanelTool);
         return app ? <SideAppPanel key={app.id} app={app} protectedWorkspace={workspace.protected} onToast={showToast} /> : null;
       }
-      case 'assistant': return <AssistantPanel key={JSON.stringify([state.activeAccountSpaceId, activeTab.id, activeTab.url])} accountId={state.activeAccountSpaceId} workspace={state.activeWorkspaceId} policy={state.assistantPolicy} presets={browserSettings.assistantPrompts} onToast={showToast} />;
+      case 'assistant': return <AssistantPanel key={JSON.stringify([state.activeAccountSpaceId, activeTab.id, activeTab.url])} accountId={state.activeAccountSpaceId} workspace={state.activeWorkspaceId} policy={state.assistantPolicy} presets={browserSettings.assistantPrompts} tabs={state.tabs.filter((item) => item.accountSpaceId === state.activeAccountSpaceId && item.id !== activeTab.id && !item.isHome)} onToast={showToast} />;
       case 'developer': return <DeveloperPanel activeTab={activeTab} onToast={showToast} />;
       case 'vault': return state.activeWorkspaceId === 'development'
         ? <EmptyState icon={KeyRound} text="MyVault is isolated from the Development workspace." />

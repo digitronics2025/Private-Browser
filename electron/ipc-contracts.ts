@@ -18,7 +18,7 @@ import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
 import { MAX_BOOKMARK_EDIT_BATCH } from './bookmark-maintenance.js';
-import { MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION } from './ai-prompt.js';
+import { MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION, MAX_ASSISTANT_EXTRA_SOURCES, MAX_ASSISTANT_SOURCE_TEXT } from './ai-prompt.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
@@ -314,10 +314,25 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       between(args, 0, 1);
       if (args[0] !== undefined && args[0] !== 'page' && args[0] !== 'selection') throw new Error('Choose a page or selection to read');
       return;
-    case 'ai:review-request':
-      between(args, 3, 4); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', MAX_ASSISTANT_CONTEXT); requireBoundedText(args[2], 'question', MAX_ASSISTANT_QUESTION);
+    case 'ai:prepare-source':
+      exact(args, 2); requireUuid(args[0], 'preview'); requireUuid(args[1], 'tab'); return;
+    case 'ai:review-request': {
+      between(args, 3, 5); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', MAX_ASSISTANT_CONTEXT); requireBoundedText(args[2], 'question', MAX_ASSISTANT_QUESTION);
       if (args[3] !== undefined && typeof args[3] !== 'boolean') throw new Error('Invalid source passage option');
+      const edits = args[4];
+      if (edits !== undefined) {
+        if (!Array.isArray(edits) || edits.length > MAX_ASSISTANT_EXTRA_SOURCES) throw new Error('Choose up to three additional sources.');
+        const ids = new Set<string>();
+        for (const item of edits) {
+          const source = requireExactKeys(item, ['id', 'text']);
+          const id = requireUuid(source.id, 'source');
+          if (ids.has(id)) throw new Error('Choose each source once.');
+          ids.add(id);
+          requireBoundedText(source.text, 'source excerpt', MAX_ASSISTANT_SOURCE_TEXT);
+        }
+      }
       return;
+    }
     case 'ai:send-reviewed':
     case 'ai:cancel-reviewed':
       exact(args, 1); requireUuid(args[0], 'review'); return;

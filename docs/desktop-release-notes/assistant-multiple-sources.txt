@@ -1,0 +1,1 @@
+Compare selected text from several tabs in one Account Space. Review, edit, or remove each source before approving the combined Assistant request.

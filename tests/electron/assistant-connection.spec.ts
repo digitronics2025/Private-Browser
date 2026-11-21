@@ -116,8 +116,7 @@ test('checks the provider with a built-in sample and sends only the separately a
     await expect(check()).rejects.toThrow(/cloud AI is disabled/i);
     await expect(makeReview()).rejects.toThrow(/cloud AI is disabled/i);
     expect(await readBodies()).toHaveLength(7);
-    const anotherSpace = initial.activeWorkspaceId === 'tenten' ? 'personal' : 'tenten';
-    await page.evaluate((id) => window.privateBrowser.switchWorkspace(id), anotherSpace);
+    await page.evaluate((fromTenten) => window.privateBrowser.switchWorkspace(fromTenten ? 'personal' : 'tenten'), initial.activeWorkspaceId === 'tenten');
     await expect(page.evaluate(() => window.privateBrowser.getState().then((state) => state.assistantPolicy))).resolves.toEqual({ cloud: 'allowed', receipts: [] });
     await expect(page.evaluate((id) => window.privateBrowser.setAssistantCloudAllowed(id, true), initial.activeAccountSpaceId)).rejects.toThrow(/unavailable in this Account Space/i);
     await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));

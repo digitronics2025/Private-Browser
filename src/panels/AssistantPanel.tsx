@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Bot, Cloud, Eye, LoaderCircle, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
-import type { AccountSpaceId, AiPagePreview, AiPreviewScope, AiProviderCheckState, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSpacePolicy, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
-import { ASSISTANT_PRESETS, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION, type AssistantPresetId, type AssistantPresetOverrides } from '../../electron/ai-prompt';
+import type { AccountSpaceId, AiPagePreview, AiPreviewScope, AiProviderCheckState, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionSource, AssistantSpacePolicy, BrowserTab, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
+import { ASSISTANT_PRESETS, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_EXTRA_SOURCES, MAX_ASSISTANT_QUESTION, MAX_ASSISTANT_SOURCE_TEXT, type AssistantPresetId, type AssistantPresetOverrides } from '../../electron/ai-prompt';
 import { PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
 
@@ -37,16 +37,21 @@ function findPagePassages(text: string, query: string): string[] {
     .slice(0, 3).map((passage) => passage.text);
 }
 
-export function AssistantPanel({ accountId, workspace, policy, presets, onToast }: {
+export function AssistantPanel({ accountId, workspace, policy, presets, tabs, onToast }: {
   accountId: AccountSpaceId;
   workspace: WorkspaceId;
   policy: AssistantSpacePolicy;
   presets?: AssistantPresetOverrides;
+  tabs: Pick<BrowserTab, 'id' | 'title'>[];
   onToast: (message: string, kind?: 'ok' | 'error') => void;
 }) {
   const [preview, setPreview] = useState<AiPagePreview | null>(null);
   const [review, setReview] = useState<AiRequestReview | null>(null);
   const [contextText, setContextText] = useState('');
+  const [extraSources, setExtraSources] = useState<AssistantSelectionSource[]>([]);
+  const [sourceTab, setSourceTab] = useState('');
+  const unusedTabs = tabs.filter((tab) => !extraSources.some((source) => source.tabId === tab.id));
+  const contextCount = contextText.length + extraSources.reduce((total, source) => total + source.text.length, 0);
   const [loading, setLoading] = useState(false);
   const [requestInFlight, setRequestInFlight] = useState<Pick<AiRequestReview, 'id' | 'mode'> | null>(null);
   const [provider, setProvider] = useState<AiProviderStatus>({ configured: false });
@@ -71,6 +76,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, onToast 
     setPreview(null);
     setReview(null);
     setContextText('');
+    setExtraSources([]);
     setAnswer(null);
     setPassageQuery('');
     setPassages(undefined);
@@ -84,6 +90,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, onToast 
   const prepare = async (scope: AiPreviewScope) => {
     setLoading(true);
     setReview(null);
+    setExtraSources([]);
     setAnswer(null);
     setPassageQuery('');
     setPassages(undefined);
@@ -99,9 +106,23 @@ export function AssistantPanel({ accountId, workspace, policy, presets, onToast 
     if (!preview) return;
     setLoading(true);
     try {
-      setReview(await window.privateBrowser.reviewAssistantRequest(preview.id, contextText, question, withEvidence));
+      setReview(await window.privateBrowser.reviewAssistantRequest(preview.id, contextText, question, withEvidence, extraSources.map(({ id, text }) => ({ id, text }))));
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
+  };
+  const addSource = async () => {
+    if (!preview || !sourceTab) return;
+    setLoading(true);
+    try {
+      const source = await window.privateBrowser.prepareAssistantSource(preview.id, sourceTab);
+      setExtraSources((current) => [...current, source]);
+      setSourceTab('');
+      setReview(null);
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Could not read the selected source.', 'error');
+    } finally {
+      setLoading(false);
+    }
   };
   const configureProvider = async (event: FormEvent) => {
     event.preventDefault();
@@ -158,6 +179,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, onToast 
       if (result.kind !== 'timeout' && result.kind !== 'cancelled') {
         setPreview(null);
         setContextText('');
+        setExtraSources([]);
       }
       setAnswer(result);
     } catch (error) {
@@ -251,7 +273,34 @@ export function AssistantPanel({ accountId, workspace, policy, presets, onToast 
               setReview(null);
             }} /></label>
             <small className="context-size">{contextText.length.toLocaleString()} of {MAX_ASSISTANT_CONTEXT.toLocaleString()} page characters</small>
+            {extraSources.length > 0 && <button type="button" className="text-button" disabled={loading} onClick={() => {
+              setContextText(contextText.trim() ? '' : preview.text);
+              setReview(null);
+            }}>{contextText.trim() ? 'Remove current excerpt' : 'Restore current excerpt'}</button>}
           </div>
+          {extraSources.map((source) => <div className="context-card" key={source.id}>
+            <h3>{source.title}</h3>
+            <small className="context-origin">{source.url}</small>
+            <label>Excerpt from {source.title}<textarea className="context-text" value={source.text} maxLength={MAX_ASSISTANT_SOURCE_TEXT} disabled={loading} onChange={(event) => {
+              const updated = event.target.value;
+              setExtraSources((current) => current.map((item) => item.id === source.id ? { ...item, text: updated } : item));
+              setReview(null);
+            }} /></label>
+            <button type="button" className="text-button" aria-label={`Remove source ${source.title}`} disabled={loading} onClick={() => {
+              setExtraSources((current) => current.filter((item) => item.id !== source.id));
+              setReview(null);
+            }}>Remove source</button>
+          </div>)}
+          {unusedTabs.length > 0 && extraSources.length < MAX_ASSISTANT_EXTRA_SOURCES && <details className="context-card assistant-source-picker">
+            <summary>Add a source from another tab</summary>
+            <p>Select text in the other tab before coming here to add it.</p>
+            <label>Source tab<select aria-label="Source tab" value={sourceTab} disabled={loading} onChange={(event) => setSourceTab(event.target.value)}>
+              <option value="">Choose a tab</option>
+              {unusedTabs.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
+            </select></label>
+            <button type="button" className="secondary-button" disabled={loading || !sourceTab} onClick={() => void addSource()}>Add selected text</button>
+          </details>}
+          {extraSources.length > 0 && <small className="context-size">{contextCount.toLocaleString()} of {MAX_ASSISTANT_CONTEXT.toLocaleString()} characters across excerpts</small>}
           {preview.text && <form className="ask-card" onSubmit={(event) => {
             event.preventDefault();
             setPassages(findPagePassages(preview.text, passageQuery));
@@ -291,7 +340,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, onToast 
               setWithEvidence(event.target.checked);
               setReview(null);
             }} /> Include source passages</label>
-            <button className="primary-button full" type="submit" disabled={loading || !provider.configured || cloudBlocked || !question.trim()}><ShieldCheck size={16} /> {cloudBlocked ? 'Cloud AI is disabled here' : provider.configured ? answer?.kind === 'timeout' ? 'Review retry' : 'Review request' : 'Connect provider first'}</button>
+            <button className="primary-button full" type="submit" disabled={loading || !provider.configured || cloudBlocked || !question.trim() || contextCount > MAX_ASSISTANT_CONTEXT}><ShieldCheck size={16} /> {cloudBlocked ? 'Cloud AI is disabled here' : provider.configured ? answer?.kind === 'timeout' ? 'Review retry' : 'Review request' : 'Connect provider first'}</button>
           </form>
           {review && <section className="permission-card request-review" aria-label="Request review">
             <div>{review.mode === 'local' ? <LockKeyhole size={17} /> : <Cloud size={17} />}<strong>{review.mode === 'local' ? 'Send to local model' : 'Send to cloud provider'}</strong></div>
