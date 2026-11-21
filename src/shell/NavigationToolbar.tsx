@@ -1,7 +1,7 @@
 import type { FormEvent, RefObject } from 'react';
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Asterisk, ArrowRight, Home, KeyRound, MoreVertical, PanelRight, RefreshCw, Search, SlidersHorizontal, Sparkles, Star, TriangleAlert, X, ZoomIn, ZoomOut } from 'lucide-react';
-import type { AccountSpaceSummary, AddressMatch, BrowserTab } from '../../electron/types';
+import { ArrowLeft, Asterisk, ArrowRight, Home, KeyRound, LockKeyhole, MoreVertical, PanelRight, RefreshCw, Search, SlidersHorizontal, Sparkles, Star, TriangleAlert, X, ZoomIn, ZoomOut } from 'lucide-react';
+import type { AccountSpaceSummary, AddressMatch, BrowserTab, Workspace } from '../../electron/types';
 import { MAX_ADDRESS_QUERY_LENGTH } from '../../electron/address-matches';
 import { AccountAvatar, accountNeedsAction } from '../lib/accounts';
 import { useOverlayLayer } from './overlay';
@@ -10,6 +10,7 @@ export interface NavigationToolbarProps {
   /** "Search Google or enter address" — names the engine chosen in Settings. */
   searchPrompt: string;
   tab: BrowserTab;
+  workspace: Workspace;
   account: AccountSpaceSummary;
   address: string;
   addressRef: RefObject<HTMLInputElement>;
@@ -45,7 +46,7 @@ export interface NavigationToolbarProps {
 }
 
 export function NavigationToolbar(props: NavigationToolbarProps) {
-  const { tab, account } = props;
+  const { tab, account, workspace } = props;
   const zoom = tab.zoomPercent ?? 100;
   const warning = tab.securityWarning;
   const needsAction = accountNeedsAction(account);
@@ -189,14 +190,19 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
       <button
         ref={props.profileButtonRef}
         type="button"
-        className={`profile-button ring-${account.color} ${props.profileOpen ? 'open' : ''}`}
+        className={`profile-button ring-${account.color}${workspace.protected ? ' protected-profile' : ''}${props.profileOpen ? ' open' : ''}`}
         aria-label={`Account Space: ${account.label}${needsAction ? ', action required' : ''}`}
+        aria-description={`Workspace: ${workspace.name}${workspace.protected ? ', protected' : ''}`}
         aria-haspopup="menu"
         aria-expanded={props.profileOpen}
-        title={`${account.label}${account.email ? ` · ${account.email}` : ''}`}
+        title={`${workspace.name} / ${account.label}${account.email ? ` · ${account.email}` : ''}`}
         onClick={props.onProfile}
       >
-        <AccountAvatar account={account} />
+        {workspace.protected ? <LockKeyhole className="profile-lock" size={18} aria-hidden="true" /> : <AccountAvatar account={account} />}
+        <span className="profile-identity" aria-hidden="true">
+          <small>{workspace.name}</small>
+          {account.label !== workspace.name && <strong>{account.label}</strong>}
+        </span>
         {needsAction && <span className="profile-badge" aria-hidden="true">!</span>}
       </button>
       <button ref={props.menuButtonRef} type="button" className={`toolbar-button ${props.menuOpen ? 'selected' : ''}`} aria-label="Browser menu" aria-haspopup="menu" aria-expanded={props.menuOpen} title="Customize and control Private Browser" onClick={props.onMenu}>

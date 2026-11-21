@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { BrowserRoutine, RoutineRunResult } from './types.js';
+import type { BrowserRoutine, RoutineRunResult, TabSetInput } from './types.js';
 import type { AddressMatch, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
@@ -9,6 +9,7 @@ import type { BackupWriteResult } from './account-backup.js';
 const api = {
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
   saveRoutine: (routine: BrowserRoutine): Promise<void> => ipcRenderer.invoke('routines:save', routine),
+  saveTabSet: (input: TabSetInput): Promise<number> => ipcRenderer.invoke('routines:save-tabs', input),
   deleteRoutine: (id: string): Promise<void> => ipcRenderer.invoke('routines:delete', id),
   runRoutine: (id: string): Promise<RoutineRunResult> => ipcRenderer.invoke('routines:run', id),
   markRoutineChecklist: (id: string, index: number, done: boolean): Promise<void> => ipcRenderer.invoke('routines:mark-checklist', id, index, done),

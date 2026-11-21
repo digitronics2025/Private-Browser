@@ -161,6 +161,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `routines:delete` | `deleteRoutine(id)` | routine ID | `void` |
 | `routines:run` | `runRoutine(id)` | routine ID | `RoutineRunResult` |
 | `routines:mark-checklist` | `markRoutineChecklist(id, index, done)` | routine ID, item index, boolean | `void` |
+| `routines:save-tabs` | `saveTabSet(input)` | current regular account, up to 20 tab IDs and reviewed URLs, local destination and name | saved count |
 | `routines:reset-checklist` | `resetRoutineChecklist(id)` | routine ID | `void` |
 
 ### ui:, bookmarks:, shortcuts:, app:

@@ -111,7 +111,11 @@ test('browser menu is keyboard navigable, closes cleanly and lists only working 
 test('profile menu shows the current space and switches workspaces', async ({ page }) => {
   const noErrors = watchErrors(page);
   await page.goto('/');
-  await page.getByRole('button', { name: 'Account Space: Operations' }).click();
+  const profile = page.getByRole('button', { name: 'Account Space: Operations' });
+  await expect(profile).toHaveAccessibleDescription('Workspace: Personal');
+  await expect(profile.getByText('Personal', { exact: true })).toBeVisible();
+  await expect(profile.getByText('Operations', { exact: true })).toBeVisible();
+  await profile.click();
   const menu = page.getByRole('menu', { name: 'Account Spaces' });
   await expect(menu.getByText('Google connected')).toBeVisible();
   await expect(menu.getByRole('menuitemradio', { name: 'Switch to Personal' })).toHaveAttribute('aria-checked', 'true');
@@ -119,6 +123,21 @@ test('profile menu shows the current space and switches workspaces', async ({ pa
   await expect(page.getByRole('button', { name: 'Account Space: TenTen' })).toBeVisible();
   await expect(menu.getByRole('menuitemradio', { name: 'Switch to TenTen' })).toHaveAttribute('aria-checked', 'true');
   noErrors();
+});
+
+test('keeps Banking visible at narrow widths and preserves address-bar access', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/');
+  const profile = page.getByRole('button', { name: 'Account Space: Operations' });
+  await expect(profile.getByText('Operations', { exact: true })).toBeHidden();
+  await profile.focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('menuitemradio', { name: 'Switch to Banking' }).click();
+  const banking = page.getByRole('button', { name: 'Account Space: Banking' });
+  await expect(banking).toHaveAccessibleDescription('Workspace: Banking, protected');
+  await expect(banking.getByText('Banking', { exact: true })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('combobox', { name: 'Address and search bar' })).toBeVisible();
 });
 
 test('bookmarks bar has folders, nested menus, overflow, context actions and Ctrl+Shift+B', async ({ page }) => {
