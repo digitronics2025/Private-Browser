@@ -274,6 +274,8 @@ All are intents; the main process opens secure dialogs for anything secret.
 | `vault:request-delete` | `id: string` | `boolean` (false when not confirmed) |
 | `vault:copy-password` | `id: string` | `void` |
 | `vault:copy-totp` | `id: string` | `{ secondsRemaining: number }` |
+| `vault:clipboard-deadline` | — | deadline in milliseconds, or undefined |
+| `vault:clipboard-clear` | — | whether the vault's unchanged copy was removed |
 | `vault:copy-generated` | `'password' | 'passphrase' | 'pin'` | `void` |
 | `vault:autofill` | `id: string` | `void` |
 

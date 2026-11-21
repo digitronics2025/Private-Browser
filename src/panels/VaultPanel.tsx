@@ -20,6 +20,8 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
   const [status, setStatus] = useState<VaultStatus>({ available: true, items: [] });
   const [query, setQuery] = useState('');
   const [secondsRemaining, setSecondsRemaining] = useState(30 - (Math.floor(Date.now() / 1000) % 30));
+  const [clipboardDeadline, setClipboardDeadline] = useState<number>();
+  const clipboardSeconds = workspaceId === 'banking' ? 0 : Math.max(0, Math.ceil(((clipboardDeadline ?? 0) - Date.now()) / 1000));
   const [formShape, setFormShape] = useState({ hasUsername: false, hasPassword: false });
   const [fillReadiness, setFillReadiness] = useState<VaultFillReadiness>();
   const [fillCheck, setFillCheck] = useState(0);
@@ -31,6 +33,11 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
   };
   useEffect(() => { void load(); return window.privateBrowser.onVaultState(() => void load()); }, []);
   useEffect(() => { const timer = window.setInterval(() => setSecondsRemaining(30 - (Math.floor(Date.now() / 1000) % 30)), 1000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => {
+    let current = true;
+    void window.privateBrowser.vaultClipboardDeadline().then((deadline) => { if (current) setClipboardDeadline(deadline); }).catch(() => undefined);
+    return () => { current = false; };
+  }, [accountId, status.lifecycle]);
   useEffect(() => { void window.privateBrowser.getVaultMigrationStatus().then((value) => setLegacyAvailable(value.legacyAvailable)); }, []);
   useEffect(() => { if (activeOrigin && workspaceId !== 'banking') void window.privateBrowser.inspectVaultFormShape().then(setFormShape).catch(() => setFormShape({ hasUsername: false, hasPassword: false })); else setFormShape({ hasUsername: false, hasPassword: false }); }, [activeOrigin, workspaceId]);
   useEffect(() => {
@@ -42,12 +49,23 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
     return () => { current = false; };
   }, [activeOrigin, workspaceId, status.lifecycle, status.generation, fillCheck]);
   const copyPassword = async (id: string) => {
-    try { await window.privateBrowser.copyPassword(id); onToast('Password copied; cleared from the clipboard in 30 seconds. Windows clipboard history (Win+V), if on, keeps its own copy.'); }
+    try { await window.privateBrowser.copyPassword(id); setClipboardDeadline(await window.privateBrowser.vaultClipboardDeadline()); onToast('Password copied'); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   const copyTotp = async (id: string) => {
-    try { const { secondsRemaining } = await window.privateBrowser.copyTotp(id); onToast(`Authenticator code copied · ${secondsRemaining}s remaining`); }
+    try { const { secondsRemaining } = await window.privateBrowser.copyTotp(id); setClipboardDeadline(await window.privateBrowser.vaultClipboardDeadline()); onToast(`Authenticator code copied · ${secondsRemaining}s remaining`); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+  };
+  const copyGenerated = async (kind: 'password' | 'passphrase' | 'pin') => {
+    try { await window.privateBrowser.copyGeneratedCredential(kind); setClipboardDeadline(await window.privateBrowser.vaultClipboardDeadline()); onToast('Generated value copied'); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+  };
+  const clearClipboard = async () => {
+    try {
+      const cleared = await window.privateBrowser.clearVaultClipboard();
+      setClipboardDeadline(undefined);
+      onToast(cleared ? 'Vault copy cleared' : 'No vault copy was cleared');
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   const unlock = async () => { try { const result = await window.privateBrowser.requestVaultUnlock(); setStatus(result); setItems(result.items); } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
   const hello = async (action: () => Promise<VaultStatus>, done?: { message: string; when: VaultStatus['platformUnlock'] }) => { try { const result = await action(); setStatus(result); setItems(result.items); if (done && result.platformUnlock === done.when) onToast(done.message); } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
@@ -61,6 +79,10 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
     <div className="side-panel">
       <PanelHeader icon={KeyRound} eyebrow="MyVault broker" title="MyVault" />
       {onOpenFull && <button className="text-button" onClick={onOpenFull}><Eye size={14} /> Open full metadata view</button>}
+      {clipboardSeconds > 0 && <div className="permission-card">
+        <span>Vault clipboard clears in {clipboardSeconds}s</span>
+        <button className="text-button" type="button" onClick={() => void clearClipboard()}>Clear now</button>
+      </div>}
       <div className={`vault-health ${status.available ? '' : 'warning'}`}><ShieldCheck size={16} /><div><strong>{status.lifecycle === 'unlocked' ? 'Unlocked on this device' : status.lifecycle === 'recovery-required' ? 'Recovery required' : status.lifecycle === 'unconfigured' ? 'Connection required' : 'Locked'}</strong><span>{status.sync === 'dirty' ? 'Encrypted changes are waiting to sync.' : status.lifecycle === 'unlocked' && workspaceId !== 'banking' ? 'Saved logins autofill matching HTTPS sign-in pages.' : status.lifecycle === 'unlocked' ? 'Fill asks you to confirm the site first. Passwords are never copied or saved from pages here.' : 'Passwords stay outside this interface and browser pages.'}</span></div></div>
       <details className="vault-setup-guide settings-card">
         <summary>Setup and recovery</summary>
@@ -91,7 +113,7 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
       {status.lifecycle === 'unlocked' && formShape.hasPassword && <button className="primary-button full" onClick={() => void saveFromPage()}><ShieldCheck size={15} /> {formShape.hasUsername ? 'Save or update this login' : 'Save password from this page'}</button>}
       {status.lifecycle === 'unlocked' && legacyAvailable && <div className="permission-card"><strong>Old Private Browser vault found</strong><p>Migration makes and verifies an encrypted backup first. The old ciphertext remains until you separately remove it.</p><button className="primary-button full" onClick={() => void window.privateBrowser.migrateLegacyVault().then((report) => { onToast(`${report.validatedCount} legacy records validated`); void load(); }).catch((error) => onToast(error.message, 'error'))}>Migrate into MyVault</button><button className="text-button danger-text" onClick={() => void window.privateBrowser.cleanupLegacyVault().then((removed) => { if (removed) { setLegacyAvailable(false); onToast('Old ciphertext removed; backup retained'); } }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}>Remove old ciphertext after verification</button></div>}
       {status.lifecycle === 'unlocked' && workspaceId !== 'banking' && <button className="text-button" onClick={() => void window.privateBrowser.importChromePasswords().then((report) => { onToast(`${report.imported.passwords} Chrome passwords imported; CSV retained`); void load(); }).catch((error) => onToast(error.message, 'error'))}><FileDown size={14} /> Import Chrome password CSV</button>}
-      {status.lifecycle === 'unlocked' && <><label className="vault-search"><Search size={14} /><input aria-label="Search MyVault metadata" placeholder="Search logins" value={query} onChange={(event) => setQuery(event.target.value)} /></label>{workspaceId !== 'banking' && <div className="credential-actions"><button onClick={() => void window.privateBrowser.copyGeneratedCredential('password').then(() => onToast('Generated password copied')).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}>Password</button><button onClick={() => void window.privateBrowser.copyGeneratedCredential('passphrase').then(() => onToast('Generated passphrase copied')).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}>Passphrase</button><button onClick={() => void window.privateBrowser.copyGeneratedCredential('pin').then(() => onToast('Generated PIN copied')).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}>PIN</button></div>}</>}
+      {status.lifecycle === 'unlocked' && <><label className="vault-search"><Search size={14} /><input aria-label="Search MyVault metadata" placeholder="Search logins" value={query} onChange={(event) => setQuery(event.target.value)} /></label>{workspaceId !== 'banking' && <div className="credential-actions"><button onClick={() => void copyGenerated('password')}>Password</button><button onClick={() => void copyGenerated('passphrase')}>Passphrase</button><button onClick={() => void copyGenerated('pin')}>PIN</button></div>}</>}
       <div className="credential-list">
         {visibleItems.map((item) => <div className="credential-card" key={item.id}>
           <div className="credential-top"><span className="site-badge">{item.label.slice(0, 1).toUpperCase()}</span><div><strong>{item.label}</strong><small>{domainFromUrl(item.url)} · {item.username}</small></div></div>

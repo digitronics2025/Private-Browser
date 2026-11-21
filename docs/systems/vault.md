@@ -29,6 +29,12 @@ fill form rules and returns the reason and next action. Banking shows its
 manual approval requirement before any form inspection. No field values or
 secrets are read for this status.
 
+MyVault's secure editor validates Base32 authenticator secrets before saving.
+Explicit copies show a 30-second countdown and Clear now. The broker protects
+Windows copies from clipboard history and sync using the OS exclusion format.
+On normal quit it waits for the unchanged-copy check and cleanup.
+[Windows clipboard formats](https://learn.microsoft.com/en-gb/windows/desktop/dataxchg/clipboard-formats)
+
 
 > Last verified: 2026-09-25
 
