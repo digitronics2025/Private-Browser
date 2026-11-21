@@ -1,0 +1,1 @@
+Reuse editable Assistant prompts for Darija replies, French rewrites, product specifications and comparisons. Copy an answer when you choose.

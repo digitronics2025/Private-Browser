@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { Bot, Check, Cloud, Eye, LoaderCircle, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
-import type { AiPagePreview, AiProviderCheckState, CloudAiProviderInput, AiProviderStatus, LocalAiModels } from '../../electron/types';
+import { Bot, Cloud, Eye, LoaderCircle, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
+import type { AiPagePreview, AiPreviewScope, AiProviderCheckState, AiRequestReview, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
+import { ASSISTANT_PRESETS, type AssistantPresetId, type AssistantPresetOverrides } from '../../electron/ai-prompt';
 import { PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
 
@@ -31,9 +32,14 @@ function findPagePassages(text: string, query: string): string[] {
     .slice(0, 3).map((passage) => passage.text);
 }
 
-export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+export function AssistantPanel({ workspace, presets, onToast }: {
+  workspace: WorkspaceId;
+  presets?: AssistantPresetOverrides;
+  onToast: (message: string, kind?: 'ok' | 'error') => void;
+}) {
   const [preview, setPreview] = useState<AiPagePreview | null>(null);
-  const [approvalToken, setApprovalToken] = useState<string | null>(null);
+  const [review, setReview] = useState<AiRequestReview | null>(null);
+  const [contextText, setContextText] = useState('');
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState<AiProviderStatus>({ configured: false });
   const [showProviderForm, setShowProviderForm] = useState(false);
@@ -44,6 +50,7 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
   const [localModel, setLocalModel] = useState('');
   const isLocal = provider.mode === 'local';
   const [question, setQuestion] = useState('Summarize the important points on this page.');
+  const [preset, setPreset] = useState<AssistantPresetId | ''>('');
   const [answer, setAnswer] = useState('');
   const [passageQuery, setPassageQuery] = useState('');
   const [passages, setPassages] = useState<string[]>();
@@ -51,7 +58,8 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
   useEffect(() => { setProviderCheck(undefined); }, [provider.mode, provider.model, provider.endpoint]);
   const clearContext = async () => {
     setPreview(null);
-    setApprovalToken(null);
+    setReview(null);
+    setContextText('');
     setAnswer('');
     setPassageQuery('');
     setPassages(undefined);
@@ -62,24 +70,25 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
   };
   // Leaving the panel is the same intent as pressing Clear.
   useEffect(() => () => { void window.privateBrowser.revokeAiContext().catch(() => undefined); }, []);
-  const prepare = async () => {
+  const prepare = async (scope: AiPreviewScope) => {
     setLoading(true);
-    setApprovalToken(null);
+    setReview(null);
     setAnswer('');
     setPassageQuery('');
     setPassages(undefined);
-    try { setPreview(await window.privateBrowser.prepareAiPreview()); }
+    try {
+      const captured = await window.privateBrowser.prepareAiPreview(scope);
+      setPreview(captured);
+      setContextText(captured.text);
+    }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
   };
-  const approve = async () => {
+  const reviewRequest = async () => {
     if (!preview) return;
     setLoading(true);
     try {
-      const approval = await window.privateBrowser.approveAiPreview(preview.id, isLocal ? 'local' : 'cloud');
-      setPreview(approval.preview);
-      setApprovalToken(approval.token);
-      onToast('Sanitized context approved');
+      setReview(await window.privateBrowser.reviewAssistantRequest(preview.id, contextText, question));
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
   };
@@ -116,14 +125,29 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
     finally { setLoading(false); }
   };
   const ask = async () => {
-    if (!approvalToken) return;
+    if (!review) return;
+    setLoading(true);
+    setReview(null);
+    setPreview(null);
+    setContextText('');
+    try {
+      setAnswer(await window.privateBrowser.sendReviewedAssistant(review.id));
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : String(error), 'error');
+    } finally { setLoading(false); }
+  };
+  const savePreset = async (id: AssistantPresetId, changes: AssistantPresetOverrides, message: string) => {
     setLoading(true);
     try {
-      setAnswer(await window.privateBrowser.askAi(approvalToken, question));
+      await window.privateBrowser.setBrowserSettings({ assistantPrompts: changes }, workspace);
+      setQuestion(changes[id] ?? ASSISTANT_PRESETS[id].question);
+      setReview(null);
+      onToast(message);
     } catch (error) {
-      setPreview(null);
-      onToast(error instanceof Error ? error.message : String(error), 'error');
-    } finally { setApprovalToken(null); setLoading(false); }
+      onToast(error instanceof Error ? error.message : 'Could not save the prompt preset.', 'error');
+    } finally {
+      setLoading(false);
+    }
   };
   return (
     <div className="side-panel">
@@ -173,17 +197,19 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
           <span className="orb"><Sparkles size={25} /></span>
           <h3>Understand this page</h3>
           <p>Read visible text locally, remove sensitive patterns, and review it before using a model.</p>
-          <button className="primary-button" onClick={prepare} disabled={loading}>{loading ? <LoaderCircle className="spin" size={16} /> : <Eye size={16} />} Read page locally</button>
+          <button className="primary-button" onClick={() => void prepare('selection')} disabled={loading}><Eye size={16} /> Read selection locally</button>
+          <button className="text-button" onClick={() => void prepare('page')} disabled={loading}>{loading ? <LoaderCircle className="spin" size={16} /> : null} Read page locally</button>
         </div>
       ) : (
         <>
           <div className="context-card">
-            <div className="context-heading"><span>EXACTLY WHAT WOULD BE SENT</span><b>{preview.redactions} redacted</b></div>
+            <div className="context-heading"><span>PAGE CONTEXT</span><b>{preview.redactions} redacted</b></div>
             <h3>{preview.title || 'Untitled page'}</h3>
             <small className="context-origin">{preview.url}</small>
-            {preview.text
-              ? <><pre className="context-text">{preview.text}</pre><small className="context-size">{preview.text.length.toLocaleString()} characters — scroll the box to read all of it</small></>
-              : <p>No readable text was found. Only the title and address above would be sent.</p>}
+            <label>Page text<textarea aria-label="Page text" className="context-text" value={contextText} maxLength={12000} disabled={loading} onChange={(event) => {
+              setContextText(event.target.value);
+              setReview(null);
+            }} /></label>
           </div>
           {preview.text && <form className="ask-card" onSubmit={(event) => {
             event.preventDefault();
@@ -199,16 +225,40 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
                 : <p>No matching passages in this page preview.</p>}
             </div>}
           </form>}
-          <div className="permission-card">
-            <div>{isLocal ? <LockKeyhole size={17} /> : <Cloud size={17} />}<strong>{isLocal ? 'Local model permission' : 'Cloud permission'}</strong></div>
-            <p>{isLocal ? 'One approved request goes to Ollama on this device. Cloud features must be disabled.' : 'The title, address and text shown above are the whole of what leaves this machine. Nothing else from the page is sent, and only for the one request you approve.'}</p>
-            {approvalToken ? <div className="approved"><Check size={15} /> Approved for one request</div> : <button className="primary-button" onClick={approve} disabled={loading || !provider.configured}><ShieldCheck size={16} /> {provider.configured ? 'Approve context' : 'Connect provider first'}</button>}
-          </div>
-          {approvalToken && <div className="ask-card"><textarea aria-label="Question" maxLength={2000} value={question} onChange={(event) => setQuestion(event.target.value)} /><button className="primary-button full" onClick={() => void ask()} disabled={loading || !question.trim()}>{loading ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />} {isLocal ? 'Ask local AI once' : 'Ask cloud AI once'}</button></div>}
-          {answer && <div className="answer-card"><span>AI ANSWER</span><p>{answer}</p></div>}
+          <form className="ask-card" onSubmit={(event) => { event.preventDefault(); void reviewRequest(); }}>
+            <label>Prompt preset<select aria-label="Prompt preset" value={preset} disabled={loading} onChange={(event) => {
+              const id = event.target.value as AssistantPresetId | '';
+              setPreset(id);
+              if (id) setQuestion(presets?.[id] ?? ASSISTANT_PRESETS[id].question);
+              setReview(null);
+            }}>
+              <option value="">Custom question</option>
+              {Object.entries(ASSISTANT_PRESETS).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}
+            </select></label>
+            <label>Question<textarea aria-label="Question" maxLength={2000} value={question} disabled={loading} onChange={(event) => { setQuestion(event.target.value); setReview(null); }} /></label>
+            {preset && <div className="panel-actions preset-actions">
+              <button type="button" disabled={loading || !question.trim() || question.trim() === (presets?.[preset] ?? ASSISTANT_PRESETS[preset].question)} onClick={() => void savePreset(preset, { ...presets, [preset]: question.trim() }, 'Prompt preset saved')}>Save preset</button>
+              {presets?.[preset] && <button type="button" disabled={loading} onClick={() => {
+                const changes = { ...presets };
+                delete changes[preset];
+                void savePreset(preset, changes, 'Default prompt restored');
+              }}>Restore default</button>}
+            </div>}
+            <button className="primary-button full" type="submit" disabled={loading || !provider.configured || !question.trim()}><ShieldCheck size={16} /> {provider.configured ? 'Review request' : 'Connect provider first'}</button>
+          </form>
+          {review && <section className="permission-card request-review" aria-label="Request review">
+            <div>{review.mode === 'local' ? <LockKeyhole size={17} /> : <Cloud size={17} />}<strong>{review.mode === 'local' ? 'Send to local model' : 'Send to cloud provider'}</strong></div>
+            <p>{review.destination}</p><p>{review.model} · {review.redactions} redacted</p>
+            <details><summary>System instruction</summary><pre className="context-text">{review.systemPrompt}</pre></details>
+            <pre className="context-text">{review.userPrompt}</pre>
+            <button className="primary-button full" type="button" onClick={() => void ask()} disabled={loading}>Approve and ask once</button>
+          </section>}
           <button className="text-button" onClick={() => void clearContext()}>Clear page context</button>
         </>
       )}
+      {answer && <div className="answer-card"><span>AI ANSWER</span><p>{answer}</p><button type="button" className="text-button" onClick={() => {
+        void window.privateBrowser.copyText(answer).then(() => onToast('Answer copied')).catch((error) => onToast(error instanceof Error ? error.message : 'Could not copy the answer.', 'error'));
+      }}>Copy answer</button></div>}
     </div>
   );
 }

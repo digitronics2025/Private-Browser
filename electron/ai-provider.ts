@@ -3,10 +3,10 @@ import { dirname } from 'node:path';
 import { safeStorage } from 'electron';
 import { isSafeAiEndpoint } from './security.js';
 import { OllamaLocal } from './ollama-local.js';
+import { AI_SYSTEM_PROMPT, aiUserPrompt } from './ai-prompt.js';
 import type { AiProviderCheckResult, AiProviderCheckState, AiProviderInput, AiProviderStatus, LocalAiModels } from './types.js';
 
 type StoredProvider = AiProviderInput & { version: 1 };
-const systemPrompt = 'Answer only from the user-approved webpage context. Clearly say when the context is insufficient. Never request or expose credentials.';
 const maxCloudResponse = 256 * 1024;
 
 class AiResponseError extends Error {
@@ -116,10 +116,10 @@ export class AiProviderStore {
   async ask(context: { title: string; url: string; text: string; dom?: string; screenshotDataUrl?: string }, question: string, checkSource: () => void): Promise<string> {
     const provider = this.config;
     if (!provider) throw new Error('Configure an AI provider first');
-    const prompt = `Page: ${context.title}\nURL: ${context.url}\n\nApproved context:\n${context.text}${context.dom ? `\n\nApproved structural DOM (no text or values):\n${context.dom}` : ''}\n\nQuestion: ${question}`;
+    const prompt = aiUserPrompt(context, question);
     if ('mode' in provider) {
       if (context.screenshotDataUrl) throw new Error('The local assistant uses text previews');
-      return this.local.ask(provider.model, systemPrompt, prompt, () => {
+      return this.local.ask(provider.model, AI_SYSTEM_PROMPT, prompt, () => {
         if (this.config !== provider) throw new Error('The AI provider changed; approve the context again');
         checkSource();
       });
@@ -138,7 +138,7 @@ export class AiProviderStore {
         model: provider.model,
         temperature: 0.2,
         messages: [
-          { role: 'system', content: systemPrompt },
+          { role: 'system', content: AI_SYSTEM_PROMPT },
           { role: 'user', content },
         ],
       }),

@@ -309,6 +309,14 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if (args[0] !== undefined) requireWorkspaceId(args[0]);
       if (args[1] !== undefined) requireBoundedText(args[1], 'address', 4096);
       if (args[2] !== undefined) requireAccountSpaceId(args[2]); return;
+    case 'ai:prepare-preview':
+      between(args, 0, 1);
+      if (args[0] !== undefined && args[0] !== 'page' && args[0] !== 'selection') throw new Error('Choose a page or selection to read');
+      return;
+    case 'ai:review-request':
+      exact(args, 3); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', 12000); requireBoundedText(args[2], 'question', 2000); return;
+    case 'ai:send-reviewed':
+      exact(args, 1); requireUuid(args[0], 'review'); return;
     case 'ai:approve-preview':
       between(args, 1, 2); requireUuid(args[0], 'preview');
       if (args[1] !== undefined && args[1] !== 'cloud' && args[1] !== 'local') throw new Error('Invalid AI approval destination');
@@ -359,7 +367,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
 /** Channels that carry no arguments at all. */
 const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'browser:undo-tab-batch',
-  'ai:check-provider', 'ai:clear-provider', 'ai:local-models', 'ai:prepare-preview', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
+  'ai:check-provider', 'ai:clear-provider', 'ai:local-models', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
   'browser:import-chrome-passwords', 'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
   'browser:reopen-closed-tab', 'browser:stop', 'browser:stop-find', 'browser:toggle-bookmark', 'browser:toggle-bookmark-bar',

@@ -41,3 +41,63 @@ test('checks installed local models and labels the saved provider without a key 
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   await expect(page.evaluate(() => window.privateBrowser.getLocalAiModels())).rejects.toThrow(/workspace/);
 });
+
+test('reviews edited selection, destination and redacted question before approval', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 820 });
+  await page.goto('/?localAi=sample');
+  await page.evaluate(() => window.privateBrowser.configureAiProvider({ mode: 'local', model: 'preview-small:latest' }));
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Read selection locally' }).click();
+  await expect(panel.getByLabel('Page text')).toHaveValue('A brass kettle sits on the shelf.');
+  await panel.getByLabel('Page text').fill('A brass kettle');
+  await panel.getByRole('textbox', { name: 'Question', exact: true }).fill('What is listed? token=fixture-only');
+  await panel.getByRole('button', { name: 'Review request' }).click();
+  const review = panel.getByRole('region', { name: 'Request review' });
+  await expect(review).toContainText('http://127.0.0.1:11434/api/chat');
+  await expect(review).toContainText('1 redacted');
+  await expect(review).toContainText('Question: What is listed? [REDACTED]');
+  await expect(review).not.toContainText('fixture-only');
+  await expect(review).not.toContainText('sits on the shelf');
+  await panel.getByRole('textbox', { name: 'Question', exact: true }).fill('What item is mentioned?');
+  await expect(review).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Review request' }).click();
+  await expect(review).toContainText('Question: What item is mentioned?');
+  await review.getByRole('button', { name: 'Approve and ask once' }).click();
+  await expect(panel.getByText('The sample shows a brass kettle on the shelf.')).toBeVisible();
+  await expect(review).toHaveCount(0);
+});
+
+test('uses all four presets, saves edits in the current space and copies an answer on demand', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: {
+      writeText: async (text: string) => { document.documentElement.dataset.copiedAnswer = text; },
+    } });
+  });
+  await page.goto('/?localAi=sample');
+  await page.evaluate(() => window.privateBrowser.configureAiProvider({ mode: 'local', model: 'preview-small:latest' }));
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Read selection locally' }).click();
+  const selector = panel.getByRole('combobox', { name: 'Prompt preset', exact: true });
+  const question = panel.getByRole('textbox', { name: 'Question', exact: true });
+  for (const [option, word] of [['Short Darija reply', 'Darija'], ['French rewrite', 'French'], ['Product specifications', 'specifications'], ['Product comparison', 'Compare']] as const) {
+    await selector.selectOption({ label: option });
+    await expect(question).toHaveValue(new RegExp(word));
+  }
+  await question.fill('Compare only the materials mentioned.');
+  await panel.getByRole('button', { name: 'Save preset' }).click();
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings.assistantPrompts?.comparison))).toBe('Compare only the materials mentioned.');
+  await selector.selectOption({ label: 'French rewrite' });
+  await selector.selectOption({ label: 'Product comparison' });
+  await expect(question).toHaveValue('Compare only the materials mentioned.');
+  await panel.getByRole('button', { name: 'Review request' }).click();
+  await panel.getByRole('button', { name: 'Approve and ask once' }).click();
+  const copy = panel.getByRole('button', { name: 'Copy answer' });
+  await expect(copy).toBeVisible();
+  await expect(page.locator('html')).not.toHaveAttribute('data-copied-answer', /./);
+  await copy.click();
+  await expect(page.locator('html')).toHaveAttribute('data-copied-answer', 'The sample shows a brass kettle on the shelf.');
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) => state.settings.assistantPrompts))).toBeUndefined();
+});
