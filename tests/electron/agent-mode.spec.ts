@@ -377,7 +377,7 @@ test('lends only the owner-selected tab and keeps parallel tasks scoped by tab I
 
   await grantWork(chrome);
   const firstOpen = call('tab_open', { url: origin + '/parallel-one', label: 'Task one' });
-  await approval.getByRole('button', { name: 'Allow for this session' }).click();
+  await approval.getByRole('button', { name: 'Allow navigation for this session on this origin' }).click();
   const first = JSON.parse((await firstOpen).text).untrusted_page_content.tabId as string;
   const second = JSON.parse((await call('tab_open', { url: origin + '/parallel-two', label: 'Task two' })).text).untrusted_page_content.tabId as string;
   await expect(workspace.getByRole('button', { name: 'Task one' })).toBeVisible();
