@@ -378,6 +378,7 @@ kbd { font: inherit; }
 .vault-setup-guide dl { display: grid; gap: 9px; margin: 8px 0 0; }
 .vault-setup-guide dt { font-weight: 650; }
 .vault-setup-guide dd { margin: 3px 0 0; color: var(--text-muted); font-size: var(--fs-sm); line-height: 1.45; }
+.vault-fill-readiness p { color: var(--text-muted); margin: 4px 0; font-size: var(--fs-sm); }
 .ntp-space-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--workspace-color); }
 .ntp-shortcuts { width: min(584px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 4px; }
 .ntp-tile { position: relative; }

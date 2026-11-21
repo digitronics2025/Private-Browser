@@ -268,6 +268,7 @@ All are intents; the main process opens secure dialogs for anything secret.
 | `vault:open-editor` | `origin?: string` | `VaultItemMeta | undefined` |
 | `vault:form-shape` | — | `{ hasUsername, hasPassword }` |
 | `vault:reset-picks` | active Account Space ID | whether remembered picks were cleared |
+| `vault:fill-readiness` | — | current-page `VaultFillReadiness` |
 | `vault:save-from-page` | — | `VaultItemMeta | undefined` |
 | `vault:request-delete` | `id: string` | `boolean` (false when not confirmed) |
 | `vault:copy-password` | `id: string` | `void` |

@@ -27,3 +27,14 @@ for (const setup of ['enrolled', 'unenrolled'] as const) {
     }
   });
 }
+
+test('shows a next action when there is no matching sign-in', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/?vaultFill=no-match');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  await page.getByRole('tab', { name: 'Vault', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  const status = panel.getByRole('status').filter({ hasText: 'No matching sign-in' });
+  await expect(status).toContainText('Choose Add login or save the login from this website.');
+  await expect(panel.locator('input[type=password]')).toHaveCount(0);
+});

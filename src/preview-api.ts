@@ -787,6 +787,12 @@ export function installPreviewApi(): void {
       }
       return true;
     },
+    vaultFillReadiness: async () => {
+      if (params.has('vaultGuide')) return 'locked';
+      if (state.activeWorkspaceId === 'banking') return 'manual';
+      const value = params.get('vaultFill');
+      return value && ['connect', 'locked', 'no-match', 'unsupported', 'ready', 'choose-login'].includes(value) ? value : 'unsupported';
+    },
   };
   const api = new Proxy(handlers, { get(target, property) { return target[String(property)] ?? (async () => undefined); } });
   Object.defineProperty(window, 'privateBrowser', { value: api as unknown as PrivateBrowserApi, configurable: true });

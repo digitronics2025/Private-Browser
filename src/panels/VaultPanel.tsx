@@ -1,8 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Clock3, Cloud, Copy, Eye, FileDown, Fingerprint, KeyRound, LockKeyhole, Plus, RefreshCw, Search, ShieldCheck, Trash2, Zap } from 'lucide-react';
-import type { AccountSpaceId, VaultItemMeta, VaultStatus, WorkspaceId } from '../../electron/types';
+import type { AccountSpaceId, VaultFillReadiness, VaultItemMeta, VaultStatus, WorkspaceId } from '../../electron/types';
 import { EmptyState, PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
+
+const fillReadinessText: Record<VaultFillReadiness, [string, string]> = {
+  locked: ['Vault locked', 'Unlock MyVault to check for a saved login.'],
+  connect: ['Connect MyVault', 'Use the one-time code to connect this browser.'],
+  'no-match': ['No matching sign-in', 'Choose Add login or save the login from this website.'],
+  unsupported: ['This form is unsupported', 'Open the site’s HTTPS sign-in page, then check again.'],
+  manual: ['Banking requires manual approval', 'Choose Fill on a saved login and confirm the site in the secure window.'],
+  'choose-login': ['Choose a saved login', 'Use the login picker or choose Fill beside the matching login.'],
+  ready: ['Matching sign-in available', 'Use Fill beside the saved login if the form still needs it.'],
+  unavailable: ['MyVault fill is unavailable', 'Check Setup and recovery or enter your login directly on the site.'],
+};
 
 export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, onToast }: { accountId: AccountSpaceId; workspaceId: WorkspaceId; activeOrigin?: string; onOpenFull?: () => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [items, setItems] = useState<VaultItemMeta[]>([]);
@@ -10,6 +21,8 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
   const [query, setQuery] = useState('');
   const [secondsRemaining, setSecondsRemaining] = useState(30 - (Math.floor(Date.now() / 1000) % 30));
   const [formShape, setFormShape] = useState({ hasUsername: false, hasPassword: false });
+  const [fillReadiness, setFillReadiness] = useState<VaultFillReadiness>();
+  const [fillCheck, setFillCheck] = useState(0);
   const [conflictReview, setConflictReview] = useState<{ local: VaultItemMeta[]; cloud: VaultItemMeta[] }>();
   const [legacyAvailable, setLegacyAvailable] = useState(false);
   const load = async () => {
@@ -20,6 +33,14 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
   useEffect(() => { const timer = window.setInterval(() => setSecondsRemaining(30 - (Math.floor(Date.now() / 1000) % 30)), 1000); return () => window.clearInterval(timer); }, []);
   useEffect(() => { void window.privateBrowser.getVaultMigrationStatus().then((value) => setLegacyAvailable(value.legacyAvailable)); }, []);
   useEffect(() => { if (activeOrigin && workspaceId !== 'banking') void window.privateBrowser.inspectVaultFormShape().then(setFormShape).catch(() => setFormShape({ hasUsername: false, hasPassword: false })); else setFormShape({ hasUsername: false, hasPassword: false }); }, [activeOrigin, workspaceId]);
+  useEffect(() => {
+    let current = true;
+    setFillReadiness(undefined);
+    void window.privateBrowser.vaultFillReadiness().then((readiness) => {
+      if (current) setFillReadiness(readiness);
+    }).catch(() => { if (current) setFillReadiness('unavailable'); });
+    return () => { current = false; };
+  }, [activeOrigin, workspaceId, status.lifecycle, status.generation, fillCheck]);
   const copyPassword = async (id: string) => {
     try { await window.privateBrowser.copyPassword(id); onToast('Password copied; cleared from the clipboard in 30 seconds. Windows clipboard history (Win+V), if on, keeps its own copy.'); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
@@ -54,6 +75,10 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
           <div><dt>Website passkeys</dt><dd>Start from your account’s security settings on the website. Choose its passkey option and follow the Windows Security prompt for the device, phone or security key where you keep the passkey. On Windows 11, use Settings → Accounts → Passkeys to view passkeys saved to this PC. MyVault’s Windows Hello option unlocks the vault.</dd></div>
         </dl>
       </details>
+      {fillReadiness && <div className="settings-card vault-fill-readiness">
+        <div role="status"><strong>{fillReadinessText[fillReadiness][0]}</strong><p>{fillReadinessText[fillReadiness][1]}</p></div>
+        {status.lifecycle === 'unlocked' && activeOrigin && <button type="button" className="text-button" onClick={() => setFillCheck((value) => value + 1)}>Check this page again</button>}
+      </div>}
       {status.lifecycle === 'unconfigured' && <button className="primary-button full" onClick={() => void window.privateBrowser.requestVaultPairing().then((result) => { setStatus(result); setItems(result.items); }).catch((error) => onToast(error.message, 'error'))}><Cloud size={16} /> Connect with one-time code</button>}
       {status.lifecycle === 'recovery-required' && <button className="recovery-button" onClick={() => void window.privateBrowser.acknowledgeVaultRecovery().then((result) => { setStatus(result); setItems(result.items); }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}>Keep recovery copy and continue</button>}
       {status.lifecycle === 'locked' && status.platformUnlock === 'enrolled' && <><button className="primary-button full" onClick={() => void hello(() => window.privateBrowser.unlockVaultWithHello())}><Fingerprint size={16} /> Unlock with Windows Hello</button><button className="text-button" onClick={() => void unlock()}><LockKeyhole size={14} /> Use master password instead</button></>}

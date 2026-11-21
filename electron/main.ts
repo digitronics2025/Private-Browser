@@ -104,7 +104,8 @@ import { MyVaultDiskStore } from './myvault/vault-store.js';
 import { SecureVaultDialogs } from './myvault/secure-dialog.js';
 import { SECURE_CREDENTIAL_PRESETS, type ConfirmDeleteDialogValue, type EditLoginDialogValue, type SecureCredentialPreset, type UnlockDialogValue } from './myvault/secure-dialog-contract.js';
 import { FillCapabilityStore, normalizedWebOrigin, type FillContext } from './myvault/fill-capability.js';
-import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fillLoginInIsolatedWorld, inspectLoginFormShape, probeFocusedLoginField } from './myvault/isolated-fill.js';
+import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fillLoginInIsolatedWorld, hasSupportedLoginForm, inspectLoginFormShape, probeFocusedLoginField } from './myvault/isolated-fill.js';
+import type { VaultFillReadiness } from './types.js';
 import { FillPicker } from './myvault/fill-picker.js';
 import { FillPreferenceStore } from './myvault/fill-preferences.js';
 import { isSameSiteFillCandidate } from './myvault/site-match.js';
@@ -3031,6 +3032,29 @@ class BrowserController {
     return this.fillPreferences.reset(accountId);
   }
 
+  async vaultFillReadiness(): Promise<VaultFillReadiness> {
+    const policy = this.activeVaultPolicy();
+    const status = this.vault.status();
+    if (!policy.vaultSurface || !policy.manualFill || !status.credentialPersistenceAvailable) return 'unavailable';
+    if (status.lifecycle === 'unconfigured') return 'connect';
+    if (status.lifecycle === 'locked') return 'locked';
+    if (status.lifecycle !== 'unlocked') return 'unavailable';
+    try {
+      const initial = this.currentFillContext();
+      const contents = this.activeContents();
+      if (!contents || !initial.origin.startsWith('https://')) return 'unsupported';
+      if (policy.requireFillConfirmation) return 'manual';
+      if (!isAutomaticFillPageUrl(contents.getURL()) || !await hasSupportedLoginForm(contents)) return 'unsupported';
+      if (JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) return 'unsupported';
+      if (this.vault.status().lifecycle !== 'unlocked') return 'locked';
+      const matches = this.vault.searchMetadata('', initial.origin).filter((entry) => entry.url && isAutofillTarget(entry.url, initial.origin));
+      if (!matches.length) return 'no-match';
+      return selectAutomaticFillEntry(matches, this.fillPreferences.get(initial.accountSpaceId, initial.origin)) ? 'ready' : 'choose-login';
+    } catch {
+      return 'unsupported';
+    }
+  }
+
   async requestSaveFromPage() {
     const policy = this.activeVaultPolicy();
     if (!policy.vaultSurface || !policy.saveCapture) throw new Error('Password capture is disabled in this workspace');
@@ -4156,6 +4180,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:open-editor', (_event, origin?: string) => controller!.openVaultEditor(origin));
   handle('vault:form-shape', () => controller!.inspectVaultFormShape());
   handle('vault:reset-picks', (_event, accountId: AccountSpaceId) => controller!.resetVaultPicks(accountId));
+  handle('vault:fill-readiness', () => controller!.vaultFillReadiness());
   handle('vault:save-from-page', () => controller!.requestSaveFromPage());
   handle('vault:request-delete', (_event, id: string) => controller!.requestVaultDelete(id));
   handle('vault:acknowledge-recovery', () => controller!.acknowledgeVaultRecovery());
