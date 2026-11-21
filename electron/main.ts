@@ -34,6 +34,7 @@ import { externalLinkAccounts, isAvailableRegularAccount, preferredExternalLinkA
 import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
+import { getDomain } from 'tldts';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
 import { WORKSPACES } from './state-store.js';
@@ -48,6 +49,7 @@ import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookma
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
 import { mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
+import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
 import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
@@ -153,7 +155,7 @@ import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
 import { appendTabSetBookmarks, resolveTabSet } from './tab-sets.js';
-import type { ReferenceSearchInput, TabSetInput } from './types.js';
+import type { BrowsingDataInput, BrowsingDataReview, ReferenceSearchInput, TabSetInput } from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
@@ -277,6 +279,7 @@ const TRACKER_HOSTS = [
 type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string };
 
 class BrowserController {
+  private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
   private readonly downloads = new Map<string, LocalDownload>();
   private readonly downloadItems = new Map<string, DownloadItem>();
@@ -1234,6 +1237,86 @@ class BrowserController {
     this.store.refreshAccount(this.accounts.update(accountSpaceId, (record) => { record.websiteStatus = 'not-visited'; }));
     this.addPrivacyEvent('vault', 'Account Space data cleared', `${WORKSPACES.find((item) => item.id === account.workspaceId)?.name ?? 'An'} Account Space: website data and history were removed`);
     await this.showActiveTab();
+  }
+
+  private requireClearableAccount(accountSpaceId: AccountSpaceId) {
+    const account = this.requireAccountMembership(accountSpaceId);
+    if (this.store.isReadOnly() || account.locked) throw new Error('Unlock this Account Space to manage its browsing data.');
+    return account;
+  }
+
+  reviewBrowsingData(value: BrowsingDataInput): BrowsingDataReview {
+    const input = requireBrowsingDataInput(value);
+    this.requireClearableAccount(input.accountSpaceId);
+    const state = this.store.get();
+    const now = Date.now();
+    const visits = browsingDataVisitIds(state.history, input, now);
+    const review: BrowsingDataReview = { id: randomUUID(), accountSpaceId: input.accountSpaceId, historyCount: visits.size,
+      siteOrigin: input.siteOrigin, range: input.range, websiteData: input.websiteData, cache: input.cache };
+    this.browsingDataReview = { review, visits, initiator: this.activeAccountSpaceId(state), expiresAt: now + 120_000 };
+    return review;
+  }
+
+  private removeHistoryVisits(accountId: AccountSpaceId, visits: Set<string>): number {
+    let removed = 0;
+    this.store.update((state) => {
+      state.history = state.history.filter((entry) => {
+        if (entry.accountSpaceId !== accountId || !visits.has(entry.id)) return true;
+        removed += 1;
+        return false;
+      });
+    });
+    return removed;
+  }
+
+  deleteHistoryVisit(accountId: AccountSpaceId, id: string): void {
+    this.requireClearableAccount(accountId);
+    if (this.activeAccountSpaceId(this.store.get()) !== accountId) throw new Error('Return to the Account Space that owns this visit.');
+    this.removeHistoryVisits(accountId, new Set([id]));
+    this.broadcast();
+  }
+
+  async deleteReviewedBrowsingData(id: string): Promise<number> {
+    const pending = this.browsingDataReview;
+    if (!pending || pending.review.id !== id || pending.expiresAt <= Date.now()
+      || pending.initiator !== this.activeAccountSpaceId(this.store.get())) throw new Error('Review the browsing data again before deleting.');
+    this.browsingDataReview = undefined;
+    const { review, visits } = pending;
+    const account = this.requireClearableAccount(review.accountSpaceId);
+    const dataTypes: NonNullable<Electron.ClearDataOptions['dataTypes']> = [];
+    if (review.websiteData) dataTypes.push('cookies', 'localStorage', 'indexedDB', 'fileSystems', 'serviceWorkers', 'backgroundFetch', 'webSQL');
+    if (review.cache) dataTypes.push('cache');
+    if (dataTypes.length) {
+      const storage = session.fromPartition(this.store.partitionFor(account.id));
+      if (review.websiteData) {
+        const site = review.siteOrigin ? new URL(review.siteOrigin).hostname : undefined;
+        const cookieDomain = (host: string) => getDomain(host, { allowPrivateDomains: true }) ?? host;
+        const cookieSite = site && cookieDomain(site);
+        this.fillPicker.close();
+        for (const tab of this.store.get().tabs.filter((candidate) => candidate.accountSpaceId === account.id)) {
+          const runtime = this.runtimeTabs.get(tab.id);
+          if (!runtime?.view) continue;
+          const host = new URL(tab.url).hostname;
+          if (cookieSite && cookieDomain(host) !== cookieSite) continue;
+          this.window.contentView.removeChildView(runtime.view);
+          runtime.view.webContents.close();
+          this.runtimeTabs.delete(tab.id);
+        }
+      }
+      try {
+        await storage.clearData({ dataTypes, originMatchingMode: 'origin-in-all-contexts',
+          ...(review.siteOrigin ? { origins: [review.siteOrigin] } : {}) });
+        if (review.websiteData && !review.siteOrigin) await storage.clearAuthCache();
+      } finally {
+        if (!this.overlayOpen) await this.showActiveTab();
+      }
+      if (review.websiteData && (!review.siteOrigin || /(^|\.)google\.com$/.test(new URL(review.siteOrigin).hostname))) {
+        this.store.refreshAccount(this.accounts.update(account.id, (record) => { record.websiteStatus = 'not-visited'; }));
+      }
+    }
+    const removed = visits.size ? this.removeHistoryVisits(account.id, visits) : 0;
+    this.addPrivacyEvent('vault', 'Browsing data deleted', 'Reviewed browsing data was removed from one Account Space');
+    return removed;
   }
 
   async deleteAccountSpace(accountSpaceId: AccountSpaceId, confirmation: string): Promise<void> {
@@ -4244,6 +4327,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:switch-account-space', (_event, id: AccountSpaceId) => controller!.switchAccountSpace(id));
   handle('browser:address-matches', (_event, account: AccountSpaceId, text: string) => controller!.addressMatches(account, text));
   handle('browser:query-history', (_event, account: AccountSpaceId, input: HistoryQuery) => controller!.retainedHistory(account, input));
+  handle('browser:review-browsing-data', (_event, input: BrowsingDataInput) => controller!.reviewBrowsingData(input));
+  handle('browser:delete-reviewed-data', (_event, id: string) => controller!.deleteReviewedBrowsingData(id));
+  handle('browser:delete-history-visit', (_event, account: AccountSpaceId, id: string) => controller!.deleteHistoryVisit(account, id));
   handle('browser:open-address-match', (_event, account: AccountSpaceId, source: AddressMatch['source'], id: string) => controller!.openAddressMatch(account, source, id));
   handle('accounts:add-local', (_event, workspaceId: WorkspaceId, label: string, color: AccountSpaceColor) => controller!.addLocalAccountSpace(workspaceId, label, color));
   handle('accounts:update', (_event, id: AccountSpaceId, label?: string, color?: AccountSpaceColor) => controller!.updateAccountSpace(id, label, color));

@@ -460,6 +460,25 @@ export interface HistoryPage {
   trimmed: boolean;
 }
 
+export type BrowsingDataRange = 'hour' | 'day' | 'week' | 'all';
+export interface BrowsingDataInput {
+  accountSpaceId: AccountSpaceId;
+  range: BrowsingDataRange;
+  site: string;
+  history: boolean;
+  websiteData: boolean;
+  cache: boolean;
+}
+export interface BrowsingDataReview {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  siteOrigin?: string;
+  range: BrowsingDataRange;
+  historyCount: number;
+  websiteData: boolean;
+  cache: boolean;
+}
+
 export interface AddressMatch {
   source: 'tab' | 'bookmark' | 'history';
   id: string;

@@ -119,6 +119,9 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:restore-selected-tabs` | `restoreSelectedTabs(ids)` | Up to 100 tab IDs from the startup recovery Account Space | `void` |
 | `browser:reopen-recent-tab` | `reopenRecentTab(id)` | Closed tab ID from the current space | `void` |
 | `browser:query-history` | `queryHistory(accountSpaceId, input)` | Expected active space, text, hostname, UTC range boundaries and page | `HistoryPage` |
+| `browser:review-browsing-data` | `reviewBrowsingData(input)` | target space in the current workspace, site, history time range and selected data | one-time review and count of selected visits |
+| `browser:delete-reviewed-data` | `deleteReviewedBrowsingData(id)` | review ID bound to its initiating Account Space | number of visits removed |
+| `browser:delete-history-visit` | `deleteHistoryVisit(accountId, id)` | current Account Space and one visit ID | `void` |
 | `browser:open-address-match` | `openAddressMatch(accountSpaceId, source, id)` | Expected active space, result type and record ID | `void` |
 | `browser:navigate` | `navigate(value)` | `value: string` | `void` |
 | `browser:home` | `goHome()` | none (exactly zero arguments) | `void` |
