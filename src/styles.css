@@ -661,6 +661,12 @@ kbd { font: inherit; }
 .bridge-pairing-guide dd { margin: 0; color: var(--text-muted); }
 .bridge-pairing-code { display: grid; gap: 4px; margin-block: 8px; }
 .bridge-pairing-code code { font-size: var(--fs-xl); letter-spacing: .15em; }
+.development-server { display: grid; gap: 8px; min-width: 0; }
+.development-server h3, .development-server p, .development-server dl { margin: 0; }
+.development-server dl { display: grid; gap: 6px; }
+.development-server dl > div { display: flex; flex-wrap: wrap; gap: 4px 8px; overflow-wrap: anywhere; }
+.development-server dt { font-weight: 650; }
+.development-server dd { margin: 0; color: var(--text-muted); }
 .bridge-label { display: flex; flex-direction: column; gap: 6px; color: var(--text-muted); font-size: var(--fs-xs); font-weight: 600; }
 .project-summary { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 12px; }
 .project-summary > div { display: flex; flex-direction: column; min-width: 0; }

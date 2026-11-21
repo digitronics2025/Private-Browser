@@ -19,9 +19,11 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
     const project = { project: { id: 'a'.repeat(32), name: 'Fixture workspace', trusted: true }, framework: 'Vite', packageManager: 'npm', types: ['vite-react'] };
     const commit = 'a'.repeat(40);
     let bridge: { state: string; browserVersion: string; extensionVersion?: string; project?: typeof project; pairingCode?: string; pairingExpiresAt?: number; activity?: string; vscodeVersion?: string; instanceId?: string } = connected
-      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: '0.4.1', vscodeVersion: '1.95.3', instanceId: 'abad0000-0000-4000-8000-000000000010', project }
+      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: '0.4.2', vscodeVersion: '1.95.3', instanceId: 'abad0000-0000-4000-8000-000000000010', project }
       : { state: 'disconnected', browserVersion: '0.4.0' };
     let ui: Record<string, unknown> = {};
+    let server: Record<string, unknown> = { phase: 'stopped', expectedUrl: 'http://localhost:5173/' };
+    let attempts = 0;
     let notify: ((value: ReturnType<typeof getState>) => void) | undefined;
     const getState = () => ({ ...state, ui });
     const api = new Proxy({
@@ -35,9 +37,21 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
       cancelBridgePairing: async () => (bridge = { state: 'disconnected', browserVersion: '0.4.0', activity: 'Pairing cancelled' }),
       listBridgeProjects: async () => [],
       setUiPreferences: async (patch: Record<string, unknown>) => { ui = { ...ui, ...patch }; notify?.(getState()); },
-      runBridgeAction: async (action: string) => action === 'project.revision'
-        ? { branch: 'topic/review', commit, staged: 1, unstaged: 2, untracked: 0, conflicts: 0, githubRepository: 'example/app' }
-        : undefined,
+      runBridgeAction: async (action: string) => {
+        if (action === 'project.revision') return { branch: 'topic/review', commit, staged: 1, unstaged: 2, untracked: 0, conflicts: 0, githubRepository: 'example/app' };
+        if (action === 'server.status') return server;
+        if (action === 'server.start') {
+          attempts += 1;
+          server = attempts === 1
+            ? { phase: 'failed', expectedUrl: 'http://localhost:5173/', reason: 'port-in-use' }
+            : { phase: 'ready', expectedUrl: 'http://localhost:5173/', address: 'http://localhost:5174/', port: 5174 };
+          return server;
+        }
+        if (action === 'server.stop') {
+          server = { phase: 'stopped', expectedUrl: 'http://localhost:5173/' };
+          return { stopped: true };
+        }
+      },
       newTab: async (_workspace: string, url: string) => { document.documentElement.dataset.openedGitHubUrl = url; },
       setLayout: async () => undefined,
     }, { get: (target, property) => property in target ? target[property as keyof typeof target] : async () => undefined });
@@ -88,15 +102,35 @@ test('opens the exact GitHub revision on request from a narrow Developer Bridge 
   await panelToggle.click();
   await page.locator('#side-panel-tab-developer').click();
   const status = page.getByRole('region', { name: 'Connection details' });
-  await expect(status).toContainText('0.4.1 · Protocol matched');
+  await expect(status).toContainText('0.4.2 · Protocol matched');
   await expect(status).toContainText('1.95.3 abad0000');
   await expect(status).toContainText('Fixture workspace · Approved');
   await status.getByRole('button', { name: 'Check connection status' }).click();
   const revision = page.getByRole('region', { name: 'Git revision' });
+  await expect(revision).toHaveCount(1);
   await expect(revision.getByText('topic/review')).toBeVisible();
   await expect(revision.getByText('1 staged · 2 unstaged · 0 untracked · 0 conflicts')).toBeVisible();
   await expect(page.locator('html')).not.toHaveAttribute('data-opened-git-hub-url');
   await revision.getByRole('button', { name: 'Open commit' }).click();
   const destination = await page.locator('html').evaluate((root: HTMLElement) => root.dataset.openedGitHubUrl);
   expect(destination).toBe('https://github.com/example/app/commit/' + 'a'.repeat(40));
+});
+
+test('shows the selected project port, retries a conflict and stops the verified server', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await installMock(page, 'development', true);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  await page.locator('#side-panel-tab-developer').click();
+  const server = page.getByRole('region', { name: 'Development server' });
+  await expect(server).toContainText('Fixture workspace');
+  await expect(server).toContainText('http://localhost:5173/');
+  await server.getByRole('button', { name: 'Start server' }).click();
+  await expect(server).toContainText('The expected port is already in use.');
+  await expect(server.getByRole('button', { name: 'Open local server' })).toHaveCount(0);
+  await server.getByRole('button', { name: 'Retry' }).click();
+  await expect(server.getByRole('status')).toHaveText('Ready for local connections');
+  await expect(server).toContainText('http://localhost:5174/');
+  await server.getByRole('button', { name: 'Stop server' }).click();
+  await expect(server.getByRole('status')).toHaveText('Stopped');
 });

@@ -117,7 +117,7 @@ import type {
   TabBatchScope,
   TabGroup,
 } from './types.js';
-import { gitRevisionSchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
+import { devServerStatusSchema, gitRevisionSchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
 import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
 import { MyVaultDiskStore } from './myvault/vault-store.js';
@@ -2549,7 +2549,7 @@ class BrowserController {
 
   async runBridgeAction(action: DeveloperBridgeAction, payload: Record<string, unknown>): Promise<unknown> {
     this.requireDeveloperWorkspace();
-    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'source.open', 'server.discover', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
+    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'source.open', 'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
     if (!allowed.has(action)) throw new Error('Unsupported VS Code action');
     const bridge = this.vscodeBridge.status();
     const projectId = bridge.project?.project.id;
@@ -2564,21 +2564,37 @@ class BrowserController {
       if (projectId !== this.vscodeBridge.status().project?.project.id) throw new Error('The selected project changed.');
       return gitRevisionSchema.nullable().parse(result);
     }
+    if (action === 'server.status' || action === 'server.start' || action === 'server.restart' || action === 'server.stop') {
+      if (!projectId) throw new Error('Choose an approved workspace first.');
+      const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+      if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 2))) {
+        throw new Error('Install Private Browser Bridge 0.4.2 or later for development server controls.');
+      }
+      const originalTab = this.activeTab(this.store.get());
+      const result = await this.vscodeBridge.request(action, { projectId, ...(action === 'server.status' && payload.refresh === true ? { refresh: true } : {}) });
+      this.requireDeveloperWorkspace();
+      const currentProject = this.vscodeBridge.status().project;
+      if (this.sessionIsLocked || projectId !== currentProject?.project.id) throw new Error('The selected project changed.');
+      if (action === 'server.stop') {
+        if (currentProject.devServerUrl) this.vscodeBridge.setProject({ ...currentProject, devServerUrl: undefined });
+        return result;
+      }
+      const rawStatus = action === 'server.status' ? result : result && typeof result === 'object' && 'status' in result ? result.status : undefined;
+      const status = devServerStatusSchema.parse(rawStatus);
+      if (currentProject.devServerUrl !== status.address) this.vscodeBridge.setProject({ ...currentProject, devServerUrl: status.address });
+      const active = this.activeTab(this.store.get());
+      if (action !== 'server.status' && status.address && originalTab.id === active.id && originalTab.url === active.url) {
+        await this.navigate(status.address);
+      }
+      return status;
+    }
     let safePayload: Record<string, unknown> = { ...payload, ...(projectId ? { projectId } : {}) };
     if (action === 'ai.handoff') {
       const preview = this.consumeAiApproval(String(payload.approvalToken ?? ''));
       safePayload = { projectId, action: String(payload.action ?? 'Diagnose').slice(0, 100), context: `${preview.text}${preview.dom ? `\n\nStructural DOM:\n${preview.dom}` : ''}` };
       this.addPrivacyEvent('cloud-approved', 'VS Code AI handoff approved', preview.title);
     }
-    const result = await this.vscodeBridge.request(action, safePayload);
-    if ((action === 'server.start' || action === 'server.restart') && result && typeof result === 'object' && 'url' in result) {
-      const url = new URL(String((result as { url: unknown }).url));
-      if (!['http:', 'https:'].includes(url.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) throw new Error('VS Code reported an invalid development-server URL');
-      const current = this.vscodeBridge.status().project;
-      if (current) this.vscodeBridge.setProject({ ...current, devServerUrl: url.toString() });
-      await this.navigate(url.toString());
-    }
-    return result;
+    return this.vscodeBridge.request(action, safePayload);
   }
 
   async inspectDeveloperPage(selectElement: boolean): Promise<DeveloperPageInfo> {

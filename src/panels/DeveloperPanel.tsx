@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Code2, Copy, FileCode2, LoaderCircle, LockKeyhole, PanelRightClose, PanelRightOpen, Play, ScanSearch, ShieldCheck, Sparkles, Trash2, TriangleAlert } from 'lucide-react';
 import { BridgePairingGuide } from './BridgePairingGuide';
+import { DevelopmentServer } from './DevelopmentServer';
 import type { AiPagePreview, BridgeStatus, BrowserTab, DeveloperPageInfo, DevToolsMode, GitRevision, ProjectInfo, ProjectSummary, TestKind, TestReport } from '../../electron/types';
 import { PanelHeader } from './common';
 import { ControlCenterSection } from './ControlCenterSection';
@@ -139,7 +140,7 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
         {project && <div className="project-summary"><div><small>PROJECT</small><strong>{project.project.name}</strong><span>{project.framework} · {project.packageManager}</span></div><button onClick={() => void bridgeAction('project.open')}>Reveal</button><p>{project.types.join(' + ') || 'Generic project'}</p>{project.activeFile && <p>Editing: {project.activeFile}</p>}</div>}
         {project && <ProjectRevision key={project.project.id} projectId={project.project.id}
           onOpen={(url) => void run(() => window.privateBrowser.newTab('development', url))} />}
-        <div className="bridge-action-row"><button className="primary-button" disabled={!project || loading} onClick={() => void bridgeAction('server.start', {}, 'Development server started')}>Start server</button><button disabled={!project || loading} onClick={() => void bridgeAction('server.restart', {}, 'Server restarted')}>Restart</button><button disabled={!project || loading} onClick={() => void bridgeAction('server.stop', {}, 'Server stopped')}>Stop</button></div>
+        {project && <DevelopmentServer key={'server-' + project.project.id} projectName={project.project.name} />}
         <button className="bridge-danger" onClick={() => void run(() => window.privateBrowser.disconnectBridge(true).then(setBridge), 'VS Code identity revoked')}>Revoke this VS Code</button>
       </>}</div>}
 

@@ -3,22 +3,30 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, readFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import * as vscode from 'vscode';
-import type { BridgeMethod, CommandSpec, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';
-import { MAX_TASK_OUTPUT_BYTES, projectInfoSchema, testKindSchema, testReportSchema } from '@private-browser/bridge-protocol';
+import type { BridgeMethod, CommandSpec, DevServerStatus, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';
+import { MAX_TASK_OUTPUT_BYTES, localDevelopmentAddress, projectInfoSchema, testKindSchema, testReportSchema } from '@private-browser/bridge-protocol';
 import { detectProject } from './adapters.js';
 import { gitRevisionForWorkspace, revisionReportNote, type GitRepositoryView } from './git-revision.js';
 import { ReportStore } from './report-store.js';
 import { spawnCommand } from './spawn-command.js';
+import { developmentPort, isDevelopmentPortListening, matchesPortConflict, reportedDevelopmentAddress } from './dev-server-status.js';
 import { resolveInsideWorkspace, safeLiveOrigin, sanitizeOutput, stableFingerprint } from './security.js';
 
 type EventSink = (event: string, payload: unknown) => void;
-interface RunningProcess { process: ChildProcessWithoutNullStreams; output: string; command: CommandSpec; url?: string; }
+interface RunningProcess {
+  process: ChildProcessWithoutNullStreams;
+  output: string;
+  reported?: URL;
+  occupiedPort?: number;
+  stopping?: boolean;
+}
 
 /** Dev-server output is forwarded at most this often. */
 const PROGRESS_INTERVAL_MS = 1_000;
 
 export class ProjectService {
   private readonly running = new Map<string, RunningProcess>();
+  private readonly serverStates = new Map<string, DevServerStatus>();
   private readonly activeTasks = new Map<string, ChildProcessWithoutNullStreams>();
   private readonly reports: ReportStore;
   private lastReportId?: string;
@@ -44,6 +52,7 @@ export class ProjectService {
       case 'project.open': return this.openProject(String(this.record(payload).projectId ?? ''));
       case 'source.open': return this.openSource(payload);
       case 'server.discover': return this.inspect(String(this.record(payload).projectId ?? ''));
+      case 'server.status': return this.serverStatus(payload);
       case 'server.start': return this.startServer(payload);
       case 'server.stop': return this.stopServer(String(this.record(payload).projectId ?? ''));
       case 'server.restart': await this.stopServer(String(this.record(payload).projectId ?? '')); return this.startServer(payload);
@@ -176,17 +185,45 @@ export class ProjectService {
     if (answer === 'Always allow exact command') await this.context.globalState.update(this.approvalKey(projectId, command.fingerprint), true);
   }
 
-  private async startServer(payloadValue: unknown): Promise<{ started: true; command: CommandSpec; url?: string }> {
+  private async serverStatus(payloadValue: unknown): Promise<DevServerStatus> {
+    const payload = this.record(payloadValue);
+    const projectId = String(payload.projectId ?? '');
+    await this.folderFor(projectId);
+    const running = this.running.get(projectId);
+    if (running) return this.updateServerStatus(projectId, running);
+    const previous = this.serverStates.get(projectId);
+    if (previous && payload.refresh !== true) return previous;
+    const info = await this.inspect(projectId);
+    const status: DevServerStatus = { phase: info.commands.some((item) => item.category === 'dev') ? 'stopped' : 'missing-command',
+      expectedUrl: this.expectedServerAddress(info)?.toString() };
+    this.serverStates.set(projectId, status);
+    return status;
+  }
+
+  private expectedServerAddress(info: ProjectInfo): URL | undefined {
+    const port = info.types.includes('vite-react') ? 5173 : info.types.includes('cloudflare-worker') ? 8787 : undefined;
+    return port ? localDevelopmentAddress(`http://localhost:${port}/`) : undefined;
+  }
+
+  private async startServer(payloadValue: unknown): Promise<{ started: boolean; command?: CommandSpec; url?: string; status: DevServerStatus }> {
     const payload = this.record(payloadValue); const projectId = String(payload.projectId ?? '');
     const info = await this.inspect(projectId);
     const command = info.commands.find((item) => item.id === String(payload.commandId ?? '')) ?? info.commands.find((item) => item.category === 'dev');
-    if (!command) throw new Error('No development command was discovered');
+    const expected = this.expectedServerAddress(info);
+    const expectedUrl = expected?.toString();
+    if (!command) {
+      const status: DevServerStatus = { phase: 'missing-command', expectedUrl };
+      this.serverStates.set(projectId, status);
+      return { started: false, status };
+    }
     await this.approveCommand(projectId, command);
+    const occupiedPort = expected && await isDevelopmentPortListening(expected) ? developmentPort(expected) : undefined;
     this.guardCommandStart();
     if (this.running.has(projectId)) throw new Error('A project task is already running');
     const child = spawnCommand(command.executable, command.args, { cwd: command.cwd, windowsHide: true, env: { ...process.env, BROWSER: 'none' } });
-    const running: RunningProcess = { process: child, output: '', command };
+    const running: RunningProcess = { process: child, output: '', occupiedPort };
     this.running.set(projectId, running);
+    this.serverStates.set(projectId, { phase: 'waiting', expectedUrl });
     // At most one progress event a second (plus the one that first reveals the
     // server address): a chatty dev server used to exceed the browser's 120
     // messages-a-minute limit and drop the connection (F-72).
@@ -195,47 +232,73 @@ export class ProjectService {
     const sendProgress = () => {
       progressTimer = undefined;
       lastProgressAt = Date.now();
-      this.emit('task.progress', { projectId, command: command.label, url: running.url, output: running.output.slice(-4_000) });
+      this.emit('task.progress', { projectId, command: command.label, output: running.output.slice(-4_000) });
     };
     const onData = (data: Buffer) => {
       running.output = sanitizeOutput(`${running.output}${data.toString()}`, MAX_TASK_OUTPUT_BYTES);
-      const hadUrl = Boolean(running.url);
-      const match = running.output.match(/https?:\/\/(?:127\.0\.0\.1|localhost):\d+(?:\/[^\s]*)?/i);
-      if (match) running.url = match[0];
-      if (!hadUrl && running.url) { if (progressTimer) clearTimeout(progressTimer); sendProgress(); return; }
+      const hadAddress = Boolean(running.reported);
+      running.reported ??= reportedDevelopmentAddress(running.output.slice(-8000));
+      if (!hadAddress && running.reported) { if (progressTimer) clearTimeout(progressTimer); sendProgress(); return; }
       if (progressTimer) return;
       progressTimer = setTimeout(sendProgress, Math.max(0, PROGRESS_INTERVAL_MS - (Date.now() - lastProgressAt)));
     };
-    child.once('exit', () => { if (progressTimer) clearTimeout(progressTimer); });
     child.stdout.on('data', onData); child.stderr.on('data', onData);
-    child.once('exit', (code) => { this.running.delete(projectId); this.emit('task.complete', { projectId, command: command.label, code, url: running.url, output: running.output.slice(-8_000) }); });
-    child.once('error', (error) => { this.running.delete(projectId); this.emit('task.complete', { projectId, command: command.label, code: -1, error: sanitizeOutput(error.message) }); });
-    const url = await this.waitForServerUrl(running, info);
-    return { started: true, command, ...(url ? { url } : {}) };
+    const finish = (code: number | null, error?: NodeJS.ErrnoException) => {
+      if (progressTimer) clearTimeout(progressTimer);
+      if (this.running.get(projectId) !== running) return;
+      this.running.delete(projectId);
+      const reason = matchesPortConflict(running.output) ? 'port-in-use'
+        : error?.code === 'ENOENT' ? 'missing-executable' : 'command-ended';
+      this.serverStates.set(projectId, running.stopping ? { phase: 'stopped', expectedUrl } : { phase: 'failed', expectedUrl, reason });
+      this.emit('task.complete', { projectId, command: command.label, code,
+        ...(error ? { error: sanitizeOutput(error.message) } : { output: running.output.slice(-8_000) }) });
+    };
+    child.once('exit', (code) => finish(code));
+    child.once('error', (error) => finish(-1, error));
+    const deadline = Date.now() + 7_500;
+    let status = await this.updateServerStatus(projectId, running);
+    while (status.phase === 'waiting' && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      status = await this.updateServerStatus(projectId, running);
+    }
+    return { started: status.phase === 'ready' || status.phase === 'waiting', command,
+      ...(status.phase === 'ready' ? { url: status.address } : {}), status };
   }
 
-  private async waitForServerUrl(running: RunningProcess, info: ProjectInfo): Promise<string | undefined> {
-    const ports = info.types.includes('cloudflare-worker') ? [8787, 5173, 4173] : info.types.includes('vite-react') ? [5173, 4173, 3000] : [3000, 5173, 8080];
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const candidates = [...new Set([running.url, ...ports.map((port) => `http://127.0.0.1:${port}/`)].filter(Boolean) as string[])];
-      for (const candidate of candidates) {
-        try {
-          const url = new URL(candidate);
-          if (!['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) continue;
-          const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(750) });
-          if (response.status < 500) return url.toString();
-        } catch { /* the managed server has not bound yet */ }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+  private async updateServerStatus(projectId: string, running: RunningProcess): Promise<DevServerStatus> {
+    const current = this.serverStates.get(projectId)!;
+    if (this.running.get(projectId) !== running || running.stopping) return current;
+    const { expectedUrl } = current;
+    const address = running.reported;
+    if (!address) {
+      const reason = matchesPortConflict(running.output) ? 'port-in-use' : 'address-not-reported';
+      const status: DevServerStatus = { phase: 'waiting', expectedUrl, reason };
+      this.serverStates.set(projectId, status);
+      return status;
     }
-    return undefined;
+    const port = developmentPort(address);
+    const conflict = port === running.occupiedPort;
+    const listening = !conflict && await isDevelopmentPortListening(address);
+    if (this.running.get(projectId) !== running || running.stopping) return this.serverStates.get(projectId)!;
+    const status: DevServerStatus = listening
+      ? { phase: 'ready', expectedUrl, address: address.toString(), port }
+      : { phase: 'waiting', expectedUrl, reason: conflict ? 'port-in-use' : 'not-listening' };
+    this.serverStates.set(projectId, status);
+    return status;
   }
 
   private async stopServer(projectId: string): Promise<{ stopped: boolean }> {
     const running = this.running.get(projectId);
     if (!running) return { stopped: false };
+    running.stopping = true;
+    const expectedUrl = this.serverStates.get(projectId)?.expectedUrl;
+    this.serverStates.set(projectId, { phase: 'stopping', expectedUrl });
     await this.terminateProcess(running.process);
-    this.running.delete(projectId);
+    if (this.running.get(projectId) === running) {
+      running.stopping = false;
+      await this.updateServerStatus(projectId, running);
+      throw new Error('VS Code could not stop the project process. Check its terminal and retry.');
+    }
     return { stopped: true };
   }
 
