@@ -53,9 +53,11 @@ cross the preload bridge.
   other-bookmarks placement, nested folder names and per-level source order.
   A nameless Chrome bookmark imports with an empty title (not its URL), so the
   bar shows it as an icon alone, as Chrome does.
-  Empty folders are not represented because the app persists URL entries rather
-  than folder nodes. The hard safety caps are 25,000 URL bookmarks and 20 folder
-  levels (deeper entries are counted as skipped).
+  Empty and nested folders stay in their destination Account Space. Import limits
+  are 25,000 bookmarks, 5,000 saved folders and 20 folder levels. The bookmark
+  manager can create folders, move bookmarks or whole folders, and choose a
+  folder when saving the current page. Shift-click the star to open the folder
+  chooser. On the bar, Shift+Alt+Left or Right reorders the focused item.
 - **History:** copies and opens the selected profile's `History` SQLite database
   read-only, selecting up to 10,000 newest visible URLs and converting Chrome's
   1601-based microsecond timestamps to ISO time.

@@ -1,6 +1,6 @@
-import { bookmarkOrder, type BookmarkLevel } from './bookmark-tree.js';
+import { nextBookmarkOrder, type BookmarkLevel } from './bookmark-tree.js';
 import { isAllowedRemoteUrl } from './security.js';
-import type { Bookmark } from './types.js';
+import type { Bookmark, BookmarkFolder } from './types.js';
 
 export const MAX_BOOKMARK_EDIT_BATCH = 200;
 const ACCOUNT_BOOKMARK_LIMIT = 25_000;
@@ -17,18 +17,20 @@ export function bookmarkFolderLabel(level: BookmarkLevel): string {
   return [level.location === 'bar' ? 'Bookmarks bar' : 'Other bookmarks', ...level.path].join(' / ');
 }
 
-export function bookmarkFolders(bookmarks: Bookmark[]): BookmarkLevel[] {
+export function bookmarkFolders(bookmarks: Bookmark[], saved: BookmarkFolder[] = []): BookmarkLevel[] {
   const folders = new Map<string, BookmarkLevel>();
   for (const location of ['bar', 'other'] as const) {
     const level = { location, path: [] };
     folders.set(bookmarkFolderKey(level), level);
   }
-  for (const { location, folderPath } of bookmarks) {
-    for (let depth = 1; depth <= folderPath.length; depth += 1) {
-      const level = { location, path: folderPath.slice(0, depth) };
+  const include = (location: BookmarkLevel['location'], path: string[]) => {
+    for (let depth = 1; depth <= path.length; depth += 1) {
+      const level = { location, path: path.slice(0, depth) };
       folders.set(bookmarkFolderKey(level), level);
     }
-  }
+  };
+  for (const item of bookmarks) include(item.location, item.folderPath);
+  for (const item of saved) include(item.location, item.path);
   return [...folders.values()].sort((left, right) => bookmarkFolderLabel(left).localeCompare(bookmarkFolderLabel(right)));
 }
 
@@ -50,7 +52,7 @@ export function editBookmarkAddress<T extends Bookmark>(bookmarks: T[], id: stri
   return bookmarks.map((bookmark) => bookmark.id === id ? { ...bookmark, url } : bookmark);
 }
 
-export function changeBookmarkBatch<T extends Bookmark>(bookmarks: T[], account: string, ids: string[], destination?: BookmarkLevel): { bookmarks: T[]; undo?: BookmarkUndo<T> } {
+export function changeBookmarkBatch<T extends Bookmark>(bookmarks: T[], account: string, ids: string[], destination?: BookmarkLevel, folders: BookmarkFolder[] = []): { bookmarks: T[]; undo?: BookmarkUndo<T> } {
   const selected = new Set(ids);
   const owned = bookmarks.filter((item) => item.accountSpaceId === account);
   const items = owned.filter((item) => selected.has(item.id));
@@ -60,13 +62,12 @@ export function changeBookmarkBatch<T extends Bookmark>(bookmarks: T[], account:
   if (!destination) return { bookmarks: bookmarks.filter((item) => !(item.accountSpaceId === account && selected.has(item.id))), undo: { kind: 'deleted', before: items } };
 
   const { location, path } = destination;
-  const children = owned.filter((item) => item.location === location && path.every((part, index) => item.folderPath[index] === part));
-  if (path.length && !children.length) throw new Error('The destination folder is no longer available.');
+  const firstOrder = nextBookmarkOrder(owned, folders, destination);
   const before = items.filter((item) => item.location !== location || item.folderPath.length !== path.length || !path.every((part, index) => item.folderPath[index] === part));
   if (!before.length) return { bookmarks };
 
-  const parentOrder = path.map((_, depth) => children.reduce((lowest, item) => Math.min(lowest, bookmarkOrder(item, depth)), Number.MAX_SAFE_INTEGER));
-  let nextOrder = children.reduce((highest, item) => Math.max(highest, bookmarkOrder(item, path.length)), -1) + 1;
+  const parentOrder = firstOrder.slice(0, -1);
+  let nextOrder = firstOrder.at(-1)!;
   const after = before.map((item) => {
     const orderPath = [...parentOrder, Math.min(Number.MAX_SAFE_INTEGER, nextOrder++)];
     return { ...item, location, folderPath: [...path], orderPath, order: orderPath[0] };

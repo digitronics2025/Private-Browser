@@ -13,6 +13,7 @@ export interface BrowserMenuActions {
   manageAccounts: () => void;
   openTool: (tool: SidePanelTool) => void;
   toggleBookmark: () => void;
+  bookmarkToFolder: () => void;
   pinCurrentPage?: () => void;
   setUi: (patch: Partial<UiPreferences>) => void;
   exportBookmarks: () => void;
@@ -81,6 +82,7 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
       <MenuItem icon={Download} label={SIDE_PANEL_NAMES.downloads} shortcut="Ctrl+J" onSelect={() => actions.openTool('downloads')} />
       <SubmenuItem id="bookmarks" icon={Star} label="Bookmarks">
         <MenuItem icon={Star} label={bookmarked ? 'Remove bookmark' : 'Bookmark this tab'} shortcut="Ctrl+D" disabled={tab.isHome} onSelect={actions.toggleBookmark} />
+        <MenuItem icon={Star} label="Bookmark this tab in a folder…" disabled={tab.isHome} onSelect={actions.bookmarkToFolder} />
         {actions.pinCurrentPage && <MenuItem label="Pin current page to New Tab" onSelect={actions.pinCurrentPage} />}
         <SubmenuItem id="bookmark-bar-mode" label="Bookmarks bar">
           {BAR_MODES.map((mode) => <MenuItem key={mode.id} role="menuitemradio" checked={ui.bookmarkBarMode === mode.id} label={mode.label} onSelect={() => actions.setUi({ bookmarkBarMode: mode.id })} />)}

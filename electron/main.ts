@@ -53,7 +53,7 @@ import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrd
 import { CHROME, contentBounds, DEFAULT_CONTENT_INSETS, FRAME_COLORS, sanitizeContentInsets, ZERO_INSETS, type ContentInsets } from './chrome-layout.js';
 import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
-import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
+import { appendBookmarkFolders, appendImportedBookmarks, createBookmarkFolder, editBookmarkFolder, exportBookmarksHtml, moveTabWithinAccountSpace, nextBookmarkOrder, removeBookmark, renameBookmark, reorderBookmarkLevel, undoImportedBookmarkFolders } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettings, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
@@ -84,6 +84,7 @@ import type {
   AiProviderInput,
   BookmarkEntryKeyInput,
   BookmarkLevelInput,
+  BookmarkFolder,
   BrowserSnapshot,
   BackupRestorePreview,
   BrowserTab,
@@ -344,7 +345,7 @@ class BrowserController {
     profileKey: string; settingsRevision?: string;
   };
   private readonly chromeImportUndo = new Map<AccountSpaceId, {
-    profileKey: string; bookmarks: Map<string, string>; history: Set<string>;
+    profileKey: string; bookmarks: Map<string, string>; history: Set<string>; folders: BookmarkFolder[];
     settings?: { workspaceId: WorkspaceId; before: BrowserSettings; after: BrowserSettings };
   }>();
   private readonly closedTabBatches = new Map<AccountSpaceId, {
@@ -604,6 +605,7 @@ class BrowserController {
       activeTabId: activeTab.id,
       tabs,
       bookmarks: persisted.bookmarks,
+      bookmarkFolders: downloadAccount ? persisted.bookmarkFoldersByAccountSpace?.[downloadAccount] : undefined,
       bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
       history: persisted.history.slice(0, 100),
       ...(downloadAccount ? this.downloadSnapshot(downloadAccount) : { downloads: [] }),
@@ -1867,10 +1869,34 @@ class BrowserController {
       const existing = next.bookmarks.findIndex((item) => item.url === tab.url && item.accountSpaceId === tab.accountSpaceId);
       if (existing >= 0) next.bookmarks.splice(existing, 1);
       else {
-        const order = next.bookmarks.filter((item) => item.accountSpaceId === tab.accountSpaceId && item.location === 'bar').length;
-        next.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order, orderPath: [order] });
+        this.addBookmark(next, tab, { location: 'bar', path: [] });
       }
     });
+    const favicon = this.runtimeTabs.get(tab.id)?.favicon;
+    if (favicon) this.rememberBookmarkIcon(tab.id, favicon);
+    this.broadcast();
+  }
+
+  private addBookmark(state: RuntimeBrowserStateV2, tab: RuntimeBrowserStateV2['tabs'][number], folder: BookmarkLevelInput): void {
+    const owned = state.bookmarks.filter((item) => item.accountSpaceId === tab.accountSpaceId);
+    if (owned.length >= 25_000) throw new Error('This Account Space has reached its bookmark limit.');
+    const orderPath = nextBookmarkOrder(owned, state.bookmarkFoldersByAccountSpace?.[tab.accountSpaceId] ?? [], folder);
+    state.bookmarks.unshift({ id: randomUUID(), title: tab.title, url: tab.url, workspaceId: tab.workspaceId,
+      accountSpaceId: tab.accountSpaceId, createdAt: new Date().toISOString(), location: folder.location,
+      folderPath: [...folder.path], order: orderPath[0], orderPath });
+  }
+
+  saveBookmarkToFolder(accountId: AccountSpaceId, tabId: string, expectedUrl: string, folder: BookmarkLevelInput): void {
+    this.requireEditableBookmarkAccount(accountId);
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    if (tab.id !== tabId || tab.url !== expectedUrl || tab.isHome || !isAllowedRemoteUrl(tab.url)) throw new Error('The page changed. Open the bookmark destination again.');
+    const existing = state.bookmarks.find((item) => item.accountSpaceId === accountId && item.url === tab.url);
+    if (existing) {
+      this.changeBookmarks(accountId, [existing.id], folder);
+      return;
+    }
+    this.store.update((next) => this.addBookmark(next, tab, folder));
     const favicon = this.runtimeTabs.get(tab.id)?.favicon;
     if (favicon) this.rememberBookmarkIcon(tab.id, favicon);
     this.broadcast();
@@ -2243,8 +2269,14 @@ class BrowserController {
 
   moveBookmark(level: BookmarkLevelInput, key: BookmarkEntryKeyInput, toIndex: number): void {
     const { accountSpaceId } = this.activeBookmarkScope();
+    this.requireEditableBookmarkAccount(accountSpaceId);
     if (key.kind === 'bookmark') this.requireActiveBookmark(key.id);
-    this.store.update((state) => { state.bookmarks = reorderBookmarkEntry(state.bookmarks, accountSpaceId, level, key, toIndex); });
+    this.store.update((state) => {
+      const folders = state.bookmarkFoldersByAccountSpace ??= {};
+      const result = reorderBookmarkLevel(state.bookmarks, folders[accountSpaceId] ?? [], accountSpaceId, level, key, toIndex);
+      state.bookmarks = result.bookmarks;
+      folders[accountSpaceId] = result.folders;
+    });
     this.broadcast();
   }
 
@@ -2268,7 +2300,8 @@ class BrowserController {
 
   changeBookmarks(accountSpaceId: AccountSpaceId, ids: string[], destination?: BookmarkLevelInput): number {
     this.requireEditableBookmarkAccount(accountSpaceId);
-    const plan = changeBookmarkBatch(this.store.get().bookmarks, accountSpaceId, ids, destination);
+    const current = this.store.get();
+    const plan = changeBookmarkBatch(current.bookmarks, accountSpaceId, ids, destination, current.bookmarkFoldersByAccountSpace?.[accountSpaceId]);
     if (!plan.undo) return 0;
     this.store.update((state) => { state.bookmarks = plan.bookmarks; });
     this.bookmarkUndo.set(accountSpaceId, plan.undo);
@@ -2291,20 +2324,45 @@ class BrowserController {
     const { state, accountSpaceId: active } = this.activeBookmarkScope();
     if (active !== accountSpaceId) throw new Error('The Account Space changed. Return to the original space.');
     const account = this.requireAccountMembership(accountSpaceId);
-    if (account.locked || state.accountHealth.some((item) => item.accountSpaceId === active && item.status === 'account-corrupt')) {
+    if (this.sessionIsLocked || account.locked || state.accountHealth.some((item) => item.accountSpaceId === active && item.status === 'account-corrupt')) {
       throw new Error('This Account Space is unavailable for bookmark changes.');
     }
   }
 
-  renameBookmarkFolder(level: BookmarkLevelInput, name: string, nextName: string): void {
-    const { accountSpaceId } = this.activeBookmarkScope();
-    this.store.update((state) => { state.bookmarks = renameBookmarkFolder(state.bookmarks, accountSpaceId, level, name, nextName); });
+  renameBookmarkFolder(level: BookmarkLevelInput, name: string, nextName: string, accountSpaceId = this.activeBookmarkScope().accountSpaceId): void {
+    const clean = nextName.trim();
+    if (!clean || /[\u0000-\u001f\u007f]/.test(clean)) throw new Error('Enter a folder name.');
+    this.updateBookmarkFolder(accountSpaceId, { location: level.location, path: [...level.path, name] },
+      { location: level.location, path: [...level.path, clean] });
+  }
+
+  removeBookmarkFolder(level: BookmarkLevelInput, name: string, accountSpaceId = this.activeBookmarkScope().accountSpaceId): void {
+    this.updateBookmarkFolder(accountSpaceId, { location: level.location, path: [...level.path, name] });
+  }
+
+  addBookmarkFolder(accountId: AccountSpaceId, parent: BookmarkLevelInput, name: string): void {
+    this.requireEditableBookmarkAccount(accountId);
+    this.store.update((state) => {
+      const folders = state.bookmarkFoldersByAccountSpace ??= {};
+      folders[accountId] = createBookmarkFolder(state.bookmarks.filter((item) => item.accountSpaceId === accountId), folders[accountId] ?? [], parent, name);
+    });
     this.broadcast();
   }
 
-  removeBookmarkFolder(level: BookmarkLevelInput, name: string): void {
-    const { accountSpaceId } = this.activeBookmarkScope();
-    this.store.update((state) => { state.bookmarks = removeBookmarkFolder(state.bookmarks, accountSpaceId, level, name); });
+  moveBookmarkFolder(accountId: AccountSpaceId, folder: BookmarkLevelInput, parent: BookmarkLevelInput): void {
+    const name = folder.path.at(-1);
+    if (!name) throw new Error('Choose a folder to move.');
+    this.updateBookmarkFolder(accountId, folder, { location: parent.location, path: [...parent.path, name] });
+  }
+
+  private updateBookmarkFolder(accountId: AccountSpaceId, source: BookmarkLevelInput, destination?: BookmarkLevelInput): void {
+    this.requireEditableBookmarkAccount(accountId);
+    this.store.update((state) => {
+      const folders = state.bookmarkFoldersByAccountSpace ??= {};
+      const result = editBookmarkFolder(state.bookmarks, folders[accountId] ?? [], accountId, source, destination);
+      state.bookmarks = result.bookmarks;
+      folders[accountId] = result.folders;
+    });
     this.broadcast();
   }
 
@@ -2319,7 +2377,7 @@ class BrowserController {
       filters: [{ name: 'Bookmark file', extensions: ['html'] }],
     });
     if (result.canceled || !result.filePath) return false;
-    await writeFile(result.filePath, exportBookmarksHtml(bookmarks), { encoding: 'utf8' });
+    await writeFile(result.filePath, exportBookmarksHtml(bookmarks, state.bookmarkFoldersByAccountSpace?.[accountSpaceId]), { encoding: 'utf8' });
     this.addPrivacyEvent('local-read', 'Bookmarks exported', `${bookmarks.length} bookmarks from the active Account Space saved to a local file`);
     return true;
   }
@@ -2342,8 +2400,12 @@ class BrowserController {
     const batch = await readBookmarkHtml(choice.filePaths[0], { workspaceId: account.workspaceId, accountSpaceId });
     validateDestination();
     let imported = 0;
-    if (batch.bookmarks.length) {
-      this.store.update((state) => { imported = appendImportedBookmarks(state.bookmarks, batch.bookmarks); });
+    if (batch.bookmarks.length || batch.folders.length) {
+      this.store.update((state) => {
+        const folders = state.bookmarkFoldersByAccountSpace ??= {};
+        folders[accountSpaceId] = appendBookmarkFolders(folders[accountSpaceId] ?? [], batch.folders);
+        imported = appendImportedBookmarks(state.bookmarks, batch.bookmarks);
+      });
       this.broadcast();
     }
     return { imported, skipped: batch.skipped + batch.bookmarks.length - imported };
@@ -2391,6 +2453,13 @@ class BrowserController {
     return account;
   }
 
+  private planScopedChromeImport(state: RuntimeBrowserStateV2, accountSpaceId: AccountSpaceId, source: ChromeProfileData) {
+    return planChromeImport({
+      bookmarks: state.bookmarks.filter((item) => item.accountSpaceId === accountSpaceId),
+      history: state.history.filter((item) => item.accountSpaceId === accountSpaceId),
+    }, source, state.bookmarkFoldersByAccountSpace?.[accountSpaceId]);
+  }
+
   previewChromeImport(options: ChromeImportOptions): ChromeImportReview {
     const { accountSpaceId } = options;
     this.requireChromeDestination(accountSpaceId, options.workspaceId);
@@ -2399,7 +2468,7 @@ class BrowserController {
     this.unimportedChromeProfile(state, profileKey);
     this.pendingChromeImport = undefined;
     const source = readChromeProfile(options.profileId, options.workspaceId, accountSpaceId, options.bookmarks, options.history, undefined, options.settings);
-    const plan = planChromeImport(state, source);
+    const plan = this.planScopedChromeImport(state, accountSpaceId, source);
     const id = randomUUID();
     const expiresIn = 5 * 60_000;
     this.pendingChromeImport = {
@@ -2427,7 +2496,7 @@ class BrowserController {
     if (review.settingsRevision !== undefined && review.settingsRevision !== JSON.stringify(settingsForWorkspace(state, account.workspaceId))) {
       throw new Error('Workspace settings changed. Preview this Chrome import again.');
     }
-    const plan = planChromeImport(state, review.source);
+    const plan = this.planScopedChromeImport(state, review.accountSpaceId, review.source);
     if (chromeImportKey(plan) !== review.importKey) throw new Error('Browsing data changed. Preview this Chrome import again.');
     return this.applyChromeImport(review.accountSpaceId, account.workspaceId, review.profileKey, plan);
   }
@@ -2438,17 +2507,19 @@ class BrowserController {
     const state = this.store.get();
     const profileKey = chromeProfileKey(options.profileId);
     this.unimportedChromeProfile(state, profileKey);
-    return this.applyChromeImport(options.accountSpaceId, options.workspaceId, profileKey, planChromeImport(state,
+    return this.applyChromeImport(options.accountSpaceId, options.workspaceId, profileKey, this.planScopedChromeImport(state, options.accountSpaceId,
       readChromeProfile(options.profileId, options.workspaceId, options.accountSpaceId, options.bookmarks, options.history)));
   }
 
   private applyChromeImport(id: AccountSpaceId, workspaceId: WorkspaceId, profileKey: string, plan: ReturnType<typeof planChromeImport>): ChromeImportResult {
     const patch = plan.summary.settingsPatch;
-    if (plan.bookmarks.length || plan.history.length || patch) {
+    if (plan.bookmarks.length || plan.history.length || plan.folders.length || patch) {
       const before = patch ? settingsForWorkspace(this.store.get(), workspaceId) : undefined;
       const newSettings = before && patch ? { workspaceId, before, after: mergeBrowserSettings(before, patch) } : undefined;
       this.store.update((state) => {
         state.bookmarks.push(...plan.bookmarks);
+        const folders = state.bookmarkFoldersByAccountSpace ??= {};
+        folders[id] = appendBookmarkFolders(folders[id] ?? [], plan.folders);
         state.history.push(...plan.history);
         state.history.sort((left, right) => right.visitedAt.localeCompare(left.visitedAt));
         (state.chromeProfileImports ??= {})[profileKey] = id;
@@ -2464,6 +2535,7 @@ class BrowserController {
         profileKey, settings: newSettings,
         bookmarks: new Map(plan.bookmarks.map((item) => [item.id, chromeImportBookmarkStamp(item)])),
         history: new Set(plan.history.map((item) => item.id)),
+        folders: plan.folders,
       });
       this.broadcast();
     }
@@ -2492,13 +2564,17 @@ class BrowserController {
         removed.history += 1;
         return false;
       });
+      const folders = state.bookmarkFoldersByAccountSpace ??= {};
+      const previous = folders[id] ?? [];
+      folders[id] = undoImportedBookmarkFolders(state.bookmarks.filter((item) => item.accountSpaceId === id), previous, undo.folders);
+      const foldersRemoved = previous.length - folders[id].length;
       if (undo.settings) {
         const { workspaceId, before, after } = undo.settings;
         removed.settingsRestored = JSON.stringify(settingsForWorkspace(state, workspaceId)) === JSON.stringify(after);
         if (removed.settingsRestored) (state.workspaceSettings ??= {})[workspaceId] = before;
       }
       if (removed.bookmarks === undo.bookmarks.size && removed.history === undo.history.size
-        && (!undo.settings || removed.settingsRestored) && state.chromeProfileImports?.[undo.profileKey] === id) {
+        && foldersRemoved === undo.folders.length && (!undo.settings || removed.settingsRestored) && state.chromeProfileImports?.[undo.profileKey] === id) {
         delete state.chromeProfileImports[undo.profileKey];
       }
     });
@@ -5204,13 +5280,16 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:hard-reload', () => controller!.hardReload());
   handle('browser:toggle-fullscreen', () => controller!.toggleFullscreen());
   handle('bookmarks:move', (_event, level: BookmarkLevelInput, key: BookmarkEntryKeyInput, toIndex: number) => controller!.moveBookmark(level, key, toIndex));
+  handle('bookmarks:add-folder', (_event, id: AccountSpaceId, parent: BookmarkLevelInput, name: string) => controller!.addBookmarkFolder(id, parent, name));
+  handle('bookmarks:move-folder', (_event, id: AccountSpaceId, source: BookmarkLevelInput, parent: BookmarkLevelInput) => controller!.moveBookmarkFolder(id, source, parent));
+  handle('bookmarks:save-to-folder', (_event, id: AccountSpaceId, tabId: string, url: string, folder: BookmarkLevelInput) => controller!.saveBookmarkToFolder(id, tabId, url, folder));
   handle('bookmarks:rename', (_event, id: string, title: string) => controller!.renameBookmark(id, title));
   handle('bookmarks:remove', (_event, id: string) => controller!.removeBookmark(id));
   handle('bookmarks:edit-address', (_event, id: string, url: string) => controller!.updateBookmarkAddress(id, url));
   handle('bookmarks:change-many', (_event, id: AccountSpaceId, ids: string[], destination?: BookmarkLevelInput) => controller!.changeBookmarks(id, ids, destination));
   handle('bookmarks:undo-many', (_event, id: AccountSpaceId) => controller!.undoBookmarks(id));
-  handle('bookmarks:rename-folder', (_event, level: BookmarkLevelInput, name: string, nextName: string) => controller!.renameBookmarkFolder(level, name, nextName));
-  handle('bookmarks:remove-folder', (_event, level: BookmarkLevelInput, name: string) => controller!.removeBookmarkFolder(level, name));
+  handle('bookmarks:rename-folder', (_event, level: BookmarkLevelInput, name: string, nextName: string, id?: AccountSpaceId) => controller!.renameBookmarkFolder(level, name, nextName, id));
+  handle('bookmarks:remove-folder', (_event, level: BookmarkLevelInput, name: string, id?: AccountSpaceId) => controller!.removeBookmarkFolder(level, name, id));
   handle('bookmarks:export', () => controller!.exportBookmarks());
   handle('bookmarks:import-html', (_event, accountSpaceId: AccountSpaceId) => controller!.importBookmarkHtml(accountSpaceId));
   handle('shortcuts:set', (_event, accountSpaceId: AccountSpaceId, tiles: ShortcutTile[] | null) => controller!.setShortcutTiles(accountSpaceId, tiles));

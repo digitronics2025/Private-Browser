@@ -140,8 +140,14 @@ const api = {
   changeBookmarks: (account: AccountSpaceId, ids: string[], destination?: BookmarkLevelInput): Promise<number> =>
     ipcRenderer.invoke('bookmarks:change-many', account, ids, destination),
   undoBookmarks: (account: AccountSpaceId): Promise<number> => ipcRenderer.invoke('bookmarks:undo-many', account),
-  renameBookmarkFolder: (level: BookmarkLevelInput, name: string, nextName: string): Promise<void> => ipcRenderer.invoke('bookmarks:rename-folder', level, name, nextName),
-  removeBookmarkFolder: (level: BookmarkLevelInput, name: string): Promise<void> => ipcRenderer.invoke('bookmarks:remove-folder', level, name),
+  addBookmarkFolder: (account: AccountSpaceId, parent: BookmarkLevelInput, name: string): Promise<void> =>
+    ipcRenderer.invoke('bookmarks:add-folder', account, parent, name),
+  moveBookmarkFolder: (account: AccountSpaceId, source: BookmarkLevelInput, parent: BookmarkLevelInput): Promise<void> =>
+    ipcRenderer.invoke('bookmarks:move-folder', account, source, parent),
+  saveBookmarkToFolder: (account: AccountSpaceId, tabId: string, url: string, folder: BookmarkLevelInput): Promise<void> =>
+    ipcRenderer.invoke('bookmarks:save-to-folder', account, tabId, url, folder),
+  renameBookmarkFolder: (level: BookmarkLevelInput, name: string, nextName: string, id?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('bookmarks:rename-folder', level, name, nextName, id),
+  removeBookmarkFolder: (level: BookmarkLevelInput, name: string, id?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('bookmarks:remove-folder', level, name, id),
   exportBookmarks: (): Promise<boolean> => ipcRenderer.invoke('bookmarks:export'),
   importBookmarkHtml: (accountSpaceId: AccountSpaceId): Promise<{ imported: number; skipped: number } | undefined> =>
     ipcRenderer.invoke('bookmarks:import-html', accountSpaceId),

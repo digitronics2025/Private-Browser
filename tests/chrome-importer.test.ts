@@ -16,6 +16,7 @@ describe('Chrome data importer', () => {
             { type: 'folder', name: 'Work', children: [
               { type: 'url', name: 'Orders', url: 'https://orders.example/' },
               { type: 'folder', name: 'Stores', children: [{ type: 'url', name: 'Shop', url: 'https://shop.example/' }] },
+              { type: 'folder', name: 'Empty folder', children: [] },
             ] },
           ],
         },
@@ -31,6 +32,7 @@ describe('Chrome data importer', () => {
     expect(result.bookmarks[2]).toEqual(expect.objectContaining({ title: 'Shop', folderPath: ['Work', 'Stores'], orderPath: [1, 1, 0] }));
     expect(result.bookmarks[3]).toEqual(expect.objectContaining({ title: 'Later', location: 'other' }));
     expect(result.bookmarks.every((item) => item.accountSpaceId === ACCOUNT_ID)).toBe(true);
+    expect(result.folders).toContainEqual({ location: 'bar', path: ['Work', 'Empty folder'], orderPath: [1, 2] });
   });
 
   // F-81: depth is bounded, not only count.
