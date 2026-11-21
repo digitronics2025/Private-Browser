@@ -97,6 +97,23 @@ and `record_stop`. Element references include a document identifier and
 cannot select elements from a different task's page. The pipe serializes
 calls within one connected client so action and approval order remain clear.
 
+## Scheduled task examples
+
+These definitions are disabled. To enable one in Claude Code, the owner first
+approves its schedule, client, space, exact steps, and output destination.
+
+| Task | Suggested schedule | Space | Read-only steps |
+| --- | --- | --- | --- |
+| Daily public price check | Daily at 09:00 local time | Open Web | Open the owner-selected public product URLs, read the listed prices and availability, and record missing or changed entries. |
+| Morning site health check | Daily at 08:00 local time | Work | Open the owner-approved status pages on exact listed origins and summarize the visible health indicators. If sign-in or a write is required, record that the check stopped. |
+
+Each task writes a local summary and raises a local in-app notification only
+through a notification destination the owner approved for that task. Leave the
+example disabled until its URLs and output are configured. An expired Agent
+Mode lease requires owner renewal before a scheduled task can continue. On
+Windows, enabled session or idle locks stop Agent Mode and require the owner
+to restore access.
+
 ## Interfaces and storage
 
 | Surface | Implementation |
