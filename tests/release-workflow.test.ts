@@ -20,6 +20,13 @@ describe('release workflow', () => {
     expect(top).not.toMatch(/cancel-in-progress: true/);
   });
 
+  it('requires the owner-approved main commit before production publication', () => {
+    const publish = workflow.slice(workflow.indexOf('  publish-cloudflare-release:'));
+    const eligibility = publish.slice(0, publish.indexOf('\n    concurrency:'));
+    expect(eligibility).toContain("github.event_name == 'push' && github.ref == 'refs/heads/main'");
+    expect(eligibility).toContain('&& vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == github.sha');
+  });
+
   // F-41: an app change whose run never published must still ship with the next push.
   it('decides "docs only" against the commit production runs, not the previous push', () => {
     const changes = step('Detect whether this push changes the application');
@@ -48,6 +55,18 @@ describe('release workflow', () => {
     expect(verify).toContain('PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.id }}');
     expect(verify).toContain('node cloudflare/scripts/activate-release.mjs "$PREVIOUS_RELEASE_ID"');
     expect(verify.trim().endsWith('exit 1')).toBe(true);
+  });
+
+  it('reads and verifies private candidate bytes before stable activation', () => {
+    const stage = step('Verify candidate bytes from private R2');
+    expect(stage).toContain('id: staged');
+    expect(stage).toContain('wrangler r2 object get "private-browser-releases/$OBJECT_KEY" --file "$candidate_file" --remote');
+    expect(stage).toContain('verify-release-candidate.mjs "$INSTALLER_PATH" "$candidate_file"');
+    expect(stage).toContain('verified=true');
+    expect(stage).toContain('$GITHUB_STEP_SUMMARY');
+    expect(workflow.indexOf(stage)).toBeLessThan(workflow.indexOf(step('Publish D1 release metadata')));
+    expect(step('Publish D1 release metadata')).toContain("steps.staged.outputs.verified == 'true'");
+    expect(step('Verify authenticated download end to end')).toContain('Stable installer verified');
   });
 
   // F-42: distribution is public, so an installer carrying the shared token is never published.

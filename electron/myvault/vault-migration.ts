@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { parseChromePasswordCsv } from '../chrome-importer.js';
-import { VaultBroker } from './vault-broker.js';
+import { describeChromePasswordCsv, MAX_PASSWORD_IMPORT_ISSUES } from '../chrome-importer.js';
+import type { ChromePasswordImportResult, ChromePasswordImportReview } from '../types.js';
+import { VaultBroker, type BrokerItemInput } from './vault-broker.js';
 import type { SafeStorageAdapter } from './vault-store.js';
 
 interface LegacyVaultItem {
@@ -74,6 +75,32 @@ function parseLegacy(value: unknown): LegacyVaultItem[] {
 /** Chrome exports are a few MB even for thousands of logins. */
 const MAX_CHROME_CSV_BYTES = 20 * 1024 * 1024;
 
+function readChromeCsv(path: string): Buffer {
+  let file: number | undefined;
+  try {
+    file = openSync(path, 'r');
+    const stats = fstatSync(file);
+    if (!stats.isFile() || stats.size > MAX_CHROME_CSV_BYTES) throw new Error('Choose a Chrome password export up to 20 MB.');
+    const bytes = Buffer.alloc(stats.size + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const read = readSync(file, bytes, offset, bytes.length - offset, null);
+      if (!read) break;
+      offset += read;
+    }
+    if (offset !== stats.size) {
+      bytes.fill(0);
+      throw new Error('The CSV changed while reading it. Choose the file again.');
+    }
+    return bytes.subarray(0, offset);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error) throw new Error('The selected password CSV could not be read. Choose it again.');
+    throw error;
+  } finally {
+    if (file !== undefined) closeSync(file);
+  }
+}
+
 export class VaultMigrationService {
   constructor(
     private readonly legacyPath: string,
@@ -131,21 +158,57 @@ export class VaultMigrationService {
   }
 
   async importChromeCsv(filePath: string): Promise<Omit<MigrationReport, 'backupPath' | 'journalPhase'>> {
-    if (statSync(filePath).size > MAX_CHROME_CSV_BYTES) throw new Error('This file is too large to be a Chrome password export');
-    const parsed = parseChromePasswordCsv(readFileSync(filePath, 'utf8'));
-    const seen = new Set(this.broker.searchMetadata().map((item) => `${item.url}\n${item.username.normalize('NFKC').trim()}`));
-    const fresh = [];
-    let skippedCount = parsed.skipped;
-    for (const row of parsed.items) {
+    const plan = this.planChromeCsv(filePath);
+    const imported = await this.broker.importLogins(plan.fresh, plan.revision);
+    const sourceCount = plan.review.sourceCount;
+    return { sourceCount, importedCount: imported.length, skippedCount: sourceCount - imported.length, validatedCount: sourceCount, conflicts: [] };
+  }
+
+  reviewChromeCsv(filePath: string): { digest: string; revision: string; review: Omit<ChromePasswordImportReview, 'id'> } {
+    const { digest, revision, review } = this.planChromeCsv(filePath);
+    return { digest, revision, review };
+  }
+
+  async importReviewedChromeCsv(filePath: string, digest: string, revision: string): Promise<ChromePasswordImportResult> {
+    const plan = this.planChromeCsv(filePath, digest, revision);
+    const imported = await this.broker.importLogins(plan.fresh, revision);
+    return { imported: imported.length, skipped: plan.review.skipped };
+  }
+
+  private planChromeCsv(filePath: string, expectedDigest?: string, expectedRevision?: string) {
+    const revision = this.broker.loginRevision();
+    if (expectedRevision !== undefined && revision !== expectedRevision) throw new Error('MyVault changed. Review the password file again.');
+    const bytes = readChromeCsv(filePath);
+    const digest = sha256(bytes);
+    const parsed = (() => {
+      try {
+        if (expectedDigest !== undefined && digest !== expectedDigest) throw new Error('The CSV changed. Review it again.');
+        return describeChromePasswordCsv(bytes.toString('utf8'));
+      } finally {
+        bytes.fill(0);
+      }
+    })();
+    const key = (url: string | undefined, username: string) => JSON.stringify([url, username.normalize('NFKC').trim()]);
+    const saved = new Set(this.broker.searchMetadata().map((item) => key(item.url, item.username)));
+    const seen = new Set<string>();
+    const fresh: BrokerItemInput[] = [];
+    for (const { entry, login: row } of parsed.items) {
       const normalizedOrigin = origin(row.url);
-      const key = `${normalizedOrigin}\n${row.username.normalize('NFKC').trim()}`;
-      if (seen.has(key)) { skippedCount += 1; continue; }
-      seen.add(key);
+      const match = key(normalizedOrigin, row.username);
+      const reason = saved.has(match) ? 'already-saved' : seen.has(match) ? 'duplicate-in-file' : undefined;
+      if (reason) {
+        parsed.skipped[reason] = (parsed.skipped[reason] ?? 0) + 1;
+        if (parsed.issues.length < MAX_PASSWORD_IMPORT_ISSUES) {
+          parsed.issues.push({ entry, reason, origin: normalizedOrigin, username: row.username });
+        }
+        continue;
+      }
+      seen.add(match);
       fresh.push({ title: row.label, url: normalizedOrigin, username: row.username, password: row.password, notes: row.note });
     }
-    const imported = await this.broker.importLogins(fresh);
-    const sourceCount = parsed.items.length + parsed.skipped;
-    return { sourceCount, importedCount: imported.length, skippedCount, validatedCount: imported.length + skippedCount, conflicts: [] };
+    const review = { sourceCount: parsed.sourceCount, toImport: fresh.length, skipped: parsed.skipped,
+      issues: parsed.issues.sort((a, b) => a.entry - b.entry) };
+    return { digest, revision, review, fresh };
   }
 
   cleanupLegacyAfterConfirmation(confirmed: boolean): boolean {

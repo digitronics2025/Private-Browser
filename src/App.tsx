@@ -17,6 +17,7 @@ import { ProfileMenu } from './shell/ProfileMenu';
 import { BrowserMenu } from './shell/BrowserMenu';
 import { ShieldStatusMenu, SiteInfoMenu, TabSearchMenu, ZoomMenu } from './shell/StatusMenus';
 import { PromptDialog, type PromptRequest } from './shell/PromptDialog';
+import { ClearBrowsingDataDialog } from './shell/ClearBrowsingDataDialog';
 import { AccountManager } from './panels/AccountManager';
 import { PermissionOverlay, RecoveryOverlay } from './panels/Overlays';
 import { useModalFocus } from './lib/dialog';
@@ -68,6 +69,8 @@ export default function App() {
   const [findOpen, setFindOpen] = useState(false);
   const [findFocus, setFindFocus] = useState(0);
   const [prompt, setPrompt] = useState<PromptRequest | null>(null);
+  const [clearDataFor, setClearDataFor] = useState<AccountSpaceId>();
+  const [historyRevision, setHistoryRevision] = useState(0);
   const [bookmarkBatch, setBookmarkBatch] = useState<{ accountId: AccountSpaceId; items: Bookmark[] } | null>(null);
   const [pendingUi, setPendingUi] = useState<UiPreferencesPatch>({});
   const [liveWidth, setLiveWidth] = useState<number | null>(null);
@@ -104,6 +107,9 @@ export default function App() {
     void window.privateBrowser.getState().then(setState);
     return disposer(window.privateBrowser.onState(setState));
   }, []);
+  useEffect(() => {
+    if (clearDataFor && clearDataFor !== state?.activeAccountSpaceId) setClearDataFor(undefined);
+  }, [clearDataFor, state?.activeAccountSpaceId]);
 
   useEffect(() => {
     setBookmarkBatch((batch) => batch?.accountId === state?.activeAccountSpaceId ? batch : null);
@@ -250,8 +256,8 @@ export default function App() {
 
   const clearBrowsingData = () => {
     if (!activeAccount) return;
-    if (!window.confirm(`Delete browsing data for “${activeAccount.label}”?\n\nWebsite data, sign-ins and history in this Account Space are removed. Bookmarks, MyVault logins and other Account Spaces are not affected.`)) return;
-    void act(() => window.privateBrowser.clearAccountSpaceData(activeAccount.id), 'Browsing data deleted');
+    setMenu(null);
+    setClearDataFor(activeAccount.id);
   };
 
   const cycleAccountSpace = (direction: 1 | -1) => {
@@ -423,7 +429,7 @@ export default function App() {
         : <VaultPanel accountId={state.activeAccountSpaceId} workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onOpenFull={() => setVaultFullOpen(true)} onToast={showToast} />;
       case 'automations': return <AutomationPanel state={state} onToast={showToast} />;
       case 'shortcuts': return <ShortcutGuide />;
-      case 'downloads': return <DownloadsPanel state={state} onToast={showToast} />;
+      case 'downloads': return <DownloadsPanel key={state.activeAccountSpaceId} state={state} onToast={showToast} />;
       case 'privacy': return <PrivacyPanel state={state} />;
       case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} entry={settingsEntry}
         onSetupExit={() => setSettingsEntry('overview')} onManageAccounts={() => setAccountManagerOpen(true)}
@@ -437,8 +443,9 @@ export default function App() {
         onBatch={(ids, destination) => window.privateBrowser.changeBookmarks(activeAccount.id, ids, destination)}
         onUndo={() => window.privateBrowser.undoBookmarks(activeAccount.id)} />;
       case 'history': return <HistoryPanel key={activeAccount.id} accountSpaceId={activeAccount.id}
-        revision={(recentHistory[0]?.id ?? '') + ':' + recentHistory.length} protectedWorkspace={workspace.protected}
-        onOpen={(id) => void act(() => window.privateBrowser.openAddressMatch(activeAccount.id, 'history', id))} onClearData={clearBrowsingData} />;
+        revision={(recentHistory[0]?.id ?? '') + ':' + recentHistory.length + ':' + historyRevision} protectedWorkspace={workspace.protected}
+        onOpen={(id) => void act(() => window.privateBrowser.openAddressMatch(activeAccount.id, 'history', id))}
+        onClearData={clearBrowsingData} onToast={showToast} />;
       default: return null;
     }
   })();
@@ -642,6 +649,13 @@ export default function App() {
         {accountManagerOpen && <AccountManager state={state} onClose={() => { setAccountManagerOpen(false); profileButtonRef.current?.focus(); }} onToast={showToast} />}
         {vaultFullOpen && <VaultFullView onClose={() => setVaultFullOpen(false)}><VaultPanel accountId={state.activeAccountSpaceId} workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></VaultFullView>}
         {prompt && <PromptDialog request={prompt} onDone={() => setPrompt(null)} />}
+        {clearDataFor === activeAccount.id && <ClearBrowsingDataDialog activeId={activeAccount.id} protectedWorkspace={workspace.protected}
+          accounts={state.accountSpaces.filter((account) => account.workspaceId === workspace.id)}
+          onDone={() => setClearDataFor(undefined)} onCleared={(visits) => {
+            setClearDataFor(undefined);
+            setHistoryRevision((value) => value + 1);
+            showToast(visits ? 'Browsing data deleted. ' + visits + (visits === 1 ? ' visit removed.' : ' visits removed.') : 'Browsing data deleted.');
+          }} />}
         {bookmarkBatch?.accountId === activeAccount.id && <BookmarkBatchDialog
           items={bookmarkBatch.items} tabs={workspaceTabs} accountName={activeAccount.label}
           onClose={() => setBookmarkBatch(null)} onOpen={async (ids) => {

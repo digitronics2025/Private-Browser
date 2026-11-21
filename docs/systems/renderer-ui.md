@@ -171,8 +171,8 @@ clears the image.
 
 The browser menu lists only working actions: new tab, reopen closed tab, Account
 Spaces, Passwords and MyVault, History, Downloads, Bookmarks (bookmark tab,
-bar mode, manager, import, export), Delete browsing data (confirmed; removes
-website data and history of the active Account Space only), zoom and full
+bar mode, manager, import, export), Delete browsing data (reviews the target
+Account Space, website, visit dates and selected data before removal), zoom and full
 screen, Print, Find, Copy link, More tools (DevTools, Developer Bridge,
 Automations, Privacy log, Block trackers), Privacy and AI, Appearance, Settings,
 About, Exit.

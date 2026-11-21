@@ -1,5 +1,24 @@
 import { expect, test } from '@playwright/test';
 
+test('reviews synthetic Chrome password skips and shows CSV cleanup after import', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/?chromePassword=sample');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  await page.getByRole('tab', { name: 'Vault', exact: true }).click();
+  await page.getByRole('button', { name: 'Import Chrome password CSV' }).click();
+  const wizard = page.getByRole('region', { name: 'Import Chrome passwords' });
+  await expect(wizard.getByText(/find Export passwords and choose Download file/)).toBeVisible();
+  await wizard.getByRole('button', { name: 'Choose password CSV' }).click();
+  await expect(wizard.getByRole('status')).toHaveText('1 of 3 entries ready to import into MyVault.');
+  await wizard.getByText('Review skipped entries', { exact: true }).click();
+  await expect(wizard.getByText('https://shop.example.test · sample@example.test')).toBeVisible();
+  await expect(wizard.getByText('Entry 3 · Unsupported website or app address')).toBeVisible();
+  await expect(wizard.locator('input')).toHaveCount(0);
+  await wizard.getByRole('button', { name: 'Import reviewed logins' }).click();
+  await expect(wizard.getByRole('status')).toHaveText('1 login added to MyVault.');
+  await expect(wizard.getByText(/delete the CSV from its folder/)).toBeVisible();
+});
+
 test('reviews a synthetic health finding at a narrow width', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 810 });
   await page.goto('/?vaultHealth=sample');

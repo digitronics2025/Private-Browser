@@ -119,6 +119,9 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:restore-selected-tabs` | `restoreSelectedTabs(ids)` | Up to 100 tab IDs from the startup recovery Account Space | `void` |
 | `browser:reopen-recent-tab` | `reopenRecentTab(id)` | Closed tab ID from the current space | `void` |
 | `browser:query-history` | `queryHistory(accountSpaceId, input)` | Expected active space, text, hostname, UTC range boundaries and page | `HistoryPage` |
+| `browser:review-browsing-data` | `reviewBrowsingData(input)` | target space in the current workspace, site, history time range and selected data | one-time review and count of selected visits |
+| `browser:delete-reviewed-data` | `deleteReviewedBrowsingData(id)` | review ID bound to its initiating Account Space | number of visits removed |
+| `browser:delete-history-visit` | `deleteHistoryVisit(accountId, id)` | current Account Space and one visit ID | `void` |
 | `browser:open-address-match` | `openAddressMatch(accountSpaceId, source, id)` | Expected active space, result type and record ID | `void` |
 | `browser:navigate` | `navigate(value)` | `value: string` | `void` |
 | `browser:home` | `goHome()` | none (exactly zero arguments) | `void` |
@@ -150,11 +153,12 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:toggle-bookmark-bar` | `toggleBookmarkBar()` | — | `void` |
 | `browser:list-chrome-profiles` | `listChromeProfiles()` | — | `ChromeProfileSource[]` |
 | `browser:import-chrome` | `importChrome(options)` | `ChromeImportOptions` | `ChromeImportResult` |
-| `browser:import-chrome-passwords` | `importChromePasswords()` | — | `ChromeImportResult` |
 | `browser:toggle-tracker-blocking` | `toggleTrackerBlocking()` | — | `void` |
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:control-download` | `controlDownload(id, action)` | current account download and pause, resume, retry or cancel | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
+| `browser:set-download-history` | `setDownloadHistory(accountId, enabled)` | current regular Account Space and whether to retain new finished downloads | `void` |
+| `browser:remove-download-entry` | `removeDownloadEntry(accountId, id)` | current regular Account Space and finished download ID | `void` |
 | `permissions:site` | `getSitePermissions(tabId, origin)` | active tab and exact origin | current policy and grant duration |
 | `permissions:revoke-site` | `revokeSitePermission(tabId, origin, capability)` | active tab, exact origin and supported capability | updated site status |
 | `permissions:list-account` | `listAccountPermissionGrants(id)` | selected Account Space in the active workspace | reusable grants |
@@ -282,6 +286,9 @@ All are intents; the main process opens secure dialogs for anything secret.
 | `vault:resolve-conflict` | `'cloud' | 'local'` | `VaultStatus` |
 | `vault:migration-status`, `vault:migrate-legacy`, `vault:cleanup-legacy` | — | migration status / report / `boolean` |
 | `vault:open-editor` | `origin?: string` | `VaultItemMeta | undefined` |
+| `vault:review-chrome-passwords` | native file picker | one-time review with counts and skip metadata |
+| `vault:import-reviewed-chrome-passwords` | approved password review ID | imported count and skips by reason |
+| `vault:discard-chrome-password-review` | password review ID | `void` |
 | `vault:check-health` | active regular Account Space ID | audited count and login IDs with issue labels |
 | `vault:edit-health-login` | active regular Account Space ID and login ID | whether the isolated editor saved the login |
 | `vault:form-shape` | — | `{ hasUsername, hasPassword }` |

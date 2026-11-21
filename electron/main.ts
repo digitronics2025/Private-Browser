@@ -34,6 +34,8 @@ import { externalLinkAccounts, isAvailableRegularAccount, preferredExternalLinkA
 import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
+import { DownloadHistoryStore } from './download-history.js';
+import { getDomain } from 'tldts';
 import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
 import { WORKSPACES } from './state-store.js';
@@ -48,6 +50,7 @@ import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookma
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
 import { mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
+import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
 import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
@@ -153,7 +156,14 @@ import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
 import { appendTabSetBookmarks, resolveTabSet } from './tab-sets.js';
-import type { ReferenceSearchInput, TabSetInput } from './types.js';
+import type {
+  BrowsingDataInput,
+  BrowsingDataReview,
+  ChromePasswordImportResult,
+  ChromePasswordImportReview,
+  ReferenceSearchInput,
+  TabSetInput,
+} from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
@@ -274,12 +284,17 @@ const TRACKER_HOSTS = [
   'mc.yandex.ru',
 ];
 
-type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string };
+type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string; retainedFileStamp?: string };
 
 class BrowserController {
+  private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
+  private pendingChromePasswords?: { id: string; accountId: AccountSpaceId; path: string; digest: string; revision: string; expiresAt: number };
+  private selectingChromePasswords = false;
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
   private readonly downloads = new Map<string, LocalDownload>();
   private readonly downloadItems = new Map<string, DownloadItem>();
+  private readonly downloadHistory = new DownloadHistoryStore(join(app.getPath('userData'), 'download-history'), safeStorage);
+  private readonly downloadHistoryFailures = new Set<AccountSpaceId>();
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
@@ -521,6 +536,7 @@ class BrowserController {
     const bookmarkUndo = this.bookmarkUndo.get(activeAccountSpaceId);
     const closedBatch = this.closedTabBatches.get(activeAccountSpaceId);
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
+    const downloadAccount = this.activeDownloadAccount(persisted);
     return {
       workspaces: WORKSPACES,
       activeWorkspaceId: persisted.activeWorkspaceId,
@@ -529,11 +545,9 @@ class BrowserController {
       bookmarks: persisted.bookmarks,
       bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
       history: persisted.history.slice(0, 100),
-      downloads: this.activeDownloadAccount(persisted)
-        ? [...this.downloads.values()]
-          .filter((entry) => entry.accountSpaceId === activeAccountSpaceId)
-          .map(({ savePath: _path, expectedInstaller: _expected, verifiedStamp: _stamp, ...entry }) => entry)
-        : [],
+      downloads: downloadAccount ? this.downloadEntries(downloadAccount) : [],
+      downloadHistory: !downloadAccount ? undefined : this.downloadHistoryFailures.has(downloadAccount)
+        ? 'unavailable' : this.downloadHistory.status(downloadAccount),
       privacyLog: persisted.privacyLog.slice(0, 50),
       trackerBlocking: persisted.trackerBlocking,
       activeAccountSpaceId,
@@ -1236,6 +1250,86 @@ class BrowserController {
     await this.showActiveTab();
   }
 
+  private requireClearableAccount(accountSpaceId: AccountSpaceId) {
+    const account = this.requireAccountMembership(accountSpaceId);
+    if (this.store.isReadOnly() || account.locked) throw new Error('Unlock this Account Space to manage its browsing data.');
+    return account;
+  }
+
+  reviewBrowsingData(value: BrowsingDataInput): BrowsingDataReview {
+    const input = requireBrowsingDataInput(value);
+    this.requireClearableAccount(input.accountSpaceId);
+    const state = this.store.get();
+    const now = Date.now();
+    const visits = browsingDataVisitIds(state.history, input, now);
+    const review: BrowsingDataReview = { id: randomUUID(), accountSpaceId: input.accountSpaceId, historyCount: visits.size,
+      siteOrigin: input.siteOrigin, range: input.range, websiteData: input.websiteData, cache: input.cache };
+    this.browsingDataReview = { review, visits, initiator: this.activeAccountSpaceId(state), expiresAt: now + 120_000 };
+    return review;
+  }
+
+  private removeHistoryVisits(accountId: AccountSpaceId, visits: Set<string>): number {
+    let removed = 0;
+    this.store.update((state) => {
+      state.history = state.history.filter((entry) => {
+        if (entry.accountSpaceId !== accountId || !visits.has(entry.id)) return true;
+        removed += 1;
+        return false;
+      });
+    });
+    return removed;
+  }
+
+  deleteHistoryVisit(accountId: AccountSpaceId, id: string): void {
+    this.requireClearableAccount(accountId);
+    if (this.activeAccountSpaceId(this.store.get()) !== accountId) throw new Error('Return to the Account Space that owns this visit.');
+    this.removeHistoryVisits(accountId, new Set([id]));
+    this.broadcast();
+  }
+
+  async deleteReviewedBrowsingData(id: string): Promise<number> {
+    const pending = this.browsingDataReview;
+    if (!pending || pending.review.id !== id || pending.expiresAt <= Date.now()
+      || pending.initiator !== this.activeAccountSpaceId(this.store.get())) throw new Error('Review the browsing data again before deleting.');
+    this.browsingDataReview = undefined;
+    const { review, visits } = pending;
+    const account = this.requireClearableAccount(review.accountSpaceId);
+    const dataTypes: NonNullable<Electron.ClearDataOptions['dataTypes']> = [];
+    if (review.websiteData) dataTypes.push('cookies', 'localStorage', 'indexedDB', 'fileSystems', 'serviceWorkers', 'backgroundFetch', 'webSQL');
+    if (review.cache) dataTypes.push('cache');
+    if (dataTypes.length) {
+      const storage = session.fromPartition(this.store.partitionFor(account.id));
+      if (review.websiteData) {
+        const site = review.siteOrigin ? new URL(review.siteOrigin).hostname : undefined;
+        const cookieDomain = (host: string) => getDomain(host, { allowPrivateDomains: true }) ?? host;
+        const cookieSite = site && cookieDomain(site);
+        this.fillPicker.close();
+        for (const tab of this.store.get().tabs.filter((candidate) => candidate.accountSpaceId === account.id)) {
+          const runtime = this.runtimeTabs.get(tab.id);
+          if (!runtime?.view) continue;
+          const host = new URL(tab.url).hostname;
+          if (cookieSite && cookieDomain(host) !== cookieSite) continue;
+          this.window.contentView.removeChildView(runtime.view);
+          runtime.view.webContents.close();
+          this.runtimeTabs.delete(tab.id);
+        }
+      }
+      try {
+        await storage.clearData({ dataTypes, originMatchingMode: 'origin-in-all-contexts',
+          ...(review.siteOrigin ? { origins: [review.siteOrigin] } : {}) });
+        if (review.websiteData && !review.siteOrigin) await storage.clearAuthCache();
+      } finally {
+        if (!this.overlayOpen) await this.showActiveTab();
+      }
+      if (review.websiteData && (!review.siteOrigin || /(^|\.)google\.com$/.test(new URL(review.siteOrigin).hostname))) {
+        this.store.refreshAccount(this.accounts.update(account.id, (record) => { record.websiteStatus = 'not-visited'; }));
+      }
+    }
+    const removed = visits.size ? this.removeHistoryVisits(account.id, visits) : 0;
+    this.addPrivacyEvent('vault', 'Browsing data deleted', 'Reviewed browsing data was removed from one Account Space');
+    return removed;
+  }
+
   async deleteAccountSpace(accountSpaceId: AccountSpaceId, confirmation: string): Promise<void> {
     if (confirmation !== 'DELETE_ACCOUNT_SPACE') throw new Error('Exact Account Space deletion confirmation is required');
     const account = this.requireAccountMembership(accountSpaceId);
@@ -1252,6 +1346,8 @@ class BrowserController {
     }
     await clearAndVerifyAccountSession(session.fromPartition(partition));
     this.configuredSessions.delete(partition);
+    this.downloadHistory.forgetAccount(accountSpaceId);
+    this.downloadHistoryFailures.delete(accountSpaceId);
     this.store.removeAccount(accountSpaceId);
     for (const [id, entry] of this.downloads) {
       if (entry.accountSpaceId === accountSpaceId) this.downloads.delete(id);
@@ -1463,6 +1559,7 @@ class BrowserController {
   }
 
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
+    if (this.pendingChromePasswords?.accountId === accountSpaceId) this.pendingChromePasswords = undefined;
     if (this.pendingChromeImport?.accountSpaceId === accountSpaceId || this.pendingChromeImport?.initiatingAccount === accountSpaceId) {
       this.pendingChromeImport = undefined;
     }
@@ -2864,17 +2961,46 @@ class BrowserController {
     return this.migration.cleanupLegacyAfterConfirmation(Boolean(confirmation?.confirmed));
   }
 
-  async importChromePasswords(): Promise<ChromeImportResult> {
-    this.assertVaultSurface();
-    const selected = await dialog.showOpenDialog(this.window, { title: 'Import Chrome passwords into MyVault', properties: ['openFile'], filters: [{ name: 'Chrome password CSV', extensions: ['csv'] }] });
-    if (selected.canceled || !selected.filePaths[0]) throw new Error('Password import cancelled');
-    const report = await this.migration.importChromeCsv(selected.filePaths[0]);
-    this.addPrivacyEvent('vault', 'Chrome passwords imported into MyVault', `${report.validatedCount} rows processed; the source CSV was retained`);
-    return {
-      imported: { bookmarks: 0, history: 0, passwords: report.importedCount },
-      skipped: { bookmarks: 0, history: 0, passwords: report.skippedCount },
-      warnings: ['The plaintext Chrome CSV was retained. Delete it explicitly after verifying MyVault.'],
-    };
+  private assertChromePasswordImport(accountId: AccountSpaceId): void {
+    if (accountId !== this.activeAccountSpaceId(this.store.get()) || !this.activeVaultPolicy().saveCapture) {
+      throw new Error('Password import is unavailable in this Account Space.');
+    }
+    if (this.vault.status().lifecycle !== 'unlocked') throw new Error('Unlock MyVault before importing a password file.');
+  }
+
+  async reviewChromePasswords(): Promise<ChromePasswordImportReview | undefined> {
+    const accountId = this.activeAccountSpaceId(this.store.get());
+    this.assertChromePasswordImport(accountId);
+    if (this.selectingChromePasswords) throw new Error('The password file chooser is already open.');
+    this.pendingChromePasswords = undefined;
+    this.selectingChromePasswords = true;
+    try {
+      const selected = await dialog.showOpenDialog(this.window, { title: 'Review Chrome passwords for MyVault', properties: ['openFile'],
+        filters: [{ name: 'Chrome password CSV', extensions: ['csv'] }] });
+      if (selected.canceled || !selected.filePaths[0]) return undefined;
+      this.assertChromePasswordImport(accountId);
+      const path = selected.filePaths[0];
+      const { digest, revision, review } = this.migration.reviewChromeCsv(path);
+      const id = randomUUID();
+      this.pendingChromePasswords = { id, accountId, path, digest, revision, expiresAt: Date.now() + 5 * 60_000 };
+      return { id, ...review };
+    } finally {
+      this.selectingChromePasswords = false;
+    }
+  }
+
+  async importReviewedChromePasswords(id: string): Promise<ChromePasswordImportResult> {
+    const pending = this.pendingChromePasswords;
+    if (!pending || pending.id !== id || pending.expiresAt <= Date.now()) throw new Error('Review the password file again before importing.');
+    this.pendingChromePasswords = undefined;
+    this.assertChromePasswordImport(pending.accountId);
+    const report = await this.migration.importReviewedChromeCsv(pending.path, pending.digest, pending.revision);
+    if (report.imported) this.addPrivacyEvent('vault', 'Chrome passwords imported into MyVault', `${report.imported} encrypted logins added`);
+    return report;
+  }
+
+  discardChromePasswordReview(id: string): void {
+    if (this.pendingChromePasswords?.id === id) this.pendingChromePasswords = undefined;
   }
 
   async openVaultEditor(origin?: string) {
@@ -3255,10 +3381,38 @@ class BrowserController {
 
   private requireOwnedDownload(id: string): LocalDownload {
     const item = this.downloads.get(id);
-    if (!item || item.accountSpaceId !== this.activeDownloadAccount()) {
-      throw new Error('Download is unavailable in this Account Space');
+    const accountId = this.activeDownloadAccount();
+    if (accountId && item?.accountSpaceId === accountId) return item;
+    const retained = accountId && this.downloadHistory.entries(accountId).find(({ entry }) => entry.id === id);
+    if (retained) {
+      return { ...retained.entry, savePath: retained.file?.path, retainedFileStamp: retained.file?.stamp };
     }
-    return item;
+    throw new Error('Download is unavailable in this Account Space');
+  }
+
+  private downloadEntries(accountId: AccountSpaceId): DownloadEntry[] {
+    const live = [...this.downloads.values()].filter((entry) => entry.accountSpaceId === accountId);
+    const retained = this.downloadHistory.entries(accountId).filter(({ entry }) => !this.downloads.has(entry.id));
+    return [
+      ...live.map(({ savePath: _path, expectedInstaller: _expected, verifiedStamp: _stamp, retainedFileStamp: _retained, ...entry }) => entry),
+      ...retained.map(({ entry }) => entry),
+    ];
+  }
+
+  setDownloadHistory(accountId: AccountSpaceId, enabled: boolean): void {
+    if (accountId !== this.activeDownloadAccount() || this.store.isReadOnly()) throw new Error('Download history is unavailable in this Account Space');
+    this.downloadHistory.setEnabled(accountId, enabled);
+    this.downloadHistoryFailures.delete(accountId);
+    this.broadcast();
+  }
+
+  removeDownloadEntry(accountId: AccountSpaceId, id: string): void {
+    if (accountId !== this.activeDownloadAccount() || this.store.isReadOnly()) throw new Error('Download history is unavailable in this Account Space');
+    const entry = this.requireOwnedDownload(id);
+    if (this.downloadItems.has(id) || entry.checksum === 'checking') throw new Error('Wait until this download finishes.');
+    if (this.downloadHistory.entries(accountId).some(({ entry }) => entry.id === id)) this.downloadHistory.remove(accountId, id);
+    this.downloads.delete(id);
+    this.broadcast();
   }
 
   private requireActiveDownload(id: string) {
@@ -3301,6 +3455,9 @@ class BrowserController {
 
   async openDownload(id: string): Promise<void> {
     const item = this.requireActiveDownload(id);
+    if (item.retainedFileStamp && item.retainedFileStamp !== downloadFileStamp(item.savePath)) {
+      throw new Error('The saved file changed after download. Download a fresh copy or use Show folder to inspect it.');
+    }
     // Judge the file that will be opened, not the name the site suggested.
     const blocked = downloadOpenBlock({ ...item, risk: downloadRisk(basename(item.savePath)) });
     if (blocked) throw new Error(blocked);
@@ -3814,6 +3971,7 @@ class BrowserController {
         id,
         accountSpaceId,
         filename,
+        origin: isAllowedRemoteUrl(item.getURL()) ? new URL(item.getURL()).origin : undefined,
         receivedBytes: 0,
         totalBytes: item.getTotalBytes(),
         state: 'progressing',
@@ -3830,12 +3988,23 @@ class BrowserController {
       });
       item.once('done', (_downloadEvent, state) => {
         this.downloadItems.delete(id);
+        if (this.downloads.get(id) !== entry) return;
         Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath(),
-          paused: false, canPause: false, canResume: false, canCancel: false });
+          finishedAt: new Date().toISOString(), paused: false, canPause: false, canResume: false, canCancel: false });
         if (entry.savePath) {
           const savedFilename = basename(entry.savePath);
           entry.risk = downloadRisk(savedFilename);
           entry.extension = downloadExtension(savedFilename);
+        }
+        if (!this.store.isReadOnly()) {
+          const path = state === 'completed' ? entry.savePath : undefined;
+          const stamp = path ? downloadFileStamp(path) : undefined;
+          try {
+            entry.retained = this.downloadHistory.record(accountSpaceId, { entry, file: path && stamp ? { path, stamp } : undefined });
+            this.downloadHistoryFailures.delete(accountSpaceId);
+          } catch {
+            this.downloadHistoryFailures.add(accountSpaceId);
+          }
         }
         if (state === 'completed' && entry.savePath && entry.expectedInstaller) void this.verifyInstallerDownload(entry, entry.savePath);
         else this.broadcast();
@@ -4275,6 +4444,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:switch-account-space', (_event, id: AccountSpaceId) => controller!.switchAccountSpace(id));
   handle('browser:address-matches', (_event, account: AccountSpaceId, text: string) => controller!.addressMatches(account, text));
   handle('browser:query-history', (_event, account: AccountSpaceId, input: HistoryQuery) => controller!.retainedHistory(account, input));
+  handle('browser:review-browsing-data', (_event, input: BrowsingDataInput) => controller!.reviewBrowsingData(input));
+  handle('browser:delete-reviewed-data', (_event, id: string) => controller!.deleteReviewedBrowsingData(id));
+  handle('browser:delete-history-visit', (_event, account: AccountSpaceId, id: string) => controller!.deleteHistoryVisit(account, id));
   handle('browser:open-address-match', (_event, account: AccountSpaceId, source: AddressMatch['source'], id: string) => controller!.openAddressMatch(account, source, id));
   handle('accounts:add-local', (_event, workspaceId: WorkspaceId, label: string, color: AccountSpaceColor) => controller!.addLocalAccountSpace(workspaceId, label, color));
   handle('accounts:update', (_event, id: AccountSpaceId, label?: string, color?: AccountSpaceColor) => controller!.updateAccountSpace(id, label, color));
@@ -4357,11 +4529,15 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:discard-chrome-import', (_event, id: string) => controller!.discardChromeImport(id));
   handle('browser:can-undo-chrome-import', (_event, id: AccountSpaceId) => controller!.canUndoChromeImport(id));
   handle('browser:undo-chrome-import', (_event, id: AccountSpaceId) => controller!.undoChromeImport(id));
-  handle('browser:import-chrome-passwords', () => controller!.importChromePasswords());
+  handle('vault:review-chrome-passwords', () => controller!.reviewChromePasswords());
+  handle('vault:import-reviewed-chrome-passwords', (_event, id: string) => controller!.importReviewedChromePasswords(id));
+  handle('vault:discard-chrome-password-review', (_event, id: string) => controller!.discardChromePasswordReview(id));
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
   handle('browser:control-download', (_event, id: string, action: DownloadAction) => controller!.controlDownload(id, action));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
+  handle('browser:set-download-history', (_event, accountId: AccountSpaceId, enabled: boolean) => controller!.setDownloadHistory(accountId, enabled));
+  handle('browser:remove-download-entry', (_event, accountId: AccountSpaceId, id: string) => controller!.removeDownloadEntry(accountId, id));
   handle('developer:toggle-tools', (_event, mode: DevToolsMode) => controller!.toggleDeveloperTools(mode));
   handle('developer:capture-diagnostics', () => controller!.captureDeveloperDiagnostics());
   handle('developer:clear-diagnostics', () => controller!.clearDeveloperDiagnostics());

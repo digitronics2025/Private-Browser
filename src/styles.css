@@ -383,6 +383,12 @@ kbd { font: inherit; }
 .vault-health-review p { color: var(--text-muted); font-size: var(--fs-sm); }
 .vault-health-review ul { margin: 8px 0 0; padding: 0; list-style: none; }
 .vault-health-review li { border-top: 1px solid var(--border); padding: 8px 0; }
+.chrome-password-review { display: grid; gap: 8px; overflow-wrap: anywhere; }
+.chrome-password-review h3, .chrome-password-review p, .chrome-password-review dl { margin: 0; }
+.chrome-password-review ol, .chrome-password-review ul { margin: 0; padding-inline-start: 20px; }
+.chrome-password-review dl > div { display: flex; justify-content: space-between; gap: 10px; }
+.chrome-password-review dd { margin: 0; }
+.chrome-password-review small { display: block; color: var(--text-muted); }
 .ntp-space-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--workspace-color); }
 .ntp-shortcuts { width: min(584px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 4px; }
 .ntp-tile { position: relative; }
@@ -803,7 +809,11 @@ kbd { font: inherit; }
 .download-body small { margin-top: 2px; color: var(--text-muted); font-size: var(--fs-xs); }
 .progress { height: 4px; margin-top: 7px; overflow: hidden; border-radius: 2px; background: var(--surface-3); }
 .progress span { display: block; height: 100%; background: var(--accent); }
-.download-actions { display: flex; gap: 6px; margin-top: 8px; }
+.download-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.download-filters { display: grid; gap: 7px; }
+.download-filters input[type="search"], .download-filters select { display: block; width: 100%; min-width: 0; }
+.download-filters p { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); }
+.download-origin { overflow-wrap: anywhere; }
 .browser-preview-marker { position: fixed; inset: auto auto 8px 8px; z-index: 10; padding: 3px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 11px; pointer-events: none; }
 .download-evidence { display: grid; gap: 6px; margin: 10px 0 6px; font-size: var(--fs-xs); }
 .download-evidence > div { display: grid; grid-template-columns: minmax(84px, 0.6fr) minmax(0, 1fr); gap: 6px; }
@@ -941,6 +951,14 @@ kbd { font: inherit; }
 .prompt-dialog label { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); font-size: var(--fs-sm); }
 .prompt-dialog input { height: 38px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--field); color: var(--text); font-size: var(--fs-md); outline: none; }
 .prompt-dialog input:focus { border-color: var(--accent-ring); box-shadow: 0 0 0 1px var(--accent-ring); background: var(--field-focus); }
+.browsing-data-dialog { max-height: calc(100vh - 24px); overflow: auto; }
+.browsing-data-dialog fieldset, .browsing-data-review { min-width: 0; margin: 0; padding: 0; border: 0; display: grid; gap: 10px; }
+.browsing-data-dialog label.browsing-data-choice { flex-direction: row; align-items: center; }
+.browsing-data-dialog input[type="checkbox"] { height: auto; padding: 0; }
+.browsing-data-review p { overflow-wrap: anywhere; }
+.browsing-data-dialog .dialog-actions { flex-wrap: wrap; }
+.browsing-data-dialog .dialog-actions .danger { color: var(--danger); background: var(--danger-soft); }
+.toolbar-button.history-delete { --button: 34px; }
 .prompt-error { color: var(--danger) !important; }
 .bookmark-batch-dialog { max-height: 95vh; overflow: auto; }
 .bookmark-batch-dialog .startup-tab-list label { flex-direction: row; align-items: flex-start; padding: 6px; }

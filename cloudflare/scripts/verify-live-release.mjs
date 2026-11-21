@@ -21,6 +21,7 @@ const manifestResponse = await fetch(`${endpoint}/update.json`, {
 });
 assert(manifestResponse.status === 200, `Authenticated manifest returned ${manifestResponse.status}`);
 const manifest = await manifestResponse.json();
+if (process.env.GITHUB_SHA) assert(manifest.commitSha === process.env.GITHUB_SHA, 'Manifest revision does not match the published commit');
 assert(manifest.filename === expectedFilename, 'Manifest filename does not match the installer');
 assert(manifest.sizeBytes === expectedSize, 'Manifest size does not match the installer');
 assert(manifest.sha256 === expectedHash, 'Manifest checksum does not match the installer');
@@ -94,7 +95,7 @@ const editedExpiry = new URL(manifest.downloadUrl);
 editedExpiry.searchParams.set('expires', '1000000000');
 await expectStatus(editedExpiry, 404);
 
-process.stdout.write(`${JSON.stringify({ ok: true, version: manifest.version, buildNumber: manifest.buildNumber, filename: expectedFilename, sizeBytes: expectedSize, sha256: expectedHash })}\n`);
+process.stdout.write(`${JSON.stringify({ ok: true, version: manifest.version, buildNumber: manifest.buildNumber, commitSha: manifest.commitSha, filename: expectedFilename, sizeBytes: expectedSize, sha256: expectedHash })}\n`);
 
 async function hashFile(path) {
   const hash = createHash('sha256');

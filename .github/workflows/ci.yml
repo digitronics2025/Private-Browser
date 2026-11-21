@@ -369,33 +369,59 @@ jobs:
         run: |
           installer="$(find release -maxdepth 1 -type f -name '*.exe' -print -quit)"
           test -n "$installer"
+          node cloudflare/scripts/verify-release-candidate.mjs "$installer"
           version="$(node -p "require('./package.json').version")"
           object_key="releases/${version}/${GITHUB_RUN_NUMBER}/$(basename "$installer")"
           npx wrangler r2 object put "private-browser-releases/${object_key}" --file "$installer" --content-type application/vnd.microsoft.portable-executable --remote
           echo "installer=$installer" >> "$GITHUB_OUTPUT"
           echo "object_key=$object_key" >> "$GITHUB_OUTPUT"
-      - name: Publish D1 release metadata
+      - name: Verify candidate bytes from private R2
         if: steps.configured.outputs.ready == 'true'
+        id: staged
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          INSTALLER_PATH: ${{ steps.upload.outputs.installer }}
+          OBJECT_KEY: ${{ steps.upload.outputs.object_key }}
+        run: |
+          candidate_dir="$(mktemp -d "$RUNNER_TEMP/private-browser-candidate.XXXXXXXX")"
+          candidate_file="$candidate_dir/candidate.exe"
+          trap 'rm -f -- "$candidate_file"; rmdir -- "$candidate_dir"' EXIT
+          npx wrangler r2 object get "private-browser-releases/$OBJECT_KEY" --file "$candidate_file" --remote
+          receipt="$(node cloudflare/scripts/verify-release-candidate.mjs "$INSTALLER_PATH" "$candidate_file")"
+          printf '### Private installer candidate verified\n\n```json\n%s\n```\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
+          echo "verified=true" >> "$GITHUB_OUTPUT"
+      - name: Publish D1 release metadata
+        if: steps.configured.outputs.ready == 'true' && steps.staged.outputs.verified == 'true'
         env:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
           PRIVATE_BROWSER_ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
           PREVIOUS_RELEASE_REVISION: ${{ steps.previous.outputs.revision }}
-        run: node cloudflare/scripts/publish-release.mjs "${{ steps.upload.outputs.installer }}" "${{ steps.upload.outputs.object_key }}"
+          INSTALLER_PATH: ${{ steps.upload.outputs.installer }}
+          OBJECT_KEY: ${{ steps.upload.outputs.object_key }}
+        run: node cloudflare/scripts/publish-release.mjs "$INSTALLER_PATH" "$OBJECT_KEY"
       - name: Verify authenticated download end to end
-        if: steps.configured.outputs.ready == 'true'
+        if: steps.configured.outputs.ready == 'true' && steps.staged.outputs.verified == 'true'
         env:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
           PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
           PRIVATE_BROWSER_ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
           PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.id }}
+          INSTALLER_PATH: ${{ steps.upload.outputs.installer }}
         shell: bash
         run: |
           # The new release is already active here; if users would not get
           # exactly the installer that was built, put the previous one back (F-50).
-          if node cloudflare/scripts/verify-live-release.mjs "${{ steps.upload.outputs.installer }}"; then exit 0; fi
+          if receipt="$(node cloudflare/scripts/verify-live-release.mjs "$INSTALLER_PATH")"; then
+            printf '%s\n' "$receipt"
+            printf '### Stable installer verified\n\n```json\n%s\n```\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [[ -n "$PREVIOUS_RELEASE_ID" ]]; then
             echo "::error::Live verification failed; re-activating $PREVIOUS_RELEASE_ID"
             node cloudflare/scripts/activate-release.mjs "$PREVIOUS_RELEASE_ID"
+            printf '### Live verification failed\n\nRestored %s.\n' "$PREVIOUS_RELEASE_ID" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::error::Live verification failed and there is no earlier release to restore"
           fi

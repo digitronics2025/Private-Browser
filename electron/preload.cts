@@ -1,12 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { BrowserRoutine, LocalAiModels, ReferenceSearchInput, RoutineRunResult, TabSetInput } from './types.js';
-import type { AddressMatch, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
+import type { AddressMatch, BrowsingDataInput, BrowsingDataReview, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
 import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
 import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
-import type { VaultFillReadiness, VaultHealthReport } from './types.js';
+import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
@@ -64,6 +64,9 @@ const api = {
   switchAccountSpace: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:switch-account-space', accountSpaceId),
   addressMatches: (accountSpaceId: AccountSpaceId, text: string): Promise<AddressMatch[]> => ipcRenderer.invoke('browser:address-matches', accountSpaceId, text),
   queryHistory: (accountSpaceId: AccountSpaceId, input: HistoryQuery): Promise<HistoryPage> => ipcRenderer.invoke('browser:query-history', accountSpaceId, input),
+  reviewBrowsingData: (input: BrowsingDataInput): Promise<BrowsingDataReview> => ipcRenderer.invoke('browser:review-browsing-data', input),
+  deleteReviewedBrowsingData: (id: string): Promise<number> => ipcRenderer.invoke('browser:delete-reviewed-data', id),
+  deleteHistoryVisit: (accountId: AccountSpaceId, id: string): Promise<void> => ipcRenderer.invoke('browser:delete-history-visit', accountId, id),
   openAddressMatch: (accountSpaceId: AccountSpaceId, source: AddressMatch['source'], id: string): Promise<void> => ipcRenderer.invoke('browser:open-address-match', accountSpaceId, source, id),
   addLocalAccountSpace: (workspaceId: WorkspaceId, label: string, color: AccountSpaceColor): Promise<AccountSpaceId> => ipcRenderer.invoke('accounts:add-local', workspaceId, label, color),
   updateAccountSpace: (accountSpaceId: AccountSpaceId, label?: string, color?: AccountSpaceColor): Promise<void> => ipcRenderer.invoke('accounts:update', accountSpaceId, label, color),
@@ -146,11 +149,15 @@ const api = {
   discardChromeImport: (id: string): Promise<void> => ipcRenderer.invoke('browser:discard-chrome-import', id),
   canUndoChromeImport: (id: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('browser:can-undo-chrome-import', id),
   undoChromeImport: (id: AccountSpaceId): Promise<{ bookmarks: number; history: number }> => ipcRenderer.invoke('browser:undo-chrome-import', id),
-  importChromePasswords: (): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome-passwords'),
+  reviewChromePasswords: (): Promise<ChromePasswordImportReview | undefined> => ipcRenderer.invoke('vault:review-chrome-passwords'),
+  importReviewedChromePasswords: (id: string): Promise<ChromePasswordImportResult> => ipcRenderer.invoke('vault:import-reviewed-chrome-passwords', id),
+  discardChromePasswordReview: (id: string): Promise<void> => ipcRenderer.invoke('vault:discard-chrome-password-review', id),
   toggleTrackerBlocking: (): Promise<void> => ipcRenderer.invoke('browser:toggle-tracker-blocking'),
   openDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-download', id),
   controlDownload: (id: string, action: DownloadAction): Promise<void> => ipcRenderer.invoke('browser:control-download', id, action),
   showDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:show-download', id),
+  setDownloadHistory: (accountId: AccountSpaceId, enabled: boolean): Promise<void> => ipcRenderer.invoke('browser:set-download-history', accountId, enabled),
+  removeDownloadEntry: (accountId: AccountSpaceId, id: string): Promise<void> => ipcRenderer.invoke('browser:remove-download-entry', accountId, id),
   toggleDeveloperTools: (mode: DevToolsMode): Promise<void> => ipcRenderer.invoke('developer:toggle-tools', mode),
   captureDeveloperDiagnostics: (): Promise<DeveloperDiagnosticReport> => ipcRenderer.invoke('developer:capture-diagnostics'),
   clearDeveloperDiagnostics: (): Promise<void> => ipcRenderer.invoke('developer:clear-diagnostics'),

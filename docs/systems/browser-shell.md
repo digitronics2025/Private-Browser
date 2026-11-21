@@ -456,22 +456,19 @@ checksum is checked.
 `will-download` is registered per session inside `configureSession`. Each download
 becomes a `DownloadEntry` in an in-memory `Map` keyed by a fresh `randomUUID()`:
 
-- The same entry object is mutated in place by the item's `updated` and `done`
-  listeners, and every mutation calls `broadcast()`, so the renderer sees live
-  progress.
-- Nothing calls `item.setSavePath()`, so Electron's own save behaviour applies.
-- Banking-workspace downloads are cancelled before a file is written. The
-  snapshot includes only the unlocked active Account Space's downloads and
-  omits local file paths. Both file actions check ownership again in main.
-- `downloadRisk` is an allowlist: only documents, images, media and archives are
-  `ordinary`; every other type (including `.msix`, `.vhdx`, `.url`,
-  extensionless names) is `dangerous`, and a disguise extension before it is
-  `deceptive`. Risk is re-judged from the saved path's name when the download
-  completes. `openDownload(id)` requires state `completed` **and** a `savePath`,
-  and refuses a risky file unless it is the checksum-verified app installer.
-  Show folder also requires a completed download with an existing saved file.
-- The map is session-only. Deleting an Account Space removes its records and
-  leaves the downloaded files on disk.
+- Progress and completion update the entry and broadcast. Electron chooses the
+  save path. Banking refuses downloads before writing any file.
+- Snapshots expose downloads only for the unlocked active Account Space and
+  omit file paths. Main checks ownership again on each file action.
+- `downloadRisk` checks the saved filename. Only documents, images, media and
+  archives are ordinary. Open and Show folder require an existing completed
+  file. Open allows risky files only after app installer verification.
+- An optional per-account history keeps the last 100 finished entries across
+  restarts. Windows protected storage encrypts filenames, saved paths and
+  origin/time metadata. The history keeps only origins from remote URLs.
+  Reopening an ordinary saved file checks its original file stamp. Installers
+  still require the current session's release verification. Removing an entry
+  or deleting the Account Space leaves downloaded files on disk.
 
 ## Downloads — checksum verification
 

@@ -1,0 +1,1 @@
+Keep download history on this device for an Account Space, search by name or source, and remove an entry while keeping the downloaded file.

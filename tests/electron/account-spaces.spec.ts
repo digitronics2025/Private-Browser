@@ -1,6 +1,6 @@
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,24 @@ let origin: string;
 let server: Server;
 let documentHeaders: IncomingHttpHeaders | undefined;
 const installerBytes = 'local installer fixture';
+
+function launchProfile() {
+  const env = { ...process.env, NODE_ENV: 'test' } as Record<string, string>;
+  delete env.ELECTRON_RUN_AS_NODE;
+  return electron.launch({ args: [join(process.cwd(), 'dist-electron/main.js'), `--user-data-dir=${userDataPath}`], env });
+}
+
+function startAccountDownload(target: string, savePath: string) {
+  return application!.evaluate(({ webContents }, { target, savePath }) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === target + '/source');
+    if (!contents) throw new Error('Download source view is missing');
+    // The initial request is stopped for permission. Set a path on the granted retry.
+    contents.session.once('will-download', () => {
+      contents.session.once('will-download', (_event, item) => item.setSavePath(savePath));
+    });
+    contents.downloadURL(target);
+  }, { target, savePath });
+}
 
 test.beforeEach(async () => {
   documentHeaders = undefined;
@@ -71,9 +89,7 @@ test.beforeEach(async () => {
   if (!address || typeof address === 'string') throw new Error('Test server did not bind to TCP');
   origin = `http://127.0.0.1:${address.port}`;
   userDataPath = mkdtempSync(join(tmpdir(), 'private-browser-electron-'));
-  const env = { ...process.env, NODE_ENV: 'test' } as Record<string, string>;
-  delete env.ELECTRON_RUN_AS_NODE;
-  application = await electron.launch({ args: [join(process.cwd(), 'dist-electron/main.js'), `--user-data-dir=${userDataPath}`], env });
+  application = await launchProfile();
 });
 
 test.afterEach(async () => {
@@ -328,15 +344,7 @@ test('scopes the download list and both file commands to the originating account
   const target = origin + '/account-download';
   await page.evaluate((url) => window.privateBrowser.navigate(url + '/source'), target);
   const savePath = join(userDataPath, 'account-fixture.txt');
-  await application!.evaluate(({ webContents }, { target, savePath }) => {
-    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === target + '/source');
-    if (!contents) throw new Error('Download source view is missing');
-    // The initial request is stopped for permission. Set a path only on its granted retry.
-    contents.session.once('will-download', () => {
-      contents.session.once('will-download', (_event, item) => item.setSavePath(savePath));
-    });
-    contents.downloadURL(target);
-  }, { target, savePath });
+  await startAccountDownload(target, savePath);
   const getState = () => page.evaluate(() => window.privateBrowser.getState());
   await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
   const promptId = (await getState()).pendingPermission!.id;
@@ -357,6 +365,86 @@ test('scopes the download list and both file commands to the originating account
   for (const error of errors) expect(error).toContain('Download is unavailable in this Account Space');
   await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), first);
   expect((await getState()).downloads).toEqual([download]);
+});
+
+test('retains only opted-in downloads and removes entries without deleting the saved file', async () => {
+  test.skip(process.platform !== 'win32', 'Uses Windows protected storage in a disposable app profile.');
+  let page = await application!.firstWindow();
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  const account = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'History fixture owner', 'sky'));
+  const target = origin + '/account-download';
+  await page.evaluate((url) => window.privateBrowser.navigate(url + '/source'), target);
+  expect((await getState()).downloadHistory).toBe('off');
+  await page.evaluate((id) => window.privateBrowser.setDownloadHistory(id, true), account);
+  const savePath = join(userDataPath, 'history-fixture.txt');
+  await startAccountDownload(target, savePath);
+  await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
+  await page.evaluate((id) => window.privateBrowser.respondToPermissionPrompt(id, 'allow-once'), (await getState()).pendingPermission!.id);
+  await expect.poll(async () => (await getState()).downloads[0]?.retained).toBe(true);
+  await application!.close();
+  application = await launchProfile();
+  page = await application.firstWindow();
+  const [download] = (await getState()).downloads;
+  expect(download).toMatchObject({ filename: 'history-fixture.txt', origin, state: 'completed', retained: true });
+  expect(download).not.toHaveProperty('savePath');
+  expect(download).not.toHaveProperty('retainedFileStamp');
+  expect(Date.parse(download.finishedAt!)).toBeGreaterThan(0);
+  await application.evaluate(({ shell }, expected) => {
+    shell.openPath = async (path) => path === expected ? '' : 'Unexpected path';
+  }, savePath);
+  const open = () => page.evaluate((id) => window.privateBrowser.openDownload(id), download.id);
+  await expect(open()).resolves.toBeUndefined();
+  writeFileSync(savePath, 'Updated fixture bytes', 'utf8');
+  await expect(open()).rejects.toThrow(/saved file changed/i);
+  await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Second history account', 'rose'));
+  expect((await getState()).downloads).toEqual([]);
+  await expect(open()).rejects.toThrow(/unavailable in this Account Space/i);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), account);
+  await page.evaluate(({ account, id }) => window.privateBrowser.removeDownloadEntry(account, id), { account, id: download.id });
+  expect((await getState()).downloads).toEqual([]);
+  expect(existsSync(savePath)).toBe(true);
+  await application.close();
+  application = await launchProfile();
+  page = await application.firstWindow();
+  expect((await getState()).downloads).toEqual([]);
+});
+
+test('deletes only reviewed visits and website data in one Account Space', async () => {
+  const page = await application!.firstWindow();
+  const first = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Review owner', 'sky'));
+  const firstUrl = origin + '/review-history-first';
+  const secondUrl = origin + '/review-history-second';
+  const lateUrl = origin + '/review-history-late';
+  const navigate = (url: string) => page.evaluate((target) => window.privateBrowser.navigate(target), url);
+  const cookie = (url: string, action: 'write' | 'count') => application!.evaluate(async ({ webContents }, { url, action }) => {
+    const source = webContents.getAllWebContents().find((contents) => contents.getURL() === url);
+    if (!source) throw new Error('Disposable page is missing');
+    if (action === 'write') await source.session.cookies.set({ url, name: 'review-fixture', value: 'sample' });
+    return (await source.session.cookies.get({ url, name: 'review-fixture' })).length;
+  }, { url, action });
+  await navigate(firstUrl);
+  expect(await cookie(firstUrl, 'write')).toBe(1);
+  const second = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Review separate', 'rose'));
+  await navigate(secondUrl);
+  expect(await cookie(secondUrl, 'write')).toBe(1);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), first);
+  const review = await page.evaluate(({ accountSpaceId, site }) => window.privateBrowser.reviewBrowsingData({
+    accountSpaceId, site, range: 'all', history: true, websiteData: true, cache: false,
+  }), { accountSpaceId: first, site: origin });
+  expect(review).toMatchObject({ accountSpaceId: first, siteOrigin: origin, historyCount: 1 });
+  await navigate(lateUrl);
+  const remove = () => page.evaluate((id) => window.privateBrowser.deleteReviewedBrowsingData(id), review.id);
+  await expect(remove()).resolves.toBe(1);
+  await expect(remove()).rejects.toThrow(/review the browsing data again/i);
+  const history = (accountId: typeof first) => page.evaluate(async (id) => (await window.privateBrowser.queryHistory(id, {
+    text: '', site: '', from: null, until: null, page: 0,
+  })).entries.map((entry) => entry.url), accountId);
+  expect(await history(first)).toContain(lateUrl);
+  expect(await history(first)).not.toContain(firstUrl);
+  expect(await cookie(lateUrl, 'count')).toBe(0);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), second);
+  expect(await history(second)).toContain(secondUrl);
+  expect(await cookie(secondUrl, 'count')).toBe(1);
 });
 
 test('rechecks the installer after a same-size file replacement before it reaches Windows Open', async () => {

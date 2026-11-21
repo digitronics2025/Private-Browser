@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Download, FileDown } from 'lucide-react';
 import { downloadOpenBlock } from '../../electron/download-safety';
 import type { BrowserSnapshot, DownloadEntry } from '../../electron/types';
@@ -10,6 +11,7 @@ const statusText = {
   cancelled: 'Cancelled',
   interrupted: 'Interrupted',
 };
+const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 const checksumText: Record<NonNullable<DownloadEntry['checksum']>, string> = {
   checking: 'Checking against the published release',
@@ -29,10 +31,31 @@ function publisherText(publisher: DownloadEntry['publisher']): string {
 }
 
 export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('all');
+  const needle = query.trim().toLowerCase();
+  const visible = state.downloads.filter((item) => (status === 'all' || item.state === status)
+    && `${item.filename} ${item.origin ?? ''}`.toLowerCase().includes(needle));
   const run = (action: () => Promise<void>) => void action().catch((error: unknown) => onToast(error instanceof Error ? error.message : String(error), 'error'));
   return <div className="side-panel">
-    <PanelHeader icon={FileDown} eyebrow="This session" title="Downloads" />
-    <div className="download-list">{state.downloads.map((item) => {
+    <PanelHeader icon={FileDown} eyebrow="Account Space" title="Downloads" />
+    {state.downloadHistory && <div className="settings-card download-filters">
+      <label><input type="checkbox" checked={state.downloadHistory === 'on'} disabled={state.downloadHistory === 'unavailable' || Boolean(state.recovery)}
+        onChange={(event) => {
+          const enabled = event.currentTarget.checked;
+          run(() => window.privateBrowser.setDownloadHistory(state.activeAccountSpaceId, enabled));
+        }} /> Keep download history</label>
+      <p>{state.downloadHistory === 'unavailable' ? 'Windows protected storage is unavailable for download history.'
+        : 'Keeps up to 100 finished downloads in this Account Space on this device.'}</p>
+      {state.downloads.length > 0 && <>
+        <label>Search downloads<input type="search" value={query} maxLength={160} onChange={(event) => setQuery(event.currentTarget.value)} /></label>
+        <label>Status<select aria-label="Download status" value={status} onChange={(event) => setStatus(event.currentTarget.value)}>
+          <option value="all">All statuses</option>
+          {Object.entries(statusText).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
+        </select></label>
+      </>}
+    </div>}
+    <div className="download-list">{visible.map((item) => {
       const progress = item.totalBytes ? Math.min(100, Math.round(item.receivedBytes / item.totalBytes * 100)) : undefined;
       const blocked = downloadOpenBlock(item);
       const type = item.risk === 'deceptive' ? ' · Deceptive double extension'
@@ -42,6 +65,8 @@ export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onT
         <div className="download-body">
           <strong>{item.filename}</strong>
           <small>{item.checksum === 'checking' ? 'Waiting for verification' : item.paused ? 'Paused' : statusText[item.state]}</small>
+          {item.origin && <small className="download-origin">{item.origin}</small>}
+          {item.finishedAt && <small><time dateTime={item.finishedAt}>{dateTime.format(new Date(item.finishedAt))}</time></small>}
           {item.state === 'progressing' && <small>{item.totalBytes
             ? `${humanBytes(item.receivedBytes)} of ${humanBytes(item.totalBytes)}`
             : `${humanBytes(item.receivedBytes)} downloaded`}</small>}
@@ -62,10 +87,13 @@ export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onT
             {item.paused && item.canResume && <button onClick={() => run(() => window.privateBrowser.controlDownload(item.id, 'resume'))}>Resume</button>}
             {item.state === 'interrupted' && !item.paused && item.canResume && <button onClick={() => run(() => window.privateBrowser.controlDownload(item.id, 'retry'))}>Retry</button>}
             {item.canCancel && <button onClick={() => run(() => window.privateBrowser.controlDownload(item.id, 'cancel'))}>Cancel download</button>}
+            {item.state !== 'progressing' && !item.canCancel && item.checksum !== 'checking' && state.downloadHistory && <button
+              title="Remove the list entry. The file stays on disk."
+              onClick={() => run(() => window.privateBrowser.removeDownloadEntry(state.activeAccountSpaceId, item.id))}>Remove from list</button>}
           </div>
         </div>
       </div>;
     })}</div>
-    {!state.downloads.length && <EmptyState icon={Download} text="Downloaded files will appear here." />}
+    {!visible.length && <EmptyState icon={Download} text={state.downloads.length ? 'No downloads match these filters.' : 'Downloaded files will appear here.'} />}
   </div>;
 }

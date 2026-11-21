@@ -13,6 +13,7 @@ import type { ExternalBrowserId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
 import { MAX_ADDRESS_QUERY_LENGTH } from './address-matches.js';
 import { MAX_REFERENCE_LENGTH, requireBrowserSettingsPatch } from './browser-settings.js';
+import { requireBrowsingDataInput } from './browsing-data.js';
 import { requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
@@ -214,6 +215,14 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       for (const id of args[2]) requireNonEmptyText(id, 'tab identifier', 200);
       return;
     }
+    case 'browser:review-browsing-data':
+      exact(args, 1);
+      requireBrowsingDataInput(requireExactKeys(args[0], ['accountSpaceId', 'range', 'site', 'history', 'websiteData', 'cache']));
+      return;
+    case 'browser:delete-reviewed-data':
+      exact(args, 1); requireNonEmptyText(args[0], 'browsing data review identifier', 128); return;
+    case 'browser:delete-history-visit':
+      exact(args, 2); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'history visit identifier', 128); return;
     case 'browser:query-history': {
       exact(args, 2); requireAccountSpaceId(args[0]);
       const input = requireExactKeys(args[1], ['text', 'site', 'from', 'until', 'page']);
@@ -333,6 +342,12 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if (typeof input.taskId !== 'string' || !/^TASK-\d{1,8}$/.test(input.taskId)) throw new Error('Invalid Control Center task'); return;
     }
     // Channels that take one identifier chosen from state the renderer was given.
+    case 'browser:set-download-history':
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (typeof args[1] !== 'boolean') throw new Error('Choose whether to keep download history');
+      return;
+    case 'browser:remove-download-entry':
+      exact(args, 2); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'download identifier', 128); return;
     case 'browser:control-download':
       exact(args, 2); requireNonEmptyText(args[0], 'download identifier', 200);
       if (args[1] !== 'pause' && args[1] !== 'resume' && args[1] !== 'retry' && args[1] !== 'cancel') throw new Error('Invalid download action');
@@ -431,6 +446,9 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); if (args[0] !== 'cloud' && args[0] !== 'local') throw new Error('Choose the cloud or local vault explicitly'); return;
     case 'vault:open-editor':
       between(args, 0, 1); if (args[0] !== undefined) requireBoundedText(args[0], 'origin', 2048); return;
+    case 'vault:import-reviewed-chrome-passwords':
+    case 'vault:discard-chrome-password-review':
+      exact(args, 1); requireNonEmptyText(args[0], 'password import review identifier', 128); return;
     case 'vault:check-health':
       exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'vault:edit-health-login':
@@ -448,13 +466,14 @@ const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'browser:undo-tab-batch',
   'ai:check-provider', 'ai:clear-provider', 'ai:local-models', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
-  'browser:import-chrome-passwords', 'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
+  'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
   'browser:reopen-closed-tab', 'browser:stop', 'browser:stop-find', 'browser:toggle-bookmark', 'browser:toggle-bookmark-bar',
   'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-pair', 'developer:bridge-projects',
   'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',
   'google:clear-configuration', 'system:is-default-browser', 'system:open-default-browser-settings', 'system:test-default-browser', 'updates:check', 'updates:clear',
   'updates:open-history', 'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review',
   'vault:clipboard-clear', 'vault:clipboard-deadline', 'vault:fill-readiness', 'vault:form-shape', 'vault:hello-disable', 'vault:hello-enable', 'vault:hello-unlock', 'vault:list', 'vault:lock',
+  'vault:review-chrome-passwords',
   'vault:migrate-legacy', 'vault:migration-status', 'vault:reconnect', 'vault:request-pairing', 'vault:request-unlock',
   'vault:save-from-page', 'vault:sync',
 ]);

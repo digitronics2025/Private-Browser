@@ -460,6 +460,25 @@ export interface HistoryPage {
   trimmed: boolean;
 }
 
+export type BrowsingDataRange = 'hour' | 'day' | 'week' | 'all';
+export interface BrowsingDataInput {
+  accountSpaceId: AccountSpaceId;
+  range: BrowsingDataRange;
+  site: string;
+  history: boolean;
+  websiteData: boolean;
+  cache: boolean;
+}
+export interface BrowsingDataReview {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  siteOrigin?: string;
+  range: BrowsingDataRange;
+  historyCount: number;
+  websiteData: boolean;
+  cache: boolean;
+}
+
 export interface AddressMatch {
   source: 'tab' | 'bookmark' | 'history';
   id: string;
@@ -490,7 +509,12 @@ export interface DownloadEntry {
   extension?: string;
   publisher?: { state: 'unsigned' | 'valid' | 'untrusted' | 'unavailable'; name?: string };
   risk: 'ordinary' | 'dangerous' | 'deceptive';
+  origin?: string;
+  finishedAt?: string;
+  retained?: boolean;
 }
+
+export type DownloadHistoryStatus = 'off' | 'on' | 'unavailable';
 
 export type DownloadAction = 'pause' | 'resume' | 'retry' | 'cancel';
 
@@ -512,6 +536,7 @@ export interface BrowserSnapshot {
   bookmarks: Bookmark[];
   history: HistoryEntry[];
   downloads: DownloadEntry[];
+  downloadHistory?: DownloadHistoryStatus;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
   /** Present after Account Spaces initialization; contains renderer-safe data only. */
@@ -793,6 +818,19 @@ export interface VaultStatus {
 }
 
 export type VaultFillReadiness = 'ready' | 'locked' | 'connect' | 'no-match' | 'unsupported' | 'manual' | 'choose-login' | 'unavailable';
+export type ChromePasswordSkipReason = 'unsupported-site' | 'missing-password' | 'field-limit' | 'row-limit' | 'already-saved' | 'duplicate-in-file';
+export interface ChromePasswordIssue { entry: number; reason: ChromePasswordSkipReason; origin?: string; username?: string }
+export interface ChromePasswordImportReview {
+  id: string;
+  sourceCount: number;
+  toImport: number;
+  skipped: Partial<Record<ChromePasswordSkipReason, number>>;
+  issues: ChromePasswordIssue[];
+}
+export interface ChromePasswordImportResult {
+  imported: number;
+  skipped: Partial<Record<ChromePasswordSkipReason, number>>;
+}
 export type VaultHealthIssue = 'duplicate-login' | 'missing-origin' | 'reused-password' | 'weak-password';
 export interface VaultHealthFinding { id: string; issues: VaultHealthIssue[] }
 export interface VaultHealthReport { checked: number; findings: VaultHealthFinding[] }

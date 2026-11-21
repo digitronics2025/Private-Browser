@@ -1,5 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
-import type { ChromeImportOptions } from '../electron/types';
+import type { ChromeImportOptions, ChromePasswordImportReview } from '../electron/types';
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
@@ -11,6 +11,8 @@ import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
+import { browsingDataVisitIds, requireBrowsingDataInput } from '../electron/browsing-data';
+import type { BrowsingDataReview } from '../electron/types';
 import { planBookmarkBatch } from '../electron/bookmark-batch';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from '../electron/bookmark-maintenance';
 import { canonicalRoutineUrl, defaultBrowserRoutines, requireBrowserRoutine } from '../electron/browser-routines';
@@ -151,10 +153,20 @@ export function installPreviewApi(): void {
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
+  const savedDownloadHistory = new Set<AccountSpaceId>();
+  if (params.get('downloadHistory') === 'sample') {
+    savedDownloadHistory.add(google);
+    sampleDownloads.push({ id: 'preview-download-history', accountSpaceId: google, filename: 'Statement.pdf',
+      origin: 'https://billing.example.test', finishedAt: '2026-11-20T16:00:00Z', state: 'completed',
+      receivedBytes: 1920, totalBytes: 1920, extension: 'PDF', risk: 'ordinary', retained: true });
+  }
+  state.downloadHistory = savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
   const workspaceSettings: Partial<Record<WorkspaceId, BrowserSettings>> = {};
   const siteZoom = new Map<string, number>();
   const siteZoomKey = (account: string, url: string) => JSON.stringify([account, new URL(url).origin]);
   let pendingChromeImport: { id: string; options: ChromeImportOptions; owner: AccountSpaceId } | undefined;
+  let clearDataReview: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string> } | undefined;
+  let passwordReview: { review: ChromePasswordImportReview; accountId: AccountSpaceId } | undefined;
   const chromeUndo = new Map<AccountSpaceId, { bookmark: boolean; history: boolean }>();
   let sampleGrants: PermissionGrantSummary[] = params.get('permissions') === 'sample' ? [
     { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
@@ -179,6 +191,7 @@ export function installPreviewApi(): void {
     };
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
+    state.downloadHistory = state.activeWorkspaceId === 'banking' ? undefined : savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
     state.bookmarkUndo = undo ? { kind: undo.kind, count: undo.before.length } : undefined;
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
@@ -453,6 +466,33 @@ export function installPreviewApi(): void {
       else await handlers.newTab();
       publish();
     },
+    reviewBrowsingData: async (value) => {
+      const input = requireBrowsingDataInput(value);
+      if (!state.accountSpaces.some((account) => account.id === input.accountSpaceId && account.workspaceId === state.activeWorkspaceId && !account.locked)) {
+        throw new Error('Unlock this Account Space to manage its browsing data.');
+      }
+      const visits = browsingDataVisitIds(state.history, input, Date.now());
+      const review: BrowsingDataReview = { id: crypto.randomUUID(), accountSpaceId: input.accountSpaceId, range: input.range,
+        siteOrigin: input.siteOrigin, historyCount: visits.size, websiteData: input.websiteData, cache: input.cache };
+      clearDataReview = { review, visits, initiator: state.activeAccountSpaceId };
+      return review;
+    },
+    deleteReviewedBrowsingData: async (id) => {
+      const pending = clearDataReview;
+      if (!pending || pending.review.id !== id || pending.initiator !== state.activeAccountSpaceId) {
+        throw new Error('Review the browsing data again before deleting.');
+      }
+      clearDataReview = undefined;
+      const count = state.history.length;
+      state.history = state.history.filter((item) => item.accountSpaceId !== pending.review.accountSpaceId || !pending.visits.has(item.id));
+      publish();
+      return count - state.history.length;
+    },
+    deleteHistoryVisit: async (id, visitId) => {
+      if (id !== state.activeAccountSpaceId) throw new Error('Return to the Account Space that owns this visit.');
+      state.history = state.history.filter((item) => item.accountSpaceId !== id || item.id !== visitId);
+      publish();
+    },
     queryHistory: (async (id: unknown, input: unknown) => {
       const scope = state.activeWorkspaceId === 'banking' || state.activeAccountSpaceId !== id ? [] : state.history;
       return queryHistory(scope, state.activeAccountSpaceId, input as Parameters<PrivateBrowserApi['queryHistory']>[1]);
@@ -479,6 +519,19 @@ export function installPreviewApi(): void {
     sideAppCommand: async () => undefined,
     openDownload: async () => { throw new Error('This preview cannot open files. Use the desktop Downloads panel.'); },
     showDownload: async () => { throw new Error('This preview cannot open folders. Use the desktop Downloads panel.'); },
+    setDownloadHistory: async (id, enabled) => {
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking') throw new Error('Download history is unavailable in this Account Space');
+      if (enabled) savedDownloadHistory.add(id);
+      else savedDownloadHistory.delete(id);
+      publish();
+    },
+    removeDownloadEntry: async (id, downloadId) => {
+      const index = sampleDownloads.findIndex((item) => item.id === downloadId && item.accountSpaceId === id
+        && !item.canCancel && item.state !== 'progressing' && item.checksum !== 'checking');
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking' || index < 0) throw new Error('Download is unavailable in this Account Space');
+      sampleDownloads.splice(index, 1);
+      publish();
+    },
     clearSideAppData: async () => undefined,
     respondToPermissionPrompt: async (_id, decision) => { document.documentElement.dataset.previewPermission = String(decision); state.pendingPermission = undefined; publish(); },
     freezeContent: async () => null,
@@ -896,9 +949,27 @@ export function installPreviewApi(): void {
         warnings: [],
       };
     }) satisfies PrivateBrowserApi['importChrome'],
-    importChromePasswords: (async () => {
-      throw new Error('Password files are unavailable in the synthetic preview');
-    }) satisfies PrivateBrowserApi['importChromePasswords'],
+    reviewChromePasswords: async () => {
+      if (params.get('chromePassword') !== 'sample' || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development') {
+        throw new Error('Password files are unavailable in the synthetic preview');
+      }
+      const review: ChromePasswordImportReview = {
+        id: crypto.randomUUID(), sourceCount: 3, toImport: 1, skipped: { 'already-saved': 1, 'unsupported-site': 1 },
+        issues: [{ entry: 2, reason: 'already-saved', origin: 'https://shop.example.test', username: 'sample@example.test' },
+          { entry: 3, reason: 'unsupported-site' }],
+      };
+      passwordReview = { review, accountId: state.activeAccountSpaceId };
+      return review;
+    },
+    importReviewedChromePasswords: async (id) => {
+      if (passwordReview?.review.id !== id || passwordReview.accountId !== state.activeAccountSpaceId) throw new Error('Review the password file again before importing.');
+      const { review } = passwordReview;
+      passwordReview = undefined;
+      return { imported: review.toImport, skipped: review.skipped };
+    },
+    discardChromePasswordReview: async (id) => {
+      if (passwordReview?.review.id === id) passwordReview = undefined;
+    },
     getBridgeStatus: (async () => ({ state: 'disconnected', browserVersion: 'Preview' })) satisfies PrivateBrowserApi['getBridgeStatus'],
     listBridgeProjects: (async () => []) satisfies PrivateBrowserApi['listBridgeProjects'],
     beginBridgePairing: (async () => {
