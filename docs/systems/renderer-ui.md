@@ -238,6 +238,9 @@ Settings shows behavior controls for the active workspace. Existing profiles
 inherit their saved settings until a workspace is customized. Users can choose
 a search engine from the Setup guide and configure explicit site keywords.
 The app builds a keyword search only after the user submits the address bar.
+The active workspace adds up to eight missing startup pages as background tabs
+and keeps restored tabs in place. Banking opens the local New Tab page and
+disables startup pages and site keywords.
 
 The bookmark manager prepares one searchable index per bookmark snapshot. It
 renders 75 results per page and preserves the text and folder filters when a
