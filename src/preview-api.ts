@@ -1,5 +1,6 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { ChromeImportOptions } from '../electron/types';
+import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
@@ -59,6 +60,8 @@ export function installPreviewApi(): void {
   ];
   const google = ids.google as AccountSpaceId;
   const params = new URLSearchParams(location.search);
+  const vaultHealthFixture = { id: 'preview-vault-health', label: 'Sample login', username: 'sample@example.test',
+    url: 'https://shop.example.test', hasTotp: false, updatedAt: '2026-11-21T10:00:00Z' };
   const state: BrowserSnapshot = {
     settings: { ...DEFAULT_BROWSER_SETTINGS },
     availableSpellcheckLanguages: ['en', 'fr'],
@@ -916,8 +919,19 @@ export function installPreviewApi(): void {
       };
     },
     openReleaseHistory: async () => handlers.navigate('https://private-browser-downloads.digitronics-electro.workers.dev/#release-history'),
-    listVault: async () => ({ available: true, items: [], lifecycle: params.get('vaultGuide') ? 'locked' : 'unlocked',
+    listVault: async () => ({ available: true,
+      items: params.has('vaultHealth') && !params.has('vaultGuide') ? [vaultHealthFixture] : [],
+      lifecycle: params.get('vaultGuide') ? 'locked' : 'unlocked',
       platformUnlock: params.get('vaultGuide') === 'enrolled' ? 'enrolled' : undefined, sync: 'idle', dirty: false, generation: 1 }),
+    checkVaultHealth: async (id): Promise<VaultHealthReport> => {
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development' || params.has('vaultGuide')) {
+        throw new Error('Vault health is unavailable in this Account Space.');
+      }
+      return params.has('vaultHealth')
+        ? { checked: 1, findings: [{ id: vaultHealthFixture.id, issues: ['weak-password'] }] }
+        : { checked: 0, findings: [] };
+    },
+    editVaultHealthLogin: async () => { throw new Error('Open the desktop app to edit a login in a secure window.'); },
     getVaultMigrationStatus: async () => ({ legacyAvailable: false }),
     // The Control Center link, paired, with one task (docs/systems/control-center-link.md).
     getControlCenterStatus: async () => ({ state: 'connected', url: 'http://127.0.0.1:4317', fingerprint: '4F1C 9A2E 77D0 13B8 C6E5 0A94 2D61 F3B7' }),

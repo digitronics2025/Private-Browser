@@ -1,5 +1,18 @@
 import { expect, test } from '@playwright/test';
 
+test('reviews a synthetic health finding at a narrow width', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/?vaultHealth=sample');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  await page.getByRole('tab', { name: 'Vault', exact: true }).click();
+  const health = page.getByRole('region', { name: 'Login health' });
+  await health.getByRole('button', { name: 'Check login health' }).click();
+  await expect(health.getByRole('status')).toHaveText('1 login to review. 1 checked.');
+  await expect(health.getByText('Password is short or repeats one character')).toBeVisible();
+  await health.getByRole('button', { name: 'Edit Sample login' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Open the desktop app to edit a login' })).toBeVisible();
+});
+
 for (const setup of ['enrolled', 'unenrolled'] as const) {
   test('shows the recovery guide for the ' + setup + ' Windows Hello preview', async ({ page }) => {
     await page.setViewportSize({ width: 430, height: 810 });

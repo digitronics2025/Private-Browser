@@ -10,6 +10,35 @@ function watchErrors(page: Page) {
 const tabList = (page: Page) => page.getByRole('tablist', { name: 'Open tabs' }).getByRole('tab');
 const sidePanel = (page: Page) => page.getByRole('complementary', { name: 'Side panel' });
 
+test('finds keyboard commands and keeps the page beside the compact panel on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: 'Keyboard shortcuts' }).click();
+  const panel = sidePanel(page);
+  const search = panel.getByRole('searchbox', { name: 'Search shortcuts' });
+  await expect(search).toBeFocused();
+  await search.fill('workspace');
+  await expect(panel.getByText('Switch workspace or Account Space', { exact: true })).toBeVisible();
+  await expect(panel.getByText('Ctrl+Shift+U', { exact: true })).toBeVisible();
+  await expect(panel.getByText('Close tab', { exact: true })).toHaveCount(0);
+  const compact = panel.getByRole('button', { name: 'Compact side panel' });
+  await compact.click();
+  await expect(compact).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => (await panel.boundingBox())?.width).toBe(230);
+  await expect.poll(async () => JSON.parse(await page.locator('html').getAttribute('data-preview-layout') ?? '{}').right).toBe(230);
+
+  await page.keyboard.press('Control+Shift+u');
+  const menu = page.getByRole('menu', { name: 'Account Spaces' });
+  const banking = menu.getByRole('menuitemradio', { name: 'Switch to Banking' });
+  await banking.focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(async () => (await window.privateBrowser.getState()).activeWorkspaceId)).toBe('banking');
+  await panel.getByRole('button', { name: 'Close side panel' }).click();
+  await page.keyboard.press('Control+Shift+k');
+  await expect(search).toBeFocused();
+});
+
 test('tab strip creates, closes, switches, middle-click closes and searches tabs', async ({ page }) => {
   const noErrors = watchErrors(page);
   await page.goto('/');

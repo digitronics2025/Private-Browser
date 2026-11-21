@@ -1,10 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { needsChromeFocus, resolveShortcut, type ShortcutInput } from '../electron/shortcuts';
+import { needsChromeFocus, resolveShortcut, SHORTCUT_GUIDE, type ShortcutInput } from '../electron/shortcuts';
 
 const key = (value: string, modifiers: Partial<Omit<ShortcutInput, 'key'>> = {}): ShortcutInput => ({ key: value, control: false, meta: false, shift: false, alt: false, ...modifiers });
 
 describe('keyboard shortcuts', () => {
+  it('documents a working keyboard chord for each guide entry', () => {
+    for (const [command, [, chord]] of Object.entries(SHORTCUT_GUIDE)) {
+      const parts = chord.split('+');
+      const printedKey = parts.at(-1)!.split('–')[0];
+      const eventKey = printedKey === 'Left' || printedKey === 'Right' ? 'Arrow' + printedKey : printedKey;
+      const input = key(eventKey, { control: parts.includes('Ctrl'), shift: parts.includes('Shift'), alt: parts.includes('Alt') });
+      expect(resolveShortcut(input)?.command, chord).toBe(command);
+    }
+    expect(needsChromeFocus('workspace-switcher')).toBe(true);
+    expect(needsChromeFocus('shortcut-guide')).toBe(true);
+  });
   it('keeps the original browser shortcuts', () => {
     expect(resolveShortcut(key('l', { control: true }))).toEqual({ command: 'focus-address' });
     expect(resolveShortcut(key('t', { control: true }))).toEqual({ command: 'new-tab' });
