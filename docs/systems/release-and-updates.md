@@ -133,23 +133,10 @@ five records. The query is sequential after `latestRelease`; the Worker does not
 run dependent D1 reads in parallel. History is informational and does not expose
 download URLs for old installers.
 
-[page.ts](../../cloudflare/src/page.ts) receives a typed page model: active
-release, history, signed download URL, canonical origin, render timestamp and the
-fixed public developer profile. It emits one script-free responsive document
-with semantic headings, UTC-backed `<time>` values, release notes, source commit,
-checksum, install steps and the developer profile link. Every D1 value is escaped
-before interpolation.
-
-The Windows job records Authenticode status against the installer SHA-256.
-Signed builds require a valid embedded signature matching the owner-approved
-public certificate fingerprint in `WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256`.
-Unsigned builds receive an explicit unsigned result. The publish job verifies
-the publisher receipt against the exact candidate bytes and reads its private
-R2 copy back. The public and private pages show the result separately from
-the file checksum and signed download link. Older releases show “Publisher
-verification is unavailable.” Retain each `.publisher.json` object alongside
-its installer. Deploy the download Worker before publishing the first desktop
-release that requires the publisher receipt.
+[page.ts](../../cloudflare/src/page.ts) renders the active release, source commit,
+history, timestamp and install steps as escaped, script-free HTML. The
+[publisher receipt](../reference/windows-publisher-verification.md) is tied to
+the installer checksum. It appears separately from the signed download link.
 
 `handlePublish` in order: 405 unless POST → 404 unless admin-authorised → 415
 unless `content-type` starts with `application/json` → 400 `invalid_release` if
