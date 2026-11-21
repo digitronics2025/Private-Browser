@@ -1,26 +1,24 @@
 import { useContext, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { Asterisk, NotebookPen, Code2, Download, KeyRound, PanelRightClose, ShieldCheck, Sparkles, X, Zap } from 'lucide-react';
-import type { SidePanelTool } from '../../electron/types';
+import { Asterisk, NotebookPen, Code2, Download, KeyRound, PanelRightClose, Pin, PinOff, ShieldCheck, Sparkles, X, Zap } from 'lucide-react';
+import type { PinnablePanelTool, SidePanelTool } from '../../electron/types';
+import { isPinnablePanelTool, PINNABLE_PANEL_TOOLS } from '../../electron/ui-preferences';
 import { clampSidePanelWidth, SIDE_PANEL } from '../../electron/chrome-layout';
 import { OverlayContext } from './overlay';
+import { SIDE_PANEL_NAMES } from './side-panel-tools';
 
-export const SIDE_PANEL_TABS: Array<{ id: SidePanelTool; label: string; title: string; icon: typeof Sparkles }> = [
-  { id: 'easynote', label: 'Notes', title: 'Notes (Ctrl+Shift+Y)', icon: NotebookPen },
-  { id: 'claude', label: 'Claude', title: 'Claude', icon: Asterisk },
-  { id: 'assistant', label: 'AI', title: 'AI assistant', icon: Sparkles },
-  { id: 'developer', label: 'DevTools', title: 'Developer cockpit', icon: Code2 },
-  { id: 'vault', label: 'Vault', title: 'MyVault', icon: KeyRound },
-  { id: 'automations', label: 'Flows', title: 'Automations', icon: Zap },
-  { id: 'downloads', label: 'Files', title: 'Downloads', icon: Download },
-  { id: 'privacy', label: 'Privacy', title: 'Privacy log', icon: ShieldCheck },
-];
+const icons: Record<PinnablePanelTool, typeof Sparkles> = {
+  easynote: NotebookPen, claude: Asterisk, assistant: Sparkles, developer: Code2,
+  vault: KeyRound, automations: Zap, downloads: Download, privacy: ShieldCheck,
+};
 
-export function SidePanel({ tool, width, compact, activeDownloads, onSelectTool, onClose, onToggleCompact, onLiveWidth, onCommitWidth, children }: {
+export function SidePanel({ tool, pins, width, compact, activeDownloads, onSelectTool, onPinTool, onClose, onToggleCompact, onLiveWidth, onCommitWidth, children }: {
   tool: SidePanelTool;
+  pins?: PinnablePanelTool[];
   width: number;
   compact: boolean;
   activeDownloads: number;
   onSelectTool: (tool: SidePanelTool) => void;
+  onPinTool: (tool: PinnablePanelTool, enabled: boolean) => void;
   onClose: () => void;
   onToggleCompact: () => void;
   onLiveWidth: (width: number | null) => void;
@@ -32,10 +30,17 @@ export function SidePanel({ tool, width, compact, activeDownloads, onSelectTool,
   const start = useRef({ x: 0, width });
   const [resizing, setResizing] = useState(false);
   const liveWidth = useRef(width);
+  const orderedTools = [...new Set([...(pins ?? []), ...PINNABLE_PANEL_TOOLS])];
+  const canPin = pins !== undefined && isPinnablePanelTool(tool);
+  const pinned = canPin && pins.includes(tool);
 
   const callbacks = useRef({ onLiveWidth, onCommitWidth });
   callbacks.current = { onLiveWidth, onCommitWidth };
   const detach = useRef<(() => void) | null>(null);
+  const pinnedToolCount = pins?.length;
+  useEffect(() => {
+    document.getElementById(`side-panel-tab-${tool}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [tool, pinnedToolCount]);
   // Closing the panel mid-drag must still unfreeze the page and drop the live
   // width; before, the overlay stayed held and the page stayed hidden (F-68).
   useEffect(() => () => {
@@ -98,10 +103,9 @@ export function SidePanel({ tool, width, compact, activeDownloads, onSelectTool,
   const onTabKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
     event.preventDefault();
-    const index = Math.max(0, SIDE_PANEL_TABS.findIndex((item) => item.id === tool));
-    const next = SIDE_PANEL_TABS[(index + (event.key === 'ArrowRight' ? 1 : -1) + SIDE_PANEL_TABS.length) % SIDE_PANEL_TABS.length];
-    onSelectTool(next.id);
-    requestAnimationFrame(() => document.getElementById(`side-panel-tab-${next.id}`)?.focus());
+    const index = isPinnablePanelTool(tool) ? orderedTools.indexOf(tool) : 0;
+    const next = orderedTools[(index + (event.key === 'ArrowRight' ? 1 : -1) + orderedTools.length) % orderedTools.length];
+    onSelectTool(next);
   };
 
   return (
@@ -120,7 +124,9 @@ export function SidePanel({ tool, width, compact, activeDownloads, onSelectTool,
       />}
       <header className="side-panel-header">
         <div className="side-panel-tabs" role="tablist" aria-label="Side panel tools" onKeyDown={onTabKey}>
-          {SIDE_PANEL_TABS.map(({ id, label, title, icon: Icon }) => {
+          {orderedTools.map((id) => {
+            const label = SIDE_PANEL_NAMES[id];
+            const Icon = icons[id];
             const selected = tool === id;
             return (
               <button
@@ -130,8 +136,8 @@ export function SidePanel({ tool, width, compact, activeDownloads, onSelectTool,
                 role="tab"
                 aria-selected={selected}
                 aria-label={label}
-                tabIndex={selected || (!SIDE_PANEL_TABS.some((item) => item.id === tool) && id === 'assistant') ? 0 : -1}
-                title={title}
+                tabIndex={selected || (!isPinnablePanelTool(tool) && id === orderedTools[0]) ? 0 : -1}
+                title={id === 'easynote' ? label + ' (Ctrl+Shift+Y)' : label}
                 className={`side-panel-tab ${selected ? 'selected' : ''}`}
                 onClick={() => onSelectTool(id)}
               >
@@ -142,6 +148,10 @@ export function SidePanel({ tool, width, compact, activeDownloads, onSelectTool,
             );
           })}
         </div>
+        {canPin && <button type="button" className={`toolbar-button small ${pinned ? 'selected' : ''}`}
+          aria-label={(pinned ? 'Unpin ' : 'Pin ') + SIDE_PANEL_NAMES[tool]}
+          title={(pinned ? 'Unpin ' : 'Pin ') + SIDE_PANEL_NAMES[tool]}
+          onClick={() => onPinTool(tool, !pinned)}>{pinned ? <PinOff size={16} /> : <Pin size={16} />}</button>}
         <button type="button" className={`toolbar-button small ${compact ? 'selected' : ''}`}
           aria-label="Compact side panel" title="Compact side panel" aria-pressed={compact} onClick={onToggleCompact}><PanelRightClose size={16} /></button>
         <button type="button" className="toolbar-button small" aria-label="Close side panel" title="Close side panel" onClick={onClose}><X size={16} /></button>

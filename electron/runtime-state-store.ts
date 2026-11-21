@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import type {
   AccountBrowsingStateV2,
   AccountSpaceHealth,
@@ -27,6 +28,10 @@ export class RuntimeStateStore {
   private state: RuntimeBrowserStateV2;
   private readonly records = new Map<AccountSpaceId, AccountSpaceRecord>();
   private readonly readOnly: boolean;
+  private readonly savedAccounts = new Map<AccountSpaceId, AccountBrowsingStateV2>();
+  private savedManifest?: BrowserStateManifestV2;
+  private saveTimer?: ReturnType<typeof setTimeout>;
+  private pendingWrites = false;
   /**
    * Accounts waiting in per-account recovery. They stay in the manifest and
    * their files are never written until the user resolves them, so a save
@@ -45,6 +50,8 @@ export class RuntimeStateStore {
       return;
     }
     this.readOnly = false;
+    this.savedManifest = initialization.manifest;
+    for (const snapshot of initialization.accountStates) this.savedAccounts.set(snapshot.accountSpaceId, snapshot);
     for (const record of initialization.accounts) this.records.set(record.id, record);
     for (const recovery of initialization.accountRecoveries) if (recovery.accountSpaceId) this.recovering.add(recovery.accountSpaceId);
     this.state = combine(initialization.manifest, initialization.accounts, initialization.accountStates, initialization.accountRecoveries);
@@ -114,15 +121,54 @@ export class RuntimeStateStore {
     return record && { cloudAllowed: record.assistantCloudAllowed !== false, receipts: structuredClone(record.assistantReceipts ?? []) };
   }
 
-  update(mutator: (state: RuntimeBrowserStateV2) => void): RuntimeBrowserStateV2 {
+  update(mutator: (state: RuntimeBrowserStateV2) => void, persistence: 'immediate' | 'routine' = 'immediate'): RuntimeBrowserStateV2 {
     if (this.readOnly) throw new Error('Browser state is in read-only recovery mode');
     const next = structuredClone(this.state);
     mutator(next);
     normalizeRuntimeState(next, this.recovering);
     rememberExternalLinkAccount(next);
-    this.persist(next);
+    if (persistence === 'immediate') {
+      try {
+        this.persist(next);
+        this.finishPendingWrites();
+      } catch (error) {
+        // Some independent files may have committed before another write failed.
+        // Retry against the previously accepted state if the caller received an error.
+        this.queueSave(1000);
+        throw error;
+      }
+    } else {
+      this.queueSave(250);
+    }
     this.state = next;
     return this.get();
+  }
+
+  flushPendingWrites(): void {
+    if (!this.pendingWrites) return;
+    this.persist(this.state);
+    this.finishPendingWrites();
+  }
+
+  private queueSave(delay: number): void {
+    this.pendingWrites = true;
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      try {
+        this.flushPendingWrites();
+      } catch {
+        if (delay < 1000) console.warn('Browser state write delayed. Private Browser will retry.');
+        this.queueSave(Math.min(10000, Math.max(1000, 2 * delay)));
+      }
+    }, delay);
+    this.saveTimer.unref();
+  }
+
+  private finishPendingWrites(): void {
+    this.pendingWrites = false;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
   }
 
   refreshAccount(record: AccountSpaceRecord): void {
@@ -178,6 +224,7 @@ export class RuntimeStateStore {
       delete state.activeTabByAccountSpace[id];
       delete state.shortcutsByAccountSpace[id];
       delete state.bookmarkIconsByAccountSpace[id];
+      if (state.sidePanelsByAccountSpace) delete state.sidePanelsByAccountSpace[id];
       if (state.activeAccountSpaceByWorkspace[account.workspaceId] === id) state.activeAccountSpaceByWorkspace[account.workspaceId] = replacement.id;
     });
     this.records.delete(id);
@@ -185,6 +232,7 @@ export class RuntimeStateStore {
     // The manifest no longer lists it, so its plaintext history, tabs and
     // bookmarks file is deleted too (F-39).
     this.persistedStore.removeAccountState(id);
+    this.savedAccounts.delete(id);
     this.recovering.delete(id);
     return result;
   }
@@ -217,26 +265,46 @@ export class RuntimeStateStore {
       workspaceSettings: next.workspaceSettings,
       routines: next.routines,
     };
+    const tabsByAccount = byAccount(next.tabs);
+    const bookmarksByAccount = byAccount(next.bookmarks);
+    const historyByAccount = byAccount(next.history);
     for (const account of next.accountSpaces) {
       if (this.recovering.has(account.id)) continue;
-      const tabs = next.tabs.filter((tab) => tab.accountSpaceId === account.id);
+      const tabs = tabsByAccount.get(account.id) ?? [];
       const state: AccountBrowsingStateV2 = {
         version: 2,
         accountSpaceId: account.id,
         workspaceId: account.workspaceId,
         tabs: tabs.map(({ loading: _loading, canGoBack: _back, canGoForward: _forward, favicon: _favicon, developerToolsAllowed: _tools, developerToolsOpen: _toolsOpen, securityWarning: _warning, audible: _audible, muted: _muted, zoomPercent: _zoom, problem: _problem, ...tab }) => tab),
         activeTabId: next.activeTabByAccountSpace[account.id],
-        bookmarks: next.bookmarks.filter((item) => item.accountSpaceId === account.id),
-        history: next.history.filter((item) => item.accountSpaceId === account.id),
+        bookmarks: bookmarksByAccount.get(account.id) ?? [],
+        history: historyByAccount.get(account.id) ?? [],
         ...(next.historyTrimmedByAccountSpace?.[account.id] ? { historyTrimmed: true } : {}),
         ...(next.tabGroupsByAccountSpace?.[account.id]?.length ? { tabGroups: next.tabGroupsByAccountSpace[account.id] } : {}),
         ...(next.shortcutsByAccountSpace[account.id] ? { shortcuts: next.shortcutsByAccountSpace[account.id] } : {}),
         ...(next.bookmarkIconsByAccountSpace[account.id] ? { bookmarkIcons: next.bookmarkIconsByAccountSpace[account.id] } : {}),
+        ...(next.sidePanelsByAccountSpace?.[account.id] ? { sidePanel: next.sidePanelsByAccountSpace[account.id] } : {}),
       };
-      this.persistedStore.saveAccountState(state);
+      if (!isDeepStrictEqual(this.savedAccounts.get(account.id), state)) {
+        this.persistedStore.saveAccountState(state);
+        this.savedAccounts.set(account.id, state);
+      }
     }
-    this.persistedStore.saveManifest(manifest);
+    if (!isDeepStrictEqual(this.savedManifest, manifest)) {
+      this.persistedStore.saveManifest(manifest);
+      this.savedManifest = manifest;
+    }
   }
+}
+
+function byAccount<T extends { accountSpaceId: AccountSpaceId }>(rows: T[]): Map<AccountSpaceId, T[]> {
+  const result = new Map<AccountSpaceId, T[]>();
+  for (const row of rows) {
+    const members = result.get(row.accountSpaceId);
+    if (members) members.push(row);
+    else result.set(row.accountSpaceId, [row]);
+  }
+  return result;
 }
 
 function rememberExternalLinkAccount(state: RuntimeBrowserStateV2): void {
@@ -296,6 +364,7 @@ function combine(
     routines: manifest.routines ?? defaultBrowserRoutines(manifest.activeAccountSpaceByWorkspace),
     shortcutsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.shortcuts).map((state) => [state.accountSpaceId, state.shortcuts!])),
     bookmarkIconsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.bookmarkIcons).map((state) => [state.accountSpaceId, state.bookmarkIcons!])),
+    sidePanelsByAccountSpace: Object.fromEntries(accountStates.flatMap((state) => state.sidePanel ? [[state.accountSpaceId, state.sidePanel]] : [])),
     accountSpaces,
     accountHealth,
     recovery: firstRecovery,

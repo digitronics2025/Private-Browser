@@ -1,9 +1,9 @@
 import type { BrowserSettings, SpellcheckLanguage } from './browser-settings.js';
-import type { UiPreferences } from './ui-preferences.js';
+import type { AccountPanelPreferences, PinnablePanelTool, UiPreferences } from './ui-preferences.js';
 
 export type { SideAppCommand, SideAppId, SideAppRect, SideAppSnapshot, SideAppStatus } from './side-app-registry.js';
 import type { SideAppSnapshot } from './side-app-registry.js';
-export type { UiPreferences, UiPreferencesPatch, ThemePreference, SidePanelTool, NewTabBackground } from './ui-preferences.js';
+export type { UiPreferences, UiPreferencesPatch, ThemePreference, SidePanelTool, PinnablePanelTool, NewTabBackground } from './ui-preferences.js';
 export type { BrowserSettings, BrowserSettingsPatch, HomePageMode, SearchEngineId, StartupMode } from './browser-settings.js';
 export type { BookmarkBarMode } from './chrome-layout.js';
 export type { Shortcut, ShortcutCommand } from './shortcuts.js';
@@ -301,6 +301,7 @@ export interface AccountBrowsingStateV2 {
   shortcuts?: ShortcutTile[];
   /** Remembered icons of bookmarked hosts, host → `data:` URL. See `bookmark-icons.ts`. */
   bookmarkIcons?: Record<string, string>;
+  sidePanel?: AccountPanelPreferences;
 }
 
 export interface ShortcutTile {
@@ -512,9 +513,13 @@ export interface DownloadEntry {
   origin?: string;
   finishedAt?: string;
   retained?: boolean;
+  destinationNote?: 'folder-unavailable' | 'saved-in-temporary-folder';
 }
 
 export type DownloadHistoryStatus = 'off' | 'on' | 'unavailable';
+export type DownloadFolderMode = 'ask' | 'automatic' | 'default';
+export interface DownloadFolderStatus { ask: boolean; available: boolean; name?: string }
+export interface DownloadBatchStatus { active: number; completed: number; stopped: number }
 
 export type DownloadAction = 'pause' | 'resume' | 'retry' | 'cancel';
 
@@ -537,6 +542,9 @@ export interface BrowserSnapshot {
   history: HistoryEntry[];
   downloads: DownloadEntry[];
   downloadHistory?: DownloadHistoryStatus;
+  downloadFolder?: DownloadFolderStatus;
+  downloadBatch?: DownloadBatchStatus;
+  sidePanelPins?: PinnablePanelTool[];
   managedUpdate?: ManagedUpdateStatus;
   privacyLog: PrivacyEvent[];
   trackerBlocking: boolean;
@@ -636,6 +644,7 @@ export interface RuntimeBrowserStateV2 {
   routines?: BrowserRoutine[];
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
   bookmarkIconsByAccountSpace: Record<string, Record<string, string>>;
+  sidePanelsByAccountSpace?: Record<string, AccountPanelPreferences>;
   accountSpaces: AccountSpaceSummary[];
   accountHealth: AccountSpaceHealth[];
   recovery?: StateRecoveryStatus;

@@ -3,7 +3,7 @@ import type { BrowserRoutine, LocalAiModels, ReferenceSearchInput, RoutineRunRes
 import type { AddressMatch, BrowsingDataInput, BrowsingDataReview, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
 import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
 import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth } from './types.js';
-import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, FindResult, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
+import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, DownloadFolderMode, FindResult, PinnablePanelTool, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
@@ -115,7 +115,8 @@ const api = {
   openBookmarksInBackground: (accountSpaceId: AccountSpaceId, ids: string[]): Promise<{ opened: number; reused: number; skipped: number }> =>
     ipcRenderer.invoke('browser:open-bookmarks-in-background', accountSpaceId, ids),
   toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
-  setUiPreferences: (patch: UiPreferencesPatch): Promise<void> => ipcRenderer.invoke('ui:set-preferences', patch),
+  setUiPreferences: (patch: UiPreferencesPatch, accountId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('ui:set-preferences', patch, accountId),
+  setSidePanelPin: (accountId: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean): Promise<void> => ipcRenderer.invoke('ui:set-panel-pin', accountId, tool, enabled),
   setBrowserSettings: (patch: BrowserSettingsPatch, workspace?: WorkspaceId): Promise<void> => ipcRenderer.invoke('settings:set', patch, workspace),
   freezeContent: (): Promise<string | null> => ipcRenderer.invoke('browser:freeze-content'),
   moveTab: (tabId: string, toIndex: number): Promise<void> => ipcRenderer.invoke('browser:move-tab', tabId, toIndex),
@@ -157,6 +158,8 @@ const api = {
   controlDownload: (id: string, action: DownloadAction): Promise<void> => ipcRenderer.invoke('browser:control-download', id, action),
   showDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:show-download', id),
   setDownloadHistory: (accountId: AccountSpaceId, enabled: boolean): Promise<void> => ipcRenderer.invoke('browser:set-download-history', accountId, enabled),
+  chooseDownloadFolder: (accountId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:choose-download-folder', accountId),
+  setDownloadFolderMode: (accountId: AccountSpaceId, mode: DownloadFolderMode): Promise<void> => ipcRenderer.invoke('browser:set-download-folder-mode', accountId, mode),
   removeDownloadEntry: (accountId: AccountSpaceId, id: string): Promise<void> => ipcRenderer.invoke('browser:remove-download-entry', accountId, id),
   toggleDeveloperTools: (mode: DevToolsMode): Promise<void> => ipcRenderer.invoke('developer:toggle-tools', mode),
   captureDeveloperDiagnostics: (): Promise<DeveloperDiagnosticReport> => ipcRenderer.invoke('developer:capture-diagnostics'),

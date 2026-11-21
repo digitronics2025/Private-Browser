@@ -1,0 +1,1 @@
+Choose an Account Space's download folder in Downloads. Keep asking where to save or let ordinary files save automatically with numbered names if a file already exists. The panel shows how many downloads are active, completed or stopped.

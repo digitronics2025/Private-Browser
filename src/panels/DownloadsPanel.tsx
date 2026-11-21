@@ -37,8 +37,31 @@ export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onT
   const visible = state.downloads.filter((item) => (status === 'all' || item.state === status)
     && `${item.filename} ${item.origin ?? ''}`.toLowerCase().includes(needle));
   const run = (action: () => Promise<void>) => void action().catch((error: unknown) => onToast(error instanceof Error ? error.message : String(error), 'error'));
+  const folder = state.downloadFolder;
+  const batch = state.downloadBatch;
   return <div className="side-panel">
     <PanelHeader icon={FileDown} eyebrow="Account Space" title="Downloads" />
+    {folder && <div className="settings-card download-filters">
+      <p className="download-origin">Save folder <strong>{folder.name ?? 'Windows default'}</strong></p>
+      <div className="download-actions">
+        <button disabled={!folder.available || Boolean(state.recovery)}
+          onClick={() => run(() => window.privateBrowser.chooseDownloadFolder(state.activeAccountSpaceId))}>
+          {folder.name ? 'Change folder' : 'Choose folder'}
+        </button>
+        {folder.name && <button disabled={Boolean(state.recovery)}
+          onClick={() => run(() => window.privateBrowser.setDownloadFolderMode(state.activeAccountSpaceId, 'default'))}>Use default</button>}
+      </div>
+      <label><input type="checkbox" checked={folder.ask} disabled={!folder.name || Boolean(state.recovery)}
+        onChange={(event) => {
+          const mode = event.currentTarget.checked ? 'ask' : 'automatic';
+          run(() => window.privateBrowser.setDownloadFolderMode(state.activeAccountSpaceId, mode));
+        }} /> Ask where to save</label>
+      {!folder.available && <p>Windows protected storage is unavailable for download folders.</p>}
+      {folder.name && !folder.ask && <p>New files with the same name get a number. Installers and potentially unsafe files still ask where to save.</p>}
+    </div>}
+    {batch && batch.active + batch.completed + batch.stopped > 1 && <p className="download-batch" aria-label="Downloads this session">
+      This session · {batch.active} active · {batch.completed} downloaded · {batch.stopped} stopped
+    </p>}
     {state.downloadHistory && <div className="settings-card download-filters">
       <label><input type="checkbox" checked={state.downloadHistory === 'on'} disabled={state.downloadHistory === 'unavailable' || Boolean(state.recovery)}
         onChange={(event) => {
@@ -80,6 +103,8 @@ export function DownloadsPanel({ state, onToast }: { state: BrowserSnapshot; onT
           </dl>
           {blocked && item.state === 'completed' && <small>{blocked}</small>}
           {item.state === 'interrupted' && !item.canResume && <small>Start a fresh download from the original page.</small>}
+          {item.destinationNote === 'folder-unavailable' && <small>The selected save folder was unavailable. Windows opened its save dialog.</small>}
+          {item.destinationNote === 'saved-in-temporary-folder' && <small>The file is in a temporary subfolder. Use Show folder to find it.</small>}
           <div className="download-actions">
             <button disabled={Boolean(blocked)} onClick={() => run(() => window.privateBrowser.openDownload(item.id))}>Open</button>
             <button disabled={item.state !== 'completed' || item.checksum === 'checking'} onClick={() => run(() => window.privateBrowser.showDownload(item.id))}>Show folder</button>

@@ -92,7 +92,7 @@ async function launch(): Promise<{ app: ElectronApplication; page: Page; profile
 async function openTasksPanel(page: Page) {
   const panelToggle = page.getByRole('button', { name: 'Side panel', exact: true });
   if ((await panelToggle.getAttribute('aria-pressed')) !== 'true') await panelToggle.click();
-  await page.getByTitle('Developer cockpit').click();
+  await page.getByRole('tab', { name: 'Developer Bridge' }).click();
   await expect(page.getByRole('heading', { name: 'Developer Bridge' })).toBeVisible();
   await page.getByRole('tab', { name: 'Tasks' }).click();
 }
@@ -201,7 +201,7 @@ test('one approval sends once, only Developer previews go, and nothing leaves ou
     // Banking shows no Control Center controls at all.
     const panelToggle = page.getByRole('button', { name: 'Side panel', exact: true });
     if ((await panelToggle.getAttribute('aria-pressed')) !== 'true') await panelToggle.click();
-    await page.getByTitle('Developer cockpit').click();
+    await page.getByRole('tab', { name: 'Developer Bridge' }).click();
     await expect(page.getByText('Protected by workspace policy')).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Tasks' })).toHaveCount(0);
   } finally {

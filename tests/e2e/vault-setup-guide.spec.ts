@@ -4,7 +4,7 @@ test('reviews synthetic Chrome password skips and shows CSV cleanup after import
   await page.setViewportSize({ width: 430, height: 810 });
   await page.goto('/?chromePassword=sample');
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
-  await page.getByRole('tab', { name: 'Vault', exact: true }).click();
+  await page.getByRole('tab', { name: 'MyVault', exact: true }).click();
   await page.getByRole('button', { name: 'Import Chrome password CSV' }).click();
   const wizard = page.getByRole('region', { name: 'Import Chrome passwords' });
   await expect(wizard.getByText(/find Export passwords and choose Download file/)).toBeVisible();
@@ -23,7 +23,7 @@ test('reviews a synthetic health finding at a narrow width', async ({ page }) =>
   await page.setViewportSize({ width: 430, height: 810 });
   await page.goto('/?vaultHealth=sample');
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
-  await page.getByRole('tab', { name: 'Vault', exact: true }).click();
+  await page.getByRole('tab', { name: 'MyVault', exact: true }).click();
   const health = page.getByRole('region', { name: 'Login health' });
   await health.getByRole('button', { name: 'Check login health' }).click();
   await expect(health.getByRole('status')).toHaveText('1 login to review. 1 checked.');
@@ -37,7 +37,7 @@ for (const setup of ['enrolled', 'unenrolled'] as const) {
     await page.setViewportSize({ width: 430, height: 810 });
     await page.goto('/?vaultGuide=' + setup);
     await page.getByRole('button', { name: 'Side panel', exact: true }).click();
-    await page.getByRole('tab', { name: 'Vault', exact: true }).click();
+    await page.getByRole('tab', { name: 'MyVault', exact: true }).click();
     const panel = page.getByRole('complementary', { name: 'Side panel' });
     const summary = panel.getByText('Setup and recovery', { exact: true });
     await summary.focus();
@@ -64,7 +64,7 @@ test('shows a next action when there is no matching sign-in', async ({ page }) =
   await page.setViewportSize({ width: 430, height: 810 });
   await page.goto('/?vaultFill=no-match');
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
-  await page.getByRole('tab', { name: 'Vault', exact: true }).click();
+  await page.getByRole('tab', { name: 'MyVault', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
   const status = panel.getByRole('status').filter({ hasText: 'No matching sign-in' });
   await expect(status).toContainText('Choose Add login or save the login from this website.');
@@ -75,7 +75,7 @@ test('shows a clipboard countdown and lets the user clear a synthetic copy', asy
   await page.setViewportSize({ width: 430, height: 810 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
-  await page.getByRole('tab', { name: 'Vault', exact: true }).click();
+  await page.getByRole('tab', { name: 'MyVault', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
   await panel.getByRole('button', { name: 'Password', exact: true }).click();
   await expect(panel.getByText(/Vault clipboard clears in \d+s/)).toBeVisible();
