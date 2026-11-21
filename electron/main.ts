@@ -1174,7 +1174,14 @@ class BrowserController {
     const result = await this.googleOAuth.disconnect(accountSpaceId, revoke);
     const record = this.accounts.require(accountSpaceId);
     this.store.refreshAccount(record);
-    this.addPrivacyEvent('vault', revoke ? 'Google access revoked' : 'Google API disconnected', revoke ? 'Google grant was revoked; local website data was retained' : 'Local browsing data was retained');
+    if (result.ok) {
+      this.addPrivacyEvent('vault', revoke ? 'Google access revoked' : 'Google API disconnected',
+        revoke ? 'Google confirmed removal of the app grant' : 'The browser removed its saved Google tools connection');
+    } else if (record.googleConnection === 'revocation-pending') {
+      this.addPrivacyEvent('blocked', 'Google revocation pending', 'Retry when the network is available');
+    } else {
+      this.broadcast();
+    }
     return result;
   }
 
@@ -1193,6 +1200,7 @@ class BrowserController {
         tab.isHome = true;
       }
     });
+    this.store.refreshAccount(this.accounts.update(accountSpaceId, (record) => { record.websiteStatus = 'not-visited'; }));
     this.addPrivacyEvent('vault', 'Account Space data cleared', `${WORKSPACES.find((item) => item.id === account.workspaceId)?.name ?? 'An'} Account Space: website data and history were removed`);
     await this.showActiveTab();
   }
