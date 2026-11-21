@@ -8,6 +8,7 @@ export type SpacePolicy = AgentSpaceSettings & {
   id: string;
   uploadRoot?: string;
   legacy?: Record<string, AgentPolicy>;
+  rememberedOrigins?: Record<string, string[]>;
 };
 export type OriginAccess = 'drive' | 'view' | 'observe' | 'deny';
 type Scope = 'document' | 'navigation' | 'tab';
@@ -48,6 +49,21 @@ export function allowedSpaceOrigin(space: SpacePolicy, url: URL, clientId: strin
     return legacy.profile === 'observe' ? 'observe' : 'drive';
   }
   return matchesAgentOrigin(space.origins, url) ? 'drive' : space.outside;
+}
+
+export function canRememberNavigation(space: SpacePolicy, clientId: string, url: URL): boolean {
+  if (space.trust !== 'work' || !space.clientIds.includes(clientId)) return false;
+  const exact = space.legacy?.[clientId]?.origins ?? space.origins;
+  return exact.includes(url.origin) && allowedSpaceOrigin(space, url, clientId) === 'drive';
+}
+
+export function pruneRememberedOrigins(space: SpacePolicy, previous = space.rememberedOrigins): SpacePolicy['rememberedOrigins'] {
+  if (!previous) return undefined;
+  const kept = Object.fromEntries(space.clientIds.flatMap((id) => {
+    const rules = previous[id]?.filter((origin) => canRememberNavigation(space, id, new URL(origin))) ?? [];
+    return rules.length ? [[id, rules] as const] : [];
+  }));
+  return Object.keys(kept).length ? kept : undefined;
 }
 
 export function decide(

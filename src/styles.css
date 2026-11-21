@@ -651,6 +651,8 @@ kbd { font: inherit; }
 .project-summary strong { margin-top: 3px; font-size: var(--fs-md); }
 .project-summary span, .project-summary p { margin: 2px 0 0; color: var(--text-muted); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-summary p { grid-column: 1 / -1; }
+.git-revision p { white-space: normal; overflow-wrap: anywhere; }
+.git-revision > .bridge-action-row { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
 .bridge-action-row { display: flex; gap: 6px; }
 .bridge-action-row > * { flex: 1; }
 .bridge-action-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
@@ -814,6 +816,7 @@ kbd { font: inherit; }
 .download-filters input[type="search"], .download-filters select { display: block; width: 100%; min-width: 0; }
 .download-filters p { margin: 0; color: var(--text-muted); font-size: var(--fs-sm); }
 .download-origin { overflow-wrap: anywhere; }
+.download-batch { color: var(--text-muted); font-size: var(--fs-sm); }
 .browser-preview-marker { position: fixed; inset: auto auto 8px 8px; z-index: 10; padding: 3px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 11px; pointer-events: none; }
 .download-evidence { display: grid; gap: 6px; margin: 10px 0 6px; font-size: var(--fs-xs); }
 .download-evidence > div { display: grid; grid-template-columns: minmax(84px, 0.6fr) minmax(0, 1fr); gap: 6px; }

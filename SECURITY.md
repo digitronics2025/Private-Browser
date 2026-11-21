@@ -125,7 +125,9 @@ are sent, common tracker hosts are blocked, and cleartext or punycode domains ar
 visibly marked in the address bar.
 
 Only the active, eligible Account Space can list, open or reveal its downloads.
-Downloaded file paths stay in the main process. Operating-system links are
+Download folder selection uses a native directory picker and encrypted
+per-account preferences. The full paths stay in main. Automatic placement
+never overwrites a file at the destination. Operating-system links are
 restricted to eligible regular Account Spaces, even with Banking in front.
 
 Private Browser opens only documents, images, media and archives. Every other
@@ -256,6 +258,11 @@ serving. The release workflow calculates SHA-256 from the exact installer
 uploaded to R2, and the desktop app verifies a downloaded installer against the
 manifest before it will open it. Resumable downloads are restricted to one
 validated byte range per request.
+
+Managed updates use a main-process HTTPS stream without redirects, a private
+staging directory, an installer size cap, and the Windows Internet zone marker.
+Opening requires an explicit action in an unlocked regular Account Space,
+a fresh matching release manifest, and a second hash of the staged file.
 
 ## Credentials in the repository
 

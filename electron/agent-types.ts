@@ -1,6 +1,6 @@
 import type { AgentActionClass, AgentSpaceSettings, ClientLimits } from '@private-browser/bridge-protocol/agent-permissions';
 
-export type AgentDecision = 'allow' | 'session' | 'deny';
+export type AgentDecision = 'allow' | 'session' | 'always' | 'deny';
 
 export interface AgentConfirmationCard {
   id: string;
@@ -13,6 +13,7 @@ export interface AgentConfirmationCard {
   formTarget?: string;
   expiresAt: number;
   canAllowSession: boolean;
+  canAllowAlways?: boolean;
 }
 
 export interface AgentAuditRow {

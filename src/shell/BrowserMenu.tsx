@@ -2,6 +2,7 @@ import { Asterisk, NotebookPen, Code2, Download, FileDown, History, Info, Keyboa
 import type { AccountSpaceId, BookmarkBarMode, BrowserSnapshot, BrowserTab, SidePanelTool, ThemePreference, UiPreferences } from '../../electron/types';
 import { AccountAvatar } from '../lib/accounts';
 import { MenuItem, MenuSeparator, MenuSurface, SubmenuItem } from './Menu';
+import { SIDE_PANEL_NAMES } from './side-panel-tools';
 
 export interface BrowserMenuActions {
   newTab: () => void;
@@ -74,9 +75,9 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
         <MenuSeparator />
         <MenuItem icon={Settings} label="Manage Account Spaces" onSelect={actions.manageAccounts} />
       </SubmenuItem>
-      {vaultAvailable && <MenuItem icon={KeyRound} label="Passwords and MyVault" onSelect={() => actions.openTool('vault')} />}
+      {vaultAvailable && <MenuItem icon={KeyRound} label={SIDE_PANEL_NAMES.vault} onSelect={() => actions.openTool('vault')} />}
       <MenuItem icon={History} label="History" shortcut="Ctrl+H" onSelect={() => actions.openTool('history')} />
-      <MenuItem icon={Download} label="Downloads" shortcut="Ctrl+J" onSelect={() => actions.openTool('downloads')} />
+      <MenuItem icon={Download} label={SIDE_PANEL_NAMES.downloads} shortcut="Ctrl+J" onSelect={() => actions.openTool('downloads')} />
       <SubmenuItem id="bookmarks" icon={Star} label="Bookmarks">
         <MenuItem icon={Star} label={bookmarked ? 'Remove bookmark' : 'Bookmark this tab'} shortcut="Ctrl+D" disabled={tab.isHome} onSelect={actions.toggleBookmark} />
         {actions.pinCurrentPage && <MenuItem label="Pin current page to New Tab" onSelect={actions.pinCurrentPage} />}
@@ -104,16 +105,16 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
       <MenuItem icon={Link2} label="Copy link" disabled={tab.isHome} onSelect={actions.copyLink} />
       <SubmenuItem id="more-tools" icon={Wrench} label="More tools">
         <MenuItem icon={Code2} label="Developer tools" shortcut="F12" disabled={!tab.developerToolsAllowed} onSelect={actions.toggleDeveloperTools} />
-        <MenuItem icon={Code2} label="Developer Bridge" onSelect={() => actions.openTool('developer')} />
-        <MenuItem icon={Zap} label="Automations" onSelect={() => actions.openTool('automations')} />
-        <MenuItem icon={ScrollText} label="Privacy log" onSelect={() => actions.openTool('privacy')} />
+        <MenuItem icon={Code2} label={SIDE_PANEL_NAMES.developer} onSelect={() => actions.openTool('developer')} />
+        <MenuItem icon={Zap} label={SIDE_PANEL_NAMES.automations} onSelect={() => actions.openTool('automations')} />
+        <MenuItem icon={ScrollText} label={SIDE_PANEL_NAMES.privacy} onSelect={() => actions.openTool('privacy')} />
         <MenuSeparator />
         <MenuItem role="menuitemcheckbox" checked={state.trackerBlocking} icon={Shield} label="Block trackers" keepOpen onSelect={actions.toggleTrackers} />
       </SubmenuItem>
       <MenuSeparator />
-      <MenuItem icon={NotebookPen} label="Notes" shortcut="Ctrl+Shift+Y" onSelect={() => actions.openTool('easynote')} />
-      <MenuItem icon={Asterisk} label="Claude" onSelect={() => actions.openTool('claude')} />
-      <MenuItem icon={Sparkles} label="Privacy and AI" onSelect={() => actions.openTool('assistant')} />
+      <MenuItem icon={NotebookPen} label={SIDE_PANEL_NAMES.easynote} shortcut="Ctrl+Shift+Y" onSelect={() => actions.openTool('easynote')} />
+      <MenuItem icon={Asterisk} label={SIDE_PANEL_NAMES.claude} onSelect={() => actions.openTool('claude')} />
+      <MenuItem icon={Sparkles} label={SIDE_PANEL_NAMES.assistant} onSelect={() => actions.openTool('assistant')} />
       <SubmenuItem id="appearance" icon={Palette} label="Appearance">
         {THEMES.map((theme) => <MenuItem key={theme.id} role="menuitemradio" checked={ui.theme === theme.id} label={theme.label} onSelect={() => actions.setUi({ theme: theme.id })} />)}
       </SubmenuItem>

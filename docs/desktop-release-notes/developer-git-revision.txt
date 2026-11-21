@@ -1,0 +1,1 @@
+Developer Bridge shows the branch, commit and worktree status for an approved VS Code workspace. Open the exact GitHub commit from the Project panel. Local test reports record the starting revision.

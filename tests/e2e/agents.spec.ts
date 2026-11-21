@@ -12,13 +12,19 @@ async function verifyAccessibility(page: Page, selector: string): Promise<void> 
 for (const width of [1280, 375]) {
   test(`shows Agent setup and confirmation at ${width}px`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 820 });
-    await page.goto('/');
+    await page.goto('/?preview=agent-settings');
     await page.getByRole('button', { name: 'Browser menu' }).click();
     await page.getByRole('menu', { name: 'Browser menu' }).getByRole('menuitem', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Open Agents' }).click();
     const allow = page.getByRole('checkbox', { name: 'Allow coding agents' });
     await expect(allow).not.toBeChecked();
     await allow.check();
+    const agentSettings = page.locator('.agents-panel');
+    await agentSettings.getByRole('button', { name: 'Limits for Claude Code' }).click();
+    const duration = agentSettings.getByRole('spinbutton', { name: 'Session duration (hours)' });
+    await expect(duration).toHaveValue('8');
+    await expect(duration).toHaveAttribute('max', '12');
+    await agentSettings.getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.getByRole('button', { name: 'Generate pairing code' }).click();
     await expect(page.getByText('12345678')).toBeVisible();
     await page.screenshot({ path: info.outputPath('agents-panel.png') });
@@ -27,11 +33,16 @@ for (const width of [1280, 375]) {
     const card = page.getByRole('alertdialog', { name: 'Approve agent action' });
     await expect(card).toBeVisible();
     await expect(card.getByText('http://localhost:3000/save')).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Always allow on this site' })).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('agent-confirmation.png') });
     await card.getByRole('button', { name: 'Deny', exact: true }).click();
     await expect(card).toHaveCount(0);
     await expect(page.getByText('Codex is controlling this tab')).toBeVisible();
     await page.screenshot({ path: info.outputPath('agent-banner.png') });
+    await page.goto('/?preview=agent-site-approval#agent-workspace');
+    await expect(card.getByRole('button', { name: 'Allow navigation for this session on this origin' })).toBeVisible();
+    await card.getByRole('button', { name: 'Always allow on this site' }).click();
+    await expect(card).toHaveCount(0);
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(page.getByText('No agent is driving')).toBeVisible();
   });

@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Bookmark, Home, Search, Palette, Check, ChevronRight, Code2, Download, ExternalLink, Globe2, LoaderCircle, LockKeyhole, RefreshCw, Settings, Shield, ShieldCheck, Upload, TriangleAlert, X } from 'lucide-react';
 import type { AccountSpaceId, BrowserSettings, BrowserSettingsPatch, BrowserSnapshot, ChromeImportResult, ChromeProfileSource, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, UiPreferences, UiPreferencesPatch } from '../../electron/types';
-import type { ChromeImportReview } from '../../electron/types';
+import type { ChromeImportReview, ManagedUpdateStatus } from '../../electron/types';
 import { PanelHeader } from './common';
 import { ChromePasswordImportWizard } from './ChromePasswordImportWizard';
 import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
@@ -230,15 +230,22 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
   }
   if (settingsPage === 'agents') return <AgentsPanel onBack={() => setSettingsPage('overview')} onToast={onToast} />;
   if (settingsPage === 'updates') {
+    const runInstaller = (action: () => Promise<void>) => void action().catch((error: unknown) => {
+      onToast(error instanceof Error ? error.message : String(error), 'error');
+    });
     return <UpdatesPage
       status={updateStatus}
       result={updateResult}
       error={updateError}
       checking={checking}
+      managed={state.managedUpdate}
       editingPrivate={editingUpdates}
       form={updateForm}
       onBack={() => { setUpdateForm((value) => ({ ...value, accessToken: '' })); setSettingsPage('overview'); }}
       onCheck={() => void checkUpdates()}
+      onDownload={(version, sha256) => runInstaller(() => window.privateBrowser.downloadManagedUpdate(version, sha256))}
+      onCancel={() => runInstaller(() => window.privateBrowser.cancelManagedUpdate())}
+      onInstall={() => runInstaller(() => window.privateBrowser.installManagedUpdate())}
       onOpenDownload={() => void window.privateBrowser.openUpdatePage().catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}
       onOpenHistory={() => void window.privateBrowser.openReleaseHistory().catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}
       onOpenDeveloper={() => void window.privateBrowser.newTab('development', 'https://dr-badawi-abdalsalam.com/')}
@@ -334,10 +341,14 @@ interface UpdatesPageProps {
   result: UpdateCheckResult | null;
   error: string | null;
   checking: boolean;
+  managed?: ManagedUpdateStatus;
   editingPrivate: boolean;
   form: UpdateServiceInput;
   onBack: () => void;
   onCheck: () => void;
+  onDownload: (version: string, sha256: string) => void;
+  onCancel: () => void;
+  onInstall: () => void;
   onOpenDownload: () => void;
   onOpenHistory: () => void;
   onOpenDeveloper: () => void;
@@ -347,7 +358,7 @@ interface UpdatesPageProps {
   onDisconnect: () => void;
 }
 
-function UpdatesPage({ status, result, error, checking, editingPrivate, form, onBack, onCheck, onOpenDownload, onOpenHistory, onOpenDeveloper, onTogglePrivate, onConfigure, onFormChange, onDisconnect }: UpdatesPageProps) {
+function UpdatesPage({ status, result, error, checking, managed, editingPrivate, form, onBack, onCheck, onDownload, onCancel, onInstall, onOpenDownload, onOpenHistory, onOpenDeveloper, onTogglePrivate, onConfigure, onFormChange, onDisconnect }: UpdatesPageProps) {
   const latest = result?.latest;
   const available = result?.state === 'available';
   const state = checking ? 'checking' : error ? 'error' : available ? 'available' : result ? 'current' : 'checking';
@@ -357,7 +368,8 @@ function UpdatesPage({ status, result, error, checking, editingPrivate, form, on
     : state === 'error'
       ? error ?? 'The update service could not be reached.'
       : state === 'available'
-        ? 'A newer Windows installer is ready on the public download page. Its checksum is checked before Private Browser will open it.'
+        ? managed ? 'Download the installer here and choose when to open it.'
+          : 'A newer Windows installer is ready on the download page. Its checksum is checked before Private Browser will open it.'
         : `Version ${result?.currentVersion ?? status?.currentVersion ?? '—'} is the latest stable release.`;
 
   return <div className="side-panel updates-page" data-testid="updates-page">
@@ -373,8 +385,19 @@ function UpdatesPage({ status, result, error, checking, editingPrivate, form, on
         <ChevronRight size={15} />
         <span><small>Latest stable</small><strong>{latest ? `v${latest.version}` : 'Checking…'}</strong></span>
       </div>
+      {managed && <ManagedInstallerStatus status={managed} />}
       <div className="updates-primary-actions">
-        {state === 'available' && <button className="updates-primary" onClick={onOpenDownload}><Download size={15} /> Open verified download</button>}
+        {state === 'available' && !managed && <button className="updates-primary" onClick={onOpenDownload}><Download size={15} /> Open verified download</button>}
+        {state === 'available' && managed && latest && <>
+          {managed.phase === 'ready' && managed.version === latest.version
+            ? <button className="updates-primary" onClick={onInstall}>Install when ready</button>
+            : ['idle', 'failed', 'installed'].includes(managed.phase) || (managed.phase === 'ready' && managed.version !== latest.version)
+              ? <button className="updates-primary" onClick={() => onDownload(latest.version, latest.sha256)}><Download size={15} /> Download update</button>
+              : null}
+          {['preparing', 'downloading'].includes(managed.phase) && <button className="updates-secondary" onClick={onCancel}>Cancel download</button>}
+          {managed.phase === 'failed' && <button className="updates-secondary" onClick={onCheck}><RefreshCw size={15} /> Check again</button>}
+          <button className="updates-secondary" onClick={onOpenDownload}><ExternalLink size={14} /> Release page</button>
+        </>}
         {state === 'current' && <button className="updates-primary" onClick={onCheck}><RefreshCw size={15} /> Check again</button>}
         {state === 'error' && <button className="updates-primary" onClick={onCheck}><RefreshCw size={15} /> Try again</button>}
         {state !== 'available' && state !== 'checking' && <button className="updates-secondary" onClick={onOpenDownload}><ExternalLink size={14} /> Release page</button>}
@@ -417,6 +440,28 @@ function UpdatesPage({ status, result, error, checking, editingPrivate, form, on
       </div>
     </section>
   </div>;
+}
+
+function ManagedInstallerStatus({ status }: { status: ManagedUpdateStatus }) {
+  switch (status.phase) {
+    case 'idle': return null;
+    case 'preparing': return <p role="status">Checking the release before downloading…</p>;
+    case 'downloading': return <div>
+      <progress aria-label="Installer download" value={status.receivedBytes ?? 0} max={status.totalBytes || 1} />
+      <p>{humanBytes(status.receivedBytes ?? 0)} of {humanBytes(status.totalBytes ?? 0)}</p>
+    </div>;
+    case 'verifying': return <p role="status">Verifying the installer…</p>;
+    case 'ready': return <div>
+      <p role="status">Checksum verified. Save your work before opening the installer. Private Browser may close during installation.</p>
+      {status.publisher?.state === 'valid' && <p>Windows verified the publisher{status.publisher.name ? ' ' + status.publisher.name : ''}.</p>}
+      {status.publisher?.state === 'unsigned' && <p>Windows found no publisher signature.</p>}
+      {status.publisher?.state === 'untrusted' && <p>Windows did not verify the publisher signature.</p>}
+      {status.publisher?.state === 'unavailable' && <p>Windows publisher verification is unavailable.</p>}
+    </div>;
+    case 'launched': return <p role="status">Follow the Windows installer. After it finishes, reopen Private Browser.</p>;
+    case 'installed': return <p role="status">Version {status.version} is installed.</p>;
+    case 'failed': return <p role="alert">{status.message ?? 'The update could not be completed.'}</p>;
+  }
 }
 
 /**

@@ -519,6 +519,14 @@ The proposed resolution is to keep the G1 lease rules and preserve remembered
 approvals for exact, already-listed Work origins. Run verification against
 the integrated release candidate.
 
+### Integration decision
+
+Gate G2 and the merge approach were approved. The Claude Code rule merged in
+`claude-config` PR #71. The browser merge preserves remembered navigation
+only for exact, already-listed Work origins. Older one-hour and eight-hour
+preferences migrate to their original durations. The former open setting maps
+to the 12-hour cap. All migrated clients require an owner renewal before use.
+
 Execute the entire plan end-to-end in full autopilot. Make independent decisions, always choosing the best long-term solutions for security, reliability, scalability, and maintainability.
 
 Investigate, implement, fix, test, and verify everything autonomously. Do not pause for routine questions. Seek approval only for unavoidable blockers, irreversible high-risk actions, or significant costs. Continue until fully verified, then provide a concise completion report.

@@ -16,6 +16,8 @@
    console for errors, and record the flow as a Playwright test.”
 5. Review the first navigation in the **Agent Workspace**. Choose **Allow
    once** or keep navigation approved for that origin until the session ends.
+   When opening an already-loaded page again on an exact Work origin you listed,
+   **Always allow on this site** can remember that navigation choice.
 
 Use **Edit Open Web** to grant a client public browsing in a disposable
 partition. The owner signs in only in Work. Unlisted Work pages open in a

@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import type { BridgeMethod, CommandSpec, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';
 import { MAX_TASK_OUTPUT_BYTES, projectInfoSchema, testKindSchema, testReportSchema } from '@private-browser/bridge-protocol';
 import { detectProject } from './adapters.js';
+import { gitRevisionForWorkspace, revisionReportNote, type GitRepositoryView } from './git-revision.js';
 import { ReportStore } from './report-store.js';
 import { spawnCommand } from './spawn-command.js';
 import { resolveInsideWorkspace, safeLiveOrigin, sanitizeOutput, stableFingerprint } from './security.js';
@@ -39,6 +40,7 @@ export class ProjectService {
       case 'project.list': return this.listProjects();
       case 'project.authorize': return this.authorize(String(this.record(payload).projectId ?? ''));
       case 'project.inspect': return this.inspect(String(this.record(payload).projectId ?? ''));
+      case 'project.revision': return this.projectRevision(String(this.record(payload).projectId ?? ''));
       case 'project.open': return this.openProject(String(this.record(payload).projectId ?? ''));
       case 'source.open': return this.openSource(payload);
       case 'server.discover': return this.inspect(String(this.record(payload).projectId ?? ''));
@@ -105,6 +107,22 @@ export class ProjectService {
     const folder = await this.folderFor(projectId);
     const info = await detectProject(folder.uri.fsPath, true, vscode.workspace.isTrusted, this.activeFile(folder));
     return projectInfoSchema.parse(info);
+  }
+
+  private async projectRevision(projectId: string) {
+    const folder = await this.folderFor(projectId);
+    const builtin = vscode.extensions.getExtension<{
+      enabled: boolean;
+      getAPI(version: 1): { readonly repositories: readonly GitRepositoryView[] };
+    }>('vscode.git');
+    if (!builtin?.isActive) return null;
+    try {
+      const git = builtin.exports;
+      if (git?.enabled) return await gitRevisionForWorkspace(folder.uri.fsPath, git.getAPI(1).repositories);
+    } catch {
+      // A disabled or unavailable Source Control provider leaves other tools usable.
+    }
+    return null;
   }
 
   private activeFile(folder?: vscode.WorkspaceFolder): string | undefined {
@@ -226,9 +244,15 @@ export class ProjectService {
     const kind = testKindSchema.parse(payload.kind); const info = await this.inspect(projectId);
     this.lastTestPayload = { ...payload, projectId, kind };
     const startedAt = new Date().toISOString(); const reportId = randomUUID();
+    const revision = await this.projectRevision(projectId);
     let report: TestReport;
     if (kind === 'quick' || kind === 'everything') report = await this.runCommands(info, kind, startedAt, reportId);
     else report = await this.runPageTest(info, kind, payload, startedAt, reportId);
+    if (revision) {
+      const note = revisionReportNote(revision);
+      const limit = 4_000 - note.length - 2;
+      report.summary = report.summary.slice(0, limit) + '\n\n' + note;
+    }
     this.lastReportId = report.id;
     await this.reports.save(testReportSchema.parse(report));
     this.emit('task.complete', { projectId, report });

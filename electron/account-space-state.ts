@@ -28,7 +28,7 @@ import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation
 import { pruneBookmarkIcons, sanitizeBookmarkIcons } from './bookmark-icons.js';
 import { isAllowedRemoteUrl } from './security.js';
 import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings, sanitizeWorkspaceSettings } from './browser-settings.js';
-import { sanitizeUiPreferences } from './ui-preferences.js';
+import { sanitizeAccountPanel, sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
 import { sanitizeBrowserRoutines } from './browser-routines.js';
 import { orderAccountTabs } from './tab-organization.js';
@@ -435,7 +435,8 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
   const shortcuts = sanitizeShortcutTiles(input.shortcuts);
   const bookmarkIcons = pruneBookmarkIcons(sanitizeBookmarkIcons(input.bookmarkIcons), bookmarks);
   const tabGroups = groups.filter((group) => tabs.some((tab) => tab.groupId === group.id));
-  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history, ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}) };
+  const sidePanel = workspaceId === 'banking' ? undefined : sanitizeAccountPanel(input.sidePanel);
+  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history, ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}), ...(sidePanel ? { sidePanel } : {}) };
 }
 
 export const MAX_SHORTCUT_TILES = 12;
@@ -556,8 +557,16 @@ function accountRecovery(accountSpaceId: AccountSpaceId, backupAvailable: boolea
 export function atomicWriteJson(filePath: string, value: unknown): void {
   mkdirSync(dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
-  writeFileSync(temporaryPath, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-  renameSync(temporaryPath, filePath);
+  const text = JSON.stringify(value, null, 2);
+  try {
+    writeFileSync(temporaryPath, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    renameSync(temporaryPath, filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      try { rmSync(temporaryPath, { force: true }); } catch { /* Preserve the write error. */ }
+    }
+    throw error;
+  }
 }
 
 function safeTimestamp(value: Date): string {

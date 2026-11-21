@@ -1,0 +1,1 @@
+Agent Mode uses separate Open Web and Work spaces, adjustable sessions with owner-only renewal, and remembered navigation for exact, approved Work origins.

@@ -159,6 +159,8 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
 | `browser:set-download-history` | `setDownloadHistory(accountId, enabled)` | current regular Account Space and whether to retain new finished downloads | `void` |
 | `browser:remove-download-entry` | `removeDownloadEntry(accountId, id)` | current regular Account Space and finished download ID | `void` |
+| `browser:choose-download-folder` | `chooseDownloadFolder(accountId)` | current regular Account Space, native picker | `void` |
+| `browser:set-download-folder-mode` | `setDownloadFolderMode(accountId, mode)` | current regular Account Space, ask/automatic/default | `void` |
 | `permissions:site` | `getSitePermissions(tabId, origin)` | active tab and exact origin | current policy and grant duration |
 | `permissions:revoke-site` | `revokeSitePermission(tabId, origin, capability)` | active tab, exact origin and supported capability | updated site status |
 | `permissions:list-account` | `listAccountPermissionGrants(id)` | selected Account Space in the active workspace | reusable grants |
@@ -180,7 +182,8 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
-| `ui:set-preferences` | `setUiPreferences(patch)` | non-empty `UiPreferencesPatch`, validated by `requireUiPreferencesPatch` | `void` |
+| `ui:set-preferences` | `setUiPreferences(patch, accountId?)` | validated UI patch, optional expected Account Space | `void` |
+| `ui:set-panel-pin` | `setSidePanelPin(accountId, tool, enabled)` | current regular Account Space, pinnable tool and flag | `void` |
 | `settings:set` | `setBrowserSettings(patch, workspace?)` | validated behavior settings, optional expected active workspace | `void` |
 | `bookmarks:move` | `moveBookmark(level, key, toIndex)` | `BookmarkLevelInput`, `BookmarkEntryKeyInput`, integer | `void` |
 | `bookmarks:rename` | `renameBookmark(id, title)` | id, non-blank title ≤ 500 | `void` |
@@ -242,15 +245,15 @@ approved preview in main, never from the renderer. Behaviour:
 
 ### agents:
 
-The main chrome uses `agents:status`, `agents:enable`, `agents:pair`,
-`agents:stop`, `agents:resume`, `agents:open-workspace`, `agents:revoke`, `agents:renew`,
-`agents:set-policy`, `agents:grant-uploads`, `agents:revoke-uploads`,
-`agents:add-space`, `agents:reset-space`, `agents:clear-audit` and
-`agents:export-audit`. The regular chrome also owns `agents:lend-tab` and
-`agents:return-tab` for the owner's active browser tab. The pinned Agent Workspace chrome may call only the
-status, stop, select, manual, close-tab and decide channels. Only its main
-frame can invoke `agents:decide`. The `agents:changed` event signals the
-app to fetch fresh status. Agent tab views have no preload.
+Main chrome owns Agent enablement, pairing, revoke, space rules, client limits,
+folder grants, audit, and tab loans. Use `agents:set-space` for space rules and
+`agents:set-limits` for per-client caps. The trusted Agent Workspace can request
+status, Stop, tab selection, manual control, tab close, owner renewal, and
+clearing a flagged Open Web space. Only its main frame may decide a pending
+action. The `always` decision remembers navigation only for an exact origin
+already listed in the assigned Work space. Status exposes lease expiry and
+whether a folder is granted. `agents:changed` signals a status refresh. Remote
+Agent tab views have no preload.
 
 ### ai: — 7 channels
 
@@ -325,6 +328,9 @@ the main process; `VaultItemMeta` carries `hasTotp`, never the secret.
 | `updates:clear` | `clearUpdateService()` | — | `UpdateServiceStatus` |
 | `updates:check` | `checkForUpdates()` | — | `UpdateCheckResult` |
 | `updates:open-page` | `openUpdatePage()` | — | `void` |
+| `updates:download-installer` | `downloadManagedUpdate(version, sha256)` | reviewed release metadata, current unlocked regular Account Space | `void` |
+| `updates:cancel-installer` | `cancelManagedUpdate()` | — | `void` |
+| `updates:install-verified` | `installManagedUpdate()` | — | `void` |
 | `updates:open-history` | `openReleaseHistory()` | — | `void` |
 
 There is no mechanical rule mapping a channel name to a method name. Four break
@@ -428,8 +434,9 @@ preload and the renderer.
 These two are deliberately different, and the `Pick` is where the split is
 declared: `loading`, `canGoBack`, `canGoForward`, `favicon`,
 `developerToolsAllowed` and `developerToolsOpen` are runtime-only.
-The snapshot also truncates `history` to 100 and `privacyLog` to 50, and adds
-`downloads`, which is never persisted.
+The snapshot truncates history to 100 and the privacy log to 50. Downloads
+exposes current-account entries, session counts and the chosen folder name.
+Optional retained entries and the folder path stay encrypted on disk.
 The History panel requests pages from the separate history query. Only the
 active regular Account Space may query its retained history.
 

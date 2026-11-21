@@ -1,0 +1,1 @@
+Private Browser saves changed Account Space files only. Routine page updates are saved together, and bookmark edits, imports and other deliberate changes still save immediately.

@@ -45,6 +45,9 @@ See the [setup guide](../agents/private-browser.md) and [security contract](../.
   exact origin. Work navigation and consequential actions retain trusted
   confirmation. An approval binds input and page revision. Navigation
   approval for the session is scoped to the same space and exact origin.
+  An owner can remember navigation to an exact, already-listed Work origin
+  from a repeat open of the inspected page. The rule is per client and space.
+  Sensitive pages, first visits and other actions retain their review.
 - The owner assigns clients to spaces. Work uses explicit origins. Unlisted
   destinations are blocked or open in a disposable signed-out preview.
   An authenticated Work view cannot load an unlisted main frame or subframe.

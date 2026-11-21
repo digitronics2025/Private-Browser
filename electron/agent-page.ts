@@ -57,6 +57,18 @@ export function createAgentPage() {
     }
     return false;
   };
+  const siteApprovalRevision = () => {
+    const walker = doc.createTreeWalker(doc, NodeFilter.SHOW_ELEMENT);
+    for (let node = walker.nextNode(), scanned = 0; node; node = walker.nextNode(), scanned += 1) {
+      if (scanned >= 5_000) return null;
+      if (!(node instanceof Element)) continue;
+      // Embedded documents and component internals cannot be safely reviewed here.
+      if (node.matches('iframe,frame,fencedframe,object,embed') || node.shadowRoot || node.localName.includes('-')) return null;
+      if (node instanceof HTMLElement && (isPrivate(node) || /(?:^|\s)cc-[a-z-]+(?:\s|$)/i.test(node.getAttribute('autocomplete') ?? ''))) return null;
+    }
+    return revision();
+  };
+
   const containingPrivate = (element: HTMLElement) => {
     for (let node: HTMLElement | null = element; node; node = node.parentElement) if (isPrivate(node)) return true;
     return false;
@@ -158,6 +170,7 @@ export function createAgentPage() {
     if (args.expected !== undefined && revision() !== args.expected) throw new Error('page changed');
     if (command === 'snapshot') return snapshot();
     if (command === 'revision') return revision();
+    if (command === 'siteApprovalRevision') return siteApprovalRevision();
     if (command === 'text') return textOf(args.ref ? target(args.ref) : doc.body ?? doc.documentElement, 12_000);
     if (command === 'metrics') {
       const entry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;

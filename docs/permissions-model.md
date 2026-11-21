@@ -103,7 +103,10 @@ when the policy permits an action.
   attach side effects to a GET request, including ordinary navigation.
 - Keep exact approvals for consequential actions. A granted origin does not
   authorize account recovery, payments, credential entry, posting or other
-  actions that require owner approval. Lend a tab under its existing separate,
+  actions that require owner approval. A remembered navigation approval may
+  be saved only for an exact, already-listed Work origin and a previously
+  loaded, inspected page. Removing access or the exact rule clears the approval.
+  Lend a tab under its existing separate,
   shorter grant and origin restrictions.
 - Return safe effective policy from `browser_status`, with space name, origin
   mode, access outside the list, tool classes, upload folder presence, configured

@@ -4,9 +4,9 @@ import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
-import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
+import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
-import type { BrowserSettings } from '../electron/types';
+import type { BrowserSettings, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
@@ -155,6 +155,13 @@ export function installPreviewApi(): void {
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
   const savedDownloadHistory = new Set<AccountSpaceId>();
+  const previewDownloadFolders = new Map<AccountSpaceId, { name: string; ask: boolean }>();
+  const previewPanelTools = new Map<AccountSpaceId, SidePanelTool>();
+  const previewPanelPins = new Map<AccountSpaceId, Set<PinnablePanelTool>>();
+  const regularPanelAccount = () => state.activeWorkspaceId !== 'banking'
+    && state.accountSpaces.some(({ id, locked }) => id === state.activeAccountSpaceId && !locked);
+  let commonPanelTool = state.ui.sidePanelTool;
+  state.sidePanelPins = regularPanelAccount() ? [] : undefined;
   if (params.get('downloadHistory') === 'sample') {
     savedDownloadHistory.add(google);
     sampleDownloads.push({ id: 'preview-download-history', accountSpaceId: google, filename: 'Statement.pdf',
@@ -162,6 +169,11 @@ export function installPreviewApi(): void {
       receivedBytes: 1920, totalBytes: 1920, extension: 'PDF', risk: 'ordinary', retained: true });
   }
   state.downloadHistory = savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
+  state.downloadFolder = { ask: true, available: true };
+  let managedUpdate: ManagedUpdateStatus | undefined = params.get('managedUpdate') === 'installed'
+    ? { phase: 'installed', version: '0.5.7' }
+    : params.get('managedUpdate') === 'sample' ? { phase: 'idle' } : undefined;
+  state.managedUpdate = managedUpdate;
   const workspaceSettings: Partial<Record<WorkspaceId, BrowserSettings>> = {};
   const siteZoom = new Map<string, number>();
   const siteZoomKey = (account: string, url: string) => JSON.stringify([account, new URL(url).origin]);
@@ -193,6 +205,22 @@ export function installPreviewApi(): void {
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     state.downloadHistory = state.activeWorkspaceId === 'banking' ? undefined : savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
+    state.downloadFolder = state.activeWorkspaceId === 'banking' ? undefined : {
+      ask: true, available: true, ...previewDownloadFolders.get(state.activeAccountSpaceId),
+    };
+    state.downloadBatch = state.activeWorkspaceId === 'banking' ? undefined
+      : state.downloads.filter((download) => download.id !== 'preview-download-history').reduce((status, download) => {
+        if (download.state === 'progressing' || download.canCancel) status.active++;
+        else if (download.state === 'completed') status.completed++;
+        else status.stopped++;
+        return status;
+      }, { active: 0, completed: 0, stopped: 0 });
+    const regularPanel = regularPanelAccount();
+    state.ui.sidePanelTool = isPinnablePanelTool(commonPanelTool)
+      ? previewPanelTools.get(state.activeAccountSpaceId) ?? (regularPanel ? commonPanelTool : 'privacy')
+      : commonPanelTool;
+    state.sidePanelPins = regularPanel ? [...(previewPanelPins.get(state.activeAccountSpaceId) ?? [])] : undefined;
+    state.managedUpdate = state.activeWorkspaceId === 'banking' ? undefined : managedUpdate;
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
     state.bookmarkUndo = undo ? { kind: undo.kind, count: undo.before.length } : undefined;
     state.recentlyClosedTabs = closedByAccount.get(state.activeAccountSpaceId) ?? [];
@@ -246,14 +274,16 @@ export function installPreviewApi(): void {
     agentState.spaces = previewSpaces();
     agentState.possibleSignIn = previewOpenWebId;
   }
-  if (params.get('preview') === 'agent-action') {
+  const siteApproval = params.get('preview') === 'agent-site-approval';
+  if (params.get('preview') === 'agent-action' || siteApproval) {
     Object.assign(agentState, {
       enabled: true, active: true, selectedTab: agentTabId,
       tabs: [{ id: agentTabId, name: 'http://localhost:3000', client: 'Codex', space: 'Work', manual: false, canManual: true }],
       current: { client: 'Codex', step: 'click', tabId: agentTabId },
       pending: { id: '9c7757bc-bf61-4685-9a31-9d38499f4ca0', client: 'Codex', tab: 'Agent Account Space',
-        origin: 'http://localhost:3000', action: 'click', target: 'button: Save', formTarget: 'http://localhost:3000/save',
-        expiresAt: Date.now() + 120_000, canAllowSession: false },
+        origin: 'http://localhost:3000', action: siteApproval ? 'tab open' : 'click',
+        target: siteApproval ? 'http://localhost:3000/' : 'button: Save', formTarget: siteApproval ? undefined : 'http://localhost:3000/save',
+        expiresAt: Date.now() + 120_000, canAllowSession: siteApproval, canAllowAlways: siteApproval },
     });
   }
   const agentChange = () => agentListeners.forEach((listener) => listener());
@@ -363,6 +393,30 @@ export function installPreviewApi(): void {
     configureUpdateService: desktopOnly,
     clearUpdateService: desktopOnly,
     openUpdatePage: desktopOnly,
+    downloadManagedUpdate: async (version, sha256) => {
+      if (!managedUpdate || state.activeWorkspaceId === 'banking') throw new Error('Download the installer using the desktop app.');
+      const result = await handlers.checkForUpdates();
+      if (result.state !== 'available' || version !== result.latest.version || sha256 !== result.latest.sha256) throw new Error('Check for updates again.');
+      const { sizeBytes } = result.latest;
+      const pending: ManagedUpdateStatus = { phase: 'downloading', version, receivedBytes: sizeBytes / 2, totalBytes: sizeBytes };
+      managedUpdate = pending;
+      publish();
+      window.setTimeout(() => {
+        if (managedUpdate !== pending) return;
+        managedUpdate = { phase: 'ready', version, publisher: { state: 'unsigned' } };
+        publish();
+      }, 500);
+    },
+    cancelManagedUpdate: async () => {
+      if (!managedUpdate || state.activeWorkspaceId === 'banking') throw new Error('Cancel the download using the desktop app.');
+      managedUpdate = { phase: 'failed', message: 'Download cancelled.' };
+      publish();
+    },
+    installManagedUpdate: async () => {
+      if (managedUpdate?.phase !== 'ready' || state.activeWorkspaceId === 'banking') throw new Error('Install a verified file using the desktop app.');
+      managedUpdate = { phase: 'launched', version: managedUpdate.version };
+      publish();
+    },
     getState: async () => structuredClone(state),
     controlDownload: async (id, action) => {
       const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);
@@ -542,6 +596,22 @@ export function installPreviewApi(): void {
       else savedDownloadHistory.delete(id);
       publish();
     },
+    chooseDownloadFolder: async (id) => {
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking') throw new Error('Download folders are unavailable in this Account Space.');
+      if (params.get('downloadFolder') !== 'sample') throw new Error('Choose a real download folder in the desktop app.');
+      previewDownloadFolders.set(id, { name: 'Sample invoices', ask: previewDownloadFolders.get(id)?.ask ?? true });
+      publish();
+    },
+    setDownloadFolderMode: async (id, mode) => {
+      if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking') throw new Error('Download folders are unavailable in this Account Space.');
+      if (mode === 'default') previewDownloadFolders.delete(id);
+      else {
+        const selected = previewDownloadFolders.get(id);
+        if (!selected) throw new Error('Choose a download folder first.');
+        previewDownloadFolders.set(id, { ...selected, ask: mode === 'ask' });
+      }
+      publish();
+    },
     removeDownloadEntry: async (id, downloadId) => {
       const index = sampleDownloads.findIndex((item) => item.id === downloadId && item.accountSpaceId === id
         && !item.canCancel && item.state !== 'progressing' && item.checksum !== 'checking');
@@ -591,7 +661,25 @@ export function installPreviewApi(): void {
       }
       publish();
     },
-    setUiPreferences: async (patch) => { state.ui = mergeUiPreferences(state.ui, patch as UiPreferencesPatch); syncDarkMode(); publish(); },
+    setUiPreferences: async (patch, expectedAccount) => {
+      if (expectedAccount !== undefined && expectedAccount !== state.activeAccountSpaceId) throw new Error('The Account Space changed. Open the tool again.');
+      const { sidePanelTool, ...globalPreferences } = patch as UiPreferencesPatch;
+      state.ui = mergeUiPreferences(state.ui, globalPreferences);
+      if (isPinnablePanelTool(sidePanelTool)) {
+        if (!isPinnablePanelTool(commonPanelTool)) commonPanelTool = 'assistant';
+        previewPanelTools.set(state.activeAccountSpaceId, sidePanelTool);
+      } else if (sidePanelTool) commonPanelTool = sidePanelTool;
+      syncDarkMode();
+      publish();
+    },
+    setSidePanelPin: async (id, tool, enabled) => {
+      if (id !== state.activeAccountSpaceId || !regularPanelAccount()) throw new Error('Tool pins are unavailable in this Account Space.');
+      const pins = previewPanelPins.get(id) ?? new Set<PinnablePanelTool>();
+      if (enabled) pins.add(tool);
+      else pins.delete(tool);
+      previewPanelPins.set(id, pins);
+      publish();
+    },
     toggleBookmarkBar: async () => { state.ui = mergeUiPreferences(state.ui, { bookmarkBarMode: state.ui.bookmarkBarMode === 'hidden' ? 'always' : 'hidden' }); publish(); },
     activateTab: async (value) => { const tab = state.tabs.find((item) => item.id === value); if (tab) { state.activeTabId = tab.id; publish(); } },
     newTab: async () => { const id = `preview-${crypto.randomUUID()}`; state.tabs.push(homeTab(id, state.activeWorkspaceId, state.activeAccountSpaceId)); state.activeTabId = id; publish(); },

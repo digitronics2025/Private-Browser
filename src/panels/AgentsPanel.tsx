@@ -428,6 +428,7 @@ export function AgentWorkspaceView() {
         <button autoFocus disabled={responding} onClick={() => respond('deny')}>Deny</button>
         <button disabled={responding} onClick={() => respond('allow')}>Allow once</button>
         {card.canAllowSession && <button disabled={responding} onClick={() => respond('session')}>Allow navigation for this session on this origin</button>}
+        {card.canAllowAlways && <button disabled={responding} onClick={() => respond('always')}>Always allow on this site</button>}
       </div>
     </section>}
     {warning && !dismissedWarning && <OwnerDialog title="Possible sign-in in Open Web" onDismiss={() => setDismissedWarning(true)}>

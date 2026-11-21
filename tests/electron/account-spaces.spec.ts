@@ -1,9 +1,10 @@
 import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { AccountSpaceId } from '../../electron/types.js';
 
 let application: ElectronApplication | undefined;
 let userDataPath: string;
@@ -98,6 +99,31 @@ test.afterEach(async () => {
   rmSync(userDataPath, { recursive: true, force: true });
 });
 
+test('restores selected side-panel tools and pins only for their owning Account Space', async () => {
+  let page = await application!.firstWindow();
+  const state = () => page.evaluate(() => window.privateBrowser.getState());
+  const first = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Owner of panel pins', 'sky'));
+  await page.evaluate(async (id) => {
+    await window.privateBrowser.setUiPreferences({ sidePanelOpen: true, sidePanelTool: 'downloads' }, id);
+    await window.privateBrowser.setSidePanelPin(id, 'downloads', true);
+  }, first);
+  const second = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Other panel preferences', 'indigo'));
+  expect((await state()).sidePanelPins).toEqual([]);
+  await expect(page.evaluate((id) => window.privateBrowser.setSidePanelPin(id, 'downloads', false), first)).rejects.toThrow(/unavailable/i);
+  await expect(page.evaluate((id) => window.privateBrowser.setUiPreferences({ sidePanelTool: 'downloads' }, id), first)).rejects.toThrow(/space changed/i);
+  await page.evaluate((id) => window.privateBrowser.setUiPreferences({ sidePanelTool: 'privacy' }, id), second);
+  await application!.close();
+  application = await launchProfile();
+  page = await application.firstWindow();
+  expect((await state()).ui.sidePanelTool).toBe('privacy');
+  expect((await state()).sidePanelPins).toEqual([]);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), first);
+  expect((await state()).ui.sidePanelTool).toBe('downloads');
+  expect((await state()).sidePanelPins).toEqual(['downloads']);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  expect((await state()).sidePanelPins).toBeUndefined();
+});
+
 test('offers first-launch setup once and keeps a skip after restart', async () => {
   let page = await application!.firstWindow();
   await expect(page.getByRole('button', { name: 'Open setup guide' })).toBeVisible();
@@ -111,6 +137,51 @@ test('offers first-launch setup once and keeps a skip after restart', async () =
   await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open setup guide' })).toHaveCount(0);
   expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.ui.offerSetupGuide))).toBe(false);
+});
+
+test('checks the managed update in its own directory and opens it only on an eligible explicit action', async () => {
+  test.skip(process.platform !== 'win32', 'Exercises the Windows installer download marker.');
+  const page = await application!.firstWindow();
+  const targetVersion = '90.0.0';
+  const checksum = createHash('sha256').update(installerBytes).digest('hex');
+  await application!.evaluate(({ shell }, sample) => {
+    const endpoint = 'https://private-browser-downloads.digitronics-electro.workers.dev';
+    const expiresAt = new Date(Date.now() + 60_000);
+    const signature = 'expires=' + Math.floor(expiresAt.getTime() / 1000) + '&signature=fixture';
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.origin !== endpoint) throw new Error('Unexpected fixture request');
+      if (url.pathname === '/api/v1/releases/public/latest') {
+        return Response.json({
+          schemaVersion: 1, appId: 'private-browser', version: sample.version, buildNumber: 1, channel: 'stable',
+          sha256: sample.checksum, filename: 'Private-Browser-Setup.exe', sizeBytes: Buffer.byteLength(sample.bytes),
+          commitSha: 'a'.repeat(40), publishedAt: new Date().toISOString(), releaseNotes: '',
+          downloadUrl: endpoint + '/download/latest.exe?' + signature,
+          downloadPageUrl: endpoint + '/download?' + signature, expiresAt: expiresAt.toISOString(),
+        });
+      }
+      if (url.pathname === '/download/latest.exe') return new Response(sample.bytes);
+      throw new Error('Unexpected fixture route');
+    };
+    shell.openPath = async (file) => {
+      process.env.PRIVATE_BROWSER_TEST_MANAGED_OPEN = file;
+      return '';
+    };
+  }, { version: targetVersion, checksum, bytes: installerBytes });
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  const openedPath = () => application!.evaluate(() => process.env.PRIVATE_BROWSER_TEST_MANAGED_OPEN);
+  await page.evaluate(({ version, sha }) => window.privateBrowser.downloadManagedUpdate(version, sha), { version: targetVersion, sha: checksum });
+  expect((await getState()).managedUpdate).toMatchObject({ phase: 'ready', version: targetVersion });
+  expect(await openedPath()).toBeUndefined();
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  expect((await getState()).managedUpdate).toBeUndefined();
+  await expect(page.evaluate(() => window.privateBrowser.installManagedUpdate())).rejects.toThrow(/regular Account Space/);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  await page.evaluate(() => window.privateBrowser.installManagedUpdate());
+  expect((await getState()).managedUpdate).toEqual({ phase: 'launched', version: targetVersion });
+  const path = (await openedPath())!;
+  expect(path).toMatch(/[/\\]update-installers[/\\]installer-[^/\\]+[/\\]PrivateBrowserUpdate\.exe$/);
+  expect(existsSync(path)).toBe(true);
 });
 
 test('previews a native Chrome import and undoes its untouched records only', async () => {
@@ -407,6 +478,73 @@ test('retains only opted-in downloads and removes entries without deleting the s
   application = await launchProfile();
   page = await application.firstWindow();
   expect((await getState()).downloads).toEqual([]);
+});
+
+test('saves a batch to its chosen Account Space folder without replacing existing files', async () => {
+  test.skip(process.platform !== 'win32', 'Uses Windows protected storage and native downloads in a disposable profile.');
+  let page = await application!.firstWindow();
+  const folder = join(userDataPath, 'DigiTronics fixture downloads');
+  const secondFolder = join(userDataPath, 'TenTen fixture downloads');
+  for (const path of [folder, secondFolder]) mkdirSync(path);
+  const existing = join(folder, 'account-fixture.txt');
+  writeFileSync(existing, 'do not overwrite');
+  const target = origin + '/account-download';
+  const account = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('digitronics', 'DigiTronics fixture', 'sky'));
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  const choose = async (id: AccountSpaceId, path: string) => {
+    await application!.evaluate(({ dialog }, selected) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] });
+    }, path);
+    await page.evaluate((owner) => window.privateBrowser.chooseDownloadFolder(owner), id);
+  };
+  await choose(account, folder);
+  expect((await getState()).downloadFolder).toEqual({ ask: true, available: true, name: 'DigiTronics fixture downloads' });
+  await page.evaluate((owner) => window.privateBrowser.setDownloadFolderMode(owner, 'automatic'), account);
+  await page.evaluate((url) => window.privateBrowser.navigate(url + '/source'), target);
+  const trigger = () => application!.evaluate(({ webContents }, url) => {
+    const source = webContents.getAllWebContents().find((candidate) => candidate.getURL() === url + '/source');
+    if (!source) throw new Error('Download source view is missing');
+    source.downloadURL(url);
+  }, target);
+  await trigger();
+  await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
+  await page.evaluate((id) => window.privateBrowser.respondToPermissionPrompt(id, 'allow-always'), (await getState()).pendingPermission!.id);
+  await trigger();
+  await expect.poll(async () => (await getState()).downloadBatch?.completed).toBe(2);
+  expect(readFileSync(existing, 'utf8')).toBe('do not overwrite');
+  expect(readdirSync(folder).sort()).toEqual(['account-fixture (1).txt', 'account-fixture (2).txt', 'account-fixture.txt'].sort());
+  expect(readFileSync(join(folder, 'account-fixture (2).txt'), 'utf8')).toBe('local fixture');
+  expect(JSON.stringify((await getState()).downloads)).not.toContain('savePath');
+  const other = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('tenten', 'TenTen fixture', 'indigo'));
+  expect((await getState()).downloads).toEqual([]);
+  expect((await getState()).downloadFolder?.name).toBeUndefined();
+  const stale = () => page.evaluate((owner) => window.privateBrowser.setDownloadFolderMode(owner, 'default'), account);
+  await expect(stale()).rejects.toThrow(/unavailable in this Account Space/i);
+  await choose(other, secondFolder);
+  expect((await getState()).downloadFolder?.name).toBe('TenTen fixture downloads');
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  expect((await getState()).downloadFolder).toBeUndefined();
+  await application!.close();
+  application = await launchProfile();
+  page = await application.firstWindow();
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('digitronics'));
+  await page.evaluate((owner) => window.privateBrowser.switchAccountSpace(owner), account);
+  expect((await getState()).downloadFolder).toEqual({ ask: false, available: true, name: 'DigiTronics fixture downloads' });
+  const shownPath = join(userDataPath, 'asked-location.txt');
+  await page.evaluate((owner) => window.privateBrowser.setDownloadFolderMode(owner, 'ask'), account);
+  await page.evaluate((url) => window.privateBrowser.navigate(url + '/source'), target);
+  const dialogPath = await application.evaluate(({ webContents }, { url, shownPath }) => new Promise<string | undefined>((resolve, reject) => {
+    const source = webContents.getAllWebContents().find((candidate) => candidate.getURL() === url + '/source');
+    if (!source) { reject(new Error('Download source view is missing')); return; }
+    source.session.once('will-download', (_event, item) => {
+      const path = item.getSaveDialogOptions().defaultPath;
+      item.setSavePath(shownPath);
+      resolve(path);
+    });
+    source.downloadURL(url);
+  }), { url: target, shownPath });
+  expect(dialogPath?.toLowerCase()).toBe(realpathSync.native(existing).toLowerCase());
+  await expect.poll(() => existsSync(shownPath)).toBe(true);
 });
 
 test('deletes only reviewed visits and website data in one Account Space', async () => {

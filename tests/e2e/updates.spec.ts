@@ -41,6 +41,27 @@ test('verifies that the installed version is the latest stable release', async (
   expectNoBrowserIssues();
 });
 
+test('shows download progress, checksum and the explicit install action at mobile width', async ({ page }) => {
+  const expectNoBrowserIssues = monitorBrowser(page);
+  await page.setViewportSize({ width: 390, height: 812 });
+  await page.goto('/?update=available&managedUpdate=sample');
+  await openUpdatesPage(page, 'Update');
+  const enabled = page.getByRole('button', { name: 'Download update' });
+  await expect(enabled).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Install when ready' })).toHaveCount(0);
+  await enabled.click();
+  await expect(page.getByRole('progressbar', { name: 'Installer download' })).toBeVisible();
+  const install = page.getByRole('button', { name: 'Install when ready' });
+  await expect(install).toBeVisible();
+  await expect(page.getByText('Windows found no publisher signature.')).toBeVisible();
+  await install.click();
+  await expect(page.getByText('Follow the Windows installer.', { exact: false })).toBeVisible();
+  await page.goto('/?managedUpdate=installed');
+  await openUpdatesPage(page, 'Open');
+  await expect(page.getByText('Version 0.5.7 is installed.')).toBeVisible();
+  expectNoBrowserIssues();
+});
+
 test('shows a focused full-width download action when a newer release exists', async ({ page }) => {
   const expectNoBrowserIssues = monitorBrowser(page);
   await page.setViewportSize({ width: 375, height: 812 });

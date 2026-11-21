@@ -57,6 +57,7 @@ describe('Agent IPC parity', () => {
     const uuid = '8ad413e5-a5f1-47fd-9593-5255014d6018';
     expect(() => validateIpcArguments('agents:decide', [uuid, 'allow-all'])).toThrow();
     expect(() => validateIpcArguments('agents:decide', [uuid, 'deny'])).not.toThrow();
+    expect(() => validateIpcArguments('agents:decide', [uuid, 'always'])).not.toThrow();
     expect(() => validateIpcArguments('agents:set-space', [uuid, {
       name: 'Work', trust: 'work', origins: [], outside: 'view', clientIds: [], downloadQuotaMb: 500,
       classes: { read: true, view: true, interact: true, diagnostic: true, files: false },
