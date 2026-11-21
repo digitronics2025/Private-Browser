@@ -57,6 +57,36 @@ test('address bar keeps security warnings visible and Ctrl+L focuses it', async 
   noErrors();
 });
 
+test('checks a pasted address locally on a narrow screen without opening it', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  const noErrors = watchErrors(page);
+  await page.goto('/');
+  await page.getByRole('tab', { name: /Local dev server/ }).click();
+  await page.getByRole('button', { name: 'View site information', exact: true }).click();
+  const info = page.getByRole('dialog', { name: 'Site information' });
+  await expect(info.getByText('localhost:4173', { exact: true })).toBeVisible();
+  await expect(info.getByText('http://localhost:4173/', { exact: true })).toBeVisible();
+  const target = 'https://xn--caf-dma.example.test:8443/stock?q=9';
+  let attempted = false;
+  await page.route('https://xn--caf-dma.example.test:8443/**', async (route) => { attempted = true; await route.abort(); });
+  const summary = info.getByText('Check this address', { exact: true });
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  const input = info.getByRole('textbox', { name: 'Address to check' });
+  await input.fill('https://café.example.test:8443/stock?q=9');
+  await input.press('Enter');
+  const result = info.getByRole('status');
+  await expect(result).toContainText(target);
+  await expect(result).toContainText('international characters');
+  await expect(result).toContainText('non-default port');
+  await expect(page.getByRole('tab', { name: /Local dev server/ })).toHaveAttribute('aria-selected', 'true');
+  expect(attempted).toBe(false);
+  await input.fill('file:///example');
+  await input.press('Enter');
+  await expect(result).toContainText('Enter an HTTP or HTTPS website address.');
+  noErrors();
+});
+
 // F-35: a page changing its own URL must not overwrite what the user is typing.
 test('a page URL change does not replace an address the user is typing', async ({ page }) => {
   const noErrors = watchErrors(page);

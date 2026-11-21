@@ -146,8 +146,10 @@ controls otherwise — then the always-visible security chip, the input, a zoom
 magnifier when not 100 % (opens `ZoomMenu`: −, +, Reset; it stays while that
 bubble is open so Reset does not pull its anchor away), the MyVault key (not in Development) and the bookmark star.
 `SiteInfoMenu` explains the connection state, Account Space and tracker
-blocking. The profile button shows the workspace and account names on wide
-windows and keeps the Banking lock and label visible on narrow windows. The
+blocking, and shows the full host and loaded destination. A local address
+check parses the current or pasted address in the renderer. It never opens
+the destination or calls IPC. The profile button shows the workspace and
+account names on wide windows and keeps the Banking lock and label visible on narrow windows. The
 accessible description names the workspace at every width. The account avatar
 displays an action badge when `accountNeedsAction` reports a problem.
 

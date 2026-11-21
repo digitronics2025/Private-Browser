@@ -1,0 +1,1 @@
+See a webpage’s full host and destination in Site information. Check a pasted address on this device without opening it.
