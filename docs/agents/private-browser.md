@@ -12,12 +12,20 @@
    `http://localhost:3000` in Private Browser. Take a snapshot, check the
    console for errors, and record the flow as a Playwright test.”
 5. Review the first navigation in the **Agent Workspace**. Choose **Allow
-   once** or keep navigation approved for that origin until the session ends.
+   once** or **Allow for this session**. To remember a site, choose **Allow
+   once**, then have the agent open the same loaded page in a new Agent tab.
+   Choose **Always allow on this site** when offered. The exact origin is
+   saved under **Approved origins**. Unreviewed pages still ask before
+   opening, and sensitive or high-risk actions still require review.
 
 Each client starts on the **Develop** profile. Add an exact staging origin
 under **Paired clients → Approved origins**. Choose **Observe** for read-only
 checks, or **Operate** for drive access limited to named origins. Use **Choose
-upload folder** if a test requires a local file.
+upload folder** if a test requires a local file. Choose **Session length**
+and click **Save permissions**. The default **1 hour** requires renewal
+after expiry. **8 hours** and **While Private Browser is open** let the
+client reconnect without manual renewal. The client card shows the lease
+expiry, and the ten-minute idle timeout still applies.
 
 To sign in yourself, click **Take manual control**, enter your credentials,
 then click **Return control to agent**. Use a dedicated test account. Press

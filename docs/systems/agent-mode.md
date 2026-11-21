@@ -8,7 +8,7 @@ sources:
   - electron/agent-lent-tab.ts
   - packages/agent-mcp/src/cli.ts
   - packages/bridge-protocol/src/agent.ts
-verified_at: 69109ce
+verified_at: 4ba2286d
 ---
 
 # Agent Mode
@@ -39,7 +39,12 @@ See the [setup guide](../agents/private-browser.md) and [security contract](../.
 - Device names, exact origins, tab identity, and permissions are resolved
   in main. New destinations and consequential actions pause in trusted
   chrome. Confirmation binds the precise payload and current page revision.
-  A session-wide approval is limited to navigation to the same exact origin.
+  Session approvals cover navigation to that exact origin. An owner may save
+  the exact origin from a repeat open of an already loaded, inspected page
+  in the same Agent Account Space. This updates the client's approved origins
+  without disconnecting it. Removing the origin clears the remembered
+  approval. First visits, sensitive pages, uploads, lent
+  writes and consequential actions retain their existing review.
 - The owner may take manual control of a tab to enter credentials. That
   detaches the debugger and prevents tool access until control is returned.
   Secrets in sensitive inputs, browser profiles and browser storage remain
@@ -57,8 +62,11 @@ See the [setup guide](../agents/private-browser.md) and [security contract](../.
   are blocked. Uploads come from an owner-selected directory and are copied to
   temporary tab-owned staging. Downloads stay in the space's local directory.
 - Stop and `Ctrl+Shift+.` close pipes and agent tabs, abort waits and discard
-  confirmations. A browser session lasts up to 60 minutes and a connection
-  times out after ten idle minutes. One client can own up to four tabs.
+  confirmations and clear leases. Existing and newly paired clients default
+  to a one-hour lease that requires manual renewal when it expires. An
+  eight-hour lease is renewed on the next connection after expiry. The open
+  setting refreshes a 24-hour bound on every new connection. Connections
+  still time out after ten idle minutes. One client can own up to four tabs.
 
 ## Lend a tab and run parallel tasks
 
