@@ -43,6 +43,15 @@ export function SetupGuide({ state, isDefault, chromeImported, firstLaunch, onAc
         <button type="button" className="secondary-button" onClick={item.run} disabled={item.disabled}>{item.action}</button>
       </li>)}
     </ul>
+    <details className="settings-card migration-checklist">
+      <summary>Chrome add-on checklist</summary>
+      <ol>
+        <li>List the Chrome add-ons you use and the task each one handles.</li>
+        <li>Try MyVault for login fill, Privacy for tracker protection, or the Developer panel for VS Code and page inspection.</li>
+        <li>Repeat each task in its intended Account Space. Check that the workflow works from start to finish.</li>
+        <li>Keep Chrome for workflows that still require an add-on. Chrome add-ons do not transfer with bookmarks and history.</li>
+      </ol>
+    </details>
     <div className="panel-actions">
       <button type="button" className="primary-button" onClick={onFinish}>Done</button>
       {firstLaunch && <button type="button" className="text-button" onClick={onFinish}>Skip setup</button>}

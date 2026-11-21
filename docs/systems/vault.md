@@ -14,6 +14,11 @@ to try for an expired enrollment code, unavailable Windows Hello, a forgotten
 master password, an offline connection or revoked device access. Opening the
 guide performs no credential operation.
 
+The guide points website passkey users to the website's security settings and
+the Windows prompt. Windows 11 shows local passkeys under Settings → Accounts
+→ Passkeys. MyVault's Windows Hello unlock opens the vault.
+[Manage passkeys in Windows](https://support.microsoft.com/en-gb/accounts-billing/security/manage-your-saved-passkeys)
+
 > Last verified: 2026-09-25
 
 ## Agent Brief
