@@ -2115,8 +2115,15 @@ class BrowserController {
   }
 
   async configureAiProvider(input: AiProviderInput) {
-    if ('mode' in input && !workspaceVaultPolicy(this.store.get().activeWorkspaceId).aiExtraction) throw new Error('AI is unavailable in this workspace');
-    const status = await this.aiProvider.configure(input);
+    const account = this.activeAccountSpaceId(this.store.get());
+    const validateSetupSpace = () => {
+      const state = this.store.get();
+      if ('mode' in input && (account !== this.activeAccountSpaceId(state) || !workspaceVaultPolicy(state.activeWorkspaceId).aiExtraction)) {
+        throw new Error('Return to the original Account Space to configure local AI.');
+      }
+    };
+    validateSetupSpace();
+    const status = await this.aiProvider.configure(input, validateSetupSpace);
     this.revokeAiContext();
     this.addPrivacyEvent('vault', 'AI provider configured', status.endpoint ?? 'Ollama local model');
     return status;

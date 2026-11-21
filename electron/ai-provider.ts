@@ -11,6 +11,7 @@ const systemPrompt = 'Answer only from the user-approved webpage context. Clearl
 export class AiProviderStore {
   private config?: StoredProvider;
   private corrupt = false;
+  private configurationRequest = 0;
   private readonly local = new OllamaLocal();
 
   constructor(private readonly filePath: string) {
@@ -28,28 +29,34 @@ export class AiProviderStore {
 
   localModels(): Promise<LocalAiModels> { return this.local.models(); }
 
-  async configure(input: AiProviderInput): Promise<AiProviderStatus> {
+  async configure(input: AiProviderInput, beforeSave: () => void): Promise<AiProviderStatus> {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('OS encryption is unavailable');
     if (this.corrupt) throw new Error('The AI provider file is corrupt; clear it before configuring again');
     const model = input.model.trim();
     if (!model || model.length > 200) throw new Error('Invalid provider model');
+    const request = ++this.configurationRequest;
+    let next: StoredProvider;
     if ('mode' in input) {
       await this.local.requireInstalledModel(model);
-      this.config = { version: 1, mode: 'local', model };
+      next = { version: 1, mode: 'local', model };
     } else {
       const endpoint = input.endpoint.trim().replace(/\/$/, '');
       if (!isSafeAiEndpoint(endpoint)) throw new Error('Use a public HTTPS AI endpoint without embedded credentials');
       if (input.apiKey.length > 1000) throw new Error('Invalid provider configuration');
-      this.config = { version: 1, endpoint, model, apiKey: input.apiKey.trim() };
+      next = { version: 1, endpoint, model, apiKey: input.apiKey.trim() };
     }
-    this.save();
+    if (request !== this.configurationRequest) throw new Error('The AI provider setting changed; check the current setting.');
+    beforeSave();
+    this.save(next);
+    this.config = next;
     return this.status();
   }
 
   clear(): AiProviderStatus {
+    this.configurationRequest += 1;
+    if (existsSync(this.filePath)) unlinkSync(this.filePath);
     this.config = undefined;
     this.corrupt = false;
-    if (existsSync(this.filePath)) unlinkSync(this.filePath);
     return this.status();
   }
 
@@ -109,10 +116,9 @@ export class AiProviderStore {
     }
   }
 
-  private save(): void {
-    if (!this.config) return;
+  private save(config: StoredProvider): void {
     mkdirSync(dirname(this.filePath), { recursive: true });
-    const encrypted = safeStorage.encryptString(JSON.stringify(this.config));
+    const encrypted = safeStorage.encryptString(JSON.stringify(config));
     const temporaryPath = `${this.filePath}.tmp`;
     writeFileSync(temporaryPath, encrypted.toString('base64'), { mode: 0o600 });
     renameSync(temporaryPath, this.filePath);

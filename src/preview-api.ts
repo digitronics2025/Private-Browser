@@ -420,6 +420,16 @@ export function installPreviewApi(): void {
     verifyAndEnableBackup: async (idValue, _code, includeOpenTabsValue, includeHistoryValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.backupEnabled = true; selected.backupIncludesOpenTabs = Boolean(includeOpenTabsValue); selected.backupIncludesHistory = Boolean(includeHistoryValue); publish(); } },
     uploadBackup: async () => ({ status: 'uploaded', etag: 'preview-etag' }),
     getAiProvider: async () => previewProvider,
+    prepareAiPreview: (async () => {
+      if (state.activeWorkspaceId === 'banking') throw new Error('AI is unavailable in this workspace');
+      if (params.get('localAi') !== 'sample') throw new Error('A sample reading page is unavailable.');
+      return {
+        id: 'preview-ai-page', accountSpaceId: state.activeAccountSpaceId, tabId: state.activeTabId,
+        service: 'browser', sourceRevision: 'preview-ai-page', sourceUrl: 'https://example.test/article',
+        title: 'Sample catalogue', url: 'https://example.test', redactions: 0, protectedPage: false,
+        text: 'The café stocks ceramic mugs. A brass kettle sits on the shelf. الشاي متوفر اليوم.',
+      };
+    }) satisfies PrivateBrowserApi['prepareAiPreview'],
     getLocalAiModels: async () => {
       if (state.activeWorkspaceId === 'banking') throw new Error('AI is unavailable in this workspace');
       return params.get('localAi') === 'sample'

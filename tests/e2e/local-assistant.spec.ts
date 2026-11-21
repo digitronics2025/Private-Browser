@@ -1,5 +1,25 @@
 import { expect, test } from '@playwright/test';
 
+test('finds exact passages in the local preview without a model, then clears them when changing spaces', async ({ page }) => {
+  await page.goto('/?localAi=sample');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Read page locally' }).click();
+  const keywords = panel.getByLabel('Page keywords');
+  await keywords.fill('cafe ceramic');
+  await keywords.press('Enter');
+  await expect(panel.getByRole('listitem')).toHaveText('The café stocks ceramic mugs.');
+  await keywords.fill('الشاي');
+  await keywords.press('Enter');
+  await expect(panel.getByRole('listitem')).toHaveText('الشاي متوفر اليوم.');
+  await keywords.fill('coffee');
+  await keywords.press('Enter');
+  await expect(panel.getByText('No matching passages in this page preview.')).toBeVisible();
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('development'));
+  await expect(panel.getByRole('button', { name: 'Read page locally' })).toBeVisible();
+  await expect(keywords).toHaveCount(0);
+});
+
 test('checks installed local models and labels the saved provider without a key field', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 800 });
   await page.goto('/?localAi=sample');

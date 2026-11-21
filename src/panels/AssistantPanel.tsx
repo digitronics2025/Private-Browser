@@ -4,6 +4,23 @@ import type { AiPagePreview, CloudAiProviderInput, AiProviderStatus, LocalAiMode
 import { PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
 
+const sentences = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+
+function searchWords(text: string): string[] {
+  return text.normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '').match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+function findPagePassages(text: string, query: string): string[] {
+  const keywords = new Set(searchWords(query));
+  if (!keywords.size) return [];
+  return [...sentences.segment(text)].map(({ segment }) => {
+    const words = new Set(searchWords(segment));
+    const score = [...keywords].filter((keyword) => words.has(keyword)).length;
+    return { text: segment.trim(), score };
+  }).filter(({ score }) => score > 0).sort((left, right) => right.score - left.score)
+    .slice(0, 3).map((passage) => passage.text);
+}
+
 export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [preview, setPreview] = useState<AiPagePreview | null>(null);
   const [approvalToken, setApprovalToken] = useState<string | null>(null);
@@ -17,11 +34,15 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
   const isLocal = provider.mode === 'local';
   const [question, setQuestion] = useState('Summarize the important points on this page.');
   const [answer, setAnswer] = useState('');
+  const [passageQuery, setPassageQuery] = useState('');
+  const [passages, setPassages] = useState<string[]>();
   useEffect(() => { void window.privateBrowser.getAiProvider().then(setProvider).catch(() => undefined); }, []);
   const clearContext = async () => {
     setPreview(null);
     setApprovalToken(null);
     setAnswer('');
+    setPassageQuery('');
+    setPassages(undefined);
     // Forgetting the token in the renderer did not invalidate it: the captured
     // page text and the live capability stayed in the main process for the full
     // five minutes. Revoke it for real.
@@ -33,6 +54,8 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
     setLoading(true);
     setApprovalToken(null);
     setAnswer('');
+    setPassageQuery('');
+    setPassages(undefined);
     try { setPreview(await window.privateBrowser.prepareAiPreview()); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setLoading(false); }
@@ -137,6 +160,20 @@ export function AssistantPanel({ onToast }: { onToast: (message: string, kind?: 
               ? <><pre className="context-text">{preview.text}</pre><small className="context-size">{preview.text.length.toLocaleString()} characters — scroll the box to read all of it</small></>
               : <p>No readable text was found. Only the title and address above would be sent.</p>}
           </div>
+          {preview.text && <form className="ask-card" onSubmit={(event) => {
+            event.preventDefault();
+            setPassages(findPagePassages(preview.text, passageQuery));
+          }}>
+            <label>Page keywords <input maxLength={120} value={passageQuery} onChange={(event) => {
+              setPassageQuery(event.target.value);
+              setPassages(undefined);
+            }} /></label>
+            <button className="text-button" type="submit" disabled={!passageQuery.trim()}>Find passages locally</button>
+            {passages && <div role="status" className="answer-card">
+              {passages.length ? <ul>{passages.map((passage, index) => <li key={index}>{passage}</li>)}</ul>
+                : <p>No matching passages in this page preview.</p>}
+            </div>}
+          </form>}
           <div className="permission-card">
             <div>{isLocal ? <LockKeyhole size={17} /> : <Cloud size={17} />}<strong>{isLocal ? 'Local model permission' : 'Cloud permission'}</strong></div>
             <p>{isLocal ? 'One approved request goes to Ollama on this device. Cloud features must be disabled.' : 'The title, address and text shown above are the whole of what leaves this machine. Nothing else from the page is sent, and only for the one request you approve.'}</p>
