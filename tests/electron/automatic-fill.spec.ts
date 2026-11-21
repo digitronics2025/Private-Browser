@@ -201,6 +201,7 @@ test('automatically fills only safe empty HTTPS login forms without submitting',
   application = await launchFixture();
   const page = await application!.firstWindow();
   await page.getByRole('button', { name: 'Open MyVault' }).click();
+  await expect(page.getByText('Vault locked', { exact: true })).toBeVisible();
   const secureWindowPromise = application!.waitForEvent('window');
   await page.getByRole('button', { name: 'Unlock in secure window' }).click();
   const secureWindow = await secureWindowPromise;
@@ -215,6 +216,7 @@ test('automatically fills only safe empty HTTPS login forms without submitting',
     password: FIXTURE_PASSWORD,
     submitted: false,
   });
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.vaultFillReadiness())).toBe('ready');
 
   const occupiedUrl = `${targetOrigin}/occupied`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), occupiedUrl);
@@ -232,8 +234,14 @@ test('automatically fills only safe empty HTTPS login forms without submitting',
   const changePasswordUrl = `${targetOrigin}/account/security`;
   await page.evaluate((target) => window.privateBrowser.navigate(target), changePasswordUrl);
   expect(await settledForm(changePasswordUrl)).toMatchObject({ username: '', password: '' });
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.vaultFillReadiness())).toBe('unsupported');
 
   await page.evaluate(() => window.privateBrowser.switchWorkspace('development'));
   await page.evaluate((target) => window.privateBrowser.navigate(target), loginUrl);
+  expect(await settledForm(loginUrl)).toMatchObject({ username: '', password: '' });
+  await expect(page.evaluate(() => window.privateBrowser.vaultFillReadiness())).resolves.toBe('unavailable');
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await page.evaluate((target) => window.privateBrowser.navigate(target), loginUrl);
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.vaultFillReadiness())).toBe('manual');
   expect(await settledForm(loginUrl)).toMatchObject({ username: '', password: '' });
 });

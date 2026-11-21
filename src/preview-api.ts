@@ -781,6 +781,12 @@ export function installPreviewApi(): void {
     sendToControlCenter: async () => ({ id: 'TASK-0043', title: 'Preview task', repositoryName: 'shop', status: 'QUEUED', currentStageName: 'Investigate', blocker: null, finalStatus: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0043' }),
     recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md' }),
     inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),
+    vaultFillReadiness: async () => {
+      if (params.has('vaultGuide')) return 'locked';
+      if (state.activeWorkspaceId === 'banking') return 'manual';
+      const value = params.get('vaultFill');
+      return value && ['connect', 'locked', 'no-match', 'unsupported', 'ready', 'choose-login'].includes(value) ? value : 'unsupported';
+    },
   };
   const api = new Proxy(handlers, { get(target, property) { return target[String(property)] ?? (async () => undefined); } });
   Object.defineProperty(window, 'privateBrowser', { value: api as unknown as PrivateBrowserApi, configurable: true });

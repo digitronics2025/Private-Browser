@@ -267,6 +267,7 @@ All are intents; the main process opens secure dialogs for anything secret.
 | `vault:migration-status`, `vault:migrate-legacy`, `vault:cleanup-legacy` | — | migration status / report / `boolean` |
 | `vault:open-editor` | `origin?: string` | `VaultItemMeta | undefined` |
 | `vault:form-shape` | — | `{ hasUsername, hasPassword }` |
+| `vault:fill-readiness` | — | current-page `VaultFillReadiness` |
 | `vault:save-from-page` | — | `VaultItemMeta | undefined` |
 | `vault:request-delete` | `id: string` | `boolean` (false when not confirmed) |
 | `vault:copy-password` | `id: string` | `void` |

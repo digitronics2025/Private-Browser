@@ -777,6 +777,8 @@ export interface VaultStatus {
   generation?: number;
 }
 
+export type VaultFillReadiness = 'ready' | 'locked' | 'connect' | 'no-match' | 'unsupported' | 'manual' | 'choose-login' | 'unavailable';
+
 export interface UpdateServiceInput {
   endpoint: string;
   accessToken: string;
