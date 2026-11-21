@@ -447,6 +447,12 @@ in the active workspace, or `null` to return to the defaults.
 
 ## Downloads
 
+The Downloads panel can pause, resume or cancel eligible transfers in the
+active Account Space. Retry resumes an interrupted native transfer when
+Electron can still resume it. A terminal interruption points back to the
+original page. Installers show Waiting for verification while the published
+checksum is checked.
+
 `will-download` is registered per session inside `configureSession`. Each download
 becomes a `DownloadEntry` in an in-memory `Map` keyed by a fresh `randomUUID()`:
 

@@ -97,11 +97,16 @@ export function installPreviewApi(): void {
       ] : []),
     ],
     downloads: params.get('downloads') === 'sample' ? [
-      { id: 'preview-progress', accountSpaceId: google, filename: 'sample.pdf', receivedBytes: 12, totalBytes: 200, state: 'progressing', risk: 'ordinary', extension: 'PDF' },
+      { id: 'preview-progress', accountSpaceId: google, filename: 'sample.pdf', receivedBytes: 12, totalBytes: 200, state: 'progressing',
+        risk: 'ordinary', extension: 'PDF', canPause: true, canCancel: true },
       { id: 'preview-installer', accountSpaceId: google, filename: 'installer-sample.exe', receivedBytes: 200, totalBytes: 200, state: 'completed', risk: 'dangerous', extension: 'EXE',
         checksum: 'verified', publisher: { state: 'unsigned' } },
       { id: 'preview-mismatch', accountSpaceId: google, filename: 'invalid-installer.exe', receivedBytes: 200, totalBytes: 200, state: 'completed', risk: 'dangerous',
         extension: 'EXE', checksum: 'mismatch' },
+      { id: 'preview-checking', accountSpaceId: google, filename: 'checking.exe', receivedBytes: 200, totalBytes: 200,
+        state: 'completed', risk: 'dangerous', extension: 'EXE', checksum: 'checking' },
+      { id: 'preview-interrupted', accountSpaceId: google, filename: 'interrupted.pdf', receivedBytes: 12, totalBytes: 200,
+        state: 'interrupted', risk: 'ordinary', extension: 'PDF', canResume: true, canCancel: true },
     ] : [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true,
     accountSpaces: accounts.map((item) => ({ ...item, enabledModules: [...item.enabledModules], grantedScopes: [...item.grantedScopes] })),
     accountHealth: accounts.map((item) => ({ accountSpaceId: item.id, status: item.googleConnection, checkedAt: '2026-09-12T12:00:00Z' })),
@@ -165,6 +170,16 @@ export function installPreviewApi(): void {
   };
   const handlers: Record<string, (...args: unknown[]) => unknown> = {
     getState: async () => structuredClone(state),
+    controlDownload: async (id, action) => {
+      const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);
+      if (!entry?.canCancel || state.activeWorkspaceId === 'banking') throw new Error('Download is unavailable in this Account Space');
+      if (action === 'pause' && entry.canPause) Object.assign(entry, { paused: true, canPause: false, canResume: true });
+      else if (action === 'resume' && entry.paused && entry.canResume || action === 'retry' && entry.state === 'interrupted' && entry.canResume) {
+        Object.assign(entry, { state: 'progressing', paused: false, canPause: true, canResume: false });
+      } else if (action === 'cancel') Object.assign(entry, { state: 'cancelled', paused: false, canCancel: false, canPause: false, canResume: false });
+      else throw new Error('This download cannot be paused or resumed right now.');
+      publish();
+    },
     saveRoutine: async (input) => {
       const routine = requireBrowserRoutine(input);
       if (state.activeWorkspaceId === 'banking' || routine.links.some((link) => !state.accountSpaces.some((account) => account.id === link.accountSpaceId && account.workspaceId !== 'banking'))) {

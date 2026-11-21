@@ -70,6 +70,7 @@ import type {
   DeveloperPageInfo,
   DeveloperNetworkIssue,
   DevToolsMode,
+  DownloadAction,
   DownloadEntry,
   AddressMatch,
   HistoryQuery,
@@ -2667,14 +2668,50 @@ class BrowserController {
     return account && isAvailableRegularAccount(state, account) ? id : undefined;
   }
 
-  private requireActiveDownload(id: string) {
+  private requireOwnedDownload(id: string): LocalDownload {
     const item = this.downloads.get(id);
     if (!item || item.accountSpaceId !== this.activeDownloadAccount()) {
       throw new Error('Download is unavailable in this Account Space');
     }
+    return item;
+  }
+
+  private requireActiveDownload(id: string) {
+    const item = this.requireOwnedDownload(id);
     if (item.state !== 'completed' || !item.savePath) throw new Error('This download is incomplete');
     if (!downloadFileStamp(item.savePath)) throw new Error('The downloaded file is missing or unavailable. Download it again.');
     return { ...item, savePath: item.savePath };
+  }
+
+  private updateDownloadProgress(entry: LocalDownload, item: DownloadItem, state: 'progressing' | 'interrupted'): void {
+    const paused = item.isPaused();
+    Object.assign(entry, {
+      state, paused, receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(),
+      canPause: state === 'progressing' && !paused && Boolean(item.getETag() && item.getLastModifiedTime()),
+      canResume: (paused || state === 'interrupted') && item.canResume(),
+      canCancel: true,
+    });
+  }
+
+  controlDownload(id: string, action: DownloadAction): void {
+    const entry = this.requireOwnedDownload(id);
+    const item = this.downloadItems.get(id);
+    if (!item || (entry.state !== 'progressing' && entry.state !== 'interrupted')) {
+      throw new Error('This download has ended. Start it again from the original page.');
+    }
+    this.updateDownloadProgress(entry, item, entry.state);
+    if (action === 'cancel') {
+      item.cancel();
+      return;
+    }
+    const resume = (action === 'resume' && entry.paused) || (action === 'retry' && entry.state === 'interrupted');
+    if (action === 'pause' && entry.canPause) item.pause();
+    else if (resume && entry.canResume) item.resume();
+    else throw new Error('This download cannot be paused or resumed right now.');
+    if (this.downloadItems.get(id) === item) {
+      this.updateDownloadProgress(entry, item, item.getState() === 'interrupted' ? 'interrupted' : 'progressing');
+      this.broadcast();
+    }
   }
 
   async openDownload(id: string): Promise<void> {
@@ -2719,7 +2756,9 @@ class BrowserController {
   }
 
   showDownload(id: string): void {
-    shell.showItemInFolder(this.requireActiveDownload(id).savePath);
+    const item = this.requireActiveDownload(id);
+    if (item.checksum === 'checking') throw new Error('Wait for installer verification to finish.');
+    shell.showItemInFolder(item.savePath);
   }
 
   isDefaultBrowser(): boolean {
@@ -3191,13 +3230,15 @@ class BrowserController {
       };
       this.downloads.set(id, entry);
       this.downloadItems.set(id, item);
+      this.updateDownloadProgress(entry, item, 'progressing');
       item.on('updated', (_downloadEvent, state) => {
-        Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state });
+        this.updateDownloadProgress(entry, item, state);
         this.broadcast();
       });
       item.once('done', (_downloadEvent, state) => {
         this.downloadItems.delete(id);
-        Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath() });
+        Object.assign(entry, { receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes(), state, savePath: item.getSavePath(),
+          paused: false, canPause: false, canResume: false, canCancel: false });
         if (entry.savePath) {
           const savedFilename = basename(entry.savePath);
           entry.risk = downloadRisk(savedFilename);
@@ -3657,6 +3698,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:import-chrome-passwords', () => controller!.importChromePasswords());
   handle('browser:toggle-tracker-blocking', () => controller!.toggleTrackerBlocking());
   handle('browser:open-download', (_event, id: string) => controller!.openDownload(id));
+  handle('browser:control-download', (_event, id: string, action: DownloadAction) => controller!.controlDownload(id, action));
   handle('browser:show-download', (_event, id: string) => controller!.showDownload(id));
   handle('developer:toggle-tools', (_event, mode: DevToolsMode) => controller!.toggleDeveloperTools(mode));
   handle('developer:capture-diagnostics', () => controller!.captureDeveloperDiagnostics());

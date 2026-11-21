@@ -16,6 +16,18 @@ test('separates file type, checksum and publisher and only enables eligible file
   const mismatch = page.locator('.download-card').filter({ hasText: 'invalid-installer.exe' });
   await expect(mismatch.getByRole('button', { name: 'Open', exact: true })).toBeDisabled();
   await expect(mismatch.getByRole('button', { name: 'Show folder' })).toBeEnabled();
+  const checking = page.locator('.download-card').filter({ hasText: 'checking.exe' });
+  await expect(checking.getByText('Waiting for verification')).toBeVisible();
+  await expect(checking.getByRole('button', { name: 'Show folder' })).toBeDisabled();
+  await downloading.getByRole('button', { name: 'Pause', exact: true }).click();
+  await expect(downloading.getByText('Paused', { exact: true })).toBeVisible();
+  await downloading.getByRole('button', { name: 'Resume' }).click();
+  await expect(downloading.getByText('Downloading', { exact: true })).toBeVisible();
+  const interrupted = page.locator('.download-card').filter({ hasText: 'interrupted.pdf' });
+  await interrupted.getByRole('button', { name: 'Retry' }).click();
+  await expect(interrupted.getByText('Downloading', { exact: true })).toBeVisible();
+  await interrupted.getByRole('button', { name: 'Cancel download' }).click();
+  await expect(interrupted.getByText('Cancelled', { exact: true })).toBeVisible();
 });
 
 test('reviews and moves or deletes duplicate bookmark entries without merging them', async ({ page }) => {
