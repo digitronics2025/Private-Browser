@@ -507,6 +507,8 @@ export default function App() {
               onShield={() => setMenu((current) => (current === 'shield' ? null : 'shield'))}
               onTabSearch={() => setMenu((current) => (current === 'tab-search' ? null : 'tab-search'))}
               onActivate={(id) => void act(() => window.privateBrowser.activateTab(id))}
+              splitView={state.splitView}
+              onSplit={(id) => void act(() => window.privateBrowser.setSplitView(id))}
               onClose={(id) => void act(() => window.privateBrowser.closeTab(id))}
               onNewTab={() => void act(() => window.privateBrowser.newTab())}
               onMove={(id, index) => void act(() => window.privateBrowser.moveTab(id, index))}

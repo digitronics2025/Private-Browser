@@ -1169,3 +1169,6 @@ kbd { font: inherit; }
 .side-app-status { padding: 6px 10px; color: var(--text-muted); font-size: var(--fs-xs); border-bottom: 1px solid var(--border); }
 .side-app-slot { position: relative; min-height: 0; flex: 1; background: var(--surface); }
 .side-app-placeholder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; color: var(--text-subtle); font-size: var(--fs-sm); }
+.split-controls { display: flex; align-items: center; gap: 3px; margin: 0 4px; }
+.split-controls button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-muted); }
+.split-controls button:not(:disabled):hover, .split-controls button:focus-visible { background: var(--hover); color: var(--text); }

@@ -326,13 +326,15 @@ records the owning tab in `htmlFullscreenOwner`; `leave-html-full-screen` from
 that tab restores it. Esc inside a page leaves window full screen only when no
 page owns it. The renderer hides all chrome while `windowState.fullscreen`.
 
+**Split view.** See [Split view](../split-view.md).
+
 **Menus over the page.** A `WebContentsView` always paints above the React tree,
 so any menu, dialog or resize drag that overlaps the page first calls
 `freezeContent()`: `capturePage()` on the active visible view, returned as a JPEG
 `data:` URL that the renderer paints in the page rectangle, followed by
 `setOverlayOpen(true)`, which hides every view with `setVisible(false)` but —
 unlike `hideAllViews` for tab switches — leaves docked DevTools attached. Home tabs, hidden
-views, protected workspaces (Banking) and `isProtectedPage` URLs return `null`
+views, split panes, protected workspaces (Banking) and `isProtectedPage` URLs return `null`
 and get a plain backdrop instead — protected pixels never enter the chrome
 renderer. The check covers both the stored tab URL and the URL the view is
 painting, refuses while a main-frame load is in flight, and discards the capture

@@ -461,6 +461,88 @@ test('suggests a Chrome profile destination and persists one settings import per
   expect(await profile()).toMatchObject({ imported: true, importedInto: undefined });
 });
 
+test('splits only regular tabs in the same Account Space and keeps native panes tied to focus', async () => {
+  const page = await application!.firstWindow();
+  const resize = (width: number) => application!.evaluate(({ BrowserWindow }, w) => {
+    BrowserWindow.getAllWindows()[0].setContentSize(w, 720);
+  }, width);
+  const readViews = () => application!.evaluate(({ BrowserWindow }, base) => BrowserWindow.getAllWindows()[0].contentView.children
+    .filter((view): view is Electron.WebContentsView => 'webContents' in view)
+    .filter((view) => view.webContents.getURL().startsWith(base + '/split-'))
+    .map((view) => ({ path: new URL(view.webContents.getURL()).pathname, visible: view.getVisible(), bounds: view.getBounds() }))
+    .sort((a, b) => a.path.localeCompare(b.path)), origin);
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  await resize(1180);
+  const { left, right } = await page.evaluate(async (base) => {
+    const api = window.privateBrowser;
+    await api.switchWorkspace('personal');
+    await api.navigate(base + '/split-left');
+    const left = (await api.getState()).activeTabId;
+    await api.newTab();
+    await api.navigate(base + '/split-right');
+    const right = (await api.getState()).activeTabId;
+    await api.activateTab(left);
+    await api.setSplitView(right);
+    return { left, right };
+  }, origin);
+  await expect.poll(async () => (await readViews()).filter((view) => view.visible).length).toBe(2);
+  const [first, second] = await readViews();
+  expect(first.path).toBe('/split-left');
+  expect(second.path).toBe('/split-right');
+  expect(second.bounds.x).toBe(first.bounds.x + first.bounds.width + 8);
+  expect(Math.abs(first.bounds.width - second.bounds.width)).toBeLessThanOrEqual(1);
+  expect(second.bounds.height).toBe(first.bounds.height);
+  expect(await page.evaluate(() => window.privateBrowser.freezeContent())).toBeNull();
+
+  await application!.evaluate(({ BrowserWindow, webContents }, base) => {
+    BrowserWindow.getAllWindows()[0].focus();
+    const secondary = webContents.getAllWebContents().find((contents) => contents.getURL() === base + '/split-right')!;
+    secondary.focus();
+    secondary.sendInputEvent({ type: 'mouseDown', x: 20, y: 20, button: 'left', clickCount: 1 });
+    secondary.sendInputEvent({ type: 'mouseUp', x: 20, y: 20, button: 'left', clickCount: 1 });
+  }, origin);
+  await expect.poll(async () => (await getState()).activeTabId).toBe(right);
+  expect((await getState()).splitView).toEqual({ leftTabId: left, rightTabId: right, suspended: false });
+
+  await application!.evaluate(({ webContents }, base) => {
+    const requester = webContents.getAllWebContents().find((contents) => contents.getURL() === base + '/split-right')!;
+    requester.downloadURL(base + '/account-download');
+  }, origin);
+  await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
+  expect((await readViews()).some((view) => view.visible)).toBe(false);
+  await page.getByRole('button', { name: 'Deny', exact: true }).click();
+  await expect.poll(async () => (await readViews()).filter((view) => view.visible).length).toBe(2);
+
+  await page.evaluate(() => window.privateBrowser.setLayout({ top: 150, left: 64, right: 600, bottom: 0 }));
+  expect((await getState()).splitView?.suspended).toBe(true);
+  expect((await readViews()).filter((view) => view.visible).map((view) => view.path)).toEqual(['/split-right']);
+  await page.evaluate(() => window.privateBrowser.setLayout({ top: 150, left: 64, right: 0, bottom: 0 }));
+  await expect.poll(async () => (await readViews()).filter((view) => view.visible).length).toBe(2);
+
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  expect((await readViews()).some((view) => view.visible)).toBe(false);
+  expect((await getState()).splitView).toBeUndefined();
+  await expect(page.evaluate((id) => window.privateBrowser.setSplitView(id), left)).rejects.toThrow(/two regular pages/);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  await expect.poll(async () => (await readViews()).filter((view) => view.visible).length).toBe(2);
+
+  await page.evaluate((url) => window.privateBrowser.navigate(url), origin + '/checkout');
+  expect((await getState()).splitView).toBeUndefined();
+  expect((await readViews()).some((view) => view.visible)).toBe(false);
+  await expect(page.evaluate((id) => window.privateBrowser.setSplitView(id), left)).rejects.toThrow(/two regular pages/);
+  await page.evaluate(async (base) => {
+    await window.privateBrowser.navigate(base + '/split-right');
+    const active = (await window.privateBrowser.getState()).activeTabId;
+    const other = (await window.privateBrowser.getState()).tabs.find((tab) => tab.id !== active && tab.url === base + '/split-left');
+    await window.privateBrowser.setSplitView(other!.id);
+  }, origin);
+  await application!.close();
+  application = await launchProfile();
+  const restored = await (await application.firstWindow()).evaluate(() => window.privateBrowser.getState());
+  expect(restored.splitView).toBeUndefined();
+  expect(restored.tabs.filter((tab) => tab.id === left || tab.id === right)).toHaveLength(2);
+});
+
 test('persists empty and moved bookmark folders in their native Account Space', async () => {
   let page = await application!.firstWindow();
   const id = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Bookmark folder fixture', 'sky'));

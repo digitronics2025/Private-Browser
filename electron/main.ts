@@ -51,6 +51,7 @@ import { RuntimeStateStore } from './runtime-state-store.js';
 import { problemForFailedLoad, StartupRestoreJournal } from './startup-restore.js';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from './tab-organization.js';
 import { CHROME, contentBounds, DEFAULT_CONTENT_INSETS, FRAME_COLORS, sanitizeContentInsets, ZERO_INSETS, type ContentInsets } from './chrome-layout.js';
+import { splitBounds, splitPageAllowed } from './split-view.js';
 import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendBookmarkFolders, appendImportedBookmarks, createBookmarkFolder, editBookmarkFolder, exportBookmarksHtml, moveTabWithinAccountSpace, nextBookmarkOrder, removeBookmark, renameBookmark, reorderBookmarkLevel, undoImportedBookmarkFolders } from './bookmark-tree.js';
@@ -354,6 +355,8 @@ class BrowserController {
     groupName?: string;
   }>();
   private startingWindow = true;
+  private readonly splitPairs = new Map<AccountSpaceId, { leftTabId: string; rightTabId: string }>();
+  private visibleSplitTabId?: string;
   private startupTabRecovery?: StartupTabRecovery;
   private readonly startupRestoreJournal = new StartupRestoreJournal(join(app.getPath('userData'), 'startup-restore.json'));
   private htmlFullscreenOwner?: string;
@@ -590,6 +593,7 @@ class BrowserController {
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
     const downloadAccount = this.activeDownloadAccount(persisted);
     const activeTab = this.activeTab(persisted);
+    const pair = this.splitPair(persisted, activeTab);
     const memorySite = downloadAccount && !activeTab.isHome ? memorySaverOrigin(activeTab.url) : undefined;
     const strictTracking = activeTab.workspaceId === 'banking';
     const trackerSite = !activeTab.isHome && isAllowedRemoteUrl(activeTab.url) && (downloadAccount || strictTracking)
@@ -603,6 +607,7 @@ class BrowserController {
       workspaces: WORKSPACES,
       activeWorkspaceId: persisted.activeWorkspaceId,
       activeTabId: activeTab.id,
+      splitView: pair && windowReady ? { ...pair, suspended: this.window.isFullScreen() || !splitBounds(this.currentContentBounds()) } : undefined,
       tabs,
       bookmarks: persisted.bookmarks,
       bookmarkFolders: downloadAccount ? persisted.bookmarkFoldersByAccountSpace?.[downloadAccount] : undefined,
@@ -708,6 +713,8 @@ class BrowserController {
     if (isKnownGoogleWebHost(url.href)) throw new Error('Google account and service pages cannot be lent.');
     this.fillCapabilities.invalidateTab(tabId);
     this.fillPicker.close();
+    this.endSplitForTab(tabId, tab.accountSpaceId);
+    this.broadcast();
     await agentHost.lendTab({
       tabId, view,
       current: () => !this.window.isDestroyed() && !this.window.isFullScreen()
@@ -762,9 +769,11 @@ class BrowserController {
 
   setLayout(layout: Layout): void {
     const next = sanitizeContentInsets(layout);
-    if (JSON.stringify(next) !== JSON.stringify(this.layout)) this.fillPicker.close();
+    const changed = JSON.stringify(next) !== JSON.stringify(this.layout);
+    if (changed) this.fillPicker.close();
     this.layout = next;
-    this.applyLayout();
+    if (changed && this.splitPairs.size) this.scheduleLayout();
+    else this.applyLayout();
   }
 
   async navigate(value: string): Promise<void> {
@@ -778,6 +787,7 @@ class BrowserController {
     const current = this.runtimeTabs.get(tab.id);
     if (current) Object.assign(current, { problem: undefined, failedUrl: undefined });
     if (url === 'private://home') {
+      this.endSplitForTab(tab.id, tab.accountSpaceId);
       this.store.update((next) => {
         const target = next.tabs.find((candidate) => candidate.id === tab.id);
         if (target) Object.assign(target, { url, title: 'New tab', isHome: true, restorePaused: undefined });
@@ -1003,6 +1013,7 @@ class BrowserController {
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
+    this.endSplitForTab(tabId, tab.accountSpaceId);
     const accountTabs = state.tabs.filter((candidate) => candidate.accountSpaceId === tab.accountSpaceId);
     const closedIndex = accountTabs.findIndex((candidate) => candidate.id === tabId);
     const siblings = accountTabs.filter((candidate) => candidate.id !== tab.id);
@@ -1032,6 +1043,12 @@ class BrowserController {
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
+    const splitView = this.runtimeTabs.get(tabId)?.view;
+    if (tabId === this.visibleSplitTabId && splitView?.getVisible() && !this.overlayOpen && !this.sessionIsLocked) {
+      this.focusSplitTab(tabId, splitView);
+      splitView.webContents.focus();
+      return;
+    }
     this.fillCapabilities.invalidateAll();
     this.hideAllViews();
     this.store.update((next) => {
@@ -1040,6 +1057,52 @@ class BrowserController {
       next.activeTabByAccountSpace[tab.accountSpaceId] = tab.id;
     });
     await this.showActiveTab();
+  }
+
+  async setSplitView(otherTabId?: string): Promise<void> {
+    const state = this.store.get();
+    const active = this.activeTab(state);
+    if (otherTabId === undefined) {
+      this.splitPairs.delete(active.accountSpaceId);
+      this.applyLayout();
+      this.broadcast();
+      return;
+    }
+    const other = state.tabs.find((tab) => tab.id === otherTabId && tab.accountSpaceId === active.accountSpaceId);
+    if (!other || other.id === active.id || !this.canSplitTab(active) || !this.canSplitTab(other)
+      || this.sessionIsLocked || this.store.isReadOnly()) throw new Error('Choose two regular pages in this Account Space.');
+    if (this.window.isFullScreen() || !splitBounds(this.currentContentBounds())) throw new Error('Widen the browser to open two pages side by side.');
+    this.splitPairs.set(active.accountSpaceId, { leftTabId: active.id, rightTabId: other.id });
+    await this.showActiveTab();
+  }
+
+  private canSplitTab(tab: BrowserTab): boolean {
+    const runtime = this.runtimeTabs.get(tab.id);
+    const contents = runtime?.view?.webContents;
+    return splitPageAllowed(tab) && !runtime?.problem && !runtime?.certificateError
+      && (!contents || contents.isDestroyed() || (!contents.isDevToolsOpened() && !agentHost?.isLentContents(contents.id)));
+  }
+
+  private splitPair(state: RuntimeBrowserStateV2, active: BrowserTab) {
+    const pair = this.splitPairs.get(active.accountSpaceId);
+    if (!pair || (pair.leftTabId !== active.id && pair.rightTabId !== active.id) || !this.canSplitTab(active)
+      || state.accountSpaces.find((item) => item.id === active.accountSpaceId)?.locked) return undefined;
+    const otherId = pair.leftTabId === active.id ? pair.rightTabId : pair.leftTabId;
+    const other = state.tabs.find((item) => item.id === otherId && item.accountSpaceId === active.accountSpaceId);
+    return other && this.canSplitTab(other) ? pair : undefined;
+  }
+
+  private focusSplitTab(tabId: string, view: WebContentsView): void {
+    if (this.sessionIsLocked || this.overlayOpen || !view.getVisible() || this.visibleSplitTabId !== tabId) return;
+    const state = this.store.get();
+    const active = this.activeTab(state);
+    const pair = this.splitPair(state, active);
+    if (!pair || (pair.leftTabId !== tabId && pair.rightTabId !== tabId)) return;
+    this.fillCapabilities.invalidateAll();
+    this.fillPicker.close();
+    this.store.update((next) => { next.activeTabByAccountSpace[active.accountSpaceId] = tabId; }, 'routine');
+    this.applyLayout();
+    this.broadcast();
   }
 
   async switchWorkspace(workspaceId: WorkspaceId): Promise<void> {
@@ -1715,6 +1778,7 @@ class BrowserController {
 
   private closeAccountViews(accountSpaceId: AccountSpaceId): void {
     this.fillPicker.close();
+    this.splitPairs.delete(accountSpaceId);
     const ids = new Set(this.store.get().tabs.filter((tab) => tab.accountSpaceId === accountSpaceId).map((tab) => tab.id));
     for (const id of ids) {
       const runtime = this.runtimeTabs.get(id);
@@ -1830,6 +1894,7 @@ class BrowserController {
     this.pendingPermission = { prompt, respond, retainAllowOnce };
     const active = this.activeTab(this.store.get());
     this.runtimeTabs.get(active.id)?.view?.setVisible(false);
+    if (this.visibleSplitTabId) this.applyLayout();
     this.broadcast();
   }
 
@@ -2083,6 +2148,7 @@ class BrowserController {
    * chrome renderer: they fail closed to a neutral backdrop.
    */
   async freezeContent(): Promise<string | null> {
+    if (this.visibleSplitTabId) return null;
     const tab = this.activeTab(this.store.get());
     const view = this.runtimeTabs.get(tab.id)?.view;
     const workspace = WORKSPACES.find((item) => item.id === tab.workspaceId);
@@ -4383,8 +4449,9 @@ class BrowserController {
     view.webContents.setWindowOpenHandler((details) => openFromPage(details));
     view.webContents.on('did-create-window', (child) => adoptPopupWindow(child, (window) => (details) => openFromPage(details, window)));
     guardPageNavigation(view.webContents);
-    view.webContents.on('did-start-navigation', (_event, _url, _isInPlace, isMainFrame) => {
+    view.webContents.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
       if (!isMainFrame) return;
+      if (isProtectedPage(url)) this.endSplitForTab(tabId, tab.accountSpaceId);
       if (runtime.problem && !this.overlayOpen && this.activeTab(this.store.get()).id === tabId) view.setVisible(true);
       runtime.navigationGeneration += 1;
       runtime.certificateError = false;
@@ -4422,7 +4489,11 @@ class BrowserController {
       this.broadcast();
     });
     view.webContents.on('page-favicon-updated', (_event, favicons) => void this.updateFavicon(tabId, ses, favicons[0]));
-    view.webContents.on('devtools-opened', () => { this.passkeyController.detach(view.webContents); this.updateRuntime(tabId, { developerToolsOpen: true }); });
+    view.webContents.on('devtools-opened', () => {
+      this.endSplitForTab(tabId, tab.accountSpaceId);
+      this.passkeyController.detach(view.webContents);
+      this.updateRuntime(tabId, { developerToolsOpen: true });
+    });
     view.webContents.on('devtools-closed', () => this.updateRuntime(tabId, { developerToolsOpen: false }));
     view.webContents.on('console-message', (details) => this.recordConsoleMessage(tabId, details));
     view.webContents.on('context-menu', (_event, params) => {
@@ -4436,9 +4507,15 @@ class BrowserController {
         () => Boolean(this.developerTarget(tabId)));
     });
     view.webContents.on('before-input-event', (event, input) => {
-      if (input.type === 'keyDown') runtime.memorySaver.interacted = true;
+      if (input.type === 'keyDown') {
+        runtime.memorySaver.interacted = true;
+        this.focusSplitTab(tabId, view);
+      }
       if (!agentHost?.isLentContents(view.webContents.id) && this.handleFillPickerKey(tabId, event, input)) return;
       this.handleShortcut(event, input);
+    });
+    view.webContents.on('before-mouse-event', (_event, input) => {
+      if (input.type === 'mouseDown') this.focusSplitTab(tabId, view);
     });
     // Only genuine user input opens the login picker; nothing the page does can.
     view.webContents.on('input-event', (_event, input) => {
@@ -4522,7 +4599,9 @@ class BrowserController {
         return;
       }
       try {
-        this.queuePermissionPrompt(this.permissions.createPrompt(accountSpaceId, workspaceId, origin, capability), callback);
+        const secondary = this.visibleSplitTabId ? this.runtimeTabs.get(this.visibleSplitTabId)?.view : undefined;
+        if (secondary && _webContents === secondary.webContents) callback(false);
+        else this.queuePermissionPrompt(this.permissions.createPrompt(accountSpaceId, workspaceId, origin, capability), callback);
       } catch {
         callback(false);
       }
@@ -4695,7 +4774,7 @@ class BrowserController {
       const view = this.ensureView(tab.id);
       const runtime = this.runtimeTabs.get(tab.id);
       if (runtime) runtime.memorySaver.lastVisibleAt = Date.now();
-      view.setVisible(true);
+      view.setVisible(!this.overlayOpen && !this.pendingPermission);
       this.applyLayout();
       // A navigation already in flight has no committed URL yet; loading again
       // would abort it with ERR_ABORTED (-3), so only start one when idle.
@@ -4707,9 +4786,7 @@ class BrowserController {
         }
       }
       this.scheduleAutomaticFill(tab.id);
-    }
-    // A Home tab skips `applyLayout`, and a switch into Banking must still hide the side app.
-    this.layoutSideApps();
+    } else this.applyLayout();
     this.broadcast();
   }
 
@@ -4815,6 +4892,7 @@ class BrowserController {
       runtime.view?.webContents.closeDevTools();
       runtime.view?.setVisible(false);
     }
+    this.visibleSplitTabId = undefined;
   }
 
   /**
@@ -4838,16 +4916,55 @@ class BrowserController {
     }, 80);
   }
 
+  private currentContentBounds() {
+    const [width, height] = this.window.getContentSize();
+    // Full screen hides every piece of chrome, so the page owns the whole window.
+    const insets = this.window.isFullScreen() ? ZERO_INSETS : this.layout;
+    return contentBounds(insets, width, height);
+  }
+
+  private endSplitForTab(tabId: string, accountSpaceId: AccountSpaceId): void {
+    const pair = this.splitPairs.get(accountSpaceId);
+    if (pair?.leftTabId !== tabId && pair?.rightTabId !== tabId) return;
+    this.splitPairs.delete(accountSpaceId);
+    this.applyLayout();
+  }
+
   private applyLayout(): void {
+    if (!this.window || this.window.isDestroyed()) return;
     this.layoutSideApps();
     const state = this.store.get();
     const active = this.activeTab(state);
     const runtime = this.runtimeTabs.get(active.id);
-    if (!runtime?.view || active.isHome || this.window.isDestroyed()) return;
-    const [width, height] = this.window.getContentSize();
-    // Full screen hides every piece of chrome, so the page owns the whole window.
-    const insets = this.window.isFullScreen() ? ZERO_INSETS : this.layout;
-    runtime.view.setBounds(contentBounds(insets, width, height));
+    const bounds = this.currentContentBounds();
+    const pair = this.splitPair(state, active);
+    const panes = pair && runtime?.view?.getVisible() && !this.overlayOpen && !this.sessionIsLocked && !this.window.isFullScreen()
+      ? splitBounds(bounds) : undefined;
+    const otherId = panes && pair ? (pair.leftTabId === active.id ? pair.rightTabId : pair.leftTabId) : undefined;
+    if (this.visibleSplitTabId !== otherId) {
+      if (this.visibleSplitTabId && this.visibleSplitTabId !== active.id) {
+        const prior = this.runtimeTabs.get(this.visibleSplitTabId);
+        if (prior?.view?.getVisible()) {
+          prior.memorySaver.lastVisibleAt = Date.now();
+          prior.view.setVisible(false);
+        }
+      }
+      this.visibleSplitTabId = otherId;
+      this.settleBroadcast = true;
+    }
+    if (!runtime?.view || active.isHome) return;
+    runtime.view.setBounds(panes && pair ? (pair.leftTabId === active.id ? panes.left : panes.right) : bounds);
+    if (!otherId || !panes || !pair) return;
+    const other = state.tabs.find((item) => item.id === otherId)!;
+    const view = this.ensureView(otherId);
+    view.setBounds(pair.leftTabId === otherId ? panes.left : panes.right);
+    view.setVisible(true);
+    const contents = view.webContents;
+    if (!contents.getURL() && !contents.isLoading()) {
+      void contents.loadURL(other.url).catch(() => {
+        // The existing failed-load event records a recoverable tab problem.
+      });
+    }
   }
 
   /**
@@ -4936,6 +5053,7 @@ class BrowserController {
     this.fillCapabilities.invalidateTab(tabId);
     if (this.fillPicker.context?.tabId === tabId) this.fillPicker.close();
     this.updateRuntime(tabId, { problem, failedUrl, loading: false });
+    if (this.visibleSplitTabId) this.applyLayout();
   }
 
   private commitNavigation(tabId: string, url: string, addHistory = true): void {
@@ -4956,6 +5074,10 @@ class BrowserController {
         }
       }
     }, 'routine');
+    if (this.visibleSplitTabId && isProtectedPage(sanitizedUrl)) {
+      const tab = this.store.get().tabs.find((item) => item.id === tabId);
+      if (tab) this.endSplitForTab(tabId, tab.accountSpaceId);
+    }
     this.updateRuntime(tabId, {});
   }
 
@@ -5205,6 +5327,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:new-tab', (_event, workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId) => controller!.newTab(workspaceId, url, accountSpaceId));
   handle('browser:close-tab', (_event, id: string) => controller!.closeTab(id));
   handle('browser:activate-tab', (_event, id: string) => controller!.activateTab(id));
+  handle('browser:set-split-view', (_event, id?: string) => controller!.setSplitView(id));
   handle('browser:switch-workspace', (_event, id: WorkspaceId) => controller!.switchWorkspace(id));
   handle('browser:switch-account-space', (_event, id: AccountSpaceId) => controller!.switchAccountSpace(id));
   handle('browser:address-matches', (_event, account: AccountSpaceId, text: string) => controller!.addressMatches(account, text));
