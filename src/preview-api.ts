@@ -4,7 +4,7 @@ import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
-import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
+import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
 import type { BrowserSettings, PinnablePanelTool, SidePanelTool } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
@@ -159,7 +159,7 @@ export function installPreviewApi(): void {
   const previewPanelPins = new Map<AccountSpaceId, Set<PinnablePanelTool>>();
   const regularPanelAccount = () => state.activeWorkspaceId !== 'banking'
     && state.accountSpaces.some(({ id, locked }) => id === state.activeAccountSpaceId && !locked);
-  const defaultPanelTool = state.ui.sidePanelTool;
+  let commonPanelTool = state.ui.sidePanelTool;
   state.sidePanelPins = regularPanelAccount() ? [] : undefined;
   if (params.get('downloadHistory') === 'sample') {
     savedDownloadHistory.add(google);
@@ -211,7 +211,9 @@ export function installPreviewApi(): void {
         return status;
       }, { active: 0, completed: 0, stopped: 0 });
     const regularPanel = regularPanelAccount();
-    state.ui.sidePanelTool = previewPanelTools.get(state.activeAccountSpaceId) ?? (regularPanel ? defaultPanelTool : 'privacy');
+    state.ui.sidePanelTool = isPinnablePanelTool(commonPanelTool)
+      ? previewPanelTools.get(state.activeAccountSpaceId) ?? (regularPanel ? commonPanelTool : 'privacy')
+      : commonPanelTool;
     state.sidePanelPins = regularPanel ? [...(previewPanelPins.get(state.activeAccountSpaceId) ?? [])] : undefined;
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
     state.bookmarkUndo = undo ? { kind: undo.kind, count: undo.before.length } : undefined;
@@ -615,7 +617,10 @@ export function installPreviewApi(): void {
       if (expectedAccount !== undefined && expectedAccount !== state.activeAccountSpaceId) throw new Error('The Account Space changed. Open the tool again.');
       const { sidePanelTool, ...globalPreferences } = patch as UiPreferencesPatch;
       state.ui = mergeUiPreferences(state.ui, globalPreferences);
-      if (sidePanelTool) previewPanelTools.set(state.activeAccountSpaceId, sidePanelTool);
+      if (isPinnablePanelTool(sidePanelTool)) {
+        if (!isPinnablePanelTool(commonPanelTool)) commonPanelTool = 'assistant';
+        previewPanelTools.set(state.activeAccountSpaceId, sidePanelTool);
+      } else if (sidePanelTool) commonPanelTool = sidePanelTool;
       syncDarkMode();
       publish();
     },

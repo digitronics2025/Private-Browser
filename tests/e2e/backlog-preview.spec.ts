@@ -220,9 +220,6 @@ test('labels the preview and exercises Chrome import and protected browsing', as
   await expect(page.getByText('Password files are unavailable in the synthetic preview')).toBeVisible();
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   await expect(page.getByRole('button', { name: 'Account Space: Banking' })).toBeVisible();
-  await page.getByRole('button', { name: 'Browser menu' }).click();
-  await page.getByRole('menuitem', { name: 'Settings' }).click();
-  await page.getByRole('button', { name: 'Import', exact: true }).click();
   await expect(page.getByLabel('Import into Account Space')).toBeDisabled();
   expect(errors).toEqual([]);
 });

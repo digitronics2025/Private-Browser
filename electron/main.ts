@@ -52,7 +52,7 @@ import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace
 import { readBookmarkHtml } from './bookmark-html.js';
 import { mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
-import { mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
+import { isPinnablePanelTool, mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
   AccountSpaceColor,
@@ -1796,6 +1796,7 @@ class BrowserController {
   }
 
   private sidePanelTool(state: RuntimeBrowserStateV2, regularAccount: AccountSpaceId | undefined): SidePanelTool {
+    if (!isPinnablePanelTool(state.ui.sidePanelTool)) return state.ui.sidePanelTool;
     return regularAccount ? state.sidePanelsByAccountSpace?.[regularAccount]?.tool ?? state.ui.sidePanelTool
       : this.temporaryPanelTools.get(this.activeAccountSpaceId(state)) ?? 'privacy';
   }
@@ -1806,14 +1807,18 @@ class BrowserController {
     if (expectedAccount !== undefined && activeId !== expectedAccount) throw new Error('The Account Space changed. Open the tool again.');
     const regularAccount = this.activeDownloadAccount(before);
     const { sidePanelTool, ...globalPreferences } = patch;
+    const scopedTool = isPinnablePanelTool(sidePanelTool) ? sidePanelTool : undefined;
     const next = this.store.update((state) => {
       state.ui = mergeUiPreferences(state.ui, globalPreferences);
-      if (sidePanelTool && regularAccount) {
+      // Keep settings and library views open when switching the account they show.
+      if (sidePanelTool && !scopedTool) state.ui.sidePanelTool = sidePanelTool;
+      if (scopedTool && !isPinnablePanelTool(state.ui.sidePanelTool)) state.ui.sidePanelTool = 'assistant';
+      if (scopedTool && regularAccount) {
         const panels = state.sidePanelsByAccountSpace ??= {};
-        panels[regularAccount] = { ...panels[regularAccount], tool: sidePanelTool };
+        panels[regularAccount] = { ...panels[regularAccount], tool: scopedTool };
       }
     });
-    if (sidePanelTool && !regularAccount) this.temporaryPanelTools.set(activeId, sidePanelTool);
+    if (scopedTool && !regularAccount) this.temporaryPanelTools.set(activeId, scopedTool);
     if (next.ui.theme !== before.ui.theme) {
       nativeTheme.themeSource = next.ui.theme;
       this.applyFrameColors();
