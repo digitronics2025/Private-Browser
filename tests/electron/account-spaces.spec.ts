@@ -195,6 +195,39 @@ test('pauses, resumes and cancels a real download only in its Account Space', as
   expect((await current()).canCancel).toBe(false);
 });
 
+test('reads and revokes native site grants only for the active origin and Account Space', async () => {
+  const page = await application!.firstWindow();
+  const owner = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Permission owner', 'sky'));
+  const source = origin + '/source';
+  const target = origin + '/account-download';
+  await page.evaluate((url) => window.privateBrowser.navigate(url), source);
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  const tabId = (await getState()).activeTabId;
+  const site = { tabId, origin };
+  const status = () => page.evaluate(({ tabId, origin }) => window.privateBrowser.getSitePermissions(tabId, origin), site);
+  expect(await status()).toContainEqual({ capability: 'download', decision: 'ask' });
+  await application!.evaluate(({ webContents }, { source, target, savePath }) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === source);
+    if (!contents) throw new Error('Permission source view is missing');
+    contents.session.once('will-download', () => {
+      contents.session.once('will-download', (_event, item) => item.setSavePath(savePath));
+    });
+    contents.downloadURL(target);
+  }, { source, target, savePath: join(userDataPath, 'permission-fixture.txt') });
+  await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
+  await page.evaluate((id) => window.privateBrowser.respondToPermissionPrompt(id, 'allow-always'), (await getState()).pendingPermission!.id);
+  await expect.poll(async () => (await getState()).downloads[0]?.state).toBe('completed');
+  expect(await status()).toContainEqual({ capability: 'download', decision: 'allowed', duration: 'until-revoked' });
+  expect(await page.evaluate((id) => window.privateBrowser.listAccountPermissionGrants(id), owner))
+    .toEqual([{ origin, capability: 'download', duration: 'until-revoked' }]);
+  const revoke = () => page.evaluate(({ tabId, origin }) => window.privateBrowser.revokeSitePermission(tabId, origin, 'download'), site);
+  await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Separate permissions', 'indigo'));
+  await expect(revoke()).rejects.toThrow(/page changed/i);
+  await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), owner);
+  expect(await revoke()).toContainEqual({ capability: 'download', decision: 'ask' });
+  expect(await page.evaluate((id) => window.privateBrowser.listAccountPermissionGrants(id), owner)).toEqual([]);
+});
+
 test('scopes the download list and both file commands to the originating account', async () => {
   const page = await application!.firstWindow();
   const first = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Download owner', 'sky'));

@@ -3,11 +3,13 @@ import type {
   AccountSpaceId,
   PermissionCapability,
   PermissionDecision,
+  PermissionGrantSummary,
   PermissionPrompt,
+  SitePermissionStatus,
   WorkspaceId,
 } from './types.js';
-import { AccountStore } from './account-store.js';
-import { requireExactWebOrigin } from './account-space-validation.js';
+import { AccountStore, type AccountSpaceRecord } from './account-store.js';
+import { PERMISSION_CAPABILITIES, requireExactWebOrigin } from './account-space-validation.js';
 
 const PROMPT_TTL_MS = 60_000;
 const NOTIFICATION_ORIGINS = new Set([
@@ -20,8 +22,8 @@ const MEET_ORIGIN = 'https://meet.google.com';
 export type PermissionEvaluation = 'granted' | 'denied' | 'prompt';
 
 export class AccountPermissionManager {
-  private readonly sessionGrants = new Set<string>();
-  private readonly oneTimeGrants = new Map<string, number>();
+  private readonly sessionGrants = new Map<string, PermissionGrantSummary>();
+  private readonly oneTimeGrants = new Map<string, PermissionGrantSummary>();
   private readonly consumedPromptIds = new Set<string>();
 
   constructor(
@@ -47,17 +49,58 @@ export class AccountPermissionManager {
     const account = this.accounts.require(accountSpaceId);
     if (account.workspaceId !== workspaceId || account.locked) return 'denied';
     const key = grantKey(accountSpaceId, origin, capability);
-    const once = this.oneTimeGrants.get(key) ?? 0;
-    if (once > 0) {
-      if (consumeOnce) {
-        if (once === 1) this.oneTimeGrants.delete(key);
-        else this.oneTimeGrants.set(key, once - 1);
-      }
+    if (this.oneTimeGrants.has(key)) {
+      if (consumeOnce) this.oneTimeGrants.delete(key);
       return 'granted';
     }
     if (this.sessionGrants.has(key)) return 'granted';
     if (account.permissionGrants.some((grant) => grant.origin === origin && grant.capability === capability)) return 'granted';
     return 'prompt';
+  }
+
+  listGrants(accountSpaceId: AccountSpaceId): PermissionGrantSummary[] {
+    return this.grantsFor(this.accounts.require(accountSpaceId));
+  }
+
+  private grantsFor(account: AccountSpaceRecord): PermissionGrantSummary[] {
+    if (account.locked || account.workspaceId === 'banking') return [];
+    const accountSpaceId = account.id;
+    const prefix = accountSpaceId + '|';
+    const grants = new Map<string, PermissionGrantSummary>();
+    for (const temporary of [this.oneTimeGrants, this.sessionGrants]) {
+      for (const [key, grant] of temporary) if (key.startsWith(prefix)) grants.set(key, grant);
+    }
+    for (const grant of account.permissionGrants) {
+      grants.set(grantKey(accountSpaceId, grant.origin, grant.capability), { ...grant, duration: 'until-revoked' });
+    }
+    return [...grants.values()].filter(({ origin, capability }) => isCapabilityAllowedAtOrigin(capability, origin))
+      .sort((a, b) => a.origin.localeCompare(b.origin) || a.capability.localeCompare(b.capability));
+  }
+
+  siteStatus(accountSpaceId: AccountSpaceId, workspaceId: WorkspaceId, origin: string): SitePermissionStatus[] {
+    const blocked = () => PERMISSION_CAPABILITIES.map((capability) => ({ capability, decision: 'blocked' as const }));
+    if (workspaceId === 'banking') return blocked();
+    try { requireExactWebOrigin(origin); } catch { return blocked(); }
+    const account = this.accounts.require(accountSpaceId);
+    if (account.locked || account.workspaceId !== workspaceId) return blocked();
+    const grants = new Map(this.grantsFor(account).filter((grant) => grant.origin === origin).map((grant) => [grant.capability, grant]));
+    return PERMISSION_CAPABILITIES.map((capability) => {
+      if (!isCapabilityAllowedAtOrigin(capability, origin)) return { capability, decision: 'blocked' };
+      const grant = grants.get(capability);
+      return grant ? { capability, decision: 'allowed', duration: grant.duration } : { capability, decision: 'ask' };
+    });
+  }
+
+  revoke(accountSpaceId: AccountSpaceId, workspaceId: WorkspaceId, originValue: string, capability: PermissionCapability): void {
+    const origin = requireExactWebOrigin(originValue);
+    if (this.evaluate(accountSpaceId, workspaceId, origin, capability, false) !== 'granted') return;
+    const key = grantKey(accountSpaceId, origin, capability);
+    const matches = (grant: { origin: string; capability: PermissionCapability }) => grant.origin === origin && grant.capability === capability;
+    if (this.accounts.require(accountSpaceId).permissionGrants.some(matches)) {
+      this.accounts.update(accountSpaceId, (account) => { account.permissionGrants = account.permissionGrants.filter((grant) => !matches(grant)); });
+    }
+    this.sessionGrants.delete(key);
+    this.oneTimeGrants.delete(key);
   }
 
   createPrompt(accountSpaceId: AccountSpaceId, workspaceId: WorkspaceId, originValue: string, capability: PermissionCapability): PermissionPrompt {
@@ -82,11 +125,11 @@ export class AccountPermissionManager {
     if (this.evaluate(prompt.accountSpaceId, prompt.workspaceId, prompt.origin, prompt.capability, false) === 'denied') return false;
     const key = grantKey(prompt.accountSpaceId, prompt.origin, prompt.capability);
     if (decision === 'allow-once') {
-      if (retainAllowOnce) this.oneTimeGrants.set(key, 1);
+      if (retainAllowOnce) this.oneTimeGrants.set(key, { origin: prompt.origin, capability: prompt.capability, duration: 'once' });
       return true;
     }
     if (decision === 'allow-session') {
-      this.sessionGrants.add(key);
+      this.sessionGrants.set(key, { origin: prompt.origin, capability: prompt.capability, duration: 'session' });
       return true;
     }
     if (decision === 'allow-always') {
@@ -102,7 +145,7 @@ export class AccountPermissionManager {
 
   clearAccount(accountSpaceId: AccountSpaceId): void {
     const prefix = `${accountSpaceId}|`;
-    for (const key of [...this.sessionGrants]) if (key.startsWith(prefix)) this.sessionGrants.delete(key);
+    for (const key of [...this.sessionGrants.keys()]) if (key.startsWith(prefix)) this.sessionGrants.delete(key);
     for (const key of [...this.oneTimeGrants.keys()]) if (key.startsWith(prefix)) this.oneTimeGrants.delete(key);
   }
 }

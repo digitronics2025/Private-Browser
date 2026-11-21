@@ -4,6 +4,7 @@ import type { AccountSpaceSummary, BrowserSnapshot, BrowserTab, Workspace } from
 import { domainFromUrl } from '../lib/format';
 import { BrandMark } from './BrandMark';
 import { MenuHeading, MenuItem, MenuSeparator, MenuSurface } from './Menu';
+import { SitePermissions } from './SitePermissions';
 
 function StatusRow({ ok, icon: Icon, title, detail }: { ok: boolean; icon: typeof Shield; title: string; detail: string }) {
   return (
@@ -79,6 +80,7 @@ export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, onClose, o
         <div><dt>Tracker blocking</dt><dd>{trackerBlocking ? 'On' : 'Paused'}</dd></div>
         {!tab.isHome && <div><dt>Address</dt><dd className="site-info-url">{tab.url}</dd></div>}
       </dl>
+      {!tab.isHome && <SitePermissions key={tab.id + ':' + tab.url} tab={tab} />}
       <MenuSeparator />
       {zoom !== 100 && <MenuItem icon={Globe2} label={`Reset zoom (${zoom}%)`} onSelect={onResetZoom} />}
       {!tab.isHome && <MenuItem icon={Code2} label="Developer tools" shortcut="F12" disabled={!tab.developerToolsAllowed} onSelect={onToggleDeveloperTools} />}

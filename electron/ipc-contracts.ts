@@ -5,6 +5,7 @@ import {
   requireBoundedStringArray,
   requireBoundedText,
   requireGoogleModules,
+  requirePermissionCapability,
   requirePermissionDecision,
   requireWorkspaceId,
 } from './account-space-validation.js';
@@ -77,6 +78,13 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'accounts:delete':
       exact(args, 2); requireAccountSpaceId(args[0]);
       if (args[1] !== 'DELETE_ACCOUNT_SPACE') throw new Error('Exact Account Space deletion confirmation is required'); return;
+    case 'permissions:site':
+      exact(args, 2); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 2048); return;
+    case 'permissions:revoke-site':
+      exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 2048);
+      requirePermissionCapability(args[2]); return;
+    case 'permissions:list-account':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'permissions:respond':
       between(args, 2, 3); requireUuid(args[0], 'permission prompt'); requirePermissionDecision(args[1]);
       if (args[2] !== undefined) requireBoundedText(args[2], 'display source identifier', 512); return;

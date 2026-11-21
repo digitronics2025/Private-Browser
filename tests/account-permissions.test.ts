@@ -69,6 +69,26 @@ describe('Account Space exact-origin permissions', () => {
     expect(() => manager.applyDecision(prompt, 'allow-once')).toThrow(/expired/);
   });
 
+  it('lists and revokes grants by origin and account without consuming a one-time grant on read', () => {
+    const { store, manager } = fixture();
+    const origin = 'https://example.test';
+    store.createLocal({ id: SECOND_ID, workspaceId: 'personal', label: 'Second', color: 'sky', order: 1 });
+    const selected = manager.createPrompt(ID, 'personal', origin, 'download');
+    manager.applyDecision(selected, 'allow-always');
+    manager.applyDecision(manager.createPrompt(ID, 'personal', origin, 'clipboard-read'), 'allow-once', true);
+    manager.applyDecision(manager.createPrompt(ID, 'personal', 'https://other.test', 'download'), 'allow-session');
+    manager.applyDecision(manager.createPrompt(SECOND_ID, 'personal', origin, 'download'), 'allow-always');
+    expect(manager.siteStatus(ID, 'personal', origin)).toContainEqual({ capability: 'download', decision: 'allowed', duration: 'until-revoked' });
+    expect(manager.siteStatus(ID, 'personal', origin)).toContainEqual({ capability: 'clipboard-read', decision: 'allowed', duration: 'once' });
+    expect(manager.evaluate(ID, 'personal', origin, 'clipboard-read')).toBe('granted');
+    expect(manager.siteStatus(ID, 'personal', origin)).toContainEqual({ capability: 'clipboard-read', decision: 'ask' });
+    manager.revoke(ID, 'personal', origin, 'download');
+    expect(manager.siteStatus(ID, 'personal', origin)).toContainEqual({ capability: 'download', decision: 'ask' });
+    expect(store.require(ID).permissionGrants).toEqual([]);
+    expect(manager.listGrants(ID)).toEqual([{ origin: 'https://other.test', capability: 'download', duration: 'session' }]);
+    expect(manager.siteStatus(SECOND_ID, 'personal', origin)).toContainEqual({ capability: 'download', decision: 'allowed', duration: 'until-revoked' });
+  });
+
   it('requires an active visible Meet main frame and a fresh source picker', () => {
     const source = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
     expect(source).toContain("origin !== 'https://meet.google.com'");
