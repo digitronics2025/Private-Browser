@@ -131,7 +131,9 @@ describe('Account Space runtime isolation', () => {
     expect(source).toContain('this.store.partitionFor(tab.accountSpaceId)');
     expect(source).toContain('this.newTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId)');
     expect(source).toContain('const cacheKey = `${tab.accountSpaceId}:${url}`');
-    expect(source).toMatch(/accountSpaceId,\r?\n\s+filename: item\.getFilename\(\)/);
+    const downloadHandler = source.slice(source.indexOf("ses.on('will-download'"));
+    expect(downloadHandler).toContain('const filename = item.getFilename()');
+    expect(downloadHandler).toMatch(/const entry: LocalDownload = \{\s*id,\s*accountSpaceId,\s*filename,/);
     expect(source).not.toContain('const partition = `persist:private-browser-${tab.workspaceId}`');
   });
 });
