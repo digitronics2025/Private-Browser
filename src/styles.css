@@ -359,7 +359,9 @@ kbd { font: inherit; }
 .ntp-setup > div { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
 .setup-guide > p, .setup-guide li p { color: var(--text-muted); font-size: var(--fs-sm); margin: 5px 0; }
 .setup-guide > ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-.setup-guide li { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.setup-guide > ul > li { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.migration-checklist summary { cursor: pointer; font-weight: 650; }
+.migration-checklist ol { display: grid; gap: 6px; margin: 8px 0 0; padding-inline-start: 20px; color: var(--text-muted); font-size: var(--fs-sm); }
 .workspace-behavior, .workspace-settings-form, .workspace-settings-form label { display: grid; gap: 8px; min-width: 0; }
 .workspace-settings-form { padding-top: 8px; }
 .workspace-settings-form textarea { width: 100%; min-width: 0; resize: vertical; }

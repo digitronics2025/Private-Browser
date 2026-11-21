@@ -72,6 +72,11 @@ autofill profiles are not copied. The current product has no compatible storage
 or runtime for most of them, and copying authentication state would violate the
 browser's session-isolation boundary.
 
+The Setup guide includes an add-on checklist. Match each Chrome add-on to its
+task, test the browser's own MyVault, Privacy or Developer tools when they fit,
+and keep Chrome for tasks that still require an add-on. Electron supports a
+subset of extension APIs. [Electron extension support](https://www.electronjs.org/docs/latest/api/extensions)
+
 ## Public Functions
 
 - `listChromeProfiles(userDataDirectory?)` returns display-safe profile metadata.

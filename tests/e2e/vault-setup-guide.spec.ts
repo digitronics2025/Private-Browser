@@ -14,6 +14,9 @@ for (const setup of ['enrolled', 'unenrolled'] as const) {
     await expect(panel.getByText('Master password forgotten')).toBeVisible();
     await expect(panel.getByText('Offline', { exact: true })).toBeVisible();
     await expect(panel.getByText('Device access revoked')).toBeVisible();
+    await expect(panel.getByText('Website passkeys')).toBeVisible();
+    await expect(panel.getByText(/Windows Security prompt for the device, phone or security key/)).toBeVisible();
+    await expect(panel.getByText(/Settings → Accounts → Passkeys/)).toBeVisible();
     await expect(panel.locator('input[type=password]')).toHaveCount(0);
     if (setup === 'enrolled') {
       await expect(panel.getByRole('button', { name: 'Unlock with Windows Hello' })).toBeVisible();
