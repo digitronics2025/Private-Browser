@@ -4,6 +4,10 @@ import { writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { agentDataRoot } from '@private-browser/bridge-protocol/agent-location';
+import { AgentHost } from './agent-host.js';
+import type { AgentDecision } from './agent-types.js';
+import type { AgentPolicy } from './agent-policy.js';
 import {
   app,
   BrowserWindow,
@@ -570,10 +574,16 @@ class BrowserController {
   }
 
   isTrustedSender(event: IpcMainInvokeEvent): boolean {
-    return !this.window.isDestroyed()
+    return Boolean(this.window) && !this.window.isDestroyed()
       && event.sender === this.window.webContents
       && event.senderFrame === this.window.webContents.mainFrame;
   }
+
+  agentParent(): BrowserWindow | undefined {
+    return this.window && !this.window.isDestroyed() ? this.window : undefined;
+  }
+
+  notifyAgentChange(): void { this.agentParent()?.webContents.send('agents:changed'); }
 
   focus(): void {
     if (!this.window || this.window.isDestroyed()) return;
@@ -3663,6 +3673,11 @@ class BrowserController {
 
   private handleShortcut(event: Electron.Event, input: Electron.Input): void {
     if (input.type !== 'keyDown' || input.isAutoRepeat) return;
+    if (input.control && input.shift && !input.alt && !input.meta && (input.code === 'Period' || input.key === '>')) {
+      event.preventDefault();
+      agentHost?.stop();
+      return;
+    }
     // Esc leaves window full screen (F11) the way it leaves page full screen.
     if (input.key === 'Escape' && !this.window.isDestroyed() && this.window.isFullScreen() && !this.htmlFullscreenOwner && !input.control && !input.alt && !input.shift && !input.meta) {
       this.window.setFullScreen(false);
@@ -3678,6 +3693,8 @@ class BrowserController {
 
 let controller: BrowserController | undefined;
 let vscodeBridge: VscodeBridgeServer | undefined;
+let agentHost: AgentHost | undefined;
+const AGENT_WORKSPACE_Ipc = new Set(['agents:status', 'agents:decide', 'agents:stop', 'agents:select', 'agents:manual', 'agents:close-tab']);
 const pendingLaunchUrls: string[] = [];
 let launchWindowReady = false;
 let processingLaunchUrls = false;
@@ -3732,15 +3749,17 @@ if (!hasSingleInstanceLock) {
   });
 }
 
-function assertTrusted(event: IpcMainInvokeEvent): void {
-  if (!controller?.isTrustedSender(event)) throw new Error('Untrusted IPC sender');
+function assertTrusted(event: IpcMainInvokeEvent, channel: string): void {
+  const agentWindow = agentHost?.workspace.isTrustedSender(event);
+  if (agentWindow && AGENT_WORKSPACE_Ipc.has(channel)) return;
+  if (channel === 'agents:decide' || !controller?.isTrustedSender(event)) throw new Error('Untrusted IPC sender');
 }
 
 const ipcGuard = new IpcGuard();
 
 function handle<TArgs extends unknown[], TResult>(channel: string, callback: (event: IpcMainInvokeEvent, ...args: TArgs) => TResult | Promise<TResult>): void {
   ipcMain.handle(channel, async (event, ...args) => {
-    assertTrusted(event);
+    assertTrusted(event, channel);
     ipcGuard.check(event.sender.id, channel, args);
     validateIpcArguments(channel, args);
     return callback(event, ...args as TArgs);
@@ -3805,8 +3824,45 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   }
   const migration = new VaultMigrationService(join(userDataPath, 'vault.enc'), join(userDataPath, 'myvault', 'migration-journal.enc'), safeStorage, vault);
   controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge, controlCenter, fillPreferences);
+  const agentChromeUrl = new URL(process.env.VITE_DEV_SERVER_URL ?? pathToFileURL(join(import.meta.dirname, '../dist/index.html')));
+  agentChromeUrl.hash = 'agent-workspace';
+  agentHost = new AgentHost({
+    data: join(userDataPath, 'agent-mode'),
+    rendezvous: !app.isPackaged && process.env.PRIVATE_BROWSER_AGENT_DATA_DIR || agentDataRoot(),
+    chromeUrl: agentChromeUrl.href,
+    preload: join(import.meta.dirname, 'preload.cjs'),
+    command: app.isPackaged ? join(process.resourcesPath, 'private-browser-agent', 'private-browser-mcp.cmd') : 'node',
+    commandArgs: app.isPackaged ? [] : [join(import.meta.dirname, '../packages/agent-mcp/dist/cli.js')],
+    parent: () => controller?.agentParent(),
+    onChange: () => controller?.notifyAgentChange(),
+    discover: async () => {
+      const selected = vscodeBridge?.status().project?.project;
+      if (!selected?.authorized || !vscodeBridge) return [];
+      const info = await vscodeBridge.request('server.discover', { projectId: selected.id }) as ProjectInfo;
+      return info.devServerUrl ? [info.devServerUrl] : [];
+    },
+  });
 
   handle('browser:get-state', () => controller!.getSnapshot());
+  handle('agents:status', () => agentHost!.status());
+  handle('agents:enable', (_event, enabled: boolean) => agentHost!.enable(enabled));
+  handle('agents:pair', () => agentHost!.beginPairing());
+  handle('agents:stop', () => agentHost!.stop());
+  handle('agents:resume', () => agentHost!.resume());
+  handle('agents:open-workspace', () => agentHost!.workspace.show());
+  handle('agents:revoke', (_event, id: string) => agentHost!.revoke(id));
+  handle('agents:renew', (_event, id: string) => agentHost!.renew(id));
+  handle('agents:set-policy', (_event, id: string, policy: AgentPolicy) => agentHost!.setPolicy(id, policy));
+  handle('agents:grant-uploads', (_event, id: string) => agentHost!.grantUploadFolder(id));
+  handle('agents:revoke-uploads', (_event, id: string) => agentHost!.revokeUploadFolder(id));
+  handle('agents:add-space', (_event, name: string) => agentHost!.addSpace(name));
+  handle('agents:reset-space', (_event, id: string) => agentHost!.resetSpace(id));
+  handle('agents:clear-audit', () => agentHost!.clearAudit());
+  handle('agents:export-audit', () => agentHost!.exportAudit());
+  handle('agents:decide', (_event, id: string, decision: AgentDecision) => agentHost!.decide(id, decision));
+  handle('agents:select', (_event, id: string) => agentHost!.workspace.select(id));
+  handle('agents:manual', (_event, id: string, manual: boolean) => agentHost!.workspace.setManual(id, manual));
+  handle('agents:close-tab', (_event, id: string) => agentHost!.workspace.close(id));
   handle('routines:save', (_event, routine: BrowserRoutine) => controller!.saveRoutine(routine));
   handle('routines:save-tabs', (_event, input: TabSetInput) => controller!.saveTabSet(input));
   handle('routines:delete', (_event, id: string) => controller!.deleteRoutine(id));
@@ -3976,6 +4032,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('updates:open-history', () => controller!.openReleaseHistory());
 
   await controller.createWindow();
+  await agentHost.start();
   setTimeout(() => void controller?.checkForUpdatesInBackground(), 10_000).unref();
   setInterval(() => void controller?.checkForUpdatesInBackground(), 24 * 60 * 60_000).unref();
   if (!pendingLaunchUrls.length) await controller.openStartupHome();
@@ -3987,6 +4044,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  agentHost?.stop();
   void controller?.flushClipboard();
   void vscodeBridge?.close();
 });

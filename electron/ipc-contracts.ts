@@ -23,6 +23,41 @@ const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox
 
 export function validateIpcArguments(channel: string, args: unknown[]): void {
   switch (channel) {
+    case 'agents:status':
+    case 'agents:pair':
+    case 'agents:stop':
+    case 'agents:resume':
+    case 'agents:open-workspace':
+    case 'agents:clear-audit':
+    case 'agents:export-audit':
+      exact(args, 0); return;
+    case 'agents:enable':
+      exact(args, 1); requireBoolean(args[0]); return;
+    case 'agents:revoke':
+    case 'agents:renew':
+    case 'agents:grant-uploads':
+    case 'agents:revoke-uploads':
+    case 'agents:reset-space':
+    case 'agents:select':
+    case 'agents:close-tab':
+      exact(args, 1); requireUuid(args[0], 'agent record'); return;
+    case 'agents:add-space':
+      exact(args, 1); requireNonEmptyText(args[0], 'Agent Account Space name', 60); return;
+    case 'agents:manual':
+      exact(args, 2); requireUuid(args[0], 'Agent tab'); requireBoolean(args[1]); return;
+    case 'agents:decide':
+      exact(args, 2); requireUuid(args[0], 'Agent confirmation');
+      if (args[1] !== 'allow' && args[1] !== 'session' && args[1] !== 'deny') throw new Error('Choose an Agent decision');
+      return;
+    case 'agents:set-policy': {
+      exact(args, 2); requireUuid(args[0], 'Agent client');
+      const policy = requireExactKeys(args[1], ['profile', 'origins', 'outside']);
+      if (policy.profile !== 'observe' && policy.profile !== 'develop' && policy.profile !== 'operate') throw new Error('Choose an Agent profile');
+      if (policy.outside !== 'observe' && policy.outside !== 'deny') throw new Error('Choose a rule for other origins');
+      if (!Array.isArray(policy.origins) || policy.origins.length > 30) throw new Error('Enter up to 30 origins');
+      for (const origin of policy.origins) requireNonEmptyText(origin, 'Agent origin', 300);
+      return;
+    }
     case 'browser:open-bookmarks-in-background':
       exact(args, 2); requireAccountSpaceId(args[0]);
       if (!Array.isArray(args[1]) || !args[1].length || args[1].length > MAX_BOOKMARK_BATCH) throw new Error('Select between 1 and 20 bookmarks');

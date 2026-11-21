@@ -1,0 +1,50 @@
+.agents-panel { overflow: auto; }
+.agent-card { border: 1px solid #73809655; border-radius: 12px; padding: 14px; margin: 0 0 12px; min-width: 0; }
+.agent-card h3, .agent-confirmation h2 { margin: 0 0 8px; }
+.agent-card p { margin: 6px 0 12px; font-size: 13px; line-height: 1.5; }
+.agent-card button, .agent-chrome button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #73809690; border-radius: 7px; padding: 6px 9px; cursor: pointer; background: transparent; color: inherit; }
+.agent-card button:hover, .agent-chrome button:hover { background: #73809622; }
+.agent-card button:disabled { cursor: default; opacity: .5; }
+.agent-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.agent-card .agent-danger, .agent-chrome .agent-danger { color: #bd2039; }
+.agent-switch { display: flex; align-items: center; gap: 8px; font-weight: 650; }
+.agent-switch input { accent-color: #6a49df; }
+.agent-pairing { display: grid; gap: 5px; margin-top: 12px; background: #6a49df18; border-radius: 8px; padding: 10px; }
+.agent-pairing output { font: 700 24px/1.1 ui-monospace, monospace; letter-spacing: .12em; }
+.agent-space, .agent-client { border-top: 1px solid #73809645; margin-top: 8px; padding-top: 8px; }
+.agent-space strong { display: block; margin-bottom: 6px; }
+.agent-space + form { margin-top: 10px; }
+.agent-card summary { cursor: pointer; font-size: 13px; margin: 7px 0; }
+.agent-client summary { font-weight: 650; }
+.agent-client small { font-weight: 400; }
+.agent-client form { display: grid; justify-items: start; gap: 8px; margin: 8px 0; }
+.agent-client label { display: grid; width: 100%; gap: 4px; font-size: 13px; }
+.agent-card input:not([type='checkbox']), .agent-card select, .agent-card textarea { min-width: 0; max-width: 100%; color: inherit; background: transparent; border: 1px solid #73809690; border-radius: 6px; padding: 6px; }
+.agent-card select option { color: #111a2a; }
+.agent-card pre { padding: 8px; background: #73809622; border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.agent-upload-path, .agent-log li { overflow-wrap: anywhere; }
+.agent-log { list-style: none; margin: 8px 0 0; padding: 0; max-height: 240px; overflow: auto; }
+.agent-log li { display: grid; gap: 4px; border-top: 1px solid #73809645; padding: 7px 1px; font-size: 12px; }
+
+.agent-workspace { min-height: 100vh; height: 100vh; overflow: auto; background: #f5f4fb; color: #211a35; border: 5px solid #bcb3d8; }
+.agent-workspace.agent-driving { border-color: #7952de; }
+.agent-chrome { height: 123px; padding: 6px 10px; background: #eee8fc; }
+.agent-workspace-heading { display: flex; align-items: center; gap: 7px; }
+.agent-workspace-heading h1 { flex: 1; margin: 0; font-size: 17px; }
+.agent-chrome nav { display: flex; gap: 6px; align-items: center; min-height: 32px; overflow-x: auto; }
+.agent-chrome nav button { white-space: nowrap; padding-block: 4px; }
+.agent-chrome nav button[aria-current='true'] { border-color: #7952de; background: #dcd0f8; }
+.agent-control-line { display: flex; align-items: center; justify-content: space-between; gap: 5px; flex-wrap: wrap; font-size: 13px; font-weight: 600; }
+.agent-control-line small { font-weight: 400; }
+.agent-control-line .agent-buttons button { padding: 4px 6px; font-size: 12px; }
+.agent-confirmation { width: min(510px, calc(100% - 20px)); margin: 12px auto; background: white; box-shadow: 0 4px 20px #30205016; }
+.agent-confirmation > svg { color: #6a49df; }
+.agent-confirmation dl { display: grid; grid-template-columns: max-content 1fr; gap: 7px 12px; font-size: 13px; margin-bottom: 15px; }
+.agent-confirmation dt { font-weight: 650; }
+.agent-confirmation dd { margin: 0; overflow-wrap: anywhere; }
+.agent-workspace-empty, .agent-workspace > [role='alert'] { padding: 12px; }
+@media (max-width: 450px) {
+  .agent-chrome { padding-inline: 6px; }
+  .agent-workspace-heading h1 { font-size: 15px; }
+  .agent-confirmation { padding: 10px; }
+}

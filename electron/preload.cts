@@ -7,8 +7,34 @@ import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, FindRes
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { BackupWriteResult } from './account-backup.js';
+import type { AgentDecision, AgentUiStatus } from './agent-types.js';
+import type { AgentPolicy } from './agent-policy.js';
 
 const api = {
+  getAgentStatus: (): Promise<AgentUiStatus> => ipcRenderer.invoke('agents:status'),
+  setAgentsEnabled: (enabled: boolean): Promise<void> => ipcRenderer.invoke('agents:enable', enabled),
+  beginAgentPairing: (): Promise<void> => ipcRenderer.invoke('agents:pair'),
+  stopAgents: (): Promise<void> => ipcRenderer.invoke('agents:stop'),
+  resumeAgents: (): Promise<void> => ipcRenderer.invoke('agents:resume'),
+  openAgentWorkspace: (): Promise<void> => ipcRenderer.invoke('agents:open-workspace'),
+  revokeAgent: (id: string): Promise<void> => ipcRenderer.invoke('agents:revoke', id),
+  renewAgent: (id: string): Promise<void> => ipcRenderer.invoke('agents:renew', id),
+  setAgentPolicy: (id: string, policy: AgentPolicy): Promise<void> => ipcRenderer.invoke('agents:set-policy', id, policy),
+  grantAgentUploads: (id: string): Promise<void> => ipcRenderer.invoke('agents:grant-uploads', id),
+  revokeAgentUploads: (id: string): Promise<void> => ipcRenderer.invoke('agents:revoke-uploads', id),
+  addAgentSpace: (name: string): Promise<void> => ipcRenderer.invoke('agents:add-space', name),
+  resetAgentSpace: (id: string): Promise<void> => ipcRenderer.invoke('agents:reset-space', id),
+  clearAgentAudit: (): Promise<void> => ipcRenderer.invoke('agents:clear-audit'),
+  exportAgentAudit: (): Promise<void> => ipcRenderer.invoke('agents:export-audit'),
+  decideAgentAction: (id: string, decision: AgentDecision): Promise<void> => ipcRenderer.invoke('agents:decide', id, decision),
+  selectAgentTab: (id: string): Promise<void> => ipcRenderer.invoke('agents:select', id),
+  setAgentTabManual: (id: string, manual: boolean): Promise<void> => ipcRenderer.invoke('agents:manual', id, manual),
+  closeAgentTab: (id: string): Promise<void> => ipcRenderer.invoke('agents:close-tab', id),
+  onAgentChanged: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('agents:changed', listener);
+    return () => { ipcRenderer.removeListener('agents:changed', listener); };
+  },
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
   saveRoutine: (routine: BrowserRoutine): Promise<void> => ipcRenderer.invoke('routines:save', routine),
   saveTabSet: (input: TabSetInput): Promise<number> => ipcRenderer.invoke('routines:save-tabs', input),

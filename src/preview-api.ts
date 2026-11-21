@@ -16,6 +16,7 @@ import type { TabSetInput } from '../electron/types';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
 import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
+import type { AgentUiStatus } from '../electron/agent-types';
 
 const WORKSPACES: Workspace[] = [
   { id: 'digitronics', name: 'Digitronics', color: '#6a92ff', icon: 'D', protected: false },
@@ -181,7 +182,44 @@ export function installPreviewApi(): void {
     if (!id) state.activeTabId = tab.id;
     publish();
   };
+  const agentListeners = new Set<() => void>();
+  const agentState: AgentUiStatus = { enabled: false, paused: false, active: false, clients: [], spaces: [], tabs: [], audit: [],
+    command: 'node', commandArgs: ['packages/agent-mcp/dist/cli.js'] };
+  const agentTabId = 'aeddf71a-49cd-4ab5-b36f-2244a9258852';
+  if (params.get('preview') === 'agent-action') {
+    Object.assign(agentState, {
+      enabled: true, active: true, selectedTab: agentTabId,
+      tabs: [{ id: agentTabId, name: 'http://localhost:3000', client: 'Codex', space: 'Agent Account Space', manual: false }],
+      current: { client: 'Codex', step: 'click', tabId: agentTabId },
+      pending: { id: '9c7757bc-bf61-4685-9a31-9d38499f4ca0', client: 'Codex', tab: 'Agent Account Space',
+        origin: 'http://localhost:3000', action: 'click', target: 'button: Save', formTarget: 'http://localhost:3000/save',
+        expiresAt: Date.now() + 120_000, canAllowSession: false },
+    });
+  }
+  const agentChange = () => agentListeners.forEach((listener) => listener());
   const handlers: Record<string, (...args: unknown[]) => unknown> = {
+    getAgentStatus: async () => structuredClone(agentState),
+    onAgentChanged: (listener) => {
+      agentListeners.add(listener as () => void);
+      return () => agentListeners.delete(listener as () => void);
+    },
+    setAgentsEnabled: async (enabled) => {
+      agentState.enabled = enabled === true;
+      agentState.spaces = agentState.enabled ? [{ id: agentTabId, name: 'Agent Account Space' }] : [];
+      agentChange();
+    },
+    beginAgentPairing: async () => {
+      agentState.pairing = { code: '12345678', expiresAt: Date.now() + 300_000 };
+      agentChange();
+    },
+    decideAgentAction: async () => { agentState.pending = undefined; agentChange(); },
+    stopAgents: async () => {
+      agentState.active = false;
+      agentState.current = undefined;
+      agentState.tabs = [];
+      agentState.pending = undefined;
+      agentChange();
+    },
     getState: async () => structuredClone(state),
     controlDownload: async (id, action) => {
       const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);

@@ -4,6 +4,11 @@ The [download page](https://private-browser-downloads.digitronics-electro.worker
 lists stable versions with their publication dates. Read the
 [desktop highlights](docs/desktop-release-notes/) for individual changes.
 
+## Unreleased
+
+- Connect Claude Code or Codex to the isolated Agent Workspace. Review
+  consequential actions in the browser and stop sessions from its toolbar.
+
 ## 0.6.40
 
 - Generate passwords, passphrases and PINs inside the secure MyVault editor.

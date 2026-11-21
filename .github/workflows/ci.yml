@@ -6,7 +6,8 @@ name: Verify and package
 #                      For a Windows-specific change, run this workflow manually on the PR
 #                      branch (Actions -> Verify and package -> Run workflow) before merging.
 #   Push to main    -> `verify`, then — only when the application changed — the Windows
-#                      transport/Electron journeys + installer, then the R2/D1 publish.
+#                      transport/Electron journeys + installer. Public publication of the
+#                      Agent Mode build requires the owner's release approval variable.
 #                      Download-service inputs are reported separately from installer publication.
 #   workflow_dispatch -> verify + Windows journeys + installer for the chosen ref (never publishes).
 
@@ -138,6 +139,13 @@ jobs:
       # Installed once (it used to be installed twice), right before the gate that needs it.
       - run: npx playwright install --with-deps chromium
       - run: npm run check
+      - name: Keep Agent Mode desktop and mobile previews
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: private-browser-agent-previews
+          path: test-results/agents-*/agent*.png
+          retention-days: 5
+          if-no-files-found: error
       # Browser test failures on the runner are not always reproducible locally;
       # keep the screenshots and traces (preview mock data only) to diagnose them.
       - name: Keep browser test evidence
@@ -174,8 +182,19 @@ jobs:
       - run: npx playwright install chromium
       - name: Exercise the real Windows named-pipe transport
         run: npm run bridge:test
-      - name: Exercise real Electron Account Space isolation
-        run: npm run test:electron
+      - name: Exercise real Electron Account Space isolation and Agent MCP
+        shell: pwsh
+        run: |
+          npm run test:electron | Tee-Object -FilePath agent-electron-smoke.txt
+          exit $LASTEXITCODE
+      - name: Keep Electron Agent MCP smoke transcript
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: electron-agent-smoke
+          path: agent-electron-smoke.txt
+          retention-days: 5
+          if-no-files-found: warn
       - name: Verify Electron MyVault boundary
         # The previous Electron suite built these inputs on this same runner.
         run: npm run test:e2e:only
@@ -263,6 +282,7 @@ jobs:
       !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main'
       && needs.changes.outputs.app == 'true'
       && needs.windows-installer.result == 'success'
+      && vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == 'true'
     # One publish at a time across runs, never cancelled. Main-branch runs are
     # not cancelled at the workflow level either (see the top of this file).
     concurrency:

@@ -1,0 +1,1 @@
+Use Private Browser with Claude Code or Codex in a separate Agent Workspace. Pair from Settings, approve important actions in the browser, and stop a session from the Agent toolbar.

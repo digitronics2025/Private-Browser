@@ -45,6 +45,22 @@ describe('browser settings channels', () => {
   });
 });
 
+describe('Agent IPC parity', () => {
+  it('registers each Agent preload invocation with explicit argument validation', async () => {
+    const preload = readFileSync(new URL('../electron/preload.cts', import.meta.url), 'utf8');
+    const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
+    const commands = [...preload.matchAll(/ipcRenderer\.invoke\('(agents:[^']+)'/g)].map((match) => match[1]).sort();
+    const handlers = [...main.matchAll(/handle\('(agents:[^']+)'/g)].map((match) => match[1]).sort();
+    expect(commands).toHaveLength(19);
+    expect(commands).toEqual(handlers);
+    const { validateIpcArguments } = await import('../electron/ipc-contracts');
+    const uuid = '8ad413e5-a5f1-47fd-9593-5255014d6018';
+    expect(() => validateIpcArguments('agents:decide', [uuid, 'allow-all'])).toThrow();
+    expect(() => validateIpcArguments('agents:decide', [uuid, 'deny'])).not.toThrow();
+    expect(() => validateIpcArguments('agents:set-policy', [uuid, { profile: 'operate', origins: [], outside: 'deny', secret: true }])).toThrow();
+  });
+});
+
 // F-49: the validator used to let every channel it did not list through.
 describe('IPC argument validation covers every channel', () => {
   const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');

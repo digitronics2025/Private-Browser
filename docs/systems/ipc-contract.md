@@ -233,6 +233,17 @@ The contract refuses any extra field: evidence and screenshots come from the
 approved preview in main, never from the renderer. Behaviour:
 [control-center-link.md](control-center-link.md).
 
+### agents:
+
+The main chrome uses `agents:status`, `agents:enable`, `agents:pair`,
+`agents:stop`, `agents:resume`, `agents:open-workspace`, `agents:revoke`, `agents:renew`,
+`agents:set-policy`, `agents:grant-uploads`, `agents:revoke-uploads`,
+`agents:add-space`, `agents:reset-space`, `agents:clear-audit` and
+`agents:export-audit`. The pinned Agent Workspace chrome may call only the
+status, stop, select, manual, close-tab and decide channels. Only its main
+frame can invoke `agents:decide`. The `agents:changed` event signals the
+app to fetch fresh status. Agent tab views have no preload.
+
 ### ai: — 7 channels
 
 | Channel | Preload method | Arguments | Resolves with |

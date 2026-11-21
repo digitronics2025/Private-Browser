@@ -36,6 +36,13 @@ Private Browser is a Windows-first Chromium work browser for Digitronics. It kee
 - Hardened Electron fuses, explicit certificate/webview denial, bounded IPC,
   strict site permissions, risky-download blocking and a locked-down Banking workspace.
 
+## Use with Claude Code or Codex
+
+Enable **Allow coding agents** in **Settings → Agents** to connect a local
+coding agent to the isolated Agent Workspace. The browser shows copy-ready
+Claude Code and Codex setup commands and lets you approve actions and stop a
+session in the toolbar. See the [Agent Mode setup guide](docs/agents/private-browser.md).
+
 ## Run locally
 
 Requirements: Node.js 22.12+ and Windows 10/11 for the final desktop installer.
