@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { sha256File, verifyDownload } from '../electron/download-verify';
+import { inspectDownloadPublisher, sha256File, verifyDownload } from '../electron/download-verify';
 
 const directory = mkdtempSync(join(tmpdir(), 'pb-download-'));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
@@ -22,6 +22,11 @@ function installer(name: string, contents: string) {
 }
 
 describe('download verification', () => {
+  it.skipIf(process.platform !== 'win32')('gets Windows publisher evidence independently of the release hash', async () => {
+    const file = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'kernel32.dll');
+    expect(await inspectDownloadPublisher(file)).toMatchObject({ state: 'valid', name: expect.stringMatching(/Microsoft/i) });
+  });
+
   it('hashes a file the same way the release pipeline does', async () => {
     const { path, expected } = installer('a.exe', 'installer bytes');
     expect(await sha256File(path)).toBe(expected.sha256);

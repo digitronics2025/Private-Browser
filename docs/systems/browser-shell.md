@@ -469,23 +469,12 @@ becomes a `DownloadEntry` in an in-memory `Map` keyed by a fresh `randomUUID()`:
 
 ## Downloads — checksum verification
 
-When a download completes, `verifyDownload` (
-[download-verify.ts](../../electron/download-verify.ts)) compares it against the
-manifest returned by the last `checkForUpdates`, remembered in
-`expectedInstaller`.
-
-- Only a download whose filename matches the expected installer is checked.
-  Anything else returns `unchecked` — an unrelated file must never be reported as
-  a failed verification.
-- Size is compared before hashing, then SHA-256 over the file.
-- `verified` and `mismatch` are written to `DownloadEntry.checksum`, surfaced in
-  the downloads list, and logged to the privacy timeline.
-- **`openDownload` throws on `mismatch`** rather than opening the file.
-
-Before this, the service published a checksum and the download page printed it,
-but nothing on this side ever compared it to the bytes that arrived — audit
-finding F-13. The installer is unsigned, so this is the only tamper check between
-the release service and the file the user runs.
+A matching installer records the expected manifest when it starts.
+[download-verify.ts](../../electron/download-verify.ts) checks size and SHA-256
+after completion and again before Open. If the file changes during verification,
+opening stops. The panel reports the file extension, release checksum and Windows
+publisher separately. Only checksum-verified installers receive the publisher
+check. Paths and verification internals stay in the main process.
 
 ## Favicons
 

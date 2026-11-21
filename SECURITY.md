@@ -126,7 +126,9 @@ Private Browser opens only documents, images, media and archives. Every other
 download type — executables, scripts, installers such as `.msix`, disk images,
 shortcuts — and every deceptive double extension is labelled and cannot be
 opened from Private Browser unless it matches the checksum of the release
-manifest. This does not replace operating-system malware scanning.
+manifest. The main process rechecks the installer before opening it.
+Authenticode publisher evidence is displayed separately and grants no
+additional open permission.
 
 ## Developer tools
 
