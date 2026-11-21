@@ -256,7 +256,7 @@ class BrowserController {
   private readonly downloadItems = new Map<string, DownloadItem>();
   private readonly configuredSessions = new Set<string>();
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
-  private readonly aiApprovals = new Map<string, { preview: AiPagePreview; expiresAt: number }>();
+  private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
   private readonly developerPreviewIds = new Set<string>();
   private readonly clipboardGuard = new ClipboardGuard(clipboard);
@@ -2088,7 +2088,7 @@ class BrowserController {
     return preview;
   }
 
-  approveAiPreview(previewId: string): AiApproval {
+  approveAiPreview(previewId: string, mode: 'cloud' | 'local' = 'cloud'): AiApproval {
     const pending = this.pendingAiPreviews.get(previewId);
     this.pendingAiPreviews.delete(previewId);
     if (!pending || pending.expiresAt < Date.now()) throw new Error('The page preview expired; read the page again');
@@ -2098,9 +2098,10 @@ class BrowserController {
     const accountSpaceId = this.activeAccountSpaceId(state);
     if (!sameAiSource(preview, accountSpaceId, tab) || isProtectedPage(tab.url)) throw new Error('The page, tab, or Account Space changed or is protected');
     if (!maySendAiPreviewToCloud(preview)) throw new Error('Mailbox contents never leave this device or enter an AI model');
+    if (mode === 'local' && this.aiProvider.status().mode !== 'local') throw new Error('Choose a local model before approving.');
     const token = randomUUID();
-    this.aiApprovals.set(token, { preview, expiresAt: Date.now() + 5 * 60_000 });
-    this.addPrivacyEvent('cloud-approved', 'Cloud context approved', `${preview.title} · ${preview.redactions} redaction(s)`);
+    this.aiApprovals.set(token, { preview, mode, expiresAt: Date.now() + 5 * 60_000 });
+    this.addPrivacyEvent(mode === 'local' ? 'local-read' : 'cloud-approved', mode === 'local' ? 'Local context approved' : 'Cloud context approved', `${preview.title} · ${preview.redactions} redaction(s)`);
     return { token, preview };
   }
 
@@ -2108,14 +2109,29 @@ class BrowserController {
     return this.aiProvider.status();
   }
 
-  configureAiProvider(input: AiProviderInput) {
-    const status = this.aiProvider.configure(input);
-    this.addPrivacyEvent('vault', 'AI provider configured', status.endpoint ?? 'Encrypted provider');
+  localAiModels() {
+    if (!workspaceVaultPolicy(this.store.get().activeWorkspaceId).aiExtraction) throw new Error('AI is unavailable in this workspace');
+    return this.aiProvider.localModels();
+  }
+
+  async configureAiProvider(input: AiProviderInput) {
+    const account = this.activeAccountSpaceId(this.store.get());
+    const validateSetupSpace = () => {
+      const state = this.store.get();
+      if ('mode' in input && (account !== this.activeAccountSpaceId(state) || !workspaceVaultPolicy(state.activeWorkspaceId).aiExtraction)) {
+        throw new Error('Return to the original Account Space to configure local AI.');
+      }
+    };
+    validateSetupSpace();
+    const status = await this.aiProvider.configure(input, validateSetupSpace);
+    this.revokeAiContext();
+    this.addPrivacyEvent('vault', 'AI provider configured', status.endpoint ?? 'Ollama local model');
     return status;
   }
 
   clearAiProvider() {
     const status = this.aiProvider.clear();
+    this.revokeAiContext();
     this.addPrivacyEvent('vault', 'AI provider removed', 'Encrypted provider credentials cleared');
     return status;
   }
@@ -2123,21 +2139,27 @@ class BrowserController {
   async askAi(token: string, questionValue: string): Promise<string> {
     const question = questionValue.trim();
     if (!question || question.length > 2000) throw new Error('Enter a question under 2,000 characters');
-    const preview = this.consumeAiApproval(token);
-    const answer = await this.aiProvider.ask(preview, question);
-    this.addPrivacyEvent('cloud-approved', 'Cloud AI request completed', preview.title);
+    const mode = this.aiProvider.status().mode ?? 'cloud';
+    const preview = this.consumeAiApproval(token, mode);
+    const answer = await this.aiProvider.ask(preview, question, () => this.validateAiSource(preview));
+    this.addPrivacyEvent(mode === 'local' ? 'local-read' : 'cloud-approved', mode === 'local' ? 'Local AI request completed' : 'Cloud AI request completed', preview.title);
     return answer;
   }
 
-  private consumeAiApproval(token: string): AiPagePreview {
+  private consumeAiApproval(token: string, mode: 'cloud' | 'local' = 'cloud'): AiPagePreview {
     const approval = this.aiApprovals.get(token);
     this.aiApprovals.delete(token);
     if (!approval || approval.expiresAt < Date.now()) throw new Error('AI approval expired; approve the page again');
+    if (approval.mode !== mode) throw new Error('The AI destination changed; approve the page for this destination.');
+    this.validateAiSource(approval.preview);
+    return approval.preview;
+  }
+
+  private validateAiSource(preview: AiPagePreview): void {
     const state = this.store.get();
     const tab = this.activeTab(state);
     const accountSpaceId = this.activeAccountSpaceId(state);
-    if (!sameAiSource(approval.preview, accountSpaceId, tab) || isProtectedPage(tab.url)) throw new Error('The page, tab, or Account Space changed or is protected');
-    return approval.preview;
+    if (!sameAiSource(preview, accountSpaceId, tab) || isProtectedPage(tab.url)) throw new Error('The page, tab, or Account Space changed or is protected');
   }
 
   /**
@@ -2152,7 +2174,7 @@ class BrowserController {
     const had = this.pendingAiPreviews.size + this.aiApprovals.size;
     this.pendingAiPreviews.clear();
     this.aiApprovals.clear();
-    if (had) this.addPrivacyEvent('blocked', 'Cloud context revoked', 'The approved page text was discarded before it was used');
+    if (had) this.addPrivacyEvent('blocked', 'AI context revoked', 'The approved page text was discarded before it was used');
   }
 
   listVault() {
@@ -3626,8 +3648,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('control-center:send', (_event, input: ControlCenterSendInput) => controller!.sendToControlCenter(input));
   handle('control-center:recheck', (_event, input: ControlCenterRecheckInput) => controller!.recheckControlCenterTask(input));
   handle('ai:prepare-preview', () => controller!.prepareAiPreview());
-  handle('ai:approve-preview', (_event, previewId: string) => controller!.approveAiPreview(previewId));
+  handle('ai:approve-preview', (_event, previewId: string, mode?: 'local' | 'cloud') => controller!.approveAiPreview(previewId, mode));
   handle('ai:provider-status', () => controller!.getAiProvider());
+  handle('ai:local-models', () => controller!.localAiModels());
   handle('ai:configure-provider', (_event, input: AiProviderInput) => controller!.configureAiProvider(input));
   handle('ai:clear-provider', () => controller!.clearAiProvider());
   handle('ai:ask', (_event, token: string, question: string) => controller!.askAi(token, question));
