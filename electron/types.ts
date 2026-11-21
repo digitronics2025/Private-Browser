@@ -807,6 +807,8 @@ export interface DeveloperConsoleEntry {
 
 export interface DeveloperNetworkIssue {
   at: string;
+  firstAt?: string;
+  count?: number;
   method: string;
   resourceType: string;
   url: string;
@@ -851,7 +853,9 @@ export interface DeveloperPageInfo {
   selector?: string;
   element?: string;
   sourcePath?: string;
+  sourceReference?: string;
   confidence?: 'exact' | 'source-map' | 'nearest';
+  failures?: DeveloperNetworkIssue[];
 }
 
 export interface VaultItemInput {

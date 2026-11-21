@@ -11,6 +11,7 @@ import { ReportStore } from './report-store.js';
 import { canSaveReportParameters, effectiveReportParameters, queryReportHistory, reportRouteHint } from './report-history.js';
 import { spawnCommand } from './spawn-command.js';
 import { developmentPort, isDevelopmentPortListening, matchesPortConflict, reportedDevelopmentAddress } from './dev-server-status.js';
+import { resolveInspectionSource } from './inspection-source.js';
 import { resolveInsideWorkspace, safeLiveOrigin, sanitizeOutput, stableFingerprint } from './security.js';
 
 type EventSink = (event: string, payload: unknown) => void;
@@ -33,6 +34,7 @@ export class ProjectService {
   private readonly reports: ReportStore;
   private readonly lastReportByProject = new Map<string, string>();
   private readonly sessionReportRuns = new Map<string, ReportRunParameters>();
+  private readonly inspectionSources = new Map<string, { projectId: string; pathname: string; file: string; expiresAt: number }>();
   private readonly commandStarts: number[] = [];
   private liveRunActive = false;
 
@@ -62,7 +64,7 @@ export class ProjectService {
       case 'server.stop': return this.stopServer(String(this.record(payload).projectId ?? ''));
       case 'server.restart': await this.stopServer(String(this.record(payload).projectId ?? '')); return this.startServer(payload);
       case 'inspect.page': return this.inspectPage(payload);
-      case 'inspect.open-source': return this.openSource(payload);
+      case 'inspect.open-source': return this.openInspectedSource(payload);
       case 'test.run': return this.runTest(payload);
       case 'test.rerun': return this.rerun(payload);
       case 'test.save-artifact': return this.saveTestArtifact(payload);
@@ -171,20 +173,31 @@ export class ProjectService {
     return { opened: true };
   }
 
-  private async inspectPage(payloadValue: unknown): Promise<Record<string, unknown>> {
-    const payload = this.record(payloadValue); const projectId = String(payload.projectId ?? ''); const folder = await this.folderFor(projectId);
-    const sourceUrl = String(payload.sourceUrl ?? '');
-    if (sourceUrl) {
-      try {
-        const url = new URL(sourceUrl); let path = decodeURIComponent(url.pathname);
-        if (path.startsWith('/@fs/')) path = path.slice(5);
-        else path = path.replace(/^\/+/, '');
-        const candidate = await resolveInsideWorkspace(folder.uri.fsPath, path);
-        return { ...payload, sourcePath: relative(folder.uri.fsPath, candidate), confidence: sourceUrl.includes('sourceMappingURL') ? 'source-map' : 'exact' };
-      } catch { /* fall through to the active editor as an honest nearest match */ }
+  private async inspectPage(payloadValue: unknown): Promise<Record<string, unknown> | null> {
+    const payload = this.record(payloadValue);
+    const projectId = String(payload.projectId ?? '');
+    const folder = await this.folderFor(projectId);
+    if (typeof payload.pathname !== 'string') {
+      const { route, framework, viewport, selector, element } = payload;
+      return { route, framework, viewport, selector, element };
     }
-    const activeFile = this.activeFile(folder);
-    return { ...payload, ...(activeFile ? { sourcePath: activeFile, confidence: 'nearest' } : {}) };
+    const source = await resolveInspectionSource(folder.uri.fsPath, payload.pathname);
+    if (!source) return null;
+    while (this.inspectionSources.size >= 32) this.inspectionSources.delete(this.inspectionSources.keys().next().value!);
+    const reference = randomUUID();
+    this.inspectionSources.set(reference, { projectId, pathname: payload.pathname, file: source.file, expiresAt: Date.now() + 2 * 60_000 });
+    return { reference, path: source.relativePath };
+  }
+
+  private async openInspectedSource(payloadValue: unknown): Promise<{ opened: true }> {
+    const payload = this.record(payloadValue);
+    const projectId = String(payload.projectId ?? '');
+    const pending = this.inspectionSources.get(String(payload.reference ?? ''));
+    if (!pending || pending.projectId !== projectId || pending.expiresAt <= Date.now()) throw new Error('Inspect the current page again to confirm the source file.');
+    const folder = await this.folderFor(projectId);
+    const source = await resolveInspectionSource(folder.uri.fsPath, pending.pathname);
+    if (!source || source.file !== pending.file) throw new Error('The confirmed source file changed. Inspect it again.');
+    return this.openSource({ projectId, path: source.relativePath });
   }
 
   private async approveCommand(projectId: string, command: CommandSpec): Promise<void> {

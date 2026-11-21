@@ -120,7 +120,7 @@ import type {
   TabBatchScope,
   TabGroup,
 } from './types.js';
-import { devServerStatusSchema, gitRevisionSchema, reportHistoryPageSchema, reportHistoryQuerySchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
+import { devServerStatusSchema, gitRevisionSchema, inspectionSourcePath, inspectionSourceSchema, localDevelopmentAddress, reportHistoryPageSchema, reportHistoryQuerySchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
 import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
 import { MyVaultDiskStore } from './myvault/vault-store.js';
@@ -143,7 +143,7 @@ import { canInstallPasskeyProvider, InternalPasskeyController, type PasskeyOptIn
 import { PlatformUnlockError, WindowsHelloSigner } from './myvault/windows-hello.js';
 import { PUBLIC_UPDATE_ENDPOINT, UpdateServiceStore } from './update-service.js';
 import { readUpdateBootstrap, removeUpdateBootstrap } from './update-bootstrap.js';
-import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl } from './developer-tools.js';
+import { canUseDeveloperTools, makeDeveloperReport, sanitizeDiagnosticText, sanitizeDiagnosticUrl, trackNetworkFailure } from './developer-tools.js';
 import { IpcGuard } from './ipc-guard.js';
 import { clearAndVerifyAccountSession } from './account-session.js';
 import { AccountPermissionManager } from './account-permissions.js';
@@ -303,6 +303,7 @@ class BrowserController {
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
   private readonly developerPreviewIds = new Set<string>();
+  private inspectedSource?: { reference: string; projectId: string; tabId: string; url: string; expiresAt: number };
   private readonly clipboardGuard = new ClipboardGuard({
     writeText: (text) => process.platform === 'win32' ? clipboard.write([new ClipboardItem({
       'text/plain': text,
@@ -2662,10 +2663,19 @@ class BrowserController {
 
   async runBridgeAction(action: DeveloperBridgeAction, payload: Record<string, unknown>): Promise<unknown> {
     this.requireDeveloperWorkspace();
-    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'source.open', 'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
+    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
     if (!allowed.has(action)) throw new Error('Unsupported VS Code action');
     const bridge = this.vscodeBridge.status();
     const projectId = bridge.project?.project.id;
+    if (action === 'inspect.open-source') {
+      const target = this.requireDeveloperTarget();
+      const source = this.inspectedSource;
+      if (this.sessionIsLocked || !source || source.reference !== payload.reference || source.projectId !== projectId
+        || source.tabId !== target.tab.id || source.url !== target.tab.url || source.expiresAt <= Date.now()) {
+        throw new Error('Inspect the current page again to confirm the source file.');
+      }
+      return this.vscodeBridge.request(action, { projectId, reference: source.reference });
+    }
     if ((action.startsWith('test.') || action.startsWith('reports.')) && !projectId) throw new Error('Choose an approved workspace first.');
     if (action === 'reports.search' || action === 'test.cancel' || (action === 'test.rerun' && payload.reportId)) {
       const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
@@ -2726,20 +2736,56 @@ class BrowserController {
 
   async inspectDeveloperPage(selectElement: boolean): Promise<DeveloperPageInfo> {
     const target = this.requireDeveloperTarget();
+    this.inspectedSource = undefined;
+    const initialUrl = target.tab.url;
     const expression = selectElement ? `new Promise((resolve) => {
       const finish = (value) => { document.removeEventListener('click', click, true); document.removeEventListener('keydown', key, true); resolve(value); };
       const selector = (node) => { if (node.id) return '#' + CSS.escape(node.id); const parts = []; for (let item = node; item && item.nodeType === 1 && parts.length < 5; item = item.parentElement) { let part = item.tagName.toLowerCase(); if (item.classList.length) part += '.' + [...item.classList].slice(0, 2).map((name) => CSS.escape(name)).join('.'); parts.unshift(part); } return parts.join(' > '); };
-      const click = (event) => { event.preventDefault(); event.stopPropagation(); const node = event.target; finish({ route: location.pathname, framework: window.__REACT_DEVTOOLS_GLOBAL_HOOK__ ? 'React' : 'Unknown', viewport: innerWidth + '?' + innerHeight, selector: selector(node), element: node.tagName.toLowerCase() }); };
+      const click = (event) => {
+        event.preventDefault(); event.stopPropagation();
+        const node = event.target;
+        if (!(node instanceof Element)) { finish({}); return; }
+        const source = node instanceof HTMLScriptElement ? node.src : node instanceof HTMLLinkElement && node.rel === 'stylesheet' ? node.href : undefined;
+        finish({ route: location.pathname, framework: window.__REACT_DEVTOOLS_GLOBAL_HOOK__ ? 'React' : 'Unknown', viewport: innerWidth + ' × ' + innerHeight, selector: selector(node), element: node.tagName.toLowerCase(), source });
+      };
       const key = (event) => { if (event.key === 'Escape') finish({ route: location.pathname, framework: 'Unknown', viewport: innerWidth + '?' + innerHeight }); };
       document.addEventListener('click', click, true); document.addEventListener('keydown', key, true); setTimeout(() => finish({ route: location.pathname, framework: 'Unknown', viewport: innerWidth + '?' + innerHeight }), 60000);
     })` : `(() => ({ route: location.pathname, framework: window.__REACT_DEVTOOLS_GLOBAL_HOOK__ ? 'React' : 'Unknown', viewport: innerWidth + '?' + innerHeight }))()`;
-    const raw = await this.evaluateWithCdp(target.contents, expression, selectElement) as Record<string, unknown>;
+    const result = await this.evaluateWithCdp(target.contents, expression, selectElement);
+    const raw = result && typeof result === 'object' ? result as Record<string, unknown> : {};
+    const requireSamePage = () => {
+      const current = this.requireDeveloperTarget();
+      if (current.contents !== target.contents || current.tab.url !== initialUrl || this.sessionIsLocked) {
+        throw new Error('The page changed. Inspect it again.');
+      }
+      return current;
+    };
+    const current = requireSamePage();
     const clean = (value: unknown, limit: number) => sanitizeDiagnosticText(String(value ?? ''), limit).text;
     const selector = clean(raw.selector, 500);
-    const page: DeveloperPageInfo = { route: clean(raw.route, 1_000), framework: clean(raw.framework, 100), viewport: clean(raw.viewport, 50), ...(selector ? { selector, element: clean(raw.element, 100), confidence: 'nearest' as const } : {}) };
-    if (this.vscodeBridge.status().state !== 'connected' || !this.vscodeBridge.status().project) return page;
-    const sourceUrl = target.runtime.console.at(-1)?.source;
-    return await this.vscodeBridge.request('inspect.page', { ...page, ...(sourceUrl ? { sourceUrl } : {}) }) as DeveloperPageInfo;
+    const page: DeveloperPageInfo = { route: clean(raw.route, 1_000), framework: clean(raw.framework, 100), viewport: clean(raw.viewport, 50),
+      ...(selector ? { selector, element: clean(raw.element, 100) } : {}),
+      failures: current.runtime.network.slice(-12).reverse().map(({ redactions: _redactions, ...issue }) => issue) };
+    const bridge = this.vscodeBridge.status();
+    const project = bridge.project;
+    if (bridge.state !== 'connected' || !project) return page;
+    const nearest: DeveloperPageInfo = project.activeFile ? { ...page, confidence: 'nearest' } : page;
+    const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+    if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 4)) || !project.devServerUrl) return nearest;
+    const original = new URL(initialUrl);
+    const server = localDevelopmentAddress(project.devServerUrl);
+    if (server?.origin !== original.origin) return nearest;
+    const candidate = selectElement ? (typeof raw.source === 'string' ? localDevelopmentAddress(raw.source) : undefined) : original;
+    if (!candidate || candidate.origin !== original.origin || (!selectElement && !/\.html?$/i.test(candidate.pathname))) return nearest;
+    const pathname = inspectionSourcePath(candidate.pathname);
+    if (!pathname) return nearest;
+    const projectId = project.project.id;
+    const match = inspectionSourceSchema.nullable().parse(await this.vscodeBridge.request('inspect.page', { projectId, pathname: candidate.pathname }));
+    requireSamePage();
+    const latest = this.vscodeBridge.status();
+    if (!match || latest.project?.project.id !== projectId || latest.instanceId !== bridge.instanceId) return nearest;
+    this.inspectedSource = { reference: match.reference, projectId, tabId: target.tab.id, url: initialUrl, expiresAt: Date.now() + 2 * 60_000 };
+    return { ...page, confidence: 'exact', sourcePath: match.path, sourceReference: match.reference };
   }
 
   private async evaluateWithCdp(contents: Electron.WebContents, expression: string, awaitPromise: boolean): Promise<unknown> {
@@ -4172,7 +4218,7 @@ class BrowserController {
     if (!target) return;
     const url = sanitizeDiagnosticUrl(details.url);
     const error = sanitizeDiagnosticText(details.error || '', 300);
-    target.runtime.network.push({
+    trackNetworkFailure(target.runtime.network, {
       at: new Date().toISOString(),
       method: details.method.slice(0, 16),
       resourceType: details.resourceType,
@@ -4181,7 +4227,6 @@ class BrowserController {
       ...(error.text ? { error: error.text } : {}),
       redactions: url.redactions + error.redactions,
     });
-    if (target.runtime.network.length > 100) target.runtime.network.splice(0, target.runtime.network.length - 100);
   }
 
   /**

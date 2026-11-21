@@ -33,6 +33,18 @@ export function sanitizeDiagnosticUrl(value: string): { text: string; redactions
   }
 }
 
+export function trackNetworkFailure(
+  issues: Array<DeveloperNetworkIssue & { redactions: number }>,
+  issue: DeveloperNetworkIssue & { redactions: number },
+): void {
+  const index = issues.findIndex((entry) => entry.method === issue.method && entry.url === issue.url
+    && entry.status === issue.status && entry.error === issue.error && entry.resourceType === issue.resourceType);
+  const previous = index >= 0 ? issues.splice(index, 1)[0] : undefined;
+  issues.push({ ...issue, firstAt: previous?.firstAt ?? issue.at, count: (previous?.count ?? 0) + 1,
+    redactions: (previous?.redactions ?? 0) + issue.redactions });
+  if (issues.length > 100) issues.shift();
+}
+
 export function formatDeveloperReport(report: Omit<DeveloperDiagnosticReport, 'formatted'>): string {
   const page = report.page;
   const lines = [
@@ -61,7 +73,8 @@ export function formatDeveloperReport(report: Omit<DeveloperDiagnosticReport, 'f
   if (!report.network.length) lines.push('None captured.');
   for (const issue of report.network) {
     const outcome = issue.status ? `HTTP ${issue.status}` : issue.error || 'failed';
-    lines.push(`- [${issue.at}] ${issue.method} ${issue.url} — ${outcome} (${issue.resourceType})`);
+    const timing = issue.count && issue.count > 1 ? `${issue.count} occurrences, first ${issue.firstAt}, last ${issue.at}` : issue.at;
+    lines.push(`- [${timing}] ${issue.method} ${issue.url} — ${outcome} (${issue.resourceType})`);
   }
 
   lines.push('', '## Request', 'Diagnose the most likely root cause, rank the evidence, and propose the smallest safe fix plus verification steps.');
