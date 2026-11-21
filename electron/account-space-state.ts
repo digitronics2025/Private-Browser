@@ -157,6 +157,7 @@ export class AccountSpaceStateStore {
     const accountStates = WORKSPACES.map((workspace) => createDefaultAccountState(workspace.id, ids[workspace.id]));
     for (const state of accountStates) this.saveAccountState(state);
     const manifest = createManifest(ids, 'digitronics', [], true, true);
+    manifest.ui = { ...sanitizeUiPreferences(manifest.ui), offerSetupGuide: true };
     this.saveManifest(manifest);
     return { status: 'ready', manifest, accounts, accountStates, accountRecoveries: [] };
   }

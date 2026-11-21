@@ -355,6 +355,11 @@ kbd { font: inherit; }
 .ntp-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: var(--fs-lg); color: var(--text); }
 .ntp-search input::placeholder { color: var(--text-subtle); }
 .ntp-context { display: flex; align-items: center; gap: 7px; margin: 14px 0 26px; color: var(--text-muted); font-size: var(--fs-sm); }
+.ntp-setup { display: grid; justify-items: center; gap: 8px; margin-bottom: 18px; text-align: center; font-size: var(--fs-sm); color: var(--text-muted); }
+.ntp-setup > div { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.setup-guide > p, .setup-guide li p { color: var(--text-muted); font-size: var(--fs-sm); margin: 5px 0; }
+.setup-guide > ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.setup-guide li { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .ntp-space-dot { width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--workspace-color); }
 .ntp-shortcuts { width: min(584px, 100%); display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 4px; }
 .ntp-tile { position: relative; }

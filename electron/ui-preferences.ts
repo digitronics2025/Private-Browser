@@ -12,6 +12,8 @@ export interface UiPreferences {
   sidePanelTool: SidePanelTool;
   newTabBackground: NewTabBackground;
   showRecentOnNewTab: boolean;
+  offerSetupGuide: boolean;
+  importedChromeData: boolean;
 }
 
 export type UiPreferencesPatch = Partial<UiPreferences>;
@@ -29,6 +31,8 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   sidePanelTool: 'assistant',
   newTabBackground: 'plain',
   showRecentOnNewTab: true,
+  offerSetupGuide: false,
+  importedChromeData: false,
 };
 
 function member<T extends string>(values: readonly T[], value: unknown): value is T {
@@ -50,6 +54,8 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
     sidePanelTool: member(SIDE_PANEL_TOOLS, input.sidePanelTool) ? input.sidePanelTool : DEFAULT_UI_PREFERENCES.sidePanelTool,
     newTabBackground: member(NEW_TAB_BACKGROUNDS, input.newTabBackground) ? input.newTabBackground : DEFAULT_UI_PREFERENCES.newTabBackground,
     showRecentOnNewTab: typeof input.showRecentOnNewTab === 'boolean' ? input.showRecentOnNewTab : DEFAULT_UI_PREFERENCES.showRecentOnNewTab,
+    offerSetupGuide: input.offerSetupGuide === true,
+    importedChromeData: input.importedChromeData === true,
   };
 }
 
@@ -57,7 +63,7 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
 export function requireUiPreferencesPatch(value: unknown): UiPreferencesPatch {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid interface preferences');
   const input = value as Record<string, unknown>;
-  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelTool', 'newTabBackground', 'showRecentOnNewTab']);
+  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelTool', 'newTabBackground', 'showRecentOnNewTab', 'offerSetupGuide', 'importedChromeData']);
   const keys = Object.keys(input);
   if (keys.length === 0 || keys.some((key) => !allowed.has(key))) throw new Error('Invalid interface preferences');
   const patch: UiPreferencesPatch = {};
@@ -73,6 +79,11 @@ export function requireUiPreferencesPatch(value: unknown): UiPreferencesPatch {
   if ('showRecentOnNewTab' in input) {
     if (typeof input.showRecentOnNewTab !== 'boolean') throw new Error('Invalid New Tab history setting');
     patch.showRecentOnNewTab = input.showRecentOnNewTab;
+  }
+  for (const key of ['offerSetupGuide', 'importedChromeData'] as const) {
+    if (!(key in input)) continue;
+    if (typeof input[key] !== 'boolean') throw new Error('Invalid setup preference');
+    patch[key] = input[key];
   }
   return patch;
 }

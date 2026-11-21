@@ -507,6 +507,7 @@ export interface BrowserSnapshot {
   externalBrowsers: ExternalBrowserSummary[];
   recovery?: StateRecoveryStatus;
   pendingPermission?: PermissionPrompt;
+  setupVaultStatus?: VaultStatus['lifecycle'];
   bookmarkBarVisible: boolean;
   ui: UiPreferences;
   settings: BrowserSettings;

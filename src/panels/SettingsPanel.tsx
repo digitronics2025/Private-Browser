@@ -1,18 +1,30 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Bookmark, Home, Search, Palette, Check, ChevronRight, Code2, Download, ExternalLink, Globe2, LoaderCircle, LockKeyhole, RefreshCw, Settings, Shield, ShieldCheck, Upload, TriangleAlert, X } from 'lucide-react';
 import type { AccountSpaceId, BrowserSettings, BrowserSettingsPatch, BrowserSnapshot, ChromeImportResult, ChromeProfileSource, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, UiPreferences, UiPreferencesPatch } from '../../electron/types';
 import { PanelHeader } from './common';
 import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
 import { SEARCH_ENGINES, type PresetSearchEngineId } from '../../electron/browser-settings';
+import { SetupGuide } from './SetupGuide';
 
 const THEME_OPTIONS = [['system', 'Match Windows'], ['light', 'Light'], ['dark', 'Dark']] as const;
 const BOOKMARK_BAR_OPTIONS = [['always', 'Always'], ['new-tab', 'New Tab only'], ['hidden', 'Hidden']] as const;
 const HOME_PAGE_OPTIONS = [['new-tab', 'New Tab page'], ['url', 'Web address']] as const;
 const STARTUP_OPTIONS = [['continue', 'Continue where you left off'], ['home', 'Also open Home page']] as const;
 
-export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { state: BrowserSnapshot; ui: UiPreferences; settings: BrowserSettings; onUiChange: (patch: UiPreferencesPatch) => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, onOpenVault, onSetupExit, onUiChange, onToast }: {
+  state: BrowserSnapshot;
+  ui: UiPreferences;
+  settings: BrowserSettings;
+  entry: 'overview' | 'setup';
+  onManageAccounts: () => void;
+  onOpenVault: () => void;
+  onSetupExit: () => void;
+  onUiChange: (patch: UiPreferencesPatch) => void;
+  onToast: (message: string, kind?: 'ok' | 'error') => void;
+}) {
   const [isDefault, setIsDefault] = useState<boolean | null>(null);
-  const [settingsPage, setSettingsPage] = useState<'overview' | 'updates'>('overview');
+  const [settingsPage, setSettingsPage] = useState<'overview' | 'updates' | 'setup'>(entry);
+  useEffect(() => { if (entry === 'setup') setSettingsPage('setup'); }, [entry]);
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -30,6 +42,7 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
   const [chromeImportOpen, setChromeImportOpen] = useState(false);
   const [chromeLoading, setChromeLoading] = useState(false);
   const [chromeResult, setChromeResult] = useState<ChromeImportResult | null>(null);
+  const chromeImportSection = useRef<HTMLDivElement>(null);
   const chromeDestinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && account.workspaceId !== 'banking');
   // null while the first status is still in flight — better than claiming
   // 'Active' before anything has been checked, which is what it used to do.
@@ -120,6 +133,7 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
       if (!destination || destination.workspaceId === 'banking') throw new Error('Choose a non-Banking Account Space');
       const result = await window.privateBrowser.importChrome({ profileId: chromeProfileId, workspaceId: destination.workspaceId, accountSpaceId: destination.id, bookmarks: chromeBookmarks, history: chromeHistory });
       setChromeResult(result);
+      if (!ui.importedChromeData && result.imported.bookmarks + result.imported.history > 0) onUiChange({ importedChromeData: true });
       onToast(`Imported ${result.imported.bookmarks} bookmarks and ${result.imported.history} history entries`);
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setChromeLoading(false); }
@@ -133,6 +147,21 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
     finally { setChromeLoading(false); }
   };
+  const exitSetup = () => {
+    onSetupExit();
+    setSettingsPage('overview');
+  };
+  if (settingsPage === 'setup') {
+    return <SetupGuide state={state} isDefault={isDefault} firstLaunch={ui.offerSetupGuide}
+      chromeImported={ui.importedChromeData} onAccounts={onManageAccounts} onVault={onOpenVault}
+      onDefault={() => void runDefaultBrowserAction(window.privateBrowser.openDefaultBrowserSettings)}
+      onImport={() => {
+        exitSetup();
+        void openChromeImport();
+        requestAnimationFrame(() => chromeImportSection.current?.scrollIntoView({ block: 'nearest' }));
+      }}
+      onExit={exitSetup} onFinish={() => { onUiChange({ offerSetupGuide: false }); exitSetup(); }} />;
+  }
   if (settingsPage === 'updates') {
     return <UpdatesPage
       status={updateStatus}
@@ -154,6 +183,11 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
   }
   return <div className="side-panel">
     <PanelHeader icon={Settings} eyebrow="Application" title="Settings" />
+    {state.activeWorkspaceId !== 'banking' && <div className="settings-card">
+      <div className="settings-row"><span><Settings size={17} /></span><div><strong>Browser setup</strong><small>Account Spaces, Chrome import, MyVault and optional services.</small></div>
+        <button type="button" onClick={() => setSettingsPage('setup')}>Setup guide</button>
+      </div>
+    </div>}
     <div className="settings-card">
       <div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Default browser</strong><small aria-live="polite">{isDefault === null ? 'Checking Windows association…' : isDefault ? 'Private Browser opens web links.' : 'Windows uses another browser for web links.'}</small></div>{isDefault && <b><Check size={14} /> Set</b>}</div>
       {!isDefault && <p className="import-note">In Windows Default apps, select Private Browser and choose Set default. If Windows lists individual link types, select Private Browser for HTTP and HTTPS.</p>}
@@ -163,7 +197,7 @@ export function SettingsPanel({ state, ui, settings, onUiChange, onToast }: { st
       </div>
     </div>
     <SearchHomeSettings settings={settings} onToast={onToast} />
-    <div className="settings-card chrome-import-settings">
+    <div ref={chromeImportSection} className="settings-card chrome-import-settings">
       <div className="settings-row"><span><Upload size={17} /></span><div><strong>Import from Chrome</strong><small>Bookmarks, bookmark folders and browsing history stay on this computer.</small></div><button onClick={() => chromeImportOpen ? setChromeImportOpen(false) : void openChromeImport()}>{chromeImportOpen ? 'Close' : 'Import'}</button></div>
       {chromeImportOpen && <div className="chrome-import-form">
         {chromeLoading && !chromeProfiles.length ? <div className="import-loading"><LoaderCircle className="spin" size={15} /> Detecting Chrome profiles…</div> : chromeProfiles.length > 0 ? <>
