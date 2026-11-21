@@ -210,7 +210,72 @@ export function installPreviewApi(): void {
     if (!id) state.activeTabId = tab.id;
     publish();
   };
-  const handlers: Record<string, (...args: unknown[]) => unknown> = {
+  const desktopOnly = async (): Promise<never> => { throw new Error('This action is available in the desktop app.'); };
+  const handlers: PrivateBrowserApi = {
+    // A browser preview has no native pages, file dialogs, secure windows,
+    // account tokens or local developer bridge. Make those limits explicit.
+    back: desktopOnly,
+    forward: desktopOnly,
+    stop: async () => undefined,
+    print: desktopOnly,
+    findInPage: desktopOnly,
+    stopFindInPage: async () => undefined,
+    setTabMuted: desktopOnly,
+    hardReload: async () => handlers.reload(),
+    renameBookmarkFolder: desktopOnly,
+    removeBookmarkFolder: desktopOnly,
+    exportBookmarks: desktopOnly,
+    quit: desktopOnly,
+    deleteAccountSpace: desktopOnly,
+    clearGoogleConfiguration: desktopOnly,
+    cancelGoogleConnection: async () => false,
+    gmailOverview: desktopOnly,
+    searchGmail: desktopOnly,
+    prepareGmailSend: desktopOnly,
+    sendGmail: desktopOnly,
+    listDriveFiles: desktopOnly,
+    createDriveFile: desktopOnly,
+    prepareDriveShare: desktopOnly,
+    shareDriveFile: desktopOnly,
+    listCalendarEvents: desktopOnly,
+    prepareCalendarWrite: desktopOnly,
+    writeCalendarEvent: desktopOnly,
+    listContacts: desktopOnly,
+    restoreBackup: desktopOnly,
+    disableBackup: desktopOnly,
+    cancelOperation: async () => false,
+    performRecoveryAction: desktopOnly,
+    captureDeveloperDiagnostics: desktopOnly,
+    clearDeveloperDiagnostics: async () => undefined,
+    disconnectBridge: desktopOnly,
+    selectBridgeProject: desktopOnly,
+    runBridgeAction: desktopOnly,
+    prepareDeveloperAiPreview: desktopOnly,
+    pairControlCenter: desktopOnly,
+    disconnectControlCenter: desktopOnly,
+    approveAiPreview: desktopOnly,
+    askAi: desktopOnly,
+    requestVaultUnlock: desktopOnly,
+    unlockVaultWithHello: desktopOnly,
+    enableVaultHello: desktopOnly,
+    disableVaultHello: desktopOnly,
+    requestVaultPairing: desktopOnly,
+    lockVault: desktopOnly,
+    syncVaultNow: desktopOnly,
+    getVaultConflictReview: async () => ({ local: [], cloud: [] }),
+    resolveVaultConflict: desktopOnly,
+    migrateLegacyVault: desktopOnly,
+    cleanupLegacyVault: desktopOnly,
+    openVaultEditor: desktopOnly,
+    requestSaveFromPage: desktopOnly,
+    requestVaultDelete: desktopOnly,
+    acknowledgeVaultRecovery: desktopOnly,
+    copyPassword: desktopOnly,
+    copyTotp: desktopOnly,
+    autofill: desktopOnly,
+    configureUpdateService: desktopOnly,
+    clearUpdateService: desktopOnly,
+    openUpdatePage: desktopOnly,
     getState: async () => structuredClone(state),
     controlDownload: async (id, action) => {
       const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);
@@ -860,10 +925,10 @@ export function installPreviewApi(): void {
       if (params.has('vaultGuide')) return 'locked';
       if (state.activeWorkspaceId === 'banking') return 'manual';
       const value = params.get('vaultFill');
-      return value && ['connect', 'locked', 'no-match', 'unsupported', 'ready', 'choose-login'].includes(value) ? value : 'unsupported';
+      return (['connect', 'locked', 'no-match', 'unsupported', 'ready', 'choose-login'] as const)
+        .find((candidate) => candidate === value) ?? 'unsupported';
     },
   };
-  const api = new Proxy(handlers, { get(target, property) { return target[String(property)] ?? (async () => undefined); } });
-  Object.defineProperty(window, 'privateBrowser', { value: api as unknown as PrivateBrowserApi, configurable: true });
+  Object.defineProperty(window, 'privateBrowser', { value: handlers, configurable: true });
   document.documentElement.dataset.browserPreview = 'synthetic';
 }

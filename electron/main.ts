@@ -1091,16 +1091,14 @@ class BrowserController {
     await this.showActiveTab();
   }
 
-  configureGoogle(clientId: string) {
-    const status = this.googleConfiguration.configure(clientId);
+  configureGoogle(clientId: string): void {
+    this.googleConfiguration.configure(clientId);
     this.broadcast();
-    return status;
   }
 
-  clearGoogleConfiguration() {
-    const status = this.googleConfiguration.clear();
+  clearGoogleConfiguration(): void {
+    this.googleConfiguration.clear();
     this.broadcast();
-    return status;
   }
 
   async connectGoogleAccount(accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) {

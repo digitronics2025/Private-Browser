@@ -1,5 +1,20 @@
 import { expect, test } from '@playwright/test';
 
+test('reports unavailable desktop actions without fabricating successful results', async ({ page }) => {
+  await page.goto('/');
+  const status = await page.evaluate(async () => {
+    const api = window.privateBrowser;
+    try {
+      await api.requestVaultUnlock();
+      return 'Unexpected preview unlock';
+    } catch (error) {
+      return (error as Error).message;
+    }
+  });
+  expect(status).toBe('This action is available in the desktop app.');
+  await expect(page.locator('html')).toHaveAttribute('data-browser-preview', 'synthetic');
+});
+
 test('separates file type, checksum and publisher and only enables eligible files', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 810 });
   await page.goto('/?downloads=sample');
