@@ -92,6 +92,10 @@ Google-host-only, redirect-free, bounded and magic-byte validated.
   and source revision. Mailbox content is never cloud-model input.
 - Every local read, approval, denial and vault access is logged without secret values.
 - Cloud AI is disabled until the user configures a public HTTPS OpenAI-compatible provider. The API key is OS-encrypted and never returned to the renderer.
+- Local AI uses a fixed Ollama loopback address from the main process. It checks
+  that cloud features are disabled and the selected model is installed locally
+  before transmitting approved text. Local approvals bind to the local
+  destination and cannot be spent on cloud or bridge requests.
 - Provider redirects are rejected to prevent HTTPS-to-local-network request pivots.
 
 ## Permissions
