@@ -1296,9 +1296,9 @@ class BrowserController {
     this.store.refreshAccount(record);
     if (result.ok) {
       this.addPrivacyEvent('vault', revoke ? 'Google access revoked' : 'Google API disconnected',
-        revoke ? 'Google confirmed removal of the app grant' : 'The browser removed its saved Google tools connection');
+        revoke ? 'Google confirmed removal of the app grant' : 'The browser removed its saved Google tools connection', accountSpaceId);
     } else if (record.googleConnection === 'revocation-pending') {
-      this.addPrivacyEvent('blocked', 'Google revocation pending', 'Retry when the network is available');
+      this.addPrivacyEvent('blocked', 'Google revocation pending', 'Retry when the network is available', accountSpaceId);
     } else {
       this.broadcast();
     }
@@ -1321,7 +1321,7 @@ class BrowserController {
       }
     });
     this.store.refreshAccount(this.accounts.update(accountSpaceId, (record) => { record.websiteStatus = 'not-visited'; }));
-    this.addPrivacyEvent('vault', 'Account Space data cleared', `${WORKSPACES.find((item) => item.id === account.workspaceId)?.name ?? 'An'} Account Space: website data and history were removed`);
+    this.addPrivacyEvent('vault', 'Account Space data cleared', `${WORKSPACES.find((item) => item.id === account.workspaceId)?.name ?? 'An'} Account Space: website data and history were removed`, accountSpaceId);
     await this.showActiveTab();
   }
 
@@ -1401,7 +1401,7 @@ class BrowserController {
       }
     }
     const removed = visits.size ? this.removeHistoryVisits(account.id, visits) : 0;
-    this.addPrivacyEvent('vault', 'Browsing data deleted', 'Reviewed browsing data was removed from one Account Space');
+    this.addPrivacyEvent('vault', 'Browsing data deleted', 'Reviewed browsing data was removed from one Account Space', account.id);
     return removed;
   }
 
@@ -3212,7 +3212,7 @@ class BrowserController {
       controller.signal.throwIfAborted();
       this.pendingAiPreviews.delete(pending.preview.id);
       for (const [sourceId, read] of this.pendingAiPreviews) if (read.parentId === pending.preview.id) this.pendingAiPreviews.delete(sourceId);
-      this.addPrivacyEvent(kind, 'Assistant request completed', 'Provider returned a response');
+      this.addPrivacyEvent(kind, 'Assistant request completed', 'Provider returned a response', pending.preview.accountSpaceId);
       return readAssistantAnswer(answer, pending.withEvidence, pending.excerpts);
     } catch (error) {
       if (controller.signal.aborted) return { kind: 'cancelled' };
@@ -3348,7 +3348,7 @@ class BrowserController {
     validate();
     if (provider.configured) this.recordAssistantReceipt(preview.accountSpaceId, mode, mode === 'local' ? 'http://127.0.0.1:11434' : provider.endpoint!, 'developer-request');
     const answer = await this.aiProvider.ask(preview, question, validate);
-    this.addPrivacyEvent(mode === 'local' ? 'local-read' : 'cloud-approved', mode === 'local' ? 'Local AI request completed' : 'Cloud AI request completed', 'Provider returned a response');
+    this.addPrivacyEvent(mode === 'local' ? 'local-read' : 'cloud-approved', mode === 'local' ? 'Local AI request completed' : 'Cloud AI request completed', 'Provider returned a response', preview.accountSpaceId);
     return answer;
   }
 
@@ -4371,14 +4371,14 @@ class BrowserController {
     const openFromPage = ({ url, disposition }: HandlerDetails, popup?: BrowserWindow): WindowOpenHandlerResponse => {
       if (agentHost?.isLentContents(view.webContents.id)) return { action: 'deny' };
       if (tab.workspaceId === 'banking') {
-        this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs');
+        this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs', tab.accountSpaceId);
         return { action: 'deny' };
       }
       if (!isAllowedRemoteUrl(url)) return { action: 'deny' };
       const now = Date.now();
       while (popupTimes.length && now - popupTimes[0]! > POPUP_WINDOW_MS) popupTimes.shift();
       if (popupTimes.length >= MAX_POPUPS_PER_WINDOW) {
-        this.addPrivacyEvent('blocked', 'Popups blocked', `${urlOriginForSharing(url)} opened too many windows`);
+        this.addPrivacyEvent('blocked', 'Popups blocked', `${urlOriginForSharing(url)} opened too many windows`, tab.accountSpaceId);
         return { action: 'deny' };
       }
       popupTimes.push(now);
@@ -4614,7 +4614,7 @@ class BrowserController {
       if (agentHost?.isLentContents(sourceContents?.id)) { event.preventDefault(); return; }
       if (protectedWorkspace) {
         event.preventDefault();
-        this.addPrivacyEvent('blocked', 'Download blocked in Banking', 'Banking does not allow saving downloads');
+        this.addPrivacyEvent('blocked', 'Download blocked in Banking', 'Banking does not allow saving downloads', accountSpaceId);
         return;
       }
       const downloadOrigin = safeOrigin(item.getURL());
@@ -4972,9 +4972,10 @@ class BrowserController {
     this.updateRuntime(tabId, {});
   }
 
-  private addPrivacyEvent(kind: PrivacyEvent['kind'], title: string, detail: string): void {
+  private addPrivacyEvent(kind: PrivacyEvent['kind'], title: string, detail: string, sourceAccountSpaceId?: AccountSpaceId): void {
     this.store.update((state) => {
-      const accountSpaceId = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+      const accountSpaceId = sourceAccountSpaceId ?? state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+      if (sourceAccountSpaceId && !state.accountSpaces.some((account) => account.id === sourceAccountSpaceId)) return;
       state.privacyLog.unshift({ id: randomUUID(), at: new Date().toISOString(), kind, title, detail, accountSpaceId, service: kind === 'vault' ? 'vault' : 'browser' });
       state.privacyLog = state.privacyLog.slice(0, 100);
     });
