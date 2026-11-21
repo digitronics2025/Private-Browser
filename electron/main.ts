@@ -107,7 +107,7 @@ import type {
   TabBatchScope,
   TabGroup,
 } from './types.js';
-import type { ProjectInfo, ProjectSummary } from '@private-browser/bridge-protocol';
+import { gitRevisionSchema, type ProjectInfo, type ProjectSummary } from '@private-browser/bridge-protocol';
 import { generateTotp } from './vault.js';
 import { VaultBroker, type GeneratedCredentialKind } from './myvault/vault-broker.js';
 import { MyVaultDiskStore } from './myvault/vault-store.js';
@@ -2295,9 +2295,21 @@ class BrowserController {
 
   async runBridgeAction(action: DeveloperBridgeAction, payload: Record<string, unknown>): Promise<unknown> {
     this.requireDeveloperWorkspace();
-    const allowed: ReadonlySet<string> = new Set(['project.open', 'source.open', 'server.discover', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
+    const allowed: ReadonlySet<string> = new Set(['project.open', 'project.revision', 'source.open', 'server.discover', 'server.start', 'server.stop', 'server.restart', 'inspect.page', 'inspect.open-source', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention']);
     if (!allowed.has(action)) throw new Error('Unsupported VS Code action');
-    const projectId = this.vscodeBridge.status().project?.project.id;
+    const bridge = this.vscodeBridge.status();
+    const projectId = bridge.project?.project.id;
+    if (action === 'project.revision') {
+      if (!projectId) throw new Error('Choose an approved workspace first.');
+      const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+      if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 1))) {
+        throw new Error('Install Private Browser Bridge 0.4.1 or later to view the Git revision.');
+      }
+      const result = await this.vscodeBridge.request(action, { projectId });
+      this.requireDeveloperWorkspace();
+      if (projectId !== this.vscodeBridge.status().project?.project.id) throw new Error('The selected project changed.');
+      return gitRevisionSchema.nullable().parse(result);
+    }
     let safePayload: Record<string, unknown> = { ...payload, ...(projectId ? { projectId } : {}) };
     if (action === 'ai.handoff') {
       const preview = this.consumeAiApproval(String(payload.approvalToken ?? ''));

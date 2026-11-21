@@ -96,6 +96,13 @@ into Agent Mode is the authorized project's loopback server URL.
 
 ## Project and Command Authorization
 
+The Project panel can read the branch, commit and worktree totals for the
+approved workspace root from VS Code’s built-in Git provider. It uses the
+provider’s current state and never runs a Git command or reads a diff. GitHub
+links open only on request. Local test summaries record the revision at report
+start. Bridge 0.4.1 adds this read-only action without changing earlier report
+or project formats.
+
 `adapters.ts` detects npm, pnpm, yarn, bun, or Gradle from lockfiles and trusted
 project files. It composes Vite/React, Node, Electron, PWA, Cloudflare Worker,
 WordPress/WooCommerce, and Android traits rather than choosing only one. Android

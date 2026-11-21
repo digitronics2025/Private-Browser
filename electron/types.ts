@@ -771,7 +771,7 @@ export interface DeveloperDiagnosticReport {
 }
 
 export type DeveloperBridgeAction =
-  | 'project.open' | 'source.open'
+  | 'project.open' | 'project.revision' | 'source.open'
   | 'server.discover' | 'server.start' | 'server.stop' | 'server.restart'
   | 'inspect.page' | 'inspect.open-source'
   | 'test.run' | 'test.cancel' | 'test.rerun' | 'test.save-artifact'
@@ -871,7 +871,7 @@ export interface UpdateCheckResult {
   latest: ReleaseManifest;
   checkedAt: string;
 }
-export type { BridgeStatus, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';
+export type { BridgeStatus, GitRevision, ProjectInfo, ProjectSummary, TestKind, TestReport } from '@private-browser/bridge-protocol';
 
 /** The AI Development Control Center link (docs/systems/control-center-link.md). */
 export type ControlCenterState = 'not-paired' | 'connected' | 'unreachable' | 'identity-changed' | 'unavailable';
