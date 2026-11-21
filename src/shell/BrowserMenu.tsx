@@ -109,7 +109,7 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
         <MenuItem icon={Zap} label={SIDE_PANEL_NAMES.automations} onSelect={() => actions.openTool('automations')} />
         <MenuItem icon={ScrollText} label={SIDE_PANEL_NAMES.privacy} onSelect={() => actions.openTool('privacy')} />
         <MenuSeparator />
-        <MenuItem role="menuitemcheckbox" checked={state.trackerBlocking} icon={Shield} label="Block trackers" keepOpen onSelect={actions.toggleTrackers} />
+        {state.activeWorkspaceId !== 'banking' && <MenuItem role="menuitemcheckbox" checked={state.trackerBlocking} icon={Shield} label="Block trackers" keepOpen onSelect={actions.toggleTrackers} />}
       </SubmenuItem>
       <MenuSeparator />
       <MenuItem icon={NotebookPen} label={SIDE_PANEL_NAMES.easynote} shortcut="Ctrl+Shift+Y" onSelect={() => actions.openTool('easynote')} />

@@ -157,6 +157,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:control-download` | `controlDownload(id, action)` | current account download and pause, resume, retry or cancel | `void` |
 | `browser:show-download` | `showDownload(id)` | `id: string` | `void` |
+| `browser:set-tracker-compatibility` | `setTrackerCompatibility(tabId, origin, paused)` | active regular tab, exact site origin and flag | `void` |
 | `browser:set-download-history` | `setDownloadHistory(accountId, enabled)` | current regular Account Space and whether to retain new finished downloads | `void` |
 | `browser:remove-download-entry` | `removeDownloadEntry(accountId, id)` | current regular Account Space and finished download ID | `void` |
 | `browser:choose-download-folder` | `chooseDownloadFolder(accountId)` | current regular Account Space, native picker | `void` |

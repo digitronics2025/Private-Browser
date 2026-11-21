@@ -11,6 +11,7 @@ let userDataPath: string;
 let origin: string;
 let server: Server;
 let documentHeaders: IncomingHttpHeaders | undefined;
+let trackerConnections = 0;
 const installerBytes = 'local installer fixture';
 
 function launchProfile() {
@@ -33,6 +34,7 @@ function startAccountDownload(target: string, savePath: string) {
 
 test.beforeEach(async () => {
   documentHeaders = undefined;
+  trackerConnections = 0;
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
@@ -84,6 +86,11 @@ test.beforeEach(async () => {
     }
     response.setHeader('Content-Type', 'text/html');
     response.end('<!doctype html><title>Account isolation fixture</title>');
+  });
+  server.on('connect', (request, socket) => {
+    if (request.url === 'scorecardresearch.com:443') trackerConnections++;
+    // The test proxy terminates every connection locally.
+    socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
@@ -137,6 +144,85 @@ test('offers first-launch setup once and keeps a skip after restart', async () =
   await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open setup guide' })).toHaveCount(0);
   expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.ui.offerSetupGuide))).toBe(false);
+});
+
+test('counts blocked requests for the current page and keeps Banking strict', async () => {
+  const page = await application!.firstWindow();
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  const ordinary = origin + '/tracker-page-ordinary';
+  const banking = origin + '/tracker-page-banking';
+  const probe = (url: string, number: number) => application!.evaluate(async ({ webContents }, input) => {
+    const contents = webContents.getAllWebContents().find((view) => view.getURL() === input.url);
+    if (!contents) throw new Error('Tracker fixture view is missing');
+    await contents.session.setProxy({ mode: 'fixed_servers', proxyRules: input.proxy, proxyBypassRules: '127.0.0.1' });
+    await contents.session.closeAllConnections();
+    await contents.executeJavaScript(`new Image().src = "https://scorecardresearch.com/tracker-${input.number}.gif"; true`);
+  }, { url, number, proxy: origin });
+
+  await page.evaluate((url) => window.privateBrowser.navigate(url), ordinary);
+  await probe(ordinary, 1);
+  await expect.poll(async () => (await getState()).trackerSite?.counts.analytics).toBe(1);
+  expect(trackerConnections).toBe(0);
+  const tab = (await getState()).activeTabId;
+  const pause = (value: boolean) => page.evaluate(({ tab, site, value }) =>
+    window.privateBrowser.setTrackerCompatibility(tab, site, value), { tab, site: origin, value });
+  await pause(true);
+  await probe(ordinary, 2);
+  await expect.poll(() => trackerConnections).toBeGreaterThan(0);
+  expect((await getState()).trackerSite?.counts.analytics).toBe(1);
+  await pause(false);
+  await probe(ordinary, 3);
+  await expect.poll(async () => (await getState()).trackerSite?.counts.analytics).toBe(2);
+  await page.evaluate(() => window.privateBrowser.toggleTrackerBlocking());
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
+  await page.evaluate((url) => window.privateBrowser.navigate(url), banking);
+  await probe(banking, 4);
+  await expect.poll(async () => (await getState()).trackerSite?.counts.analytics).toBe(1);
+  expect((await getState()).trackerSite).toMatchObject({ blocking: true, canPause: false });
+  await expect(page.evaluate(({ id, site }) => window.privateBrowser.setTrackerCompatibility(id, site, true),
+    { id: (await getState()).activeTabId, site: origin })).rejects.toThrow(/unavailable/);
+});
+
+test('locks browser data and native views on Windows lock until its observed unlock', async () => {
+  test.skip(process.platform !== 'win32', 'Exercises the Windows lock event path in an isolated Electron profile.');
+  let page = await application!.firstWindow();
+  const subject = origin + '/locked-window-fixture';
+  await page.evaluate(async (url) => {
+    await window.privateBrowser.switchWorkspace('personal');
+    await window.privateBrowser.navigate(url);
+    await window.privateBrowser.setUiPreferences({ lockOnWindowsSession: true, idleLockMinutes: 5 });
+  }, subject);
+  await application!.evaluate(({ powerMonitor }) => { powerMonitor.emit('lock-screen'); });
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toBeVisible();
+  const snapshot = await page.evaluate(() => window.privateBrowser.getState());
+  expect(snapshot).toMatchObject({ sessionLock: 'windows', accountSpaces: [], tabs: [], history: [], sideApps: [] });
+  expect(await application!.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((view) => view.getURL() === url), subject)).toBe(false);
+  await expect(page.evaluate(() => window.privateBrowser.listVault())).rejects.toThrow(/locked/i);
+  await application!.close();
+  application = await launchProfile();
+  page = await application.firstWindow();
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toBeVisible();
+  await application.evaluate(({ powerMonitor }) => { powerMonitor.emit('unlock-screen'); });
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toBeVisible();
+  await application.evaluate(({ powerMonitor }) => {
+    powerMonitor.emit('lock-screen');
+    powerMonitor.emit('unlock-screen');
+  });
+  await expect.poll(() => application!.evaluate(({ webContents }, url) => webContents.getAllWebContents().some((view) => view.getURL() === url), subject)).toBe(true);
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toHaveCount(0);
+  expect((await page.evaluate(() => window.privateBrowser.getState())).ui.idleLockMinutes).toBe(5);
+});
+
+test('idle auto-lock uses the Windows idle clock without leaving a browser unlock button', async () => {
+  test.skip(process.platform !== 'win32', 'Exercises the Windows idle clock integration.');
+  const page = await application!.firstWindow();
+  await application!.evaluate(({ powerMonitor }) => { powerMonitor.getSystemIdleTime = () => 301; });
+  await page.evaluate(() => window.privateBrowser.setUiPreferences({ idleLockMinutes: 5 }));
+  await expect(page.getByRole('heading', { name: 'Private Browser is locked' })).toBeVisible({ timeout: 10_000 });
+  expect((await page.evaluate(() => window.privateBrowser.getState())).sessionLock).toBe('idle');
+  await expect(page.getByRole('button', { name: /resume|unlock/i })).toHaveCount(0);
+  await expect(page.getByText('Lock and unlock Windows to resume browsing.')).toBeVisible();
 });
 
 test('checks the managed update in its own directory and opens it only on an eligible explicit action', async () => {
@@ -261,6 +347,28 @@ test('reads Google connection health without a network check and rejects another
     return api.getGoogleConnectionHealth((await api.getState()).activeAccountSpaceId);
   });
   expect(banking).toEqual({ state: 'unavailable' });
+});
+
+test('retains a named Google setup after restart and keeps Banking out of OAuth', async () => {
+  const windowBefore = await application!.firstWindow();
+  const id = await windowBefore.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Pending Google setup', 'indigo', true));
+  await expect.poll(() => windowBefore.evaluate((accountId) => window.privateBrowser.getState().then(
+    (state) => state.accountSpaces.find((account) => account.id === accountId),
+  ), id)).toMatchObject({ googleSetupPending: true, kind: 'local', googleConnection: 'disconnected' });
+
+  await application!.close();
+  application = await launchProfile();
+  const windowAfter = await application.firstWindow();
+  const restored = await windowAfter.evaluate((accountId) => window.privateBrowser.getState().then(
+    (state) => state.accountSpaces.find((account) => account.id === accountId),
+  ), id);
+  expect(restored).toMatchObject({ googleSetupPending: true, label: 'Pending Google setup', enabledModules: [] });
+  const denied = await windowAfter.evaluate(async () => {
+    const api = window.privateBrowser;
+    await api.switchWorkspace('banking');
+    return api.connectGoogleAccount((await api.getState()).activeAccountSpaceId, ['identity'], 'edge');
+  });
+  expect(denied).toMatchObject({ ok: false, error: { code: 'GOOGLE_POLICY_DENIED' } });
 });
 
 test('routes an operating-system link back to the last regular account from Banking', async () => {

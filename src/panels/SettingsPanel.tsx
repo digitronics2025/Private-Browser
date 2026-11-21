@@ -8,7 +8,10 @@ import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
 import { DEFAULT_SPELLCHECK, MAX_SETTING_URL_LENGTH, MAX_SITE_KEYWORDS, MAX_STARTUP_PAGES, SEARCH_ENGINES, SPELLCHECK_LANGUAGES, type PresetSearchEngineId, type SpellcheckLanguage, type SpellcheckSettings } from '../../electron/browser-settings';
 import type { Workspace } from '../../electron/types';
 import { SetupGuide } from './SetupGuide';
+import { IDLE_LOCK_MINUTES } from '../../electron/ui-preferences';
 import { AgentsPanel } from './AgentsPanel';
+import { SafeDiagnostics } from './SafeDiagnostics';
+import type { DiagnosticReason } from '../lib/safe-diagnostics';
 import { Bot } from 'lucide-react';
 
 const THEME_OPTIONS = [['system', 'Match Windows'], ['light', 'Light'], ['dark', 'Dark']] as const;
@@ -326,6 +329,20 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     <div className="settings-card"><div className="settings-row"><span><Palette size={17} /></span><div><strong>Appearance</strong><small>Theme for the browser frame, menus and the New Tab page.</small></div></div>
       <div className="segmented" role="radiogroup" aria-label="Theme">{THEME_OPTIONS.map(([theme, label]) => <button type="button" key={theme} role="radio" aria-checked={ui.theme === theme} className={ui.theme === theme ? 'active' : ''} onClick={() => onUiChange({ theme })}>{label}</button>)}</div>
     </div>
+    <fieldset className="settings-card screen-privacy-settings">
+      <legend>Screen privacy</legend>
+      <label><input type="checkbox" checked={Boolean(ui.lockOnWindowsSession)}
+        onChange={(event) => onUiChange({ lockOnWindowsSession: event.currentTarget.checked })} /> Lock Private Browser when Windows locks</label>
+      <label>Lock after device inactivity
+        <select value={ui.idleLockMinutes ?? 0} onChange={(event) => onUiChange({ idleLockMinutes: Number(event.currentTarget.value) })}>
+          {IDLE_LOCK_MINUTES.map((minutes) => <option key={minutes} value={minutes}>{minutes ? minutes + ' minutes' : 'Off'}</option>)}
+        </select>
+      </label>
+      <p>Locking closes live pages and side apps, locks MyVault, and disconnects Developer Bridge and Agent Mode. Tabs reload after Windows unlocks.</p>
+      <label><input type="checkbox" checked={Boolean(ui.maskTodayIdentity)}
+        onChange={(event) => onUiChange({ maskTodayIdentity: event.currentTarget.checked })} /> Mask Account Space identity on New Tab</label>
+      <p>Hides the Account Space label, avatar, bookmarks, shortcuts and recent pages while New Tab is open.</p>
+    </fieldset>
     <div className="settings-card"><div className="settings-row"><span><Bookmark size={17} /></span><div><strong>Bookmarks bar</strong><small>Where the bookmarks bar appears. Shortcut: Ctrl+Shift+B.</small></div></div>
       <div className="segmented" role="radiogroup" aria-label="Bookmarks bar">{BOOKMARK_BAR_OPTIONS.map(([mode, label]) => <button type="button" key={mode} role="radio" aria-checked={ui.bookmarkBarMode === mode} className={ui.bookmarkBarMode === mode ? 'active' : ''} onClick={() => onUiChange({ bookmarkBarMode: mode })}>{label}</button>)}</div>
     </div>
@@ -371,6 +388,8 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
         ? managed ? 'Download the installer here and choose when to open it.'
           : 'A newer Windows installer is ready on the download page. Its checksum is checked before Private Browser will open it.'
         : `Version ${result?.currentVersion ?? status?.currentVersion ?? '—'} is the latest stable release.`;
+  const installerFailure = managed?.phase === 'failed' ? managed.failure : undefined;
+  const updateDiagnostic = state === 'error' ? 'PB-UPDATE-CHECK' : installerFailure && installerDiagnostics[installerFailure];
 
   return <div className="side-panel updates-page" data-testid="updates-page">
     <button className="updates-back" aria-label="Back to Settings" onClick={onBack}><ArrowLeft size={14} /> Settings</button>
@@ -386,6 +405,7 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
         <span><small>Latest stable</small><strong>{latest ? `v${latest.version}` : 'Checking…'}</strong></span>
       </div>
       {managed && <ManagedInstallerStatus status={managed} />}
+      {updateDiagnostic && <SafeDiagnostics reason={updateDiagnostic} />}
       <div className="updates-primary-actions">
         {state === 'available' && !managed && <button className="updates-primary" onClick={onOpenDownload}><Download size={15} /> Open verified download</button>}
         {state === 'available' && managed && latest && <>
@@ -441,6 +461,14 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
     </section>
   </div>;
 }
+
+const installerDiagnostics = {
+  release: 'PB-UPDATE-RELEASE',
+  verification: 'PB-UPDATE-VERIFY',
+  storage: 'PB-UPDATE-SAVE',
+  launch: 'PB-UPDATE-OPEN',
+  cancelled: undefined,
+} satisfies Record<NonNullable<ManagedUpdateStatus['failure']>, DiagnosticReason | undefined>;
 
 function ManagedInstallerStatus({ status }: { status: ManagedUpdateStatus }) {
   switch (status.phase) {
