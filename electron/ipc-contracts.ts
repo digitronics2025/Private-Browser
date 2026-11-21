@@ -142,7 +142,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'ui:set-preferences':
       exact(args, 1); requireUiPreferencesPatch(args[0]); return;
     case 'settings:set':
-      exact(args, 1); requireBrowserSettingsPatch(args[0]); return;
+      between(args, 1, 2); requireBrowserSettingsPatch(args[0]); if (args[1] !== undefined) requireWorkspaceId(args[1]); return;
     case 'browser:home':
       exact(args, 0); return;
     case 'browser:address-matches':

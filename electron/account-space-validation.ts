@@ -8,7 +8,7 @@ import type {
 } from './types.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const WORKSPACE_IDS = new Set<WorkspaceId>(['digitronics', 'tenten', 'development', 'personal', 'banking']);
+export const WORKSPACE_IDS: ReadonlySet<WorkspaceId> = new Set(['digitronics', 'tenten', 'development', 'personal', 'banking']);
 const ACCOUNT_COLORS = new Set<AccountSpaceColor>(['indigo', 'sky', 'emerald', 'amber', 'rose', 'violet', 'slate']);
 const GOOGLE_MODULES = new Set<GoogleModule>([
   'identity',

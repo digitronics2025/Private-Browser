@@ -2,7 +2,8 @@ import type { PrivateBrowserApi } from '../electron/preload.cjs';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AccountSpaceId, AiProviderInput, AiProviderStatus, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
-import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, searchTemplateFor } from '../electron/browser-settings';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
+import type { BrowserSettings } from '../electron/types';
 import { parseWebAddress } from '../electron/security';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
@@ -141,6 +142,7 @@ export function installPreviewApi(): void {
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
+  const workspaceSettings: Partial<Record<WorkspaceId, BrowserSettings>> = {};
   let sampleGrants: PermissionGrantSummary[] = params.get('permissions') === 'sample' ? [
     { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
     { origin: 'https://mail.google.com', capability: 'notifications', duration: 'session' },
@@ -148,6 +150,7 @@ export function installPreviewApi(): void {
   let previewProvider: AiProviderStatus = { configured: false };
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
   const publish = () => {
+    state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
     state.bookmarkBarVisible = state.ui.bookmarkBarMode !== 'hidden';
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     const undo = bookmarkUndos.get(state.activeAccountSpaceId);
@@ -308,14 +311,20 @@ export function installPreviewApi(): void {
     freezeContent: async () => null,
     toggleFullscreen: async () => { state.windowState.fullscreen = !state.windowState.fullscreen; publish(); },
     // Same rules as the main process: validated patch, Home address normalized, Banking Home is the New Tab page.
-    setBrowserSettings: async (value) => {
+    setBrowserSettings: async (value, workspace) => {
       const patch = requireBrowserSettingsPatch(value);
+      const active = state.activeWorkspaceId;
+      if (workspace !== undefined && workspace !== active) throw new Error('The workspace changed. Reopen its settings.');
+      if (active === 'banking' && (patch.homePage !== undefined || patch.homePageUrl !== undefined
+        || patch.startup !== undefined || patch.startupPages !== undefined || patch.siteKeywords !== undefined)) {
+        throw new Error('Home, startup pages and site keywords are unavailable in Banking.');
+      }
       if (patch.homePageUrl !== undefined) {
         const url = parseWebAddress(patch.homePageUrl);
         if (!url) throw new Error('Enter a web address, for example tenten.ma');
         patch.homePageUrl = url;
       }
-      state.settings = mergeBrowserSettings(state.settings, patch);
+      workspaceSettings[active] = mergeBrowserSettings(state.settings, patch);
       publish();
     },
     goHome: async () => {
@@ -398,7 +407,7 @@ export function installPreviewApi(): void {
       const tab = activeTab();
       if (text === 'private://home') Object.assign(tab, { url: text, title: 'New tab', isHome: true, developerToolsAllowed: false });
       else {
-        const url = /^https?:\/\//.test(text) ? text : searchTemplateFor(state.settings).replace('%s', () => encodeURIComponent(text));
+        const url = resolveWorkspaceNavigation(text, state.settings, state.activeWorkspaceId === 'banking');
         Object.assign(tab, { url, title: new URL(url).hostname, isHome: false, zoomPercent: 100, securityWarning: url.startsWith('http:') ? 'insecure' : undefined, developerToolsAllowed: canUseDeveloperTools(tab.workspaceId, false, url) });
       }
       publish();

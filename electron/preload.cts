@@ -81,7 +81,7 @@ const api = {
     ipcRenderer.invoke('browser:open-bookmarks-in-background', accountSpaceId, ids),
   toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
   setUiPreferences: (patch: UiPreferencesPatch): Promise<void> => ipcRenderer.invoke('ui:set-preferences', patch),
-  setBrowserSettings: (patch: BrowserSettingsPatch): Promise<void> => ipcRenderer.invoke('settings:set', patch),
+  setBrowserSettings: (patch: BrowserSettingsPatch, workspace?: WorkspaceId): Promise<void> => ipcRenderer.invoke('settings:set', patch, workspace),
   freezeContent: (): Promise<string | null> => ipcRenderer.invoke('browser:freeze-content'),
   moveTab: (tabId: string, toIndex: number): Promise<void> => ipcRenderer.invoke('browser:move-tab', tabId, toIndex),
   reopenClosedTab: (): Promise<void> => ipcRenderer.invoke('browser:reopen-closed-tab'),

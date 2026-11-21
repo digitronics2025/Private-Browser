@@ -24,7 +24,7 @@ import {
   type Session,
   type WindowOpenHandlerResponse,
 } from 'electron';
-import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from './security.js';
+import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from './security.js';
 import { externalLinkAccounts, isAvailableRegularAccount, preferredExternalLinkAccount } from './external-link-routing.js';
 import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
@@ -41,7 +41,7 @@ import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendImportedBookmarks, exportBookmarksHtml, moveTabWithinAccountSpace, removeBookmark, removeBookmarkFolder, renameBookmark, renameBookmarkFolder, reorderBookmarkEntry } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
-import { mergeBrowserSettings, resolveHomeUrl, searchTemplateFor, type BrowserSettingsPatch } from './browser-settings.js';
+import { mergeBrowserSettings, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, type BrowserSettingsPatch } from './browser-settings.js';
 import { mergeUiPreferences, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
 import type {
@@ -513,7 +513,7 @@ class BrowserController {
       externalBrowsers: this.externalBrowsers.discover().map(({ id, name }) => ({ id, name })),
       bookmarkBarVisible: persisted.bookmarkBarVisible,
       ui: persisted.ui,
-      settings: persisted.settings,
+      settings: settingsForWorkspace(persisted, persisted.activeWorkspaceId),
       windowState: {
         maximized: windowReady && this.window.isMaximized(),
         fullscreen: windowReady && this.window.isFullScreen(),
@@ -619,7 +619,7 @@ class BrowserController {
 
   async navigate(value: string): Promise<void> {
     const state = this.store.get();
-    const url = normalizeNavigationInput(value, searchTemplateFor(state.settings));
+    const url = resolveWorkspaceNavigation(value, settingsForWorkspace(state, state.activeWorkspaceId), state.activeWorkspaceId === 'banking');
     const tab = this.activeTab(state);
     if (this.startupTabRecovery?.accountSpaceId === tab.accountSpaceId) {
       this.startupTabRecovery = undefined;
@@ -1015,7 +1015,7 @@ class BrowserController {
 
   async openInAccountSpace(accountSpaceId: AccountSpaceId, value: string): Promise<void> {
     const account = this.requireAccountMembership(accountSpaceId);
-    const url = normalizeNavigationInput(value, searchTemplateFor(this.store.get().settings));
+    const url = resolveWorkspaceNavigation(value, settingsForWorkspace(this.store.get(), account.workspaceId), account.workspaceId === 'banking');
     if (url !== 'private://home' && !isAllowedRemoteUrl(url)) throw new Error('Only HTTP and HTTPS pages are allowed');
     await this.newTab(account.workspaceId, url, accountSpaceId);
   }
@@ -1460,7 +1460,7 @@ class BrowserController {
   async goHome(): Promise<void> {
     const state = this.store.get();
     const workspace = WORKSPACES.find((item) => item.id === this.activeTab(state).workspaceId);
-    await this.navigate(resolveHomeUrl(state.settings, Boolean(workspace?.protected)));
+    await this.navigate(resolveHomeUrl(settingsForWorkspace(state, state.activeWorkspaceId), Boolean(workspace?.protected)));
   }
 
   /**
@@ -1469,7 +1469,27 @@ class BrowserController {
    */
   async openStartupHome(): Promise<void> {
     const state = this.store.get();
-    if (state.settings.startup !== 'home' || state.recovery || this.startupTabRecovery) return;
+    if (state.recovery || this.startupTabRecovery || state.activeWorkspaceId === 'banking') return;
+    const settings = settingsForWorkspace(state, state.activeWorkspaceId);
+    if (settings.startup === 'pages' && settings.startupPages?.length) {
+      const account = state.accountSpaces.find((candidate) => candidate.id === this.activeAccountSpaceId(state));
+      if (!account || !isAvailableRegularAccount(state, account)) return;
+      const seen = new Set(state.tabs.filter((tab) => tab.accountSpaceId === account.id && !tab.isHome && isAllowedRemoteUrl(tab.url))
+        .map((tab) => canonicalRoutineUrl(tab.url)));
+      const tabs: BrowserTab[] = [];
+      for (const url of settings.startupPages) {
+        const address = canonicalRoutineUrl(url);
+        if (seen.has(address)) continue;
+        seen.add(address);
+        tabs.push(this.backgroundTab(account.workspaceId, address, account.id));
+      }
+      if (tabs.length) {
+        this.store.update((next) => { next.tabs.push(...tabs); });
+        this.broadcast();
+      }
+      return;
+    }
+    if (settings.startup !== 'home') return;
     try {
       await this.newTab(state.activeWorkspaceId);
       await this.goHome();
@@ -1478,14 +1498,23 @@ class BrowserController {
     }
   }
 
-  setBrowserSettings(patch: BrowserSettingsPatch): void {
+  setBrowserSettings(patch: BrowserSettingsPatch, workspaceId?: WorkspaceId): void {
+    const workspace = this.store.get().activeWorkspaceId;
+    if (workspaceId && workspaceId !== workspace) throw new Error('The workspace changed. Reopen its settings.');
+    if (workspace === 'banking' && (patch.homePage !== undefined || patch.homePageUrl !== undefined
+      || patch.startup !== undefined || patch.startupPages !== undefined || patch.siteKeywords !== undefined)) {
+      throw new Error('Home, startup pages and site keywords are unavailable in Banking.');
+    }
     const next = { ...patch };
     if (next.homePageUrl !== undefined) {
       const url = parseWebAddress(next.homePageUrl);
       if (!url || !isAllowedRemoteUrl(url)) throw new Error('Enter a web address, for example tenten.ma');
       next.homePageUrl = url;
     }
-    this.store.update((state) => { state.settings = mergeBrowserSettings(state.settings, next); });
+    this.store.update((state) => {
+      const settings = state.workspaceSettings ??= {};
+      settings[workspace] = mergeBrowserSettings(settingsForWorkspace(state, workspace), next);
+    });
     this.broadcast();
   }
 
@@ -3720,7 +3749,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:open-bookmarks-in-background', (_event, account: AccountSpaceId, ids: string[]) => controller!.openBookmarksInBackground(account, ids));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
   handle('ui:set-preferences', (_event, patch: UiPreferencesPatch) => controller!.setUiPreferences(patch));
-  handle('settings:set', (_event, patch: BrowserSettingsPatch) => controller!.setBrowserSettings(patch));
+  handle('settings:set', (_event, patch: BrowserSettingsPatch, workspace?: WorkspaceId) => controller!.setBrowserSettings(patch, workspace));
   handle('browser:freeze-content', () => controller!.freezeContent());
   handle('browser:move-tab', (_event, tabId: string, toIndex: number) => controller!.moveTab(tabId, toIndex));
   handle('browser:organize-tab', (_event, action: TabOrganizationAction) => controller!.organizeTab(action));
