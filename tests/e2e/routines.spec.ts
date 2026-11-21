@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 test('reviews and opens the same reference in two saved sites on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 810 });
   await page.goto('/');
+  await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
   await page.evaluate(() => window.privateBrowser.setBrowserSettings({ siteKeywords: [
     { keyword: 'seller', template: 'https://seller.example.test/search?q=%s' },
     { keyword: 'stock', template: 'https://stock.example.test/item/%s' },
