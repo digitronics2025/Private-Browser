@@ -28,7 +28,7 @@ import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation
 import { pruneBookmarkIcons, sanitizeBookmarkIcons } from './bookmark-icons.js';
 import { isAllowedRemoteUrl } from './security.js';
 import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings, sanitizeWorkspaceSettings } from './browser-settings.js';
-import { sanitizeUiPreferences } from './ui-preferences.js';
+import { sanitizeAccountPanel, sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
 import { sanitizeBrowserRoutines } from './browser-routines.js';
 import { orderAccountTabs } from './tab-organization.js';
@@ -435,7 +435,8 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
   const shortcuts = sanitizeShortcutTiles(input.shortcuts);
   const bookmarkIcons = pruneBookmarkIcons(sanitizeBookmarkIcons(input.bookmarkIcons), bookmarks);
   const tabGroups = groups.filter((group) => tabs.some((tab) => tab.groupId === group.id));
-  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history, ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}) };
+  const sidePanel = workspaceId === 'banking' ? undefined : sanitizeAccountPanel(input.sidePanel);
+  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history, ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}), ...(sidePanel ? { sidePanel } : {}) };
 }
 
 export const MAX_SHORTCUT_TILES = 12;

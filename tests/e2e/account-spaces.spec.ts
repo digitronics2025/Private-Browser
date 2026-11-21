@@ -62,7 +62,7 @@ test('shows the Chrome-style autofill state in the vault panel without preview e
   await page.goto('/');
   await page.getByRole('button', { name: 'Open MyVault' }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
-  await expect(panel.getByRole('tab', { name: 'Vault' })).toHaveAttribute('aria-selected', 'true');
+  await expect(panel.getByRole('tab', { name: 'MyVault' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByText('Saved logins autofill matching HTTPS sign-in pages.')).toBeVisible();
   await panel.getByRole('button', { name: 'Reset remembered picks' }).click();
   await expect(page.getByText('Remembered picks cleared for this Account Space')).toBeVisible();

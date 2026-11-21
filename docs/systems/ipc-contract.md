@@ -180,7 +180,8 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 
 | Channel | Preload method | Arguments | Resolves with |
 | --- | --- | --- | --- |
-| `ui:set-preferences` | `setUiPreferences(patch)` | non-empty `UiPreferencesPatch`, validated by `requireUiPreferencesPatch` | `void` |
+| `ui:set-preferences` | `setUiPreferences(patch, accountId?)` | validated UI patch, optional expected Account Space | `void` |
+| `ui:set-panel-pin` | `setSidePanelPin(accountId, tool, enabled)` | current regular Account Space, pinnable tool and flag | `void` |
 | `settings:set` | `setBrowserSettings(patch, workspace?)` | validated behavior settings, optional expected active workspace | `void` |
 | `bookmarks:move` | `moveBookmark(level, key, toIndex)` | `BookmarkLevelInput`, `BookmarkEntryKeyInput`, integer | `void` |
 | `bookmarks:rename` | `renameBookmark(id, title)` | id, non-blank title ≤ 500 | `void` |

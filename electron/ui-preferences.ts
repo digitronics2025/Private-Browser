@@ -2,6 +2,9 @@ import { clampSidePanelWidth, SIDE_PANEL, type BookmarkBarMode } from './chrome-
 
 export type ThemePreference = 'system' | 'dark' | 'light';
 export type SidePanelTool = 'claude' | 'easynote' | 'assistant' | 'developer' | 'vault' | 'automations' | 'downloads' | 'privacy' | 'settings' | 'bookmarks' | 'history' | 'shortcuts';
+export const PINNABLE_PANEL_TOOLS = ['easynote', 'claude', 'assistant', 'developer', 'vault', 'automations', 'downloads', 'privacy'] as const;
+export type PinnablePanelTool = typeof PINNABLE_PANEL_TOOLS[number];
+export interface AccountPanelPreferences { tool?: SidePanelTool; pins?: PinnablePanelTool[] }
 export type NewTabBackground = 'plain' | 'lagoon' | 'dusk' | 'mist' | 'graphite';
 
 export interface UiPreferences {
@@ -38,6 +41,19 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
 
 function member<T extends string>(values: readonly T[], value: unknown): value is T {
   return typeof value === 'string' && (values as readonly string[]).includes(value);
+}
+
+export function isPinnablePanelTool(value: unknown): value is PinnablePanelTool {
+  return member(PINNABLE_PANEL_TOOLS, value);
+}
+
+export function sanitizeAccountPanel(value: unknown): AccountPanelPreferences | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const input = value as Partial<AccountPanelPreferences>;
+  const tool = member(SIDE_PANEL_TOOLS, input.tool) ? input.tool : undefined;
+  const pins = Array.isArray(input.pins) ? [...new Set(input.pins.slice(0, 32).filter(isPinnablePanelTool))] : [];
+  if (!tool && !pins.length) return undefined;
+  return { ...(tool ? { tool } : {}), ...(pins.length ? { pins } : {}) };
 }
 
 /**
