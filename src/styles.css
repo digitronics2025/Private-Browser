@@ -668,6 +668,9 @@ kbd { font: inherit; }
 .provider-strip > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .provider-strip strong { font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-strip small { color: var(--text-muted); font-size: var(--fs-xs); margin-top: 1px; }
+.provider-check { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: -7px 0 10px; }
+.provider-check small, .provider-check p { color: var(--text-muted); font-size: var(--fs-sm); }
+.provider-check p { flex: 1 0 100%; margin: 0; }
 .provider-strip button, .settings-row > button, .update-actions button, .credential-actions button, .download-actions button, .password-import-row > button {
   min-height: 30px; padding: 0 12px; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--surface); color: var(--text); font-size: var(--fs-sm); white-space: nowrap;

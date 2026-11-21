@@ -237,6 +237,7 @@ approved preview in main, never from the renderer. Behaviour:
 | `ai:prepare-preview` | `prepareAiPreview()` | — | `AiPagePreview` |
 | `ai:approve-preview` | `approveAiPreview(previewId, mode?)` | preview ID and optional local/cloud destination | `AiApproval` |
 | `ai:provider-status` | `getAiProvider()` | — | `AiProviderStatus` |
+| `ai:check-provider` | `checkAiProvider()` | fixed sample, regular Account Space | typed readiness or failure |
 | `ai:local-models` | `getLocalAiModels()` | — | Ollama readiness and installed local model names |
 | `ai:configure-provider` | `configureAiProvider(input)` | `input: AiProviderInput` | `AiProviderStatus` |
 | `ai:clear-provider` | `clearAiProvider()` | — | `AiProviderStatus` |
