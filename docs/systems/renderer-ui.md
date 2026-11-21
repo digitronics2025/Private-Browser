@@ -218,6 +218,11 @@ asserts `#root` scrollLeft 0 and no `.app-shell` overflow.
 
 ## New Tab Page
 
+A fresh browser offers the optional Setup guide alongside search. Skip setup
+saves the choice locally. Settings can reopen the guide at any time in regular
+workspaces. The guide opens existing Account Space, Chrome import, Windows
+default browser and vault actions only when the user chooses a step.
+
 Brand mark and "Private Browser" heading, a search field that calls `navigate`,
 the workspace and Account Space, up to 12 shortcut tiles, recently visited and
 bookmark cards, and a Customize popover with theme, backgrounds and a recent-visit

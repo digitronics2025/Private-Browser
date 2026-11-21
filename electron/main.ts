@@ -503,6 +503,8 @@ class BrowserController {
       tabGroups: persisted.tabGroupsByAccountSpace?.[activeAccountSpaceId] ?? [],
       closedTabBatch: closedBatch ? { count: closedBatch.entries.length, groupName: closedBatch.groupName } : undefined,
       pendingPermission: this.pendingPermission?.prompt,
+      setupVaultStatus: persisted.activeWorkspaceId !== 'banking' && persisted.activeWorkspaceId !== 'development'
+        ? this.vault.status().lifecycle : undefined,
       googleConfiguration: this.googleConfiguration.status(),
       externalBrowsers: this.externalBrowsers.discover().map(({ id, name }) => ({ id, name })),
       bookmarkBarVisible: persisted.bookmarkBarVisible,

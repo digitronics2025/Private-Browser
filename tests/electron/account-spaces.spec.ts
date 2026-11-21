@@ -61,6 +61,21 @@ test.afterEach(async () => {
   rmSync(userDataPath, { recursive: true, force: true });
 });
 
+test('offers first-launch setup once and keeps a skip after restart', async () => {
+  let page = await application!.firstWindow();
+  await expect(page.getByRole('button', { name: 'Open setup guide' })).toBeVisible();
+  await page.getByRole('main', { name: 'New Tab' }).getByRole('button', { name: 'Skip setup' }).click();
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) => state.ui.offerSetupGuide))).toBe(false);
+  await application!.close();
+  const env = { ...process.env, NODE_ENV: 'test' } as Record<string, string>;
+  delete env.ELECTRON_RUN_AS_NODE;
+  application = await electron.launch({ args: [join(process.cwd(), 'dist-electron/main.js'), `--user-data-dir=${userDataPath}`], env });
+  page = await application.firstWindow();
+  await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open setup guide' })).toHaveCount(0);
+  expect(await page.evaluate(() => window.privateBrowser.getState().then((state) => state.ui.offerSetupGuide))).toBe(false);
+});
+
 test('routes an operating-system link back to the last regular account from Banking', async () => {
   const page = await application!.firstWindow();
   const accountSpaceId = await page.evaluate(async () => {
