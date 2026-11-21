@@ -652,6 +652,7 @@ export function installPreviewApi(): void {
       return queryHistory(scope, state.activeAccountSpaceId, input as Parameters<PrivateBrowserApi['queryHistory']>[1]);
     }) satisfies PrivateBrowserApi['queryHistory'],
     onState: (callback) => { listeners.add(callback as (snapshot: BrowserSnapshot) => void); return () => listeners.delete(callback as (snapshot: BrowserSnapshot) => void); },
+    onDownloadProgress: () => () => undefined,
     onCommand: () => () => undefined,
     onFindResult: () => () => undefined,
     onUpdateAvailable: () => () => undefined,

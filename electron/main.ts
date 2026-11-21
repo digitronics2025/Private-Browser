@@ -101,6 +101,7 @@ import type {
   DevToolsMode,
   DownloadAction,
   DownloadBatchStatus,
+  DownloadByteProgress,
   DownloadFolderMode,
   DownloadEntry,
   AddressMatch,
@@ -213,6 +214,8 @@ type Layout = ContentInsets;
 
 const WHEEL_ZOOM_INTERVAL_MS = 100;
 const MAX_CLOSED_TABS = 25;
+const DOWNLOAD_PROGRESS_INTERVAL_MS = 120;
+const MENU_FREEZE_BUDGET_MS = 75;
 
 const AUTOMATIC_FILL_RETRY_DELAYS_MS = [0, 300, 1_000, 2_500] as const;
 /** At most this many popups per page view in any rolling window. */
@@ -287,6 +290,9 @@ class BrowserController {
   private sweepingMemory = false;
   private readonly downloads = new Map<string, LocalDownload>();
   private readonly downloadItems = new Map<string, DownloadItem>();
+  private readonly downloadProgressAccounts = new Set<AccountSpaceId>();
+  private downloadProgressTimer?: ReturnType<typeof setTimeout>;
+  private downloadProgressRevision = 0;
   private readonly downloadHistory = new DownloadHistoryStore(join(app.getPath('userData'), 'download-history'), safeStorage);
   private readonly downloadHistoryFailures = new Set<AccountSpaceId>();
   private readonly trackerProtection = new TrackerProtection();
@@ -320,6 +326,7 @@ class BrowserController {
     retainAllowOnce: boolean;
   };
   private readonly faviconCache = new Map<string, string>();
+  private readonly faviconRequests = new Map<string, Promise<string | undefined>>();
   private readonly operations = new Map<string, { accountSpaceId: AccountSpaceId; controller: AbortController }>();
   private readonly googleOverviewCursors = new Map<string, {
     accountSpaceId: AccountSpaceId; service: GoogleOverviewService; subject: string;
@@ -483,6 +490,9 @@ class BrowserController {
       }
     });
     this.window.on('closed', () => {
+      if (this.downloadProgressTimer) clearTimeout(this.downloadProgressTimer);
+      this.downloadProgressTimer = undefined;
+      this.downloadProgressAccounts.clear();
       screen.removeListener('display-metrics-changed', onDisplayChange);
       nativeTheme.removeListener('updated', onThemeChange);
       for (const runtime of this.runtimeTabs.values()) {
@@ -608,7 +618,7 @@ class BrowserController {
       bookmarkFolders: downloadAccount ? persisted.bookmarkFoldersByAccountSpace?.[downloadAccount] : undefined,
       bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
       history: persisted.history,
-      ...(downloadAccount ? this.downloadSnapshot(downloadAccount) : { downloads: [] }),
+      ...(downloadAccount ? { ...this.downloadSnapshot(downloadAccount), downloadProgressRevision: this.downloadProgressRevision } : { downloads: [] }),
       downloadHistory: !downloadAccount ? undefined : this.downloadHistoryFailures.has(downloadAccount)
         ? 'unavailable' : this.downloadHistory.status(downloadAccount),
       downloadFolder: downloadAccount ? this.downloadFolder.status(downloadAccount) : undefined,
@@ -1725,6 +1735,7 @@ class BrowserController {
       this.runtimeTabs.delete(id);
     }
     for (const key of [...this.faviconCache.keys()]) if (key.startsWith(`${accountSpaceId}:`)) this.faviconCache.delete(key);
+    for (const key of [...this.faviconRequests.keys()]) if (key.startsWith(`${accountSpaceId}:`)) this.faviconRequests.delete(key);
     this.closedTabs.delete(accountSpaceId);
     this.closedTabBatches.delete(accountSpaceId);
     this.bookmarkUndo.delete(accountSpaceId);
@@ -2092,12 +2103,20 @@ class BrowserController {
     const painted = () => view.webContents.getURL();
     if (view.webContents.isLoadingMainFrame() || isProtectedPage(painted())) return null;
     const before = painted();
+    const expires = performance.now() + MENU_FREEZE_BUDGET_MS;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
-      const image = await view.webContents.capturePage();
-      if (image.isEmpty() || painted() !== before || isProtectedPage(painted())) return null;
+      const image = await Promise.race([
+        view.webContents.capturePage(),
+        new Promise<null>((resolve) => { deadline = setTimeout(() => resolve(null), MENU_FREEZE_BUDGET_MS); }),
+      ]);
+      if (!image || performance.now() >= expires || image.isEmpty() || !view.getVisible()
+        || painted() !== before || isProtectedPage(painted())) return null;
       return `data:image/jpeg;base64,${image.toJPEG(82).toString('base64')}`;
     } catch {
       return null;
+    } finally {
+      if (deadline) clearTimeout(deadline);
     }
   }
 
@@ -3981,6 +4000,24 @@ class BrowserController {
     return { downloads, downloadBatch };
   }
 
+  private scheduleDownloadProgress(accountSpaceId: AccountSpaceId): void {
+    this.downloadProgressRevision++;
+    this.downloadProgressAccounts.add(accountSpaceId);
+    if (this.downloadProgressTimer) return;
+    this.downloadProgressTimer = setTimeout(() => {
+      this.downloadProgressTimer = undefined;
+      const active = this.activeDownloadAccount();
+      const changed = active && this.downloadProgressAccounts.has(active);
+      this.downloadProgressAccounts.clear();
+      if (!active || !changed || !this.window || this.window.isDestroyed()) return;
+      const entries: DownloadByteProgress['entries'] = [];
+      for (const { accountSpaceId, id, receivedBytes, totalBytes, state } of this.downloads.values()) {
+        if (accountSpaceId === active && state === 'progressing') entries.push({ id, receivedBytes, totalBytes });
+      }
+      this.window.webContents.send('downloads:progress', { accountSpaceId: active, revision: this.downloadProgressRevision, entries } satisfies DownloadByteProgress);
+    }, DOWNLOAD_PROGRESS_INTERVAL_MS).unref();
+  }
+
   private assertOwnDownloadFolder(accountId: AccountSpaceId): void {
     if (accountId !== this.activeDownloadAccount() || this.store.isReadOnly()) {
       throw new Error('Download folders are unavailable in this Account Space.');
@@ -4400,6 +4437,7 @@ class BrowserController {
       if (!isMainFrame) return;
       if (runtime.problem && !this.overlayOpen && this.activeTab(this.store.get()).id === tabId) view.setVisible(true);
       runtime.navigationGeneration += 1;
+      if (!_isInPlace) runtime.favicon = undefined;
       runtime.certificateError = false;
       runtime.problem = undefined;
       runtime.failedUrl = undefined;
@@ -4655,8 +4693,11 @@ class BrowserController {
       this.downloadItems.set(id, item);
       this.updateDownloadProgress(entry, item, 'progressing');
       item.on('updated', (_downloadEvent, state) => {
+        const { state: previousState, paused, canPause, canResume, canCancel, receivedBytes, totalBytes } = entry;
         this.updateDownloadProgress(entry, item, state);
-        this.broadcast();
+        if (entry.state !== previousState || entry.paused !== paused || entry.canPause !== canPause
+          || entry.canResume !== canResume || entry.canCancel !== canCancel) this.broadcast();
+        else if (entry.receivedBytes !== receivedBytes || entry.totalBytes !== totalBytes) this.scheduleDownloadProgress(entry.accountSpaceId);
       });
       item.once('done', async (_downloadEvent, state) => {
         this.downloadItems.delete(id);
@@ -4880,33 +4921,47 @@ class BrowserController {
       this.updateRuntime(tabId, { favicon: undefined });
       return;
     }
-    const tab = this.store.get().tabs.find((candidate) => candidate.id === tabId);
-    if (!tab) return;
+    const runtime = this.runtimeTabs.get(tabId);
+    const tab = this.store.getTab(tabId);
+    if (!tab || tab.isHome || !runtime || !isAllowedRemoteUrl(url)) return;
+    const generation = runtime.navigationGeneration;
     const cacheKey = `${tab.accountSpaceId}:${url}`;
-    const cached = this.faviconCache.get(cacheKey);
-    if (cached) {
-      this.rememberBookmarkIcon(tabId, cached);
-      this.updateRuntime(tabId, { favicon: cached });
-      return;
+    let dataUrl = this.faviconCache.get(cacheKey);
+    if (!dataUrl) {
+      let request = this.faviconRequests.get(cacheKey);
+      if (!request) {
+        if (this.faviconRequests.size >= 32) return;
+        request = this.readFavicon(ses, url);
+        this.faviconRequests.set(cacheKey, request);
+      }
+      dataUrl = await request;
+      if (this.faviconRequests.get(cacheKey) === request) {
+        this.faviconRequests.delete(cacheKey);
+        if (dataUrl) {
+          if (this.faviconCache.size >= 200) this.faviconCache.delete(this.faviconCache.keys().next().value!);
+          this.faviconCache.set(cacheKey, dataUrl);
+        }
+      }
     }
-    if (!isAllowedRemoteUrl(url)) return;
+    if (!dataUrl || runtime.navigationGeneration !== generation || this.runtimeTabs.get(tabId) !== runtime
+      || runtime.favicon === dataUrl || this.sessionIsLocked || runtime.view?.webContents.isDestroyed() || this.store.getTab(tabId)?.isHome) return;
+    this.rememberBookmarkIcon(tabId, dataUrl);
+    this.updateRuntime(tabId, { favicon: dataUrl });
+  }
+
+  private async readFavicon(ses: Session, url: string): Promise<string | undefined> {
     try {
       const response = await ses.fetch(url, { signal: AbortSignal.timeout(5_000), redirect: 'follow' });
-      if (!response.ok) return;
       const type = (response.headers.get('content-type') ?? '').split(';')[0]!.trim().toLowerCase();
-      if (!FAVICON_TYPES.has(type)) return;
+      if (!response.ok || !FAVICON_TYPES.has(type)) { await response.body?.cancel(); return; }
       // The page chooses this URL: the size limit is applied while reading, not
       // after the whole body is in memory (F-71).
       const declared = Number(response.headers.get('content-length'));
-      if (Number.isFinite(declared) && declared > MAX_FAVICON_BYTES) { void response.body?.cancel(); return; }
+      if (Number.isFinite(declared) && declared > MAX_FAVICON_BYTES) { await response.body?.cancel(); return; }
       const bytes = await readAtMost(response, MAX_FAVICON_BYTES);
       // The icon rides along in every state broadcast, so keep it small.
       if (!bytes?.byteLength) return;
-      const dataUrl = `data:${type};base64,${bytes.toString('base64')}`;
-      if (this.faviconCache.size >= 200) this.faviconCache.delete(this.faviconCache.keys().next().value!);
-      this.faviconCache.set(cacheKey, dataUrl);
-      this.rememberBookmarkIcon(tabId, dataUrl);
-      this.updateRuntime(tabId, { favicon: dataUrl });
+      return `data:${type};base64,${bytes.toString('base64')}`;
     } catch {
       // A site without a reachable icon is ordinary, not an error worth showing.
     }

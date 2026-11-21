@@ -326,18 +326,14 @@ records the owning tab in `htmlFullscreenOwner`; `leave-html-full-screen` from
 that tab restores it. Esc inside a page leaves window full screen only when no
 page owns it. The renderer hides all chrome while `windowState.fullscreen`.
 
-**Menus over the page.** A `WebContentsView` always paints above the React tree,
-so any menu, dialog or resize drag that overlaps the page first calls
-`freezeContent()`: `capturePage()` on the active visible view, returned as a JPEG
-`data:` URL that the renderer paints in the page rectangle, followed by
-`setOverlayOpen(true)`, which hides every view with `setVisible(false)` but —
-unlike `hideAllViews` for tab switches — leaves docked DevTools attached. Home tabs, hidden
-views, protected workspaces (Banking) and `isProtectedPage` URLs return `null`
-and get a plain backdrop instead — protected pixels never enter the chrome
-renderer. The check covers both the stored tab URL and the URL the view is
-painting, refuses while a main-frame load is in flight, and discards the capture
-if the painted URL changed during it. Nothing is written to disk and the image is dropped when the overlay
-closes.
+**Menus over the page.** A `WebContentsView` paints above React chrome. An
+overlapping menu, dialog or resize drag prepares a backdrop and hides the live
+views via `setOverlayOpen(true)`. Docked DevTools stay attached. A JPEG still
+may replace the backdrop during preparation. The menu can open while capture
+is pending. The still stays in renderer memory only until the overlay closes.
+`freezeContent()` checks both stored and painted URLs. It returns `null` for
+Home, hidden views, Banking, protected URLs, main-frame loads and expired or
+stale captures. See [Browser performance checks](../browser-performance.md).
 
 **The side app.** `applyLayout` first calls `layoutSideApps()`, which places or
 hides the selected Claude or Notes view in the side panel (hidden while `overlayOpen`, in full

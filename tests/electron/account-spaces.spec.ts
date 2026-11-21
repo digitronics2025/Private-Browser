@@ -51,6 +51,18 @@ test.beforeEach(async () => {
         : '<!doctype html><title>Page with a form</title><form><input name="unsaved"></form>');
       return;
     }
+    if (request.url?.startsWith('/profile-page?')) {
+      response.setHeader('Content-Type', 'text/html');
+      response.end('<!doctype html><title>Profile sample</title><link rel="icon" href="/profile-icon.png"><p>Local profile fixture</p>');
+      return;
+    }
+    if (request.url === '/profile-icon.png') {
+      setTimeout(() => {
+        response.setHeader('Content-Type', 'image/png');
+        response.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==', 'base64'));
+      }, 700);
+      return;
+    }
     if (request.url?.startsWith('/sample-failure?')) {
       response.writeHead(503, { 'Cache-Control': 'no-store' });
       response.end('local fixture unavailable');
@@ -763,6 +775,121 @@ test('reads and revokes native site grants only for the active origin and Accoun
   await page.evaluate((id) => window.privateBrowser.switchAccountSpace(id), owner);
   expect(await revoke()).toContainEqual({ capability: 'download', decision: 'ask' });
   expect(await page.evaluate((id) => window.privateBrowser.listAccountPermissionGrants(id), owner)).toEqual([]);
+});
+
+test('profiles a 30-tab window under a download burst and checks shortcuts over an open menu', async () => {
+  const page = await application!.firstWindow();
+  await page.evaluate(async (base) => {
+    await window.privateBrowser.switchWorkspace('personal');
+    await window.privateBrowser.navigate(base + '/profile-anchor');
+  }, origin);
+  await application!.evaluate(({ webContents }, base) => {
+    const owner = webContents.getAllWebContents().find((contents) => contents.getURL() === base + '/profile-anchor')!;
+    const ownSession = owner.session as Electron.Session & { fixtureIconRequests: number };
+    const fetch = ownSession.fetch.bind(ownSession);
+    ownSession.fixtureIconRequests = 0;
+    ownSession.fetch = (url, options) => {
+      if (url === base + '/profile-icon.png') ownSession.fixtureIconRequests++;
+      return fetch(url, options);
+    };
+  }, origin);
+  await page.evaluate(async (base) => {
+    const api = window.privateBrowser;
+    for (let index = 0; index < 24; index++) await api.newTab('personal');
+    for (let index = 0; index < 5; index++) await api.newTab('personal', base + '/profile-page?tab=' + index);
+  }, origin);
+  const getState = () => page.evaluate(() => window.privateBrowser.getState());
+  await expect.poll(async () => (await getState()).tabs.filter((tab) => tab.url.includes('/profile-page?') && tab.favicon).length).toBe(5);
+  const iconRequests = await application!.evaluate(({ webContents }, base) => {
+    const owner = webContents.getAllWebContents().find((contents) => contents.getURL() === base + '/profile-anchor')!;
+    return (owner.session as Electron.Session & { fixtureIconRequests: number }).fixtureIconRequests;
+  }, origin);
+  const timing = await page.evaluate(async () => {
+    const api = window.privateBrowser;
+    const takeSamples = async (length: number, read: () => Promise<unknown>) => {
+      const sizes: number[] = [];
+      for (let index = 0; index < length; index++) {
+        const start = performance.now();
+        await read();
+        sizes.push(performance.now() - start);
+      }
+      return sizes.sort((a, b) => a - b)[Math.floor(length * .9)];
+    };
+    const state = await api.getState();
+    return { tabs: state.tabs.length, snapshotBytes: new TextEncoder().encode(JSON.stringify(state)).length,
+      snapshotP90Ms: await takeSamples(20, api.getState), freezeP90Ms: await takeSamples(10, api.freezeContent) };
+  });
+  expect(timing.tabs).toBe(30);
+
+  await application!.evaluate(({ webContents }, { base, path }) => {
+    const owner = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(base + '/profile-page?'))!;
+    const ownSession = owner.session as Electron.Session & { fixtureProfileItem?: Electron.DownloadItem };
+    ownSession.once('will-download', () => {
+      ownSession.once('will-download', (_event, item) => {
+        item.setSavePath(path);
+        ownSession.fixtureProfileItem = item;
+      });
+    });
+    owner.downloadURL(base + '/slow-download');
+  }, { base: origin, path: join(userDataPath, 'profile-download.txt') });
+  await expect.poll(async () => (await getState()).pendingPermission?.capability).toBe('download');
+  await page.evaluate((id) => window.privateBrowser.respondToPermissionPrompt(id, 'allow-once'), (await getState()).pendingPermission!.id);
+  await expect.poll(async () => (await getState()).downloads[0]?.state).toBe('progressing');
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await page.getByRole('menuitem', { name: /^Downloads\b/ }).click();
+  const progressBar = page.getByRole('progressbar', { name: 'slow-fixture.txt', exact: true });
+  await expect(progressBar).toBeVisible();
+  await page.evaluate(() => {
+    const probe = { snapshots: 0, progress: 0, stop: () => {} };
+    const offState = window.privateBrowser.onState(() => probe.snapshots++);
+    const offProgress = window.privateBrowser.onDownloadProgress(() => probe.progress++);
+    probe.stop = () => { offState(); offProgress(); };
+    Reflect.set(window, 'profileStateProbe', probe);
+  });
+  await application!.evaluate(({ webContents }, base) => {
+    const owner = webContents.getAllWebContents().find((contents) => contents.getURL().startsWith(base + '/profile-page?'))!;
+    const item = (owner.session as Electron.Session & { fixtureProfileItem?: Electron.DownloadItem }).fixtureProfileItem!;
+    let received = item.getReceivedBytes();
+    item.getReceivedBytes = () => received;
+    for (let index = 0; index < 24; index++) {
+      received += 64 * 1024;
+      item.emit('updated', {}, 'progressing');
+    }
+  }, origin);
+  await expect.poll(async () => Number(await progressBar.getAttribute('aria-valuenow'))).toBeGreaterThan(3);
+  const { snapshots: snapshotPushes, progress: progressPushes } = await page.evaluate(() => {
+    const probe = Reflect.get(window, 'profileStateProbe') as { snapshots: number; progress: number; stop: () => void };
+    probe.stop();
+    return { snapshots: probe.snapshots, progress: probe.progress };
+  });
+  expect(snapshotPushes).toBeLessThanOrEqual(1);
+  expect(progressPushes).toBeGreaterThan(0);
+  expect(progressPushes).toBeLessThanOrEqual(2);
+  expect(iconRequests).toBe(1);
+  const downloads = (await getState()).downloads;
+  await page.evaluate((id) => window.privateBrowser.controlDownload(id, 'cancel'), downloads[0].id);
+  const remoteVisible = () => application!.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows()[0].contentView.children
+    .filter((view): view is Electron.WebContentsView => 'webContents' in view)
+    .some((view) => view.getVisible() && view.webContents.getURL() === url), origin + '/profile-page?tab=4');
+  await expect.poll(remoteVisible).toBe(true);
+  await application!.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('browser:freeze-content');
+    ipcMain.handle('browser:freeze-content', () => new Promise<null>((resolve) => {
+      Reflect.set(globalThis, 'fixtureFreezeRelease', () => resolve(null));
+    }));
+  });
+  await page.getByRole('button', { name: 'Browser menu' }).click();
+  await expect(page.getByRole('menu', { name: 'Browser menu' })).toBeVisible();
+  await expect.poll(remoteVisible).toBe(false);
+  await expect.poll(() => application!.evaluate(() => typeof Reflect.get(globalThis, 'fixtureFreezeRelease'))).toBe('function');
+  await page.keyboard.press('Control+L');
+  await expect(page.getByRole('combobox', { name: 'Address and search bar' })).toBeFocused();
+  expect(await application!.evaluate(() => {
+    const finish = Reflect.get(globalThis, 'fixtureFreezeRelease') as (() => void) | undefined;
+    finish?.();
+    return Boolean(finish);
+  })).toBe(true);
+  console.log('Windows chrome profile ' + JSON.stringify({ ...timing, iconRequests, snapshotPushes, progressPushes }));
 });
 
 test('scopes the download list and both file commands to the originating account', async () => {

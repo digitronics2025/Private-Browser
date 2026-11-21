@@ -11,6 +11,7 @@ import type { BackupWriteResult } from './account-backup.js';
 import type { BackupRestorePreview, GoogleOverviewPage, GoogleOverviewService } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
+import type { DownloadByteProgress } from './types.js';
 
 const api = {
   getAgentStatus: (): Promise<AgentUiStatus> => ipcRenderer.invoke('agents:status'),
@@ -255,6 +256,11 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, state: BrowserSnapshot) => callback(state);
     ipcRenderer.on('browser:state', listener);
     return () => { ipcRenderer.removeListener('browser:state', listener); };
+  },
+  onDownloadProgress: (callback: (progress: DownloadByteProgress) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: DownloadByteProgress) => callback(progress);
+    ipcRenderer.on('downloads:progress', listener);
+    return () => { ipcRenderer.removeListener('downloads:progress', listener); };
   },
   onCommand: (callback: (shortcut: Shortcut) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, shortcut: Shortcut) => callback(shortcut);
