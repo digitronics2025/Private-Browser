@@ -37,6 +37,7 @@ export interface NavigationToolbarProps {
   onHome: () => void;
   onSiteInfo: () => void;
   onToggleBookmark: () => void;
+  onBookmarkToFolder: () => void;
   onOpenVault: () => void;
   onZoomMenu: () => void;
   onToggleSidePanel: () => void;
@@ -179,7 +180,10 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
           <button type="button" className="omnibox-action" aria-label="Open MyVault" title="Passwords and MyVault" onClick={props.onOpenVault}><KeyRound size={16} /></button>
         )}
         {!tab.isHome && (
-          <button type="button" className={`omnibox-action ${props.bookmarked ? 'active' : ''}`} aria-label={props.bookmarked ? 'Remove bookmark' : 'Bookmark this tab'} aria-pressed={props.bookmarked} title={props.bookmarked ? 'Remove bookmark (Ctrl+D)' : 'Bookmark this tab (Ctrl+D)'} onClick={props.onToggleBookmark}>
+          <button type="button" className={`omnibox-action ${props.bookmarked ? 'active' : ''}`} aria-label={props.bookmarked ? 'Remove bookmark' : 'Bookmark this tab'} aria-pressed={props.bookmarked}
+            title={(props.bookmarked ? 'Remove bookmark' : 'Bookmark this tab') + ' (Ctrl+D). Right-click or Shift-click to choose a folder.'}
+            onClick={(event) => event.shiftKey ? props.onBookmarkToFolder() : props.onToggleBookmark()}
+            onContextMenu={(event) => { event.preventDefault(); props.onBookmarkToFolder(); }}>
             <Star size={16} fill={props.bookmarked ? 'currentColor' : 'none'} />
           </button>
         )}

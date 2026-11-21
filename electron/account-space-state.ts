@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { rememberBookmarkFolders, validateBookmarkFolders } from './bookmark-tree.js';
 import type {
   AccountBrowsingStateV2,
   AccountSpaceBookmark,
@@ -436,12 +437,14 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
     orderPath: Array.isArray(item.orderPath) ? item.orderPath.slice(0, 20).filter((part) => Number.isSafeInteger(part) && part >= 0) : [index],
   }));
   const history = sanitizeAccountItems<AccountSpaceHistoryEntry>(input.history, input.accountSpaceId, workspaceId, 10_000);
+  const bookmarkFolders = rememberBookmarkFolders(bookmarks, validateBookmarkFolders(input.bookmarkFolders));
   const historyTrimmed = input.historyTrimmed === true || (Array.isArray(input.history) && input.history.length > 10_000);
   const shortcuts = sanitizeShortcutTiles(input.shortcuts);
   const bookmarkIcons = pruneBookmarkIcons(sanitizeBookmarkIcons(input.bookmarkIcons), bookmarks);
   const tabGroups = groups.filter((group) => tabs.some((tab) => tab.groupId === group.id));
   const sidePanel = workspaceId === 'banking' ? undefined : sanitizeAccountPanel(input.sidePanel);
-  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history, ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}), ...(sidePanel ? { sidePanel } : {}) };
+  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history,
+    ...(bookmarkFolders.length ? { bookmarkFolders } : {}), ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}), ...(sidePanel ? { sidePanel } : {}) };
 }
 
 export const MAX_SHORTCUT_TILES = 12;
