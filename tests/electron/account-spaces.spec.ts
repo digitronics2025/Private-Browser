@@ -38,6 +38,12 @@ test.beforeEach(async () => {
   server = createServer((request, response) => {
     if (request.url === '/') documentHeaders = request.headers;
     response.setHeader('Cache-Control', 'public, max-age=3600');
+    if (request.url?.startsWith('http://scorecardresearch.com/tracker-')) {
+      trackerConnections++;
+      response.writeHead(404, { 'Cache-Control': 'no-store' });
+      response.end();
+      return;
+    }
     if (request.url === '/sleep-static' || request.url === '/sleep-form') {
       response.setHeader('Content-Type', 'text/html');
       response.end(request.url === '/sleep-static'
@@ -106,7 +112,6 @@ test.beforeEach(async () => {
     response.end('<!doctype html><title>Account isolation fixture</title>');
   });
   server.on('connect', (request, socket) => {
-    if (request.url === 'scorecardresearch.com:443') trackerConnections++;
     // The test proxy terminates every connection locally.
     socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
   });
@@ -191,9 +196,18 @@ test('counts blocked requests for the current page and keeps Banking strict', as
   const probe = (url: string, number: number) => application!.evaluate(async ({ webContents }, input) => {
     const contents = webContents.getAllWebContents().find((view) => view.getURL() === input.url);
     if (!contents) throw new Error('Tracker fixture view is missing');
-    await contents.session.setProxy({ mode: 'fixed_servers', proxyRules: input.proxy, proxyBypassRules: '127.0.0.1' });
-    await contents.session.closeAllConnections();
-    await contents.executeJavaScript(`new Image().src = "https://scorecardresearch.com/tracker-${input.number}.gif"; true`);
+    const trackerUrl = 'http://scorecardresearch.com/tracker-' + input.number + '.gif';
+    const proxyAddress = new URL(input.proxy).host;
+    await contents.session.setProxy({ mode: 'fixed_servers', proxyRules: proxyAddress, proxyBypassRules: '127.0.0.1' });
+    const proxy = await contents.session.resolveProxy(trackerUrl);
+    if (proxy !== 'PROXY ' + proxyAddress) throw new Error('The tracker fixture did not resolve to its local proxy.');
+    await contents.executeJavaScript(`new Promise((resolve) => {
+      const image = new Image();
+      image.hidden = true;
+      image.onload = image.onerror = () => { image.remove(); resolve(true); };
+      document.body.append(image);
+      image.src = ${JSON.stringify(trackerUrl)};
+    })`);
   }, { url, number, proxy: origin });
 
   await page.evaluate((url) => window.privateBrowser.navigate(url), ordinary);
