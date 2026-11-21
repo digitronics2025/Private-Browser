@@ -12,7 +12,7 @@ import {
 import type { ExternalBrowserId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
 import { MAX_ADDRESS_QUERY_LENGTH } from './address-matches.js';
-import { requireBrowserSettingsPatch } from './browser-settings.js';
+import { MAX_REFERENCE_LENGTH, requireBrowserSettingsPatch } from './browser-settings.js';
 import { requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
@@ -30,6 +30,18 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       args[1].forEach((id) => requireNonEmptyText(id, 'bookmark identifier', 128)); return;
     case 'routines:save':
       exact(args, 1); requireBrowserRoutine(args[0]); return;
+    case 'routines:open-reference': {
+      exact(args, 1);
+      const input = requireExactKeys(args[0], ['accountSpaceId', 'keyword', 'reference', 'reviewedUrl']);
+      requireAccountSpaceId(input.accountSpaceId);
+      if (!/^[a-z][a-z0-9-]{0,15}$/.test(requireNonEmptyText(input.keyword, 'site keyword', 16))) {
+        throw new Error('Choose a saved site keyword');
+      }
+      requireNonEmptyText(input.reference, 'product reference', MAX_REFERENCE_LENGTH);
+      const url = requireNonEmptyText(input.reviewedUrl, 'reviewed search address', 4096);
+      if (!url.startsWith('https://') || !isAllowedRemoteUrl(url)) throw new Error('Choose a secure search address');
+      return;
+    }
     case 'routines:save-tabs': {
       exact(args, 1);
       const input = requireExactKeys(args[0], ['accountSpaceId', 'kind', 'name', 'tabs']);

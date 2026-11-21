@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
+import { downloadRisk, inspectWebAddress, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
 import { isSameSiteFillCandidate, registrableSite } from '../electron/myvault/site-match';
 import { createDefaultState, sanitizeState } from '../electron/state-store';
 import { generateTotp } from '../electron/vault';
@@ -50,8 +50,27 @@ describe('navigation security', () => {
   it('warns about cleartext and internationalized look-alike domains', () => {
     expect(navigationWarning('http://example.com')).toBe('insecure');
     expect(navigationWarning('http://localhost:5173')).toBeUndefined();
+    expect(navigationWarning('http://127.0.0.1:5173')).toBeUndefined();
+    expect(navigationWarning('http://127.example.test')).toBe('insecure');
     expect(navigationWarning('https://xn--80ak6aa92e.com')).toBe('idn');
     expect(navigationWarning('https://digitronics.ma')).toBeUndefined();
+  });
+
+  it('reports the exact host, destination and address clues without accepting credentials', () => {
+    expect(inspectWebAddress('HTTPS://café.example.test:8443/stock?q=9')).toEqual({
+      host: 'xn--caf-dma.example.test:8443',
+      destination: 'https://xn--caf-dma.example.test:8443/stock?q=9',
+      clues: ['international', 'custom-port'],
+    });
+    expect(inspectWebAddress('http://[::1]:4317')).toMatchObject({ clues: ['unencrypted', 'ip-address', 'custom-port'] });
+    expect(inspectWebAddress('localhost:4317')).toMatchObject({ host: 'localhost:4317' });
+    expect(inspectWebAddress('https://www.example.test/?utm_source=mail')).toMatchObject({
+      host: 'www.example.test', destination: 'https://www.example.test/?utm_source=mail', clues: [],
+    });
+    for (const address of ['file:///example', 'not an address', 'example.com:99999', 'https://']) {
+      expect(inspectWebAddress(address)).toEqual({ issue: 'invalid' });
+    }
+    expect(inspectWebAddress('https://user:password@example.com')).toEqual({ issue: 'credentials' }); // secret-guard:allow
   });
 
   it('allows only narrow, secure, top-frame permissions outside Banking', () => {
@@ -59,6 +78,7 @@ describe('navigation security', () => {
     expect(isAllowedSitePermission('clipboard-sanitized-write', 'http://localhost:5173', false, true)).toBe(true);
     expect(isAllowedSitePermission('media', 'https://video.example/watch', false, true)).toBe(false);
     expect(isAllowedSitePermission('fullscreen', 'http://example.com', false, true)).toBe(false);
+    expect(isAllowedSitePermission('fullscreen', 'http://127.example.test', false, true)).toBe(false);
     expect(isAllowedSitePermission('fullscreen', 'https://video.example/watch', true, true)).toBe(false);
     expect(isAllowedSitePermission('fullscreen', 'https://video.example/watch', false, false)).toBe(false);
   });

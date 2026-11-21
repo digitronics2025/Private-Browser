@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { BrowserRoutine, LocalAiModels, RoutineRunResult, TabSetInput } from './types.js';
+import type { BrowserRoutine, LocalAiModels, ReferenceSearchInput, RoutineRunResult, TabSetInput } from './types.js';
 import type { AddressMatch, HistoryPage, HistoryQuery, TabBatchScope, TabOrganizationAction } from './types.js';
 import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
 import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth } from './types.js';
@@ -13,6 +13,7 @@ const api = {
   getState: (): Promise<BrowserSnapshot> => ipcRenderer.invoke('browser:get-state'),
   saveRoutine: (routine: BrowserRoutine): Promise<void> => ipcRenderer.invoke('routines:save', routine),
   saveTabSet: (input: TabSetInput): Promise<number> => ipcRenderer.invoke('routines:save-tabs', input),
+  openReferenceSearch: (input: ReferenceSearchInput): Promise<void> => ipcRenderer.invoke('routines:open-reference', input),
   deleteRoutine: (id: string): Promise<void> => ipcRenderer.invoke('routines:delete', id),
   runRoutine: (id: string): Promise<RoutineRunResult> => ipcRenderer.invoke('routines:run', id),
   markRoutineChecklist: (id: string, index: number, done: boolean): Promise<void> => ipcRenderer.invoke('routines:mark-checklist', id, index, done),
