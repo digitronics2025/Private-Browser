@@ -349,6 +349,28 @@ test('reads Google connection health without a network check and rejects another
   expect(banking).toEqual({ state: 'unavailable' });
 });
 
+test('retains a named Google setup after restart and keeps Banking out of OAuth', async () => {
+  const windowBefore = await application!.firstWindow();
+  const id = await windowBefore.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Pending Google setup', 'indigo', true));
+  await expect.poll(() => windowBefore.evaluate((accountId) => window.privateBrowser.getState().then(
+    (state) => state.accountSpaces.find((account) => account.id === accountId),
+  ), id)).toMatchObject({ googleSetupPending: true, kind: 'local', googleConnection: 'disconnected' });
+
+  await application!.close();
+  application = await launchProfile();
+  const windowAfter = await application.firstWindow();
+  const restored = await windowAfter.evaluate((accountId) => window.privateBrowser.getState().then(
+    (state) => state.accountSpaces.find((account) => account.id === accountId),
+  ), id);
+  expect(restored).toMatchObject({ googleSetupPending: true, label: 'Pending Google setup', enabledModules: [] });
+  const denied = await windowAfter.evaluate(async () => {
+    const api = window.privateBrowser;
+    await api.switchWorkspace('banking');
+    return api.connectGoogleAccount((await api.getState()).activeAccountSpaceId, ['identity'], 'edge');
+  });
+  expect(denied).toMatchObject({ ok: false, error: { code: 'GOOGLE_POLICY_DENIED' } });
+});
+
 test('routes an operating-system link back to the last regular account from Banking', async () => {
   const page = await application!.firstWindow();
   const accountSpaceId = await page.evaluate(async () => {

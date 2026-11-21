@@ -68,7 +68,7 @@ const api = {
   deleteReviewedBrowsingData: (id: string): Promise<number> => ipcRenderer.invoke('browser:delete-reviewed-data', id),
   deleteHistoryVisit: (accountId: AccountSpaceId, id: string): Promise<void> => ipcRenderer.invoke('browser:delete-history-visit', accountId, id),
   openAddressMatch: (accountSpaceId: AccountSpaceId, source: AddressMatch['source'], id: string): Promise<void> => ipcRenderer.invoke('browser:open-address-match', accountSpaceId, source, id),
-  addLocalAccountSpace: (workspaceId: WorkspaceId, label: string, color: AccountSpaceColor): Promise<AccountSpaceId> => ipcRenderer.invoke('accounts:add-local', workspaceId, label, color),
+  addLocalAccountSpace: (workspaceId: WorkspaceId, label: string, color: AccountSpaceColor, googleSetupPending = false): Promise<AccountSpaceId> => ipcRenderer.invoke('accounts:add-local', workspaceId, label, color, googleSetupPending),
   updateAccountSpace: (accountSpaceId: AccountSpaceId, label?: string, color?: AccountSpaceColor): Promise<void> => ipcRenderer.invoke('accounts:update', accountSpaceId, label, color),
   reorderAccountSpaces: (workspaceId: WorkspaceId, accountSpaceIds: AccountSpaceId[]): Promise<void> => ipcRenderer.invoke('accounts:reorder', workspaceId, accountSpaceIds),
   openInAccountSpace: (accountSpaceId: AccountSpaceId, url: string): Promise<void> => ipcRenderer.invoke('accounts:open-in', accountSpaceId, url),

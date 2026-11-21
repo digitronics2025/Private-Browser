@@ -1,0 +1,1 @@
+Google website sign-in and optional Google tools now have separate setup paths. Start with identity, choose access for each tool when needed, and resume a cancelled setup from the same Account Space.

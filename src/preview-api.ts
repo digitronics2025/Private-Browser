@@ -842,13 +842,22 @@ export function installPreviewApi(): void {
     },
     switchAccountSpace: async (value) => { const id = value as AccountSpaceId; const selected = state.accountSpaces.find((item) => item.id === id); if (!selected || selected.locked) throw new Error('Account Space is unavailable'); state.activeAccountSpaceId = id; state.activeWorkspaceId = selected.workspaceId; state.activeTabId = state.tabs.find((tab) => tab.accountSpaceId === id)!.id; publish(); },
     switchWorkspace: async (value) => { const workspaceId = value as WorkspaceId; state.activeWorkspaceId = workspaceId; state.activeAccountSpaceId = state.accountSpaces.find((item) => item.workspaceId === workspaceId)!.id; state.activeTabId = state.tabs.find((tab) => tab.accountSpaceId === state.activeAccountSpaceId)!.id; publish(); },
-    addLocalAccountSpace: async (workspaceValue, labelValue, colorValue) => { const id = crypto.randomUUID() as AccountSpaceId; const created = account(id, workspaceValue as WorkspaceId, String(labelValue), colorValue as 'indigo'); state.accountSpaces.push(created); state.tabs.push(homeTab(`preview-${id}`, created.workspaceId, id)); state.activeAccountSpaceId = id; state.activeTabId = `preview-${id}`; publish(); return id; },
+    addLocalAccountSpace: async (workspaceValue, labelValue, colorValue, googleSetupPending) => {
+      const id = crypto.randomUUID() as AccountSpaceId;
+      const created = account(id, workspaceValue as WorkspaceId, String(labelValue), colorValue as 'indigo');
+      state.accountSpaces.push({ ...created, googleSetupPending: googleSetupPending && created.workspaceId !== 'banking' ? true : undefined });
+      state.tabs.push(homeTab(`preview-${id}`, created.workspaceId, id));
+      state.activeAccountSpaceId = id;
+      state.activeTabId = `preview-${id}`;
+      publish();
+      return id;
+    },
     updateAccountSpace: async (idValue, labelValue, colorValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { if (typeof labelValue === 'string') selected.label = labelValue; if (typeof colorValue === 'string') selected.color = colorValue as typeof selected.color; publish(); } },
     reorderAccountSpaces: async (_workspace, orderValue) => { (orderValue as AccountSpaceId[]).forEach((id, order) => { const item = state.accountSpaces.find((candidate) => candidate.id === id); if (item) item.order = order; }); publish(); },
     openInAccountSpace: async () => undefined,
     setAccountSpaceLocked: async (idValue, lockedValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.locked = Boolean(lockedValue); selected.googleConnection = selected.locked ? 'locked' : 'disconnected'; publish(); } },
     configureGoogle: async () => { state.googleConfiguration = { configured: true, source: 'encrypted-settings' }; publish(); },
-    connectGoogleAccount: async (idValue, modulesValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.kind = 'google'; selected.email = selected.email ?? 'account@example.com'; selected.googleConnection = 'connected'; selected.enabledModules = [...modulesValue as typeof selected.enabledModules]; publish(); } return { ok: true }; },
+    connectGoogleAccount: async (idValue, modulesValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.kind = 'google'; delete selected.googleSetupPending; selected.email = selected.email ?? 'account@example.com'; selected.googleConnection = 'connected'; selected.enabledModules = [...modulesValue as typeof selected.enabledModules]; publish(); } return { ok: true }; },
     disconnectGoogleAccount: async (idValue, revoke) => {
       const selected = state.accountSpaces.find((item) => item.id === idValue && item.workspaceId === state.activeWorkspaceId);
       if (!selected) throw new Error('Choose an Account Space in the current workspace.');

@@ -110,7 +110,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       requireIndex(args[1]); if (Number(args[1]) >= MAX_ROUTINE_ITEMS) throw new Error('Invalid checklist position');
       requireBoolean(args[2]); return;
     case 'accounts:add-local':
-      exact(args, 3); requireWorkspaceId(args[0]); requireAccountLabel(args[1]); requireAccountColor(args[2]); return;
+      between(args, 3, 4); requireWorkspaceId(args[0]); requireAccountLabel(args[1]); requireAccountColor(args[2]);
+      if (args.length === 4) requireBoolean(args[3]); return;
     case 'accounts:update':
       between(args, 1, 3); requireAccountSpaceId(args[0]);
       if (args[1] !== undefined) requireAccountLabel(args[1]);

@@ -79,6 +79,7 @@ export interface AccountSpaceRecord {
   kind: AccountSpaceKind;
   partitionKey: string;
   sourceFingerprint?: string;
+  googleSetupPending?: boolean;
   googleIdentity?: GoogleIdentityRecord;
   refreshToken?: string;
   createdAt: string;
@@ -109,6 +110,7 @@ export interface CreateAccountSpaceInput {
   order: number;
   partitionKey?: string;
   sourceFingerprint?: string;
+  googleSetupPending?: boolean;
 }
 
 export class AccountStore {
@@ -139,6 +141,7 @@ export class AccountStore {
       kind: 'local',
       partitionKey: input.partitionKey ? requirePartitionKey(input.partitionKey, workspaceId, id) : newPartitionKey(id),
       sourceFingerprint: input.sourceFingerprint ? requireFingerprint(input.sourceFingerprint) : undefined,
+      googleSetupPending: input.googleSetupPending === true && workspaceId !== 'banking' ? true : undefined,
       createdAt,
       updatedAt: createdAt,
       lastUsedAt: createdAt,
@@ -221,6 +224,7 @@ export class AccountStore {
     }
     return this.update(id, (record) => {
       record.kind = 'google';
+      delete record.googleSetupPending;
       record.googleIdentity = validatedIdentity;
       record.refreshToken = refreshToken;
       record.enabledModules = requireGoogleModules(modules);
@@ -248,6 +252,7 @@ export class AccountStore {
       color: record.color,
       order: record.order,
       kind: record.kind,
+      googleSetupPending: record.googleSetupPending,
       email: record.googleIdentity?.email,
       displayName: record.googleIdentity?.displayName,
       avatarDataUrl: avatar ? `data:${avatar.mimeType};base64,${avatar.bytesBase64}` : undefined,
@@ -339,6 +344,7 @@ function validateRecord(value: unknown, expectedId: AccountSpaceId): AccountSpac
     kind,
     partitionKey: requirePartitionKey(input.partitionKey, workspaceId, expectedId),
     sourceFingerprint: input.sourceFingerprint ? requireFingerprint(input.sourceFingerprint) : undefined,
+    googleSetupPending: input.googleSetupPending === true && kind === 'local' && workspaceId !== 'banking' ? true : undefined,
     googleIdentity: input.googleIdentity ? validateGoogleIdentity(input.googleIdentity) : undefined,
     refreshToken: typeof input.refreshToken === 'string' && input.refreshToken.length <= 8192 ? input.refreshToken : undefined,
     createdAt,

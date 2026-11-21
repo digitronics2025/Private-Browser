@@ -76,6 +76,7 @@ export interface AccountSpaceSummary {
   color: AccountSpaceColor;
   order: number;
   kind: AccountSpaceKind;
+  googleSetupPending?: boolean;
   email?: string;
   displayName?: string;
   avatarDataUrl?: string;

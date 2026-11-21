@@ -1111,11 +1111,11 @@ class BrowserController {
     await this.showActiveTab();
   }
 
-  async addLocalAccountSpace(workspaceId: WorkspaceId, label: string, color: AccountSpaceColor): Promise<AccountSpaceId> {
+  async addLocalAccountSpace(workspaceId: WorkspaceId, label: string, color: AccountSpaceColor, googleSetupPending = false): Promise<AccountSpaceId> {
     const state = this.store.get();
     if (!WORKSPACES.some((workspace) => workspace.id === workspaceId)) throw new Error('Unknown workspace');
     const order = state.accountSpaces.filter((account) => account.workspaceId === workspaceId).length;
-    const record = this.accounts.createLocal({ workspaceId, label, color, order });
+    const record = this.accounts.createLocal({ workspaceId, label, color, order, googleSetupPending });
     try {
       this.hideAllViews();
       this.store.addAccount(record);
@@ -1187,21 +1187,33 @@ class BrowserController {
   }
 
   async connectGoogleAccount(accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId) {
-    this.requireAccountMembership(accountSpaceId);
-    const previous = this.accounts.require(accountSpaceId).googleConnection;
-    const connecting = this.accounts.update(accountSpaceId, (account) => { account.googleConnection = 'connecting'; });
-    this.store.refreshAccount(connecting);
+    const account = this.requireAccountMembership(accountSpaceId);
+    if (account.locked || account.workspaceId === 'banking') {
+      return { ok: false, error: { code: 'GOOGLE_POLICY_DENIED', message: 'Google tools are unavailable in this Account Space.', requestId: randomUUID() } } as const;
+    }
+    if (this.googleOAuth.isConnecting(accountSpaceId)) {
+      return { ok: false, error: { code: 'GOOGLE_INTERNAL', message: 'A Google connection is already in progress for this account.', requestId: randomUUID() } } as const;
+    }
+    const previous = this.accounts.require(accountSpaceId);
+    this.store.refreshAccount({ ...previous, googleConnection: 'connecting' });
     this.broadcast();
-    const result = await this.googleOAuth.connect(accountSpaceId, modules, browserId, () => this.store.get().accountSpaces.map((account) => account.id));
-    if (!result.ok) {
+    const selectedModules = previous.googleIdentity ? modules : ['identity' as const];
+    const result = await this.googleOAuth.connect(accountSpaceId, selectedModules, browserId, () => this.store.get().accountSpaces.map((account) => account.id));
+    if (!this.store.get().accountSpaces.some(({ id }) => id === accountSpaceId)) return result;
+    if (!result.ok && result.error?.code !== 'GOOGLE_CANCELLED') {
       const status = result.error?.code === 'GOOGLE_CONFIGURATION_REQUIRED' ? 'not-configured'
         : result.error?.code === 'GOOGLE_SCOPE_MISSING' ? 'partial-scopes'
           : result.error?.code === 'GOOGLE_RECONNECT_REQUIRED' ? 'reconnect-required'
             : result.error?.code === 'GOOGLE_OFFLINE' ? 'offline'
               : 'disconnected';
-      // A failed or cancelled reconnect leaves an existing grant as it was: the
-      // stored token still works, so "disconnected" would be untrue (F-58).
-      this.accounts.update(accountSpaceId, (account) => { account.googleConnection = status === 'disconnected' && account.refreshToken ? previous : status; });
+      // A failed reconnect keeps an existing usable grant. A lock or disconnect
+      // during the consent window takes precedence over the attempted connection.
+      const current = this.accounts.require(accountSpaceId);
+      if (!current.locked && current.googleConnection === previous.googleConnection) {
+        this.accounts.update(accountSpaceId, (record) => {
+          record.googleConnection = status === 'disconnected' && record.refreshToken ? previous.googleConnection : status;
+        });
+      }
     }
     this.store.refreshAccount(this.accounts.require(accountSpaceId));
     this.recordGoogleCheck(accountSpaceId, result);
@@ -1242,13 +1254,7 @@ class BrowserController {
 
   cancelGoogleConnection(accountSpaceId: AccountSpaceId): boolean {
     this.requireAccountMembership(accountSpaceId);
-    const cancelled = this.googleOAuth.cancel(accountSpaceId);
-    if (cancelled) {
-      const record = this.accounts.update(accountSpaceId, (account) => { account.googleConnection = 'disconnected'; });
-      this.store.refreshAccount(record);
-      this.broadcast();
-    }
-    return cancelled;
+    return this.googleOAuth.cancel(accountSpaceId);
   }
 
   async disconnectGoogleAccount(accountSpaceId: AccountSpaceId, revoke = false) {
@@ -4719,7 +4725,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:delete-reviewed-data', (_event, id: string) => controller!.deleteReviewedBrowsingData(id));
   handle('browser:delete-history-visit', (_event, account: AccountSpaceId, id: string) => controller!.deleteHistoryVisit(account, id));
   handle('browser:open-address-match', (_event, account: AccountSpaceId, source: AddressMatch['source'], id: string) => controller!.openAddressMatch(account, source, id));
-  handle('accounts:add-local', (_event, workspaceId: WorkspaceId, label: string, color: AccountSpaceColor) => controller!.addLocalAccountSpace(workspaceId, label, color));
+  handle('accounts:add-local', (_event, workspaceId: WorkspaceId, label: string, color: AccountSpaceColor, googleSetupPending?: boolean) => controller!.addLocalAccountSpace(workspaceId, label, color, googleSetupPending));
   handle('accounts:update', (_event, id: AccountSpaceId, label?: string, color?: AccountSpaceColor) => controller!.updateAccountSpace(id, label, color));
   handle('accounts:reorder', (_event, workspaceId: WorkspaceId, ids: AccountSpaceId[]) => controller!.reorderAccountSpaces(workspaceId, ids));
   handle('accounts:open-in', (_event, id: AccountSpaceId, url: string) => controller!.openInAccountSpace(id, url));
