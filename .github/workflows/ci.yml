@@ -7,8 +7,7 @@ name: Verify and package
 #                      branch (Actions -> Verify and package -> Run workflow) before merging.
 #   Push to main    -> `verify`, then — only when the application changed — the Windows
 #                      transport/Electron journeys + installer, then the R2/D1 publish.
-#                      Cloudflare download-service changes deploy from here too, once,
-#                      reusing this run's `verify` instead of running the gate a second time.
+#                      Download-service inputs are reported separately from installer publication.
 #   workflow_dispatch -> verify + Windows journeys + installer for the chosen ref (never publishes).
 
 on:
@@ -95,12 +94,32 @@ jobs:
         run: |
           if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]] || ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-          elif git diff --quiet "$BEFORE_SHA" "$AFTER_SHA" -- cloudflare package.json package-lock.json .github/workflows/ci.yml; then
+          elif git diff --quiet "$BEFORE_SHA" "$AFTER_SHA" -- cloudflare package.json package-lock.json .github/workflows/deploy-cloudflare.yml; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Cloudflare runtime and dependency inputs are unchanged; no service deploy."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Summarize affected release paths
+        shell: bash
+        env:
+          APP_CHANGED: ${{ steps.app.outputs.app }}
+          WORKER_CHANGED: ${{ steps.cloudflare.outputs.changed }}
+        run: |
+          {
+            echo '### Release path classification'
+            if [[ "$APP_CHANGED" == "true" ]]; then
+              echo '- Windows app inputs changed. Windows verification and publication gates apply.'
+            else
+              echo '- Instructions, documentation or release tooling only. App publication skipped.'
+            fi
+            if [[ "$WORKER_CHANGED" == "true" ]]; then
+              echo '- Download Worker inputs changed. The Worker deployment path is tracked separately.'
+            else
+              echo '- Download Worker inputs unchanged.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   verify:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
@@ -158,7 +177,8 @@ jobs:
       - name: Exercise real Electron Account Space isolation
         run: npm run test:electron
       - name: Verify Electron MyVault boundary
-        run: npm run test:e2e
+        # The previous Electron suite built these inputs on this same runner.
+        run: npm run test:e2e:only
       - name: Select the next release version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: pwsh
