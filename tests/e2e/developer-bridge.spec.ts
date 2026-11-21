@@ -14,15 +14,16 @@ function snapshot(workspaceId: 'development' | 'banking') {
   return { workspaces, activeWorkspaceId: workspaceId, activeAccountSpaceId: active.id, activeTabId: workspaceId, tabs, bookmarks: [], history: [], downloads: [], privacyLog: [], trackerBlocking: true, bookmarkBarVisible: true, accountSpaces: accounts, accountHealth: accounts.map((account) => ({ accountSpaceId: account.id, status: account.googleConnection, checkedAt: '2026-09-12T10:00:00Z' })), googleConfiguration: { configured: false }, externalBrowsers: [] };
 }
 
-async function installMock(page: import('@playwright/test').Page, workspaceId: 'development' | 'banking', connected = false, inspection = false) {
-  await page.addInitScript(({ state, connected, inspection }) => {
+async function installMock(page: import('@playwright/test').Page, workspaceId: 'development' | 'banking', connected = false, inspection = false, scenario = false) {
+  await page.addInitScript(({ state, connected, inspection, scenario }) => {
     if (inspection) Object.assign(state.tabs.find((tab) => tab.id === state.activeTabId)!, {
       url: 'http://127.0.0.1:5173/catalogue.html', title: 'Inspection fixture', isHome: false, developerToolsAllowed: true,
     });
-    const project = { project: { id: 'a'.repeat(32), name: 'Fixture workspace', trusted: true }, framework: 'Vite', packageManager: 'npm', types: ['vite-react'] };
+    const project = { project: { id: 'a'.repeat(32), name: 'Fixture workspace', trusted: true }, framework: 'Vite', packageManager: 'npm', types: ['vite-react'],
+      ...(scenario ? { devServerUrl: 'http://127.0.0.1:5173/' } : {}) };
     const commit = 'a'.repeat(40);
     let bridge: { state: string; browserVersion: string; extensionVersion?: string; project?: typeof project; pairingCode?: string; pairingExpiresAt?: number; activity?: string; vscodeVersion?: string; instanceId?: string } = connected
-      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: '0.4.3', vscodeVersion: '1.95.3', instanceId: 'abad0000-0000-4000-8000-000000000010', project }
+      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: scenario ? '0.4.5' : '0.4.3', vscodeVersion: '1.95.3', instanceId: 'abad0000-0000-4000-8000-000000000010', project }
       : { state: 'disconnected', browserVersion: '0.4.0' };
     let ui: Record<string, unknown> = {};
     let server: Record<string, unknown> = { phase: 'stopped', expectedUrl: 'http://localhost:5173/' };
@@ -66,7 +67,14 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
           document.documentElement.dataset.replayedReport = String(payload.reportId);
           return report;
         }
-        if (action === 'test.run') return new Promise((_resolve, reject) => { rejectTest = reject; });
+        if (action === 'test.configuration') return { fixtures: ['catalogue.json'] };
+        if (action === 'test.run') {
+          if (scenario) {
+            document.documentElement.dataset.testScenario = JSON.stringify(payload);
+            return report;
+          }
+          return new Promise((_resolve, reject) => { rejectTest = reject; });
+        }
         if (action === 'test.cancel') {
           if (!rejectTest) return { stopped: false };
           rejectTest(new Error('Test stopped'));
@@ -91,8 +99,27 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
       setLayout: async () => undefined,
     }, { get: (target, property) => property in target ? target[property as keyof typeof target] : async () => undefined });
     Object.defineProperty(window, 'privateBrowser', { value: api });
-  }, { state: snapshot(workspaceId), connected, inspection });
+  }, { state: snapshot(workspaceId), connected, inspection, scenario });
 }
+
+test('sends the exact local route, fixture and selected viewports for baseline comparison', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await installMock(page, 'development', true, false, true);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  await page.getByRole('tab', { name: 'Developer Bridge' }).click();
+  await page.getByRole('tab', { name: 'Test', exact: true }).click();
+  const scenario = page.getByRole('group', { name: 'Local test scenario' });
+  await scenario.getByLabel('Route', { exact: true }).fill('/catalogue/prices');
+  await scenario.getByLabel('Data fixture').selectOption('catalogue.json');
+  await scenario.getByLabel('Mobile', { exact: true }).check();
+  await scenario.getByRole('button', { name: 'Compare with baseline' }).click();
+  await expect.poll(() => page.locator('html').getAttribute('data-test-scenario')).toBe(JSON.stringify({
+    kind: 'baseline-compare', url: 'http://127.0.0.1:5173/catalogue/prices', viewports: ['desktop', 'mobile'], fixture: 'catalogue.json',
+  }));
+  await scenario.getByLabel('Route', { exact: true }).fill('//external.example.test/catalogue');
+  await expect(scenario.getByRole('button', { name: 'Save local baseline' })).toBeDisabled();
+});
 
 test('opens only a confirmed inspection source and displays grouped failures', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 810 });
