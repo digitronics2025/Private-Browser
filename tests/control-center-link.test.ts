@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ControlCenterLink, identityFingerprint, isLoopbackControlCenterUrl, verifyStatement, type SealedStorage } from '../electron/control-center-link';
+import type { AccountSpaceId } from '../electron/types';
 
 /**
  * The Control Center link (docs/systems/control-center-link.md). The vectors
@@ -67,7 +68,7 @@ function fakeControlCenter(options: FakeOptions = {}) {
       if (custom) return json(custom.status, custom.body);
       return json(201, task('TASK-0007'));
     }
-    if (path === '/api/connected-app/tasks') return json(200, [task('TASK-0007')]);
+    if (path === '/api/connected-app/tasks') return json(200, [{ ...task('TASK-0007'), status: 'COMPLETED' }]);
     if (/\/evidence$/.test(path)) return json(201, { artifactId: 'a1', name: 'browser-recheck-1.md', created: true });
     return json(404, { error: { code: 'NOT_FOUND', message: 'nope' } });
   }) as typeof fetch;
@@ -106,6 +107,26 @@ describe('Control Center statements', () => {
 });
 
 describe('Control Center link', () => {
+  it('keeps the task route and receipt bound to its owning Account Space across restart', async () => {
+    const h = harness();
+    await h.link.pair('12345678');
+    const accountSpaceId = '122b503d-a1b3-497a-a610-e193af8d0702' as AccountSpaceId;
+    const url = 'http://127.0.0.1:5173/cart?fixture=sample#heading';
+    const current = { accountSpaceId, url };
+    const capture = '2026-11-21T18:00:00.000Z';
+    await h.link.createTask({ repositoryId: 'r1', note: 'Fix cart', sourceUrl: 'http://127.0.0.1:5173/cart',
+      pageOrigin: null, evidence: '{}', currentPage: current, capturedAt: capture });
+    const restored = h.make();
+    await expect(restored.addRecheck('TASK-0007', { ...current, url: 'http://127.0.0.1:5173/checkout' }, '{}', capture))
+      .rejects.toThrow(/original route/);
+    const other = { ...current, accountSpaceId: '122b503d-a1b3-497a-a610-e193af8d0703' as AccountSpaceId };
+    expect((await restored.tasks(other))[0].browserContext).toBeUndefined();
+    expect((await restored.tasks(current))[0].browserContext).toMatchObject({ routeMatch: true, route: 'http://127.0.0.1:5173/cart' });
+    await expect(restored.addRecheck('TASK-0007', current, '{}', capture)).resolves.toMatchObject({ name: 'browser-recheck-1.md', capturedAt: capture });
+    expect((await h.make().tasks(current))[0].browserContext?.receipt).toMatchObject({ name: 'browser-recheck-1.md', capturedAt: capture });
+    expect(h.fake.calls.filter(({ url }) => url.endsWith('/evidence'))).toHaveLength(1);
+  });
+
   it('pairs, pins the key, keeps the token sealed and out of status', async () => {
     const h = harness({}, { url: 'http://127.0.0.1:4999', port: 4999, pid: 1 });
     expect((await h.link.status()).state).toBe('not-paired');

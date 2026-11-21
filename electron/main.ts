@@ -87,6 +87,8 @@ import type {
   BookmarkFolder,
   BrowserSnapshot,
   BackupRestorePreview,
+  BackupReminderDays,
+  BackupUploadPreview,
   BrowserTab,
   BrowserRoutine,
   RoutineRunResult,
@@ -156,7 +158,7 @@ import { GoogleServices, type CalendarWriteInput, type DriveCreateInput, type Gm
 import { GOOGLE_OVERVIEW_MAX_PAGES, googleOverviewModule } from './google-overview.js';
 import { healthFromGoogleConnection, observeGoogleHealth } from './google-connection-health.js';
 import type { GoogleConnectionHealth } from './types.js';
-import { AccountBackupManager, backupRestoreRevision, planBackupRestore, type BackupWriteResult } from './account-backup.js';
+import { AccountBackupManager, backupRestoreRevision, backupUploadRevision, planBackupRestore, type BackupWriteResult } from './account-backup.js';
 import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
 import { validateIpcArguments } from './ipc-contracts.js';
 import { ControlCenterLink, developerEvidence } from './control-center-link.js';
@@ -280,6 +282,7 @@ class BrowserController {
   private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
   private pendingBackupRequest?: { accountSpaceId: AccountSpaceId; operationId: string };
   private backupRestoreReview?: { preview: BackupRestorePreview; items: ReturnType<typeof planBackupRestore>['items']; subject: string; revision: string; expiresAt: number };
+  private backupUploadReview?: { id: string; accountSpaceId: AccountSpaceId; subject: string; etag: string | null; revision: string; expiresAt: number };
   private pendingChromePasswords?: { id: string; accountId: AccountSpaceId; path: string; digest: string; revision: string; expiresAt: number };
   private selectingChromePasswords = false;
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
@@ -1600,17 +1603,81 @@ class BrowserController {
   }
 
   uploadBackup(accountSpaceId: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite'): Promise<BackupWriteResult> {
+    if (conflictResolution) throw new Error('Review the local and remote backups before choosing how to resolve a conflict.');
+    const payload = this.backupPayload(accountSpaceId);
+    return this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
+      const result = await this.backups.upload(accountSpaceId, payload, undefined, signal);
+      if (result.status === 'uploaded') this.refreshBackupSummary(accountSpaceId);
+      return result;
+    });
+  }
+
+  private backupPayload(accountSpaceId: AccountSpaceId) {
     const state = this.store.get();
-    const payload = this.backups.buildPayload(accountSpaceId, {
+    return this.backups.buildPayload(accountSpaceId, {
       bookmarks: state.bookmarks,
+      folderTree: state.bookmarkFoldersByAccountSpace?.[accountSpaceId],
       trackerBlocking: state.trackerBlocking,
       openTabs: state.tabs,
       history: state.history,
     });
-    return this.runGoogleOperation(accountSpaceId, operationId, 'backup', (signal) => this.backups.upload(accountSpaceId, payload, conflictResolution, signal));
   }
 
-  async previewBackupRestore(accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<BackupRestorePreview> {
+  async previewBackupUpload(accountSpaceId: AccountSpaceId, operationId: string): Promise<BackupUploadPreview> {
+    const account = this.requireBackupUploadTarget(accountSpaceId);
+    this.backupUploadReview = undefined;
+    const payload = this.backupPayload(accountSpaceId);
+    return this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
+      const { details, expectedEtag } = await this.backups.reviewUpload(accountSpaceId, payload, signal);
+      signal.throwIfAborted();
+      if (this.requireBackupUploadTarget(accountSpaceId).subject !== account.subject) throw new Error('The Google account changed.');
+      const id = randomUUID();
+      this.backupUploadReview = { id, accountSpaceId, subject: account.subject, etag: expectedEtag,
+        revision: backupUploadRevision(payload), expiresAt: Date.now() + 2 * 60_000 };
+      return { id, accountSpaceId, ...details };
+    });
+  }
+
+  async applyBackupUpload(id: string, operationId: string, resolution: 'merge' | 'overwrite'): Promise<BackupWriteResult> {
+    const review = this.backupUploadReview;
+    if (!review || review.id !== id) throw new Error('Review the backup again before saving.');
+    this.backupUploadReview = undefined;
+    const account = this.requireBackupUploadTarget(review.accountSpaceId);
+    const payload = this.backupPayload(review.accountSpaceId);
+    if (review.subject !== account.subject || review.expiresAt <= Date.now() || review.revision !== backupUploadRevision(payload)) {
+      throw new Error('The browsing data changed or this review expired. Review it again.');
+    }
+    return this.runGoogleOperation(review.accountSpaceId, operationId, 'backup', async (signal) => {
+      const result = await this.backups.upload(review.accountSpaceId, payload, resolution, signal, review.etag);
+      if (result.status === 'uploaded') this.refreshBackupSummary(review.accountSpaceId);
+      return result;
+    });
+  }
+
+  cancelBackupUpload(id: string): void {
+    if (this.backupUploadReview?.id === id) this.backupUploadReview = undefined;
+  }
+
+  setBackupReminder(accountSpaceId: AccountSpaceId, days: BackupReminderDays): void {
+    this.requireBackupUploadTarget(accountSpaceId);
+    this.accounts.update(accountSpaceId, (record) => { record.backup.reminderDays = days; });
+    this.refreshBackupSummary(accountSpaceId);
+  }
+
+  private refreshBackupSummary(accountSpaceId: AccountSpaceId): void {
+    this.store.refreshAccount(this.accounts.require(accountSpaceId));
+    this.broadcast();
+  }
+
+  private requireBackupUploadTarget(accountSpaceId: AccountSpaceId) {
+    const account = this.requireBackupRestoreTarget(accountSpaceId);
+    if (this.sessionIsLocked || this.activeAccountSpaceId(this.store.get()) !== accountSpaceId || !this.accounts.require(accountSpaceId).backup.enabled) {
+      throw new Error('Open the enabled backup in its unlocked Account Space.');
+    }
+    return account;
+  }
+
+  async previewBackupRestore(accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string, generation?: string): Promise<BackupRestorePreview> {
     const account = this.requireBackupRestoreTarget(accountSpaceId);
     const previous = this.pendingBackupRequest;
     if (previous) this.cancelOperation(previous.operationId);
@@ -1619,14 +1686,14 @@ class BrowserController {
     this.backupRestoreReview = undefined;
     try {
       return await this.runGoogleOperation(accountSpaceId, operationId, 'backup', async (signal) => {
-        const payload = await this.backups.restore(accountSpaceId, recoveryCode, signal);
+        const { payload, generations } = await this.backups.restoreGeneration(accountSpaceId, recoveryCode, generation, signal);
         if (signal.aborted || this.pendingBackupRequest !== request || this.requireBackupRestoreTarget(accountSpaceId).subject !== account.subject) {
           throw new Error('The backup request changed. Start a new preview.');
         }
         const state = this.store.get();
         const { counts, items } = planBackupRestore(payload, { accountSpaceId, workspaceId: account.workspaceId }, state);
         const preview: BackupRestorePreview = { id: randomUUID(), accountSpaceId, accountLabel: account.label,
-          workspaceId: account.workspaceId, createdAt: payload.createdAt, counts };
+          workspaceId: account.workspaceId, createdAt: payload.createdAt, counts, generations };
         this.backupRestoreReview = { preview, items, subject: account.subject,
           revision: backupRestoreRevision(accountSpaceId, state), expiresAt: Date.now() + 2 * 60_000 };
         return preview;
@@ -1648,6 +1715,10 @@ class BrowserController {
     }
     this.store.update((state) => {
       state.bookmarks.push(...pending.items.bookmarks);
+      if (pending.items.folders.length) {
+        const folders = state.bookmarkFoldersByAccountSpace ??= {};
+        folders[accountSpaceId] = appendBookmarkFolders(folders[accountSpaceId] ?? [], pending.items.folders);
+      }
       state.history.push(...pending.items.history);
       state.tabs.push(...pending.items.tabs.map((tab) => ({
         ...tab, restorePaused: true, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false,
@@ -1731,6 +1802,7 @@ class BrowserController {
   }
 
   private cancelAccountOperations(accountSpaceId: AccountSpaceId): void {
+    if (this.backupUploadReview?.accountSpaceId === accountSpaceId) this.backupUploadReview = undefined;
     this.trackerProtection.clearAccount(accountSpaceId);
     this.trackerExpiry.get(accountSpaceId)?.forEach((timer) => clearTimeout(timer));
     this.trackerExpiry.delete(accountSpaceId);
@@ -2926,6 +2998,7 @@ class BrowserController {
       tabId: tab.id,
       service: 'browser',
       sourceRevision: aiSourceRevision(tab.accountSpaceId, tab, previewText),
+      capturedAt: report.capturedAt,
       sourceUrl: tab.url,
       title: `Developer diagnosis - ${sanitizeDiagnosticText(tab.title, 200).text}`,
       url: sanitizeDiagnosticUrl(tab.url).text,
@@ -2970,7 +3043,8 @@ class BrowserController {
 
   async controlCenterTasks() {
     this.requireDeveloperWorkspace();
-    return this.controlCenter.tasks();
+    const tab = this.activeTab(this.store.get());
+    return this.controlCenter.tasks({ accountSpaceId: tab.accountSpaceId, url: tab.url });
   }
 
   async sendToControlCenter(input: ControlCenterSendInput) {
@@ -2986,6 +3060,8 @@ class BrowserController {
       sourceUrl: sanitizeDiagnosticUrl(tab.url).text,
       pageOrigin: this.pageOrigin(tab.url),
       evidence: developerEvidence(preview),
+      currentPage: { accountSpaceId: tab.accountSpaceId, url: tab.url },
+      capturedAt: preview.capturedAt,
       ...(screenshot ? { screenshotJpegBase64: screenshot } : {}),
     });
   }
@@ -2993,8 +3069,11 @@ class BrowserController {
   async recheckControlCenterTask(input: ControlCenterRecheckInput) {
     this.requireDeveloperWorkspace();
     const preview = this.consumeDeveloperApproval(input.approvalToken);
+    const tab = this.activeTab(this.store.get());
+    if (!preview.capturedAt) throw new Error('Capture fresh evidence before attaching it.');
+    if (preview.screenshotDataUrl) throw new Error('Capture a re-check before attaching evidence to an existing task.');
     this.addPrivacyEvent('cloud-approved', 'Control Center re-check approved', `${preview.title} · ${input.taskId}`);
-    return this.controlCenter.addEvidence(input.taskId, developerEvidence(preview));
+    return this.controlCenter.addRecheck(input.taskId, { accountSpaceId: tab.accountSpaceId, url: tab.url }, developerEvidence(preview), preview.capturedAt);
   }
 
   /** Spends the approval first, like every AI path, then insists it approved a Developer-panel preview. */
@@ -5259,7 +5338,11 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('backup:create-recovery', (_event, id: AccountSpaceId) => controller!.createBackupRecoveryCode(id));
   handle('backup:verify-enable', (_event, id: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean) => controller!.verifyAndEnableBackup(id, recoveryCode, includeOpenTabs, includeHistory));
   handle('backup:upload', (_event, id: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite') => controller!.uploadBackup(id, operationId, conflictResolution));
-  handle('backup:preview-restore', (_event, id: AccountSpaceId, operationId: string, recoveryCode?: string) => controller!.previewBackupRestore(id, operationId, recoveryCode));
+  handle('backup:preview-upload', (_event, id: AccountSpaceId, operationId: string) => controller!.previewBackupUpload(id, operationId));
+  handle('backup:apply-upload', (_event, id: string, operationId: string, resolution: 'merge' | 'overwrite') => controller!.applyBackupUpload(id, operationId, resolution));
+  handle('backup:cancel-upload', (_event, id: string) => controller!.cancelBackupUpload(id));
+  handle('backup:set-reminder', (_event, id: AccountSpaceId, days: BackupReminderDays) => controller!.setBackupReminder(id, days));
+  handle('backup:preview-restore', (_event, id: AccountSpaceId, operationId: string, recoveryCode?: string, generation?: string) => controller!.previewBackupRestore(id, operationId, recoveryCode, generation));
   handle('backup:apply-restore', (_event, id: string) => controller!.applyBackupRestore(id));
   handle('backup:cancel-restore', (_event, id: string) => controller!.cancelBackupRestore(id));
   handle('backup:disable', (_event, id: AccountSpaceId) => controller!.disableBackup(id));

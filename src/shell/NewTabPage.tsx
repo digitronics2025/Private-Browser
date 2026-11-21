@@ -1,4 +1,4 @@
-import { useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { ArrowLeft, ArrowRight, Clock3, MoreVertical, Palette, Pencil, Plus, RotateCcw, Search, Star, Trash2 } from 'lucide-react';
 import type { AccountSpaceSummary, Bookmark, HistoryEntry, NewTabBackground, ShortcutTile, ThemePreference, Workspace } from '../../electron/types';
 import { domainFromUrl, timeAgo } from '../lib/format';
@@ -21,7 +21,7 @@ function tileHue(value: string): number {
   return hash;
 }
 
-export function NewTabPage({ searchPrompt, workspace, account, shortcuts, customized, history, showRecent, maskIdentity, setupGuide, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onMoveShortcut, onResetShortcuts, onBackground, onShowRecent, onTheme }: {
+export function NewTabPage({ searchPrompt, workspace, account, shortcuts, customized, history, showRecent, maskIdentity, setupGuide, bookmarks, favicons, background, theme, onNavigate, onOpenBookmark, onAddShortcut, onEditShortcut, onRemoveShortcut, onMoveShortcut, onResetShortcuts, onBackground, onShowRecent, onTheme, onManageBackup }: {
   searchPrompt: string;
   workspace: Workspace;
   account: AccountSpaceSummary;
@@ -45,10 +45,18 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
   onBackground: (background: NewTabBackground) => void;
   onShowRecent: (show: boolean) => void;
   onTheme: (theme: ThemePreference) => void;
+  onManageBackup: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [tileMenu, setTileMenu] = useState<{ tile: ShortcutTile; anchor: HTMLElement } | null>(null);
   const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [now, setNow] = useState(Date.now);
+  const reminderAt = account.backupReminderAt ? Date.parse(account.backupReminderAt) : undefined;
+  useEffect(() => {
+    if (reminderAt === undefined || reminderAt <= now) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), Math.min(2_147_483_647, Math.max(0, reminderAt - Date.now())));
+    return () => window.clearTimeout(timer);
+  }, [reminderAt, now]);
   const customizeRef = useRef<HTMLButtonElement>(null);
   const recent = showRecent && !maskIdentity ? history.slice(0, 6) : [];
   const saved = maskIdentity ? [] : bookmarks.slice(0, 6);
@@ -74,6 +82,10 @@ export function NewTabPage({ searchPrompt, workspace, account, shortcuts, custom
           {!maskIdentity && <span className="ntp-space-dot" style={{ '--workspace-color': workspace.color } as CSSProperties} aria-hidden="true" />}
           {maskIdentity ? 'Today' : account.label === workspace.name ? workspace.name : `${workspace.name} · ${account.label}`}
         </p>
+        {!maskIdentity && !account.locked && reminderAt !== undefined && now >= reminderAt && <section className="ntp-setup" aria-label="Backup reminder">
+          <span>An encrypted backup is due.</span>
+          <button type="button" className="secondary-button" onClick={onManageBackup}>Manage backup</button>
+        </section>}
         {setupGuide && <section className="ntp-setup" aria-label="First launch">
           <span>Your browser is ready. Review optional setup whenever you like.</span>
           <div>

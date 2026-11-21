@@ -1,7 +1,8 @@
-import { randomBytes, webcrypto } from 'node:crypto';
+import { createHash, randomBytes, webcrypto } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { ControlCenterRepository, ControlCenterStatus, ControlCenterTask } from './types.js';
+import { sanitizeDiagnosticUrl } from './developer-tools.js';
+import type { AccountSpaceId, ControlCenterEvidenceReceipt, ControlCenterRepository, ControlCenterStatus, ControlCenterTask } from './types.js';
 
 export type { ControlCenterRepository, ControlCenterStatus, ControlCenterTask } from './types.js';
 
@@ -42,6 +43,17 @@ interface StoredLink {
   identityKey: string;
   /** Page origin → the repository the operator chose for it last time. */
   originRepos: Record<string, string>;
+  taskSources?: Record<string, TaskSource>;
+}
+
+type CurrentTaskPage = { accountSpaceId: AccountSpaceId; url: string };
+interface TaskSource {
+  accountSpaceId: AccountSpaceId;
+  routeHash: string;
+  route?: string;
+  taskCreatedAt: string;
+  capturedAt: string;
+  receipt?: ControlCenterEvidenceReceipt;
 }
 
 export class ControlCenterError extends Error {
@@ -101,6 +113,33 @@ const nonce = () => randomBytes(18).toString('base64url');
 
 const isText = (v: unknown, max = 2000): v is string => typeof v === 'string' && v.length <= max;
 const isNullableText = (v: unknown, max = 2000): v is string | null => v === null || isText(v, max);
+
+function pageRoute(value: string): { hash: string; safeUrl?: string } | undefined {
+  try {
+    const url = new URL(value);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) return undefined;
+    const path = url.origin + url.pathname;
+    const sanitized = sanitizeDiagnosticUrl(path).text;
+    return { hash: createHash('sha256').update(path).digest('hex'), ...(sanitized === path ? { safeUrl: path } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+function validTimestamp(value: unknown): value is string {
+  return isText(value, 40) && Number.isFinite(Date.parse(value));
+}
+
+function storedTaskSources(value: unknown): StoredLink['taskSources'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return Object.fromEntries(Object.entries(value).slice(-50).filter(([id, source]) => /^TASK-\d{1,8}$/.test(id)
+    && source && typeof source === 'object' && /^[a-f\d-]{36}$/i.test(source.accountSpaceId)
+    && /^[a-f\d]{64}$/.test(source.routeHash) && validTimestamp(source.taskCreatedAt) && validTimestamp(source.capturedAt)
+    && (source.route === undefined || typeof source.route === 'string' && pageRoute(source.route)?.safeUrl === source.route
+      && pageRoute(source.route)?.hash === source.routeHash)
+    && (source.receipt === undefined || isText(source.receipt?.name, 200)
+      && validTimestamp(source.receipt.capturedAt) && validTimestamp(source.receipt.attachedAt))));
+}
 
 function parseTask(value: unknown, base: string): ControlCenterTask {
   const t = value as Record<string, unknown> | null;
@@ -226,7 +265,8 @@ export class ControlCenterLink {
    * Send approved evidence as a task. One request id for this call and its
    * retries, so a lost answer never creates a second task.
    */
-  async createTask(input: { repositoryId: string; note: string; sourceUrl: string; pageOrigin: string | null; evidence: string; screenshotJpegBase64?: string }): Promise<ControlCenterTask> {
+  async createTask(input: { repositoryId: string; note: string; sourceUrl: string; pageOrigin: string | null; evidence: string;
+    screenshotJpegBase64?: string; currentPage?: CurrentTaskPage; capturedAt?: string }): Promise<ControlCenterTask> {
     const requestId = nonce();
     const body = {
       requestId,
@@ -241,21 +281,60 @@ export class ControlCenterLink {
       return { at, value: await this.request(at, 'POST', '/api/connected-app/tasks', body, this.link!.token) };
     });
     const task = parseTask(sent.value, sent.at);
+    const route = input.currentPage && pageRoute(input.currentPage.url);
+    if (input.currentPage && route && validTimestamp(task.createdAt)) {
+      this.rememberTaskSource(task.id, { accountSpaceId: input.currentPage.accountSpaceId,
+        routeHash: route.hash, route: route.safeUrl, taskCreatedAt: task.createdAt, capturedAt: input.capturedAt ?? new Date().toISOString() });
+    }
     if (input.pageOrigin && this.link!.originRepos[input.pageOrigin] !== input.repositoryId) {
       const originRepos = { ...this.link!.originRepos, [input.pageOrigin]: input.repositoryId };
       // Keep the memory small: the 50 most recent origins.
       const entries = Object.entries(originRepos).slice(-50);
       this.link = { ...this.link!, originRepos: Object.fromEntries(entries) };
-      this.save();
+      this.saveRecordedContext();
     }
-    return task;
+    return this.taskInContext(task, input.currentPage);
   }
 
-  async tasks(): Promise<ControlCenterTask[]> {
+  async tasks(current?: CurrentTaskPage): Promise<ControlCenterTask[]> {
     const base = await this.verify();
     const list = await this.request(base, 'GET', '/api/connected-app/tasks', undefined, this.link!.token);
     if (!Array.isArray(list) || list.length > 50) throw new ControlCenterError('The Control Center sent an unexpected answer', 'REJECTED');
-    return list.map((t) => parseTask(t, base));
+    return list.map((t) => this.taskInContext(parseTask(t, base), current));
+  }
+
+  async addRecheck(taskId: string, current: CurrentTaskPage, evidence: string, capturedAt: string): Promise<ControlCenterEvidenceReceipt> {
+    const source = this.link?.taskSources?.[taskId];
+    if (!source || source.accountSpaceId !== current.accountSpaceId || source.routeHash !== pageRoute(current.url)?.hash) {
+      throw new ControlCenterError('Open the original route in its Account Space before attaching evidence.', 'REJECTED');
+    }
+    const task = (await this.tasks(current)).find((item) => item.id === taskId);
+    if (!task?.browserContext?.routeMatch || !['COMPLETED', 'FAILED', 'CANCELLED', 'WAITING_FOR_USER'].includes(task.status)) {
+      throw new ControlCenterError('The attached task changed. Refresh it before re-checking.', 'REJECTED');
+    }
+    const result = await this.addEvidence(taskId, evidence);
+    const receipt = { name: result.name, capturedAt, attachedAt: new Date().toISOString() };
+    this.rememberTaskSource(taskId, { ...source, capturedAt, receipt });
+    return receipt;
+  }
+
+  private taskInContext(task: ControlCenterTask, current?: CurrentTaskPage): ControlCenterTask {
+    const source = this.link?.taskSources?.[task.id];
+    if (!current || source?.accountSpaceId !== current.accountSpaceId || source.taskCreatedAt !== task.createdAt) return task;
+    return { ...task, browserContext: { route: source.route, routeMatch: source.routeHash === pageRoute(current.url)?.hash,
+      capturedAt: source.capturedAt, receipt: source.receipt } };
+  }
+
+  private rememberTaskSource(taskId: string, source: TaskSource): void {
+    if (!this.link) return;
+    const current = Object.entries(this.link.taskSources ?? {}).filter(([id]) => id !== taskId);
+    this.link.taskSources = Object.fromEntries([...current.slice(-49), [taskId, source]]);
+    this.saveRecordedContext();
+  }
+
+  private saveRecordedContext(): void {
+    try { this.save(); }
+    catch { console.warn('Control Center confirmed the request. The browser could only keep its receipt for this session.'); }
   }
 
   async addEvidence(taskId: string, evidence: string): Promise<{ name: string }> {
@@ -339,7 +418,7 @@ export class ControlCenterLink {
       if (!this.options.storage.isEncryptionAvailable() || !existsSync(this.options.filePath)) return undefined;
       const parsed = JSON.parse(this.options.storage.decryptString(Buffer.from(readFileSync(this.options.filePath, 'utf8'), 'base64'))) as StoredLink;
       if (parsed.version !== 1 || !FIELD.test(parsed.appId) || !isText(parsed.token, 200) || !isText(parsed.identityKey, 200) || typeof parsed.originRepos !== 'object' || parsed.originRepos === null) throw new Error('Invalid link');
-      return parsed;
+      return { ...parsed, taskSources: storedTaskSources(parsed.taskSources) };
     } catch {
       this.corrupt = true;
       this.quarantine();
