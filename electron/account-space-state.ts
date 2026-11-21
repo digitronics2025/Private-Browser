@@ -30,6 +30,7 @@ import { isAllowedRemoteUrl } from './security.js';
 import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings } from './browser-settings.js';
 import { sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
+import { orderAccountTabs } from './tab-organization.js';
 
 interface MigrationJournal {
   version: 1;
@@ -393,6 +394,12 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
     throw new Error('Invalid Account Space browsing state');
   }
   const workspaceId = requireWorkspaceId(input.workspaceId);
+  const groupIds = new Set<string>();
+  const groups = (Array.isArray(input.tabGroups) ? input.tabGroups.slice(0, 100) : []).flatMap((group) => {
+    if (!group || !isAccountSpaceId(group.id) || groupIds.has(group.id) || typeof group.name !== 'string' || !group.name.trim()) return [];
+    groupIds.add(group.id);
+    return [{ id: group.id, name: group.name.trim().slice(0, 48), collapsed: group.collapsed === true }];
+  });
   if (!Array.isArray(input.tabs)) throw new Error('Invalid Account Space tabs');
   const tabs = input.tabs.slice(0, 100).filter((tab) =>
     tab && tab.accountSpaceId === input.accountSpaceId && tab.workspaceId === workspaceId && typeof tab.id === 'string'
@@ -404,6 +411,9 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
     title: typeof tab.title === 'string' ? tab.title.slice(0, 500) : 'New tab',
     url: tab.url,
     isHome: tab.url === 'private://home' || Boolean(tab.isHome),
+      ...(tab.restorePaused === true ? { restorePaused: true } : {}),
+      ...(tab.pinned === true ? { pinned: true } : {}),
+      ...(tab.pinned !== true && tab.groupId && groupIds.has(tab.groupId) ? { groupId: tab.groupId } : {}),
   }));
   if (tabs.length === 0) {
     tabs.push({ id: randomUUID(), workspaceId, accountSpaceId: input.accountSpaceId, title: 'New tab', url: 'private://home', isHome: true });
@@ -420,7 +430,8 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
   const historyTrimmed = input.historyTrimmed === true || (Array.isArray(input.history) && input.history.length > 10_000);
   const shortcuts = sanitizeShortcutTiles(input.shortcuts);
   const bookmarkIcons = pruneBookmarkIcons(sanitizeBookmarkIcons(input.bookmarkIcons), bookmarks);
-  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs, activeTabId, bookmarks, history, ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}) };
+  const tabGroups = groups.filter((group) => tabs.some((tab) => tab.groupId === group.id));
+  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history, ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}) };
 }
 
 export const MAX_SHORTCUT_TILES = 12;
@@ -538,7 +549,7 @@ function accountRecovery(accountSpaceId: AccountSpaceId, backupAvailable: boolea
   };
 }
 
-function atomicWriteJson(filePath: string, value: unknown): void {
+export function atomicWriteJson(filePath: string, value: unknown): void {
   mkdirSync(dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
   writeFileSync(temporaryPath, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
