@@ -38,3 +38,16 @@ test('shows a next action when there is no matching sign-in', async ({ page }) =
   await expect(status).toContainText('Choose Add login or save the login from this website.');
   await expect(panel.locator('input[type=password]')).toHaveCount(0);
 });
+
+test('shows a clipboard countdown and lets the user clear a synthetic copy', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 810 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  await page.getByRole('tab', { name: 'Vault', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Password', exact: true }).click();
+  await expect(panel.getByText(/Vault clipboard clears in \d+s/)).toBeVisible();
+  await panel.getByRole('button', { name: 'Clear now', exact: true }).click();
+  await expect(page.getByText('Vault copy cleared', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Clear now', exact: true })).toHaveCount(0);
+});

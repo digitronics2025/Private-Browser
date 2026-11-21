@@ -28,6 +28,23 @@ function textField(input: Record<string, unknown>, key: string, max: number, req
   return value;
 }
 
+export function normalizeAuthenticatorSecret(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const match = /^([A-Z2-7]{16,256})(={0,6})$/.exec(value.replace(/[\s-]/g, '').toUpperCase());
+  if (!match) throw new Error('Enter a valid Base32 authenticator secret.');
+  const [, text, padding] = match;
+  const remainder = text.length % 8;
+  const paddingByRemainder: Record<number, number> = { 0: 0, 2: 6, 4: 4, 5: 3, 7: 1 };
+  const requiredPadding = paddingByRemainder[remainder];
+  const trailingBits = text.length * 5 % 8;
+  const tail = alphabet.indexOf(text.at(-1)!);
+  if (requiredPadding === undefined || (padding.length > 0 && padding.length !== requiredPadding) || (tail & ((1 << trailingBits) - 1)) !== 0) {
+    throw new Error('Enter a valid Base32 authenticator secret.');
+  }
+  return text;
+}
+
 export function parseSecureDialogValue(kind: SecureDialogKind, value: unknown): SecureDialogValue {
   const input = record(value);
   if (kind === 'unlock' || kind === 'enroll-hello') return { password: textField(input, 'password', 1024)! };
@@ -40,7 +57,7 @@ export function parseSecureDialogValue(kind: SecureDialogKind, value: unknown): 
       url: parsed.origin,
       username: textField(input, 'username', 500)!.normalize('NFKC').trim(),
       password: textField(input, 'password', 5000)!,
-      totpSecret: textField(input, 'totpSecret', 500, false),
+      totpSecret: normalizeAuthenticatorSecret(textField(input, 'totpSecret', 500, false)),
     };
   }
   if (kind === 'pair') {
