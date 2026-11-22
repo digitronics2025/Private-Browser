@@ -6,15 +6,13 @@ if (!$env:WINDOWS_SIGNING_PFX -or !$env:WINDOWS_SIGNING_PASSWORD -or !$approved.
 }
 
 $certificates = [Security.Cryptography.X509Certificates.X509Certificate2Collection]::new()
-$password = ConvertTo-SecureString $env:WINDOWS_SIGNING_PASSWORD -AsPlainText -Force
 try {
     $pfx = [Convert]::FromBase64String($env:WINDOWS_SIGNING_PFX)
-    $certificates.Import($pfx, $password, 'UserKeySet, PersistKeySet')
+    $certificates.Import($pfx, $env:WINDOWS_SIGNING_PASSWORD, 'UserKeySet, PersistKeySet')
 } catch {
     throw 'Could not load the production signing certificate into the Windows user key store.'
 } finally {
     if ($pfx) { [Array]::Clear($pfx, 0, $pfx.Length) }
-    $password.Dispose()
 }
 
 $signers = @($certificates | Where-Object {
