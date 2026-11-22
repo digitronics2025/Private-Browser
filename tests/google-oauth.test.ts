@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { AccountStore, type SafeStorageAdapter } from '../electron/account-store';
-import { EventEmitter } from 'node:events';
+import { ChildProcess } from 'node:child_process';
 import { ExternalBrowserLauncher } from '../electron/external-browser';
 import { GoogleConfigurationStore } from '../electron/google-config';
 import { fetchValidatedGoogleAvatar, GoogleOAuthManager, type GoogleOAuthClient } from '../electron/google-oauth';
@@ -243,7 +243,7 @@ describe('secure Google desktop OAuth', () => {
     const launcher = new ExternalBrowserLauncher(
       { ProgramFiles: root },
       'win32',
-      ((path, args, options) => { calls.push([path, args, options]); return Object.assign(new EventEmitter(), { unref }); }),
+      ((path, args, options) => { calls.push([path, args, options]); return Object.assign(new ChildProcess(), { unref }); }),
     );
     launcher.launch('edge', 'https://accounts.google.com/o/oauth2/v2/auth?client_id=public');
     expect(calls).toEqual([[executable, ['https://accounts.google.com/o/oauth2/v2/auth?client_id=public'], { shell: false, detached: true, stdio: 'ignore' }]]);
@@ -255,7 +255,7 @@ describe('secure Google desktop OAuth', () => {
     const root = mkdtempSync(join(tmpdir(), 'chrome-launch-'));
     const folder = join(root, 'Google', 'Chrome', 'Application');
     const executable = join(folder, 'chrome.exe');
-    const child = Object.assign(new EventEmitter(), { unref: vi.fn() });
+    const child = Object.assign(new ChildProcess(), { unref: vi.fn() });
     const spawn = vi.fn(() => child);
     const launcher = new ExternalBrowserLauncher({ ProgramFiles: root }, 'win32', spawn);
     await expect(launcher.openGooglePasswordManager()).rejects.toThrow(/not found/);
