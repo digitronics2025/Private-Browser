@@ -14,7 +14,7 @@ class TestEncryption implements SafeStorageAdapter {
   decryptString(value: Buffer): string { return Buffer.from(value).reverse().toString(); }
 }
 
-function fixture() {
+function fixture(browsingEncryption?: SafeStorageAdapter) {
   const root = mkdtempSync(join(tmpdir(), 'account-lifecycle-'));
   const accounts = new AccountStore(join(root, 'accounts'), new TestEncryption());
   const persisted = new AccountSpaceStateStore({
@@ -25,13 +25,14 @@ function fixture() {
       migrationJournalPath: join(root, 'migration.json'),
     },
     accountStore: accounts,
+    browsingEncryption,
   });
   const initialized = persisted.initialize();
   if (initialized.status !== 'ready') throw new Error('fixture did not initialize');
   return { root, accounts, persisted, runtime: new RuntimeStateStore(persisted, accounts, initialized) };
 }
 
-function reopen(root: string, accounts: AccountStore) {
+function reopen(root: string, accounts: AccountStore, browsingEncryption?: SafeStorageAdapter) {
   const persisted = new AccountSpaceStateStore({
     paths: {
       legacyFilePath: join(root, 'browser-state.json'),
@@ -40,6 +41,7 @@ function reopen(root: string, accounts: AccountStore) {
       migrationJournalPath: join(root, 'migration.json'),
     },
     accountStore: accounts,
+    browsingEncryption,
   });
   const initialized = persisted.initialize();
   if (initialized.status !== 'ready') throw new Error('reopen did not initialize');
@@ -112,6 +114,64 @@ describe('Account Space lifecycle', () => {
     writeFileSync(join(root, 'accounts', `${only.id}.account.enc`), 'broken');
     const reopened = reopen(root, accounts);
     expect(() => reopened.runtime.update((state) => { state.trackerBlocking = !state.trackerBlocking; })).not.toThrow();
+  });
+
+  it('boots the active unreadable Account Space into a locked recovery tab without touching its data', () => {
+    const { root, accounts, runtime } = fixture();
+    const state = runtime.get();
+    const target = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId]!;
+    const other = state.activeAccountSpaceByWorkspace.personal!;
+    const record = join(root, 'accounts', `${target}.account.enc`);
+    const browsing = join(root, 'account-browsing', `${target}.json`);
+    const previous = readFileSync(browsing);
+    writeFileSync(record, 'different Windows key');
+    writeFileSync(join(root, 'account-browsing', `${other}.json`), 'unreadable');
+    const { runtime: recovered } = reopen(root, accounts);
+    const chrome = recovered.getChromeState();
+    expect(chrome.recovery?.accountSpaceId).toBe(target);
+    expect(chrome.accountSpaces.find(({ id }) => id === target)).toMatchObject({ locked: true });
+    expect(chrome.tabs.find(({ id }) => id === chrome.activeTabByAccountSpace[target])).toMatchObject({ isHome: true, url: 'private://home' });
+    expect(() => recovered.partitionFor(target)).toThrow(/recovery/i);
+    expect(() => recovered.partitionFor(other)).toThrow(/recovery/i);
+    recovered.update((next) => { next.trackerBlocking = false; });
+    expect(readFileSync(record, 'utf8')).toBe('different Windows key');
+    expect(readFileSync(browsing)).toEqual(previous);
+  });
+
+  it('migrates existing browsing data and resumes an encryption write interrupted after enrollment', () => {
+    const storage = new TestEncryption();
+    const { root, accounts, runtime, persisted } = fixture(storage);
+    const id = runtime.get().activeAccountSpaceByWorkspace.digitronics!;
+    const path = join(root, 'account-browsing', `${id}.json`);
+    const url = 'https://private-fixture.example/document';
+    runtime.update((state) => state.history.push({ id: 'fixture-visit', url, title: 'Fixture title', workspaceId: 'digitronics', accountSpaceId: id, visitedAt: new Date().toISOString() }));
+    const old = readFileSync(path);
+    expect(old.toString()).toContain(url);
+    runtime.enableBrowsingProtection();
+    expect(persisted.protectionStatus()).toBe('on');
+    expect(readFileSync(path, 'utf8')).not.toContain(url);
+    expect(reopen(root, accounts, storage).runtime.get().history[0]?.url).toBe(url);
+    writeFileSync(path, old);
+    expect(reopen(root, accounts, storage).runtime.get().history[0]?.url).toBe(url);
+    expect(readFileSync(path, 'utf8')).toContain('private-browser-device-browsing-v1');
+    expect(readFileSync(path, 'utf8')).not.toContain(url);
+  });
+
+  it('opens locked recovery when a device key is unavailable and never rewrites the browsing file', () => {
+    const storage = new TestEncryption();
+    const { root, accounts, runtime } = fixture(storage);
+    const id = runtime.get().activeAccountSpaceByWorkspace.digitronics!;
+    runtime.enableBrowsingProtection();
+    const path = join(root, 'account-browsing', `${id}.json`);
+    const file = readFileSync(path);
+    const wrapper = join(root, 'browsing-device-key.json');
+    writeFileSync(wrapper, 'unavailable key fixture');
+    const opened = reopen(root, accounts, storage);
+    expect(opened.persisted.protectionStatus()).toBe('unavailable');
+    expect(opened.runtime.get().recovery?.accountSpaceId).toBe(id);
+    opened.runtime.update((state) => { state.trackerBlocking = false; });
+    expect(readFileSync(path)).toEqual(file);
+    expect(readFileSync(wrapper, 'utf8')).toBe('unavailable key fixture');
   });
 
   it('fresh-starts an account whose browsing file is corrupt, keeping its intact record', () => {

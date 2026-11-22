@@ -47,6 +47,9 @@ import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, ass
 import { WORKSPACES } from './state-store.js';
 import { AccountStore, MAX_ASSISTANT_RECEIPTS } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
+import { sealBrowsingArchive, unsealBrowsingArchive } from './browsing-recovery.js';
+import type { BrowsingPrivacyAction } from './browsing-protection.js';
+import { agentStorageAvailable } from './agent-audit.js';
 import { RuntimeStateStore } from './runtime-state-store.js';
 import { problemForFailedLoad, StartupRestoreJournal } from './startup-restore.js';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from './tab-organization.js';
@@ -286,6 +289,7 @@ function permissionCapability(
 type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string; retainedFileStamp?: string };
 
 class BrowserController {
+  private browsingPrivacyBusy = false;
   private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
   private pendingBackupRequest?: { accountSpaceId: AccountSpaceId; operationId: string };
   private backupRestoreReview?: { preview: BackupRestorePreview; items: ReturnType<typeof planBackupRestore>['items']; subject: string; revision: string; expiresAt: number };
@@ -638,6 +642,7 @@ class BrowserController {
       downloadFolder: downloadAccount ? this.downloadFolder.status(downloadAccount) : undefined,
       managedUpdate: downloadAccount && process.platform === 'win32' && !this.store.isReadOnly() ? this.managedUpdate.snapshot() : undefined,
       privacyLog: persisted.privacyLog,
+      browsingProtection: this.persistedState.protectionStatus(),
       trackerBlocking: strictTracking || persisted.trackerBlocking,
       trackerSite,
       memorySaverSite: memorySite && downloadAccount ? { origin: memorySite, keptAwake: this.store.keepsSiteAwake(downloadAccount, memorySite) } : undefined,
@@ -2250,6 +2255,103 @@ class BrowserController {
     if (!isPinnablePanelTool(state.ui.sidePanelTool)) return state.ui.sidePanelTool;
     return regularAccount ? state.sidePanelsByAccountSpace?.[regularAccount]?.tool ?? state.ui.sidePanelTool
       : this.temporaryPanelTools.get(this.activeAccountSpaceId(state)) ?? 'privacy';
+  }
+
+  async changeBrowsingPrivacy(id: AccountSpaceId, action: BrowsingPrivacyAction, value?: number | boolean): Promise<boolean> {
+    const account = this.requireBrowsingPrivacyAccount(id);
+    if (this.browsingPrivacyBusy) throw new Error('Finish the current browsing privacy action first.');
+    this.browsingPrivacyBusy = true;
+    try {
+      if (action === 'protect') {
+        const confirmed = await this.confirmBrowsingPrivacy('Encrypt local browsing data',
+          'This protects tabs, bookmarks and history for all Account Spaces using this device. Export a recovery file for each space you need to move to another Windows profile. Existing backups and website cache files are outside this setting.', 'Enable encryption');
+        if (!confirmed) return false;
+        this.requireBrowsingPrivacyAccount(id);
+        this.store.enableBrowsingProtection();
+        return true;
+      }
+      if (action === 'retention' || action === 'log') {
+        const retention = action === 'retention';
+        if ((retention ? value !== 0 : value === true) && !await this.confirmBrowsingPrivacy(
+          retention ? `Keep ${value} days of history` : 'Use a minimal privacy log',
+          retention ? 'Older Private Browser history will be removed from every Account Space, including history imported later.'
+            : 'Remove site names and detail text from existing and future privacy events. The log shows event type and time.',
+          retention ? 'Change retention' : 'Use minimal log')) return false;
+        this.requireBrowsingPrivacyAccount(id);
+        this.store.update((state) => {
+          if (retention) state.ui.historyRetentionDays = value as number;
+          else state.ui.minimalPrivacyLog = value === true;
+        });
+        return true;
+      }
+      const filters = [{ name: 'Private Browser recovery file', extensions: ['pbbr'] }];
+      if (action === 'export') {
+        const selected = await dialog.showSaveDialog(this.window, { title: 'Save encrypted browsing recovery file', defaultPath: 'Private-Browser-Recovery.pbbr', filters });
+        if (selected.canceled || !selected.filePath) return false;
+        this.requireBrowsingPrivacyAccount(id);
+        const secret = await this.secureDialogs.open('export-browsing') as UnlockDialogValue | undefined;
+        if (!secret) return false;
+        this.requireBrowsingPrivacyAccount(id);
+        const state = this.store.get();
+        const bytes = await sealBrowsingArchive({ version: 1, createdAt: new Date().toISOString(), workspaceId: account.workspaceId,
+          bookmarks: state.bookmarks.filter((item) => item.accountSpaceId === id), bookmarkFolders: [], folderTree: state.bookmarkFoldersByAccountSpace?.[id],
+          history: state.history.filter((item) => item.accountSpaceId === id), settings: { trackerBlocking: state.trackerBlocking } }, secret.password);
+        this.requireBrowsingPrivacyAccount(id);
+        try { await writeFile(selected.filePath, bytes, { flag: 'wx', mode: 0o600 }); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('That file already exists. Choose a new name to keep the existing copy.');
+          throw new Error('The recovery file could not be saved.');
+        }
+        return true;
+      }
+      const selected = await dialog.showOpenDialog(this.window, { title: 'Open encrypted browsing recovery file', properties: ['openFile'], filters });
+      if (selected.canceled || !selected.filePaths[0]) return false;
+      this.requireBrowsingPrivacyAccount(id);
+      const secret = await this.secureDialogs.open('restore-browsing') as UnlockDialogValue | undefined;
+      if (!secret) return false;
+      this.requireBrowsingPrivacyAccount(id);
+      const payload = await unsealBrowsingArchive(selected.filePaths[0], secret.password);
+      this.requireBrowsingPrivacyAccount(id);
+      const before = this.store.get();
+      const revision = backupRestoreRevision(id, before);
+      const cutoff = before.ui.historyRetentionDays ? Date.now() - before.ui.historyRetentionDays * 86_400_000 : 0;
+      const history = payload.history?.filter((entry) => Date.parse(entry.visitedAt) >= cutoff);
+      const { items, counts } = planBackupRestore({ ...payload, history, openTabs: undefined }, { accountSpaceId: id, workspaceId: account.workspaceId }, before);
+      const message = `Add ${counts.bookmarks.added} bookmarks, ${counts.folders?.added ?? 0} folders and ${counts.history.added} history entries to ${account.label}?`;
+      const detail = 'Duplicates and entries outside your retention or storage limits are skipped.';
+      if (!await this.confirmBrowsingPrivacy(message, detail, 'Merge browsing data')) return false;
+      this.requireBrowsingPrivacyAccount(id);
+      const current = this.store.get();
+      if (current.ui.historyRetentionDays !== before.ui.historyRetentionDays || backupRestoreRevision(id, current) !== revision) {
+        throw new Error('Browsing data changed during review. Open the recovery file again.');
+      }
+      this.store.update((state) => {
+        state.bookmarks.push(...items.bookmarks);
+        state.history = [...state.history, ...items.history].sort((left, right) => right.visitedAt.localeCompare(left.visitedAt));
+        if (items.folders.length) {
+          const folders = state.bookmarkFoldersByAccountSpace ??= {};
+          folders[id] = appendBookmarkFolders(folders[id] ?? [], items.folders);
+        }
+      });
+      return true;
+    } finally {
+      this.browsingPrivacyBusy = false;
+      this.broadcast();
+    }
+  }
+
+  private requireBrowsingPrivacyAccount(id: AccountSpaceId) {
+    const state = this.store.get();
+    const account = state.accountSpaces.find((candidate) => candidate.id === id);
+    if (id !== this.activeDownloadAccount(state) || !account || account.locked || this.store.isReadOnly() || this.sessionIsLocked) {
+      throw new Error('Open the original unlocked Account Space to use browsing privacy settings.');
+    }
+    return account;
+  }
+
+  private async confirmBrowsingPrivacy(message: string, detail: string, action: string): Promise<boolean> {
+    const choice = await dialog.showMessageBox(this.window, { type: 'warning', message, detail, buttons: ['Cancel', action], cancelId: 0, defaultId: 0 });
+    return choice.response === 1;
   }
 
   setUiPreferences(patch: UiPreferencesPatch, expectedAccount?: AccountSpaceId): void {
@@ -5453,6 +5555,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
       migrationJournalPath: join(userDataPath, 'browser-state-v2.migration.json'),
     },
     accountStore,
+    browsingEncryption: { isEncryptionAvailable: agentStorageAvailable, encryptString: (value) => safeStorage.encryptString(value), decryptString: (value) => safeStorage.decryptString(value) },
   });
   const store = new RuntimeStateStore(persistedState, accountStore, persistedState.initialize());
   // Cookies left in a legacy partition no Account Space owns any more (after a
@@ -5616,6 +5719,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:open-bookmarks-in-background', (_event, account: AccountSpaceId, ids: string[]) => controller!.openBookmarksInBackground(account, ids));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
   handle('ui:set-preferences', (_event, patch: UiPreferencesPatch, id?: AccountSpaceId) => controller!.setUiPreferences(patch, id));
+  handle('privacy:browsing', (_event, id: AccountSpaceId, action: BrowsingPrivacyAction, value?: number | boolean) => controller!.changeBrowsingPrivacy(id, action, value));
   handle('ui:set-panel-pin', (_event, id: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean) => controller!.setSidePanelPin(id, tool, enabled));
   handle('settings:set', (_event, patch: BrowserSettingsPatch, workspace?: WorkspaceId) => controller!.setBrowserSettings(patch, workspace));
   handle('browser:freeze-content', () => controller!.freezeContent());
