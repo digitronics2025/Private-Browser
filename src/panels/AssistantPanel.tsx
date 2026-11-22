@@ -1,7 +1,8 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { Bot, Cloud, Eye, LoaderCircle, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
-import type { AccountSpaceId, AiPagePreview, AiPreviewScope, AiProviderCheckState, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionSource, AssistantSpacePolicy, BrowserTab, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
-import { ASSISTANT_PRESETS, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_EXTRA_SOURCES, MAX_ASSISTANT_QUESTION, MAX_ASSISTANT_SOURCE_TEXT, type AssistantPresetId, type AssistantPresetOverrides } from '../../electron/ai-prompt';
+import type { AccountSpaceId, AiPagePreview, AiPreviewScope, AiProviderCheckResult, AiProviderCheckState, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionSource, AssistantSpacePolicy, BrowserTab, CloudAiProviderInput, AiProviderStatus, LocalAiModels, WorkspaceId } from '../../electron/types';
+import { ASSISTANT_PRESETS, assistantContextLimit, MAX_ASSISTANT_EXTRA_SOURCES, MAX_ASSISTANT_QUESTION, type AssistantPresetId, type AssistantPresetOverrides } from '../../electron/ai-prompt';
+import { AssistantMarkdown } from '../lib/AssistantMarkdown';
 import { PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
 
@@ -10,12 +11,17 @@ const checkMessages: Record<AiProviderCheckState, string> = {
   ready: 'The selected model answered the built-in sample.',
   'not-configured': 'Save a provider before testing.',
   authentication: 'The provider refused access. Check the API key and access to this model.',
+  'bad-request': 'The provider rejected the request.',
+  'insufficient-credit': 'Check provider credit or billing.',
+  'context-too-long': 'Reduce the approved context.',
+  'model-not-found': 'Check the model ID and endpoint.',
   model: 'Check the provider endpoint and model ID.',
   'rate-limit': 'The provider is limiting requests. Try again later.',
   'invalid-response': 'The provider returned an empty or unreadable response.',
   unavailable: 'Could not reach the AI provider. Check the connection and endpoint.',
   'local-setup': 'Start Ollama with cloud features disabled and check that the selected model is installed.',
 };
+const providerEndpoints = { Anthropic: 'https://api.anthropic.com/v1', OpenRouter: 'https://openrouter.ai/api/v1', OpenAI: 'https://api.openai.com/v1' };
 const receiptPurpose: Record<AssistantReceipt['purpose'], string> = {
   'page-request': 'Page request',
   'connection-test': 'Connection test',
@@ -56,11 +62,13 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
   const [requestInFlight, setRequestInFlight] = useState<Pick<AiRequestReview, 'id' | 'mode'> | null>(null);
   const [provider, setProvider] = useState<AiProviderStatus>({ configured: false });
   const [showProviderForm, setShowProviderForm] = useState(false);
-  const [providerCheck, setProviderCheck] = useState<AiProviderCheckState>();
+  const [providerCheck, setProviderCheck] = useState<AiProviderCheckResult>();
   const [providerForm, setProviderForm] = useState<CloudAiProviderInput>({ endpoint: 'https://openrouter.ai/api/v1', model: '', apiKey: '' });
+  const [presetProvider, setPresetProvider] = useState("OpenRouter");
   const [providerMode, setProviderMode] = useState<'local' | 'cloud'>('local');
   const [local, setLocal] = useState<LocalAiModels>();
   const [localModel, setLocalModel] = useState('');
+  const contextLimit = assistantContextLimit(provider.mode);
   const isLocal = provider.mode === 'local';
   const cloudBlocked = provider.mode === 'cloud' && policy.cloud !== 'allowed';
   const [question, setQuestion] = useState('Summarize the important points on this page.');
@@ -152,15 +160,15 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
   const checkConnection = async () => {
     setLoading(true);
     setProviderCheck(undefined);
-    try { setProviderCheck((await window.privateBrowser.checkAiProvider()).state); }
-    catch { setProviderCheck('unavailable'); }
+    try { setProviderCheck(await window.privateBrowser.checkAiProvider()); }
+    catch { setProviderCheck({ state: 'unavailable' }); }
     finally { setLoading(false); }
   };
   const changeCloudPolicy = async (allowed: boolean) => {
     setLoading(true);
     try {
       await window.privateBrowser.setAssistantCloudAllowed(accountId, allowed);
-      if (!allowed && review?.mode === 'cloud') setReview(null);
+      await clearContext();
       setProviderCheck(undefined);
     } catch (error) {
       onToast(error instanceof Error ? error.message : 'Could not change cloud AI settings.', 'error');
@@ -177,9 +185,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
     try {
       const result = await window.privateBrowser.sendReviewedAssistant(review.id);
       if (result.kind !== 'timeout' && result.kind !== 'cancelled') {
-        setPreview(null);
-        setContextText('');
-        setExtraSources([]);
+        setQuestion('');
       }
       setAnswer(result);
     } catch (error) {
@@ -227,7 +233,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
       {provider.configured && <div className="provider-check">
         <button className="text-button" type="button" disabled={loading || cloudBlocked} onClick={() => void checkConnection()}>Test connection</button>
         <small>Uses a built-in sample.</small>
-        {providerCheck && <p role="status">{checkMessages[providerCheck]}</p>}
+        {providerCheck && <p role="status">{checkMessages[providerCheck.state]} {providerCheck.reason}</p>}
       </div>}
       {showProviderForm && <form className="vault-form provider-form" onSubmit={configureProvider}>
         <label>Provider type<select value={providerMode} onChange={(event) => {
@@ -244,8 +250,14 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
             {local.models.map((model) => <option key={model} value={model}>{model}</option>)}
           </select></label> : null}
         </> : <>
-          <input placeholder="OpenAI-compatible endpoint" required value={providerForm.endpoint} onChange={(event) => setProviderForm({ ...providerForm, endpoint: event.target.value })} />
-          <input placeholder="Model ID" required maxLength={200} pattern="[^\s]+" title="Enter the model ID without spaces"
+          <label>Provider<select value={presetProvider} onChange={(event) => {
+            const name = event.target.value;
+            setPresetProvider(name);
+            if (name in providerEndpoints) setProviderForm({ endpoint: providerEndpoints[name as keyof typeof providerEndpoints], model: name === 'Anthropic' ? 'claude-sonnet-5-5' : '', apiKey: '' });
+          }}>{[...Object.keys(providerEndpoints), 'Custom'].map(name => <option key={name}>{name}</option>)}</select></label>
+          {presetProvider === 'Anthropic' && <datalist id="assistant-models">{['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5'].map(model => <option key={model} value={model} />)}</datalist>}
+          <input placeholder="OpenAI-compatible endpoint" required value={providerForm.endpoint} onChange={(event) => { setPresetProvider('Custom'); setProviderForm({ ...providerForm, endpoint: event.target.value, apiKey: '' }); }} />
+          <input placeholder="Model ID" list="assistant-models" required maxLength={200} pattern="[^\s]+" title="Enter the model ID without spaces"
             value={providerForm.model} onChange={(event) => setProviderForm({ ...providerForm, model: event.target.value })} />
           <input placeholder="API key (encrypted)" type="password" value={providerForm.apiKey} onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })} />
         </>}
@@ -268,11 +280,11 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
             <div className="context-heading"><span>PAGE CONTEXT</span><b>{preview.redactions} redacted</b></div>
             <h3>{preview.title || 'Untitled page'}</h3>
             <small className="context-origin">{preview.url}</small>
-            <label>Page text<textarea aria-label="Page text" className="context-text" value={contextText} maxLength={MAX_ASSISTANT_CONTEXT} disabled={loading} onChange={(event) => {
+            <label>Page text<textarea aria-label="Page text" className="context-text" value={contextText} maxLength={contextLimit} disabled={loading} onChange={(event) => {
               setContextText(event.target.value);
               setReview(null);
             }} /></label>
-            <small className="context-size">{contextText.length.toLocaleString()} of {MAX_ASSISTANT_CONTEXT.toLocaleString()} page characters</small>
+            <small className="context-size">{contextText.length.toLocaleString()} of {contextLimit.toLocaleString()} page characters</small>
             {extraSources.length > 0 && <button type="button" className="text-button" disabled={loading} onClick={() => {
               setContextText(contextText.trim() ? '' : preview.text);
               setReview(null);
@@ -281,7 +293,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
           {extraSources.map((source) => <div className="context-card" key={source.id}>
             <h3>{source.title}</h3>
             <small className="context-origin">{source.url}</small>
-            <label>Excerpt from {source.title}<textarea className="context-text" value={source.text} maxLength={MAX_ASSISTANT_SOURCE_TEXT} disabled={loading} onChange={(event) => {
+            <label>Excerpt from {source.title}<textarea className="context-text" value={source.text} maxLength={contextLimit / 3} disabled={loading} onChange={(event) => {
               const updated = event.target.value;
               setExtraSources((current) => current.map((item) => item.id === source.id ? { ...item, text: updated } : item));
               setReview(null);
@@ -300,7 +312,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
             </select></label>
             <button type="button" className="secondary-button" disabled={loading || !sourceTab} onClick={() => void addSource()}>Add selected text</button>
           </details>}
-          {extraSources.length > 0 && <small className="context-size">{contextCount.toLocaleString()} of {MAX_ASSISTANT_CONTEXT.toLocaleString()} characters across excerpts</small>}
+          {extraSources.length > 0 && <small className="context-size">{contextCount.toLocaleString()} of {contextLimit.toLocaleString()} characters across excerpts</small>}
           {preview.text && <form className="ask-card" onSubmit={(event) => {
             event.preventDefault();
             setPassages(findPagePassages(preview.text, passageQuery));
@@ -326,7 +338,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
               <option value="">Custom question</option>
               {Object.entries(ASSISTANT_PRESETS).map(([id, value]) => <option key={id} value={id}>{value.label}</option>)}
             </select></label>
-            <label>Question<textarea aria-label="Question" maxLength={MAX_ASSISTANT_QUESTION} value={question} disabled={loading} onChange={(event) => { setQuestion(event.target.value); setReview(null); }} /></label>
+            <label>{answer && answer.kind !== 'cancelled' && answer.kind !== 'timeout' ? 'Ask a follow-up' : 'Question'}<textarea maxLength={MAX_ASSISTANT_QUESTION} value={question} disabled={loading} onChange={(event) => { setQuestion(event.target.value); setReview(null); }} /></label>
             <small className="context-size">{question.length.toLocaleString()} of {MAX_ASSISTANT_QUESTION.toLocaleString()} question characters</small>
             {preset && <div className="panel-actions preset-actions">
               <button type="button" disabled={loading || !question.trim() || question.trim() === (presets?.[preset] ?? ASSISTANT_PRESETS[preset].question)} onClick={() => void savePreset(preset, { ...presets, [preset]: question.trim() }, 'Prompt preset saved')}>Save preset</button>
@@ -340,7 +352,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
               setWithEvidence(event.target.checked);
               setReview(null);
             }} /> Include source passages</label>
-            <button className="primary-button full" type="submit" disabled={loading || !provider.configured || cloudBlocked || !question.trim() || contextCount > MAX_ASSISTANT_CONTEXT}><ShieldCheck size={16} /> {cloudBlocked ? 'Cloud AI is disabled here' : provider.configured ? answer?.kind === 'timeout' ? 'Review retry' : 'Review request' : 'Connect provider first'}</button>
+            <button className="primary-button full" type="submit" disabled={loading || !provider.configured || cloudBlocked || !question.trim() || contextCount > contextLimit}><ShieldCheck size={16} /> {cloudBlocked ? 'Cloud AI is disabled here' : provider.configured ? answer?.kind === 'timeout' ? 'Review retry' : 'Review request' : 'Connect provider first'}</button>
           </form>
           {review && <section className="permission-card request-review" aria-label="Request review">
             <div>{review.mode === 'local' ? <LockKeyhole size={17} /> : <Cloud size={17} />}<strong>{review.mode === 'local' ? 'Send to local model' : 'Send to cloud provider'}</strong></div>
@@ -361,13 +373,15 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
       )}
       {answer && <div className="answer-card">
         {(answer.kind === 'answer' || answer.kind === 'sources') && <span>AI ANSWER</span>}
-        {answer.kind === 'answer' && <p>{answer.text}</p>}
+        {answer.kind === 'answer' && <AssistantMarkdown text={answer.text} onOpen={url => void window.privateBrowser.newTab(workspace, url, accountId).catch(() => onToast('Could not open link.', 'error'))} />}
         {answer.kind === 'insufficient' && <p role="status">Insufficient page information. The reply included no source passage from the approved text.</p>}
         {answer.kind === 'cancelled' && <p role="status">Request cancelled.</p>}
         {answer.kind === 'timeout' && <p role="status">The provider timed out. Review the request before retrying.</p>}
         {answer.kind === 'sources' && <ul className="source-findings">{answer.items.map(({ claim, quote }) => <li key={claim}>
           <p>{claim}</p><blockquote aria-label="Source passage">{quote}</blockquote>
         </li>)}</ul>}
+        {answer.truncated && <p role="status">Answer was cut off — ask a narrower question.</p>}
+        {answer.usage && <p>{answer.usage.promptTokens} input tokens · {answer.usage.completionTokens} output tokens</p>}
         {copyableAnswer && <button type="button" className="text-button" onClick={() => {
           void window.privateBrowser.copyText(copyableAnswer).then(() => onToast('Answer copied')).catch((error) => onToast(error instanceof Error ? error.message : 'Could not copy the answer.', 'error'));
         }}>Copy answer</button>}

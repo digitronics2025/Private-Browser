@@ -21,7 +21,7 @@ import { notesPanelCommands, type NotesPanelCommand } from './notes-panel.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
 import { MAX_BOOKMARK_EDIT_BATCH } from './bookmark-maintenance.js';
-import { MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_QUESTION, MAX_ASSISTANT_EXTRA_SOURCES, MAX_ASSISTANT_SOURCE_TEXT } from './ai-prompt.js';
+import { MAX_ASSISTANT_CONTEXT_CLOUD, MAX_ASSISTANT_QUESTION, MAX_ASSISTANT_EXTRA_SOURCES } from './ai-prompt.js';
 
 const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox']);
 
@@ -472,7 +472,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'ai:prepare-source':
       exact(args, 2); requireUuid(args[0], 'preview'); requireUuid(args[1], 'tab'); return;
     case 'ai:review-request': {
-      between(args, 3, 5); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', MAX_ASSISTANT_CONTEXT); requireBoundedText(args[2], 'question', MAX_ASSISTANT_QUESTION);
+      between(args, 3, 5); requireUuid(args[0], 'preview'); requireBoundedText(args[1], 'page context', MAX_ASSISTANT_CONTEXT_CLOUD); requireBoundedText(args[2], 'question', MAX_ASSISTANT_QUESTION);
       if (args[3] !== undefined && typeof args[3] !== 'boolean') throw new Error('Invalid source passage option');
       const edits = args[4];
       if (edits !== undefined) {
@@ -483,7 +483,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
           const id = requireUuid(source.id, 'source');
           if (ids.has(id)) throw new Error('Choose each source once.');
           ids.add(id);
-          requireBoundedText(source.text, 'source excerpt', MAX_ASSISTANT_SOURCE_TEXT);
+          requireBoundedText(source.text, 'source excerpt', MAX_ASSISTANT_CONTEXT_CLOUD / 3);
         }
       }
       return;

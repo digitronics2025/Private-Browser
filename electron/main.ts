@@ -44,7 +44,7 @@ import { BrowserSessionLock } from './browser-session-lock.js';
 import { MAX_MEMORY_SAVER_EXCLUSIONS, MEMORY_SAVER_INTERVAL_MS, MEMORY_SAVER_PAGE_CHECK, mayReloadInactivePage, memorySaverOrigin, type MemorySaverPage } from './memory-saver.js';
 import { getDomain } from 'tldts';
 import { AiProviderStore } from './ai-provider.js';
-import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from './ai-prompt.js';
+import { AI_SYSTEM_PROMPT, assistantContextLimit, validateAssistantExcerpts, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, recentAssistantTurns, type AssistantTurn, readAssistantAnswer } from './ai-prompt.js';
 import { WORKSPACES } from './state-store.js';
 import { AccountStore, MAX_ASSISTANT_RECEIPTS } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
@@ -329,9 +329,9 @@ class BrowserController {
   private readonly temporaryPanelTools = new Map<AccountSpaceId, SidePanelTool>();
   private readonly configuredSessions = new Set<string>();
   private spellingLanguages?: SpellcheckLanguage[];
-  private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
+  private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string; conversation?: { binding: string; turns: AssistantTurn[] } }>();
   private claudeExcerpt?: AssistantCapture & { expiresAt: number };
-  private assistantReview?: AssistantCapture & { review: AiRequestReview; question: string; withEvidence: boolean; expiresAt: number; additional: AssistantCapture[]; excerpts: string[] };
+  private assistantReview?: AssistantCapture & { review: AiRequestReview; question: string; withEvidence: boolean; expiresAt: number; additional: AssistantCapture[]; excerpts: string[]; binding: string; userQuestion: string; history: AssistantTurn[] };
   private notesDraft?: { review: NotesDraftReview; generation: number; url: string; delivering: boolean };
   private activeAssistant?: { id: string; mode: 'local' | 'cloud'; controller: AbortController };
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
@@ -3667,7 +3667,7 @@ class BrowserController {
     this.assistantReview = undefined;
     const state = this.store.get();
     const tab = this.activeTab(state);
-    const capture = await this.captureAssistantSelection(tab, scope, MAX_ASSISTANT_CONTEXT);
+    const capture = await this.captureAssistantSelection(tab, scope, assistantContextLimit(this.aiProvider.status().mode));
     this.validateAssistantSource(capture.preview, capture.navigationGeneration);
     this.addPrivacyEvent('local-read', 'Local page preview', `${capture.preview.title} · ${capture.preview.redactions} redaction(s)`);
     this.pendingAiPreviews.set(capture.preview.id, { ...capture, expiresAt: Date.now() + 5 * 60_000 });
@@ -3684,9 +3684,10 @@ class BrowserController {
     const contents = runtime?.view?.webContents;
     if (!runtime || !contents || tab.isHome) throw new Error('Open a webpage first');
     const navigationGeneration = runtime.navigationGeneration;
+    const rawLimit = Math.max(20_000, maximum);
     const code = scope === 'selection'
-      ? "(window.getSelection()?.toString() ?? '').slice(0, 20000)"
-      : "document.body?.innerText.slice(0, 20000) ?? ''";
+      ? `(window.getSelection()?.toString() ?? '').slice(0, ${rawLimit})`
+      : `document.body?.innerText.slice(0, ${rawLimit}) ?? ''`;
     const rawText = await contents.executeJavaScriptInIsolatedWorld(1008, [{ code }]) as string;
     if (scope === 'selection' && !rawText.trim()) throw new Error('Select visible page text, then try again.');
     const result = redactSensitiveText(rawText);
@@ -3721,7 +3722,7 @@ class BrowserController {
     if (!tab || tab.id === parent.preview.tabId || classifyAiSource(tab.url) !== 'browser') {
       throw new Error('Choose another open webpage in this Account Space.');
     }
-    const capture = await this.captureAssistantSelection(tab, 'selection', MAX_ASSISTANT_SOURCE_TEXT);
+    const capture = await this.captureAssistantSelection(tab, 'selection', assistantContextLimit(this.aiProvider.status().mode) / 3);
     this.validateAssistantSource(parent.preview, parent.navigationGeneration);
     this.validateExtraAssistantSource(capture);
     if (this.pendingAiPreviews.get(parentId) !== parent || parent.expiresAt <= Date.now()) throw new Error('The current page preview expired.');
@@ -3752,6 +3753,8 @@ class BrowserController {
     this.requireAssistantPolicy(pending.preview.accountSpaceId, provider.mode);
     const question = redactSensitiveText(questionValue.trim());
     if (!question.text) throw new Error('Enter a question before reviewing the request.');
+    const limit = assistantContextLimit(provider.mode);
+    validateAssistantExcerpts(text, edits.map(edit => edit.text), limit);
     const redacted = redactSensitiveText(text);
     const additional = edits.map((edit) => {
       const extra = this.pendingAiPreviews.get(edit.id);
@@ -3765,13 +3768,13 @@ class BrowserController {
     const includeCurrent = !additional.length || Boolean(redacted.text.trim());
     const edited = [...includeCurrent ? [redacted] : [], ...additional.map(({ excerpt }) => excerpt)];
     const excerpts = edited.map((excerpt) => excerpt.text);
-    if (excerpts.reduce((total, excerpt) => total + excerpt.length, 0) > MAX_ASSISTANT_CONTEXT) {
-      throw new Error('Reduce the combined excerpts to 12,000 characters.');
-    }
+    const size = excerpts.reduce((total, excerpt) => total + excerpt.length, 0);
+    validateAssistantExcerpts(redacted.text, additional.map(({ excerpt }) => excerpt.text), limit);
     const reviewedQuestion = assistantQuestion(question.text, withEvidence);
     const sources = [...includeCurrent ? [pending.preview] : [], ...additional.map(({ capture }) => capture.preview)];
-    const contextText = formatAssistantExcerpts(sources.map((source, index) => ({ ...source, text: excerpts[index] })), additional.length > 0);
-    const preview = { ...pending.preview, text: contextText, ...(additional.length ? { title: 'Reviewed webpages', url: 'See source origins below' } : {}) };
+    const binding = JSON.stringify(sources.map((source, index) => [source.id, excerpts[index]]));
+    const history = recentAssistantTurns(pending.conversation?.binding === binding ? pending.conversation.turns : [], limit - size);
+    const preview = { ...pending.preview, sources: sources.map((source, index) => ({ title: source.title, url: source.url, text: excerpts[index] })), history };
     const review: AiRequestReview = {
       id: randomUUID(),
       mode: provider.mode,
@@ -3783,7 +3786,7 @@ class BrowserController {
         + edited.reduce((total, item) => total + item.redactions, 0),
     };
     this.assistantReview = { review, preview, question: reviewedQuestion, withEvidence, expiresAt: pending.expiresAt,
-      navigationGeneration: pending.navigationGeneration, additional: additional.map(({ capture }) => capture), excerpts };
+      navigationGeneration: pending.navigationGeneration, additional: additional.map(({ capture }) => capture), excerpts, binding, userQuestion: question.text, history };
     return review;
   }
 
@@ -3810,12 +3813,23 @@ class BrowserController {
     const controller = new AbortController();
     this.activeAssistant = { id, mode: pending.review.mode, controller };
     try {
-      const answer = await this.aiProvider.ask(pending.preview, pending.question, validate, controller.signal);
+      const answer = await this.aiProvider.ask(pending.preview, pending.question, () => {
+        if (pending.expiresAt <= Date.now()) throw new Error('The review expired. Read the page again.');
+        validate();
+      }, controller.signal);
       controller.signal.throwIfAborted();
-      this.pendingAiPreviews.delete(pending.preview.id);
-      for (const [sourceId, read] of this.pendingAiPreviews) if (read.parentId === pending.preview.id) this.pendingAiPreviews.delete(sourceId);
+      validate();
+      const result = readAssistantAnswer(answer.text, pending.withEvidence, pending.excerpts);
+      const read = this.pendingAiPreviews.get(pending.preview.id);
+      if (read && read.expiresAt > Date.now()) {
+        const visible = result.kind === 'answer' ? result.text : result.kind === 'sources' ? JSON.stringify(result.items) : 'Insufficient page information.';
+        read.conversation = { binding: pending.binding, turns: [...pending.history, {
+          question: pending.userQuestion, answer: redactSensitiveText(visible).text,
+        }].slice(-4) };
+      }
       this.addPrivacyEvent(kind, 'Assistant request completed', 'Provider returned a response', pending.preview.accountSpaceId);
-      return readAssistantAnswer(answer, pending.withEvidence, pending.excerpts);
+      const { text: _text, ...metadata } = answer;
+      return { ...result, ...metadata };
     } catch (error) {
       if (controller.signal.aborted) return { kind: 'cancelled' };
       if (error instanceof Error && (error.name === 'TimeoutError' || (error.cause instanceof Error && error.cause.name === 'TimeoutError'))) {
@@ -3882,10 +3896,7 @@ class BrowserController {
   setAssistantCloudAllowed(accountId: AccountSpaceId, allowed: boolean): void {
     this.requireAssistantPolicy(accountId, 'local');
     this.store.refreshAccount(this.accounts.update(accountId, (record) => { record.assistantCloudAllowed = allowed; }));
-    if (!allowed) {
-      if (this.assistantReview?.review.mode === 'cloud') this.assistantReview = undefined;
-      if (this.activeAssistant?.mode === 'cloud') this.activeAssistant.controller.abort();
-    }
+    this.revokeAiContext();
     this.broadcast();
   }
 
@@ -3951,7 +3962,7 @@ class BrowserController {
     if (provider.configured) this.recordAssistantReceipt(preview.accountSpaceId, mode, mode === 'local' ? 'http://127.0.0.1:11434' : provider.endpoint!, 'developer-request');
     const answer = await this.aiProvider.ask(preview, question, validate);
     this.addPrivacyEvent(mode === 'local' ? 'local-read' : 'cloud-approved', mode === 'local' ? 'Local AI request completed' : 'Cloud AI request completed', 'Provider returned a response', preview.accountSpaceId);
-    return answer;
+    return answer.text;
   }
 
   private consumeAiApproval(token: string, mode: 'cloud' | 'local' = 'cloud'): AiPagePreview {

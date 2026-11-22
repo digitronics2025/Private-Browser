@@ -822,10 +822,15 @@ export interface AiRequestReview {
   redactions: number;
 }
 
-export type AssistantAnswer =
+export interface AssistantMetadata {
+  truncated?: boolean;
+  usage?: { promptTokens: number; completionTokens: number };
+}
+
+export type AssistantAnswer = AssistantMetadata & (
   | { kind: 'answer'; text: string }
   | { kind: 'sources'; items: { claim: string; quote: string }[] }
-  | { kind: 'insufficient' | 'cancelled' | 'timeout' };
+  | { kind: 'insufficient' | 'cancelled' | 'timeout' });
 
 export interface AiProviderStatus {
   configured: boolean;
@@ -835,9 +840,10 @@ export interface AiProviderStatus {
   error?: 'provider-corrupt' | 'os-encryption-unavailable';
 }
 
-export type AiProviderCheckState = 'ready' | 'not-configured' | 'authentication' | 'model' | 'rate-limit' | 'invalid-response' | 'unavailable' | 'local-setup';
+export type AiProviderCheckState = 'ready' | 'not-configured' | 'authentication' | 'model' | 'rate-limit' | 'invalid-response' | 'unavailable' | 'local-setup' | 'bad-request' | 'insufficient-credit' | 'context-too-long' | 'model-not-found';
 export interface AiProviderCheckResult {
   state: AiProviderCheckState;
+  reason?: string;
 }
 
 export interface CloudAiProviderInput {

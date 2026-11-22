@@ -57,8 +57,8 @@ test('sends only reviewed selections from the current Account Space and refuses 
     const single = await prepare(firstRead, false);
     expect(single.userPrompt).not.toContain('Reference product');
     const combined = await prepare(firstRead, true);
-    expect(combined.userPrompt).toContain(`Source 1: First product (${origin})`);
-    expect(combined.userPrompt).toContain(`Source 2: Reference product (${origin})`);
+    expect(combined.userPrompt).toContain(`source="1" title="First product" url="${origin}"`);
+    expect(combined.userPrompt).toContain(`source="2" title="Reference product" url="${origin}"`);
     expect(combined.userPrompt).not.toContain('An unrelated description');
     expect(combined.userPrompt).not.toContain('sku=');
     await page.evaluate((id) => window.privateBrowser.sendReviewedAssistant(id), combined.id);

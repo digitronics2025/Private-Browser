@@ -6,6 +6,8 @@ lists stable versions with their publication dates. Read the
 
 ## Unreleased
 
+- Review follow-up page questions, read formatted answers and see cloud provider errors and reported token usage.
+
 - Connect Claude Code or Codex to the isolated Agent Workspace. Review
   consequential actions in the browser and stop sessions from its toolbar.
 

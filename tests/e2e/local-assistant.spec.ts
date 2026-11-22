@@ -71,6 +71,13 @@ test('reviews edited selection, destination and redacted question before approva
   await review.getByRole('button', { name: 'Approve and ask once' }).click();
   await expect(panel.getByText('The sample shows a brass kettle on the shelf.')).toBeVisible();
   await expect(review).toHaveCount(0);
+  for (let turn = 1; turn <= 4; turn++) {
+    await panel.getByLabel('Ask a follow-up').fill('Follow-up ' + turn);
+    await panel.getByRole('button', { name: 'Review request' }).click();
+    await expect(review).toContainText('previous_turns');
+    await review.getByRole('button', { name: 'Approve and ask once' }).click();
+    await expect(review).toHaveCount(0);
+  }
 });
 
 test('uses all four presets, saves edits in the current space and copies an answer on demand', async ({ page }) => {
@@ -215,4 +222,23 @@ test('reviews several selected sources and lets the user remove each excerpt bef
   await panel.getByRole('button', { name: 'Review request' }).click();
   await expect(review).toContainText('A brass kettle sits on the shelf.');
   await expect(review).not.toContainText('reference.example.test');
+});
+
+test('prefills cloud presets, preserves custom settings and clears the submitted key', async ({ page }) => {
+  await openAssistantPreview(page, '/?localAi=sample');
+  await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await panel.getByRole('button', { name: 'Connect', exact: true }).click();
+  await panel.getByLabel('Provider type').selectOption('cloud');
+  const preset = panel.getByRole('combobox', { name: 'Provider', exact: true });
+  await preset.selectOption('OpenAI');
+  await expect(panel.getByPlaceholder('OpenAI-compatible endpoint')).toHaveValue('https://api.openai.com/v1');
+  await preset.selectOption('Anthropic');
+  await expect(panel.getByPlaceholder('Model ID')).toHaveValue('claude-sonnet-5-5');
+  await preset.selectOption('Custom');
+  await expect(panel.getByPlaceholder('OpenAI-compatible endpoint')).toHaveValue('https://api.anthropic.com/v1');
+  await panel.getByPlaceholder('API key (encrypted)').fill('fixture');
+  await panel.getByRole('button', { name: 'Save encrypted provider' }).click();
+  await panel.getByRole('button', { name: 'Change', exact: true }).click();
+  await expect(panel.getByPlaceholder('API key (encrypted)')).toHaveValue('');
 });

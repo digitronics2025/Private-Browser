@@ -53,8 +53,10 @@ test('checks the provider with a built-in sample and sends only the separately a
     await expect(check()).resolves.toEqual({ state: 'ready' });
     const bodies = await app.evaluate(() => (globalThis as typeof globalThis & { __pbAiConnection?: Fixture }).__pbAiConnection!.bodies);
     expect(bodies).toHaveLength(1);
+    expect(Object.keys(JSON.parse(bodies[0])).sort()).toEqual(['max_tokens', 'messages', 'model']);
+    expect(JSON.parse(bodies[0]).max_tokens).toBe(4096);
     const messages = JSON.parse(bodies[0]).messages as Array<{ role: string; content: string }>;
-    expect(messages[1].content).toBe('Page: Private Browser test sample\nURL: Built-in sample\n\nApproved context:\nThe fictional shop has two test pages.\n\nQuestion: How many test pages are in the sample?');
+    expect(messages[1].content).toBe('<approved_context source="1" title="Private Browser test sample" url="Built-in sample">\nThe fictional shop has two test pages.\n</approved_context>\n\nQuestion: How many test pages are in the sample?');
     for (const [mode, state] of [['quota', 'rate-limit'], ['oversize', 'invalid-response']] as const) {
       await app.evaluate((_electron, value) => { (globalThis as typeof globalThis & { __pbAiConnection?: Fixture }).__pbAiConnection!.mode = value; }, mode);
       await expect(check()).resolves.toEqual({ state });
@@ -69,15 +71,31 @@ test('checks the provider with a built-in sample and sends only the separately a
     });
     const preview = await page.evaluate(() => window.privateBrowser.prepareAiPreview('selection'));
     expect(preview.text).toBe('A brass kettle sits on the shelf.');
+    await expect(page.evaluate(id => window.privateBrowser.reviewAssistantRequest(id, 'a'.repeat(48_001), 'Limit?'), preview.id)).rejects.toThrow();
+    await expect(page.evaluate(id => window.privateBrowser.reviewAssistantRequest(id, 'a'.repeat(48_000), 'Limit?'), preview.id)).resolves.toMatchObject({ mode: 'cloud' });
     const review = await page.evaluate((id) => window.privateBrowser.reviewAssistantRequest(id, 'A brass kettle', 'What is listed? token=fixture-only'), preview.id);
     expect(review.destination).toBe('https://ai-fixture.example.com/v1/chat/completions');
     expect(review.redactions).toBe(1);
-    expect(review.userPrompt).toBe(`Page: Reading sample\nURL: ${origin}\n\nApproved context:\nA brass kettle\n\nQuestion: What is listed? [REDACTED]`);
+    expect(review.userPrompt).toBe(`<approved_context source="1" title="Reading sample" url="${origin}">\nA brass kettle\n</approved_context>\n\nQuestion: What is listed? [REDACTED]`);
     const readBodies = () => app.evaluate(() => (globalThis as typeof globalThis & { __pbAiConnection?: Fixture }).__pbAiConnection!.bodies);
     expect(await readBodies()).toHaveLength(3);
     const send = (id: string) => page.evaluate((value) => window.privateBrowser.sendReviewedAssistant(value), id);
     await expect(send(review.id)).resolves.toEqual({ kind: 'answer', text: 'Two.' });
     await expect(send(review.id)).rejects.toThrow(/review the request/i);
+    const followUp = await page.evaluate(id => window.privateBrowser.reviewAssistantRequest(id, 'A brass kettle', 'And its material?'), preview.id);
+    expect(followUp.userPrompt).toContain('Two.');
+    expect(followUp.id).not.toBe(review.id);
+    await app.evaluate(() => {
+      const root = globalThis as typeof globalThis & { __realNow?: typeof Date.now };
+      root.__realNow = Date.now;
+      Date.now = () => root.__realNow!() + 300_001;
+    });
+    try {
+      await expect(send(followUp.id)).rejects.toThrow(/expired/i);
+      await expect(page.evaluate(id => window.privateBrowser.reviewAssistantRequest(id, 'A brass kettle', 'Still there?'), preview.id)).rejects.toThrow(/expired/i);
+    } finally {
+      await app.evaluate(() => { Date.now = (globalThis as typeof globalThis & { __realNow: typeof Date.now }).__realNow; });
+    }
     const sent = await readBodies();
     expect(sent).toHaveLength(4);
     expect(JSON.parse(sent[3]).messages).toEqual([
@@ -114,7 +132,7 @@ test('checks the provider with a built-in sample and sends only the separately a
     expect(receipts.every((item) => Object.keys(item).sort().join(',') === 'at,destination,mode,purpose')).toBe(true);
     await page.evaluate((id) => window.privateBrowser.setAssistantCloudAllowed(id, false), initial.activeAccountSpaceId);
     await expect(check()).rejects.toThrow(/cloud AI is disabled/i);
-    await expect(makeReview()).rejects.toThrow(/cloud AI is disabled/i);
+    await expect(makeReview()).rejects.toThrow(/preview expired/i);
     expect(await readBodies()).toHaveLength(7);
     await page.evaluate((fromTenten) => window.privateBrowser.switchWorkspace(fromTenten ? 'personal' : 'tenten'), initial.activeWorkspaceId === 'tenten');
     await expect(page.evaluate(() => window.privateBrowser.getState().then((state) => state.assistantPolicy))).resolves.toEqual({ cloud: 'allowed', receipts: [] });

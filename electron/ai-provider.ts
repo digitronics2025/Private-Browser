@@ -1,28 +1,45 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { safeStorage } from 'electron';
-import { isSafeAiEndpoint } from './security.js';
+import { redactSensitiveText, isSafeAiEndpoint } from './security.js';
 import { OllamaLocal } from './ollama-local.js';
 import { AI_SYSTEM_PROMPT, aiUserPrompt } from './ai-prompt.js';
-import type { AiProviderCheckResult, AiProviderCheckState, AiProviderInput, AiProviderStatus, LocalAiModels } from './types.js';
+import type { AssistantMetadata, AiProviderCheckResult, AiProviderCheckState, AiProviderInput, AiProviderStatus, LocalAiModels } from './types.js';
 
 type StoredProvider = AiProviderInput & { version: 1 };
+export const CLOUD_AI_TIMEOUT_MS = 60_000;
+const CONNECTION_TIMEOUT_MS = 20_000;
 const maxCloudResponse = 256 * 1024;
 
 class AiResponseError extends Error {
-  constructor(readonly state: AiProviderCheckState, message: string) { super(message); }
+  constructor(readonly state: AiProviderCheckState, message: string, readonly reason?: string) { super(reason ? message + ' ' + reason : message); }
 }
 
-function failedCloudResponse(status: number): AiResponseError {
-  if (status === 401 || status === 403) return new AiResponseError('authentication', 'The AI provider refused access. Check authentication and model access.');
-  if (status === 400 || status === 404 || status === 422) return new AiResponseError('model', 'The AI provider rejected the request. Check the model ID and endpoint.');
-  if (status === 429) return new AiResponseError('rate-limit', 'The AI provider is limiting requests. Try again later.');
-  return new AiResponseError('unavailable', 'The AI provider is unavailable. Try again later.');
+async function failedCloudResponse(response: Response, key: string): Promise<AiResponseError> {
+  let reason = '';
+  try {
+    const data = JSON.parse(await readBody(response, 4096));
+    if (typeof data?.error?.message === 'string') {
+      const message = key ? data.error.message.split(key).join('[REDACTED]') : data.error.message;
+      reason = redactSensitiveText(message.replace(/\bsk-[\w-]+/gi, '[REDACTED]')).text
+        .replace(/[\s\p{Cc}\p{Cf}]+/gu, ' ').trim().slice(0, 300);
+    }
+  } catch (error) {
+    if (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)) throw error;
+  }
+  const status = response.status;
+  if (status === 402 || /credit balance|billing|insufficient.quota/i.test(reason)) return new AiResponseError('insufficient-credit', 'Check provider credit or billing.', reason);
+  if (status === 401 || status === 403) return new AiResponseError('authentication', 'The provider refused access.', reason);
+  if (status === 404) return new AiResponseError('model-not-found', 'Check the model ID and endpoint.', reason);
+  if (/context.{0,24}(length|long|limit|window)|too many tokens/i.test(reason)) return new AiResponseError('context-too-long', 'Reduce the approved context.', reason);
+  if (status === 400 || status === 422) return new AiResponseError('bad-request', 'The provider rejected the request.', reason);
+  if (status === 429) return new AiResponseError('rate-limit', 'The provider is limiting requests.', reason);
+  return new AiResponseError('unavailable', 'The provider is unavailable.', reason);
 }
 
-async function readCloudAnswer(response: Response): Promise<string> {
+async function readBody(response: Response, limit: number): Promise<string> {
   const stream = response.body;
-  if (!stream || Number(response.headers.get('content-length') ?? 0) > maxCloudResponse) {
+  if (!stream || Number(response.headers.get('content-length') ?? 0) > limit) {
     await stream?.cancel().catch(() => undefined);
     throw new AiResponseError('invalid-response', 'The AI provider returned an empty or oversized response.');
   }
@@ -34,19 +51,29 @@ async function readCloudAnswer(response: Response): Promise<string> {
       const { done, value } = await reader.read();
       if (done) break;
       length += value.byteLength;
-      if (length > maxCloudResponse) {
+      if (length > limit) {
         await reader.cancel().catch(() => undefined);
         throw new AiResponseError('invalid-response', 'The AI provider response exceeded its size limit.');
       }
       chunks.push(Buffer.from(value));
     }
   } finally { reader.releaseLock(); }
-  let parsed: { choices?: Array<{ message?: { content?: unknown } }> };
-  try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readCloudAnswer(response: Response): Promise<{ text: string } & AssistantMetadata> {
+  const body = await readBody(response, maxCloudResponse);
+  let parsed: { choices?: Array<{ finish_reason?: string; message?: { content?: unknown } }>; usage?: { prompt_tokens: number; completion_tokens: number } };
+  try { parsed = JSON.parse(body); }
   catch { throw new AiResponseError('invalid-response', 'The AI provider returned an unreadable response.'); }
   const answer = parsed?.choices?.[0]?.message?.content;
   if (typeof answer !== 'string' || !answer.trim()) throw new AiResponseError('invalid-response', 'The AI provider returned an empty response.');
-  return answer.trim().slice(0, 30_000);
+  const usage = parsed.usage;
+  const valid = (count: number) => Number.isSafeInteger(count) && count >= 0 && count <= 1_000_000_000;
+  return { text: answer.trim().slice(0, 30_000),
+    ...(parsed.choices?.[0]?.finish_reason === 'length' || answer.trim().length > 30_000 ? { truncated: true } : {}),
+    ...(usage && valid(usage.prompt_tokens) && valid(usage.completion_tokens)
+      ? { usage: { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens } } : {}) };
 }
 
 export class AiProviderStore {
@@ -106,29 +133,29 @@ export class AiProviderStore {
     if (!provider || !this.status().configured) return { state: 'not-configured' };
     try {
       await this.ask({ title: 'Private Browser test sample', url: 'Built-in sample', text: 'The fictional shop has two test pages.' },
-        'How many test pages are in the sample?', checkWorkspace);
+        'How many test pages are in the sample?', checkWorkspace, undefined, CONNECTION_TIMEOUT_MS);
       return { state: 'ready' };
     } catch (error) {
-      return { state: error instanceof AiResponseError ? error.state : 'mode' in provider ? 'local-setup' : 'unavailable' };
+      return error instanceof AiResponseError ? { state: error.state, ...(error.reason && { reason: error.reason }) } : { state: 'mode' in provider ? 'local-setup' : 'unavailable' };
     }
   }
 
-  async ask(context: { title: string; url: string; text: string; dom?: string; screenshotDataUrl?: string }, question: string, checkSource: () => void, cancellation?: AbortSignal): Promise<string> {
+  async ask(context: { title: string; url: string; text: string; dom?: string; screenshotDataUrl?: string }, question: string, checkSource: () => void, cancellation?: AbortSignal, timeoutMs = CLOUD_AI_TIMEOUT_MS): Promise<{ text: string } & AssistantMetadata> {
     const provider = this.config;
     if (!provider) throw new Error('Configure an AI provider first');
     const prompt = aiUserPrompt(context, question);
     if ('mode' in provider) {
       if (context.screenshotDataUrl) throw new Error('The local assistant uses text previews');
-      return this.local.ask(provider.model, AI_SYSTEM_PROMPT, prompt, () => {
+      return { text: await this.local.ask(provider.model, AI_SYSTEM_PROMPT, prompt, () => {
         if (this.config !== provider) throw new Error('The AI provider changed; approve the context again');
         checkSource();
-      }, cancellation);
+      }, cancellation) };
     }
     const content = context.screenshotDataUrl
       ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: context.screenshotDataUrl } }]
       : prompt;
     checkSource();
-    const timeout = AbortSignal.timeout(10_000);
+    const timeout = AbortSignal.timeout(timeoutMs);
     const response = await fetch(`${provider.endpoint}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -137,7 +164,7 @@ export class AiProviderStore {
       },
       body: JSON.stringify({
         model: provider.model,
-        temperature: 0.2,
+        max_tokens: 4096,
         messages: [
           { role: 'system', content: AI_SYSTEM_PROMPT },
           { role: 'user', content },
@@ -147,8 +174,7 @@ export class AiProviderStore {
       signal: cancellation ? AbortSignal.any([cancellation, timeout]) : timeout,
     });
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw failedCloudResponse(response.status);
+      throw await failedCloudResponse(response, provider.apiKey);
     }
     return readCloudAnswer(response);
   }

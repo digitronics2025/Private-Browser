@@ -177,3 +177,5 @@ No real OAuth credential, token, cookie, or private account data is inspected, c
 - D1/R2 and the public manifest expose Private Browser `0.5.10` build 93 for the exact fix commit: `Private-Browser-0.5.10-Setup.exe`, 115,640,382 bytes, SHA-256 `62f2546439be19bd644931c26a0fdce39ccac97eaf10663e4f2c2c0679e844da`.
 - A separate public signed-route stream matched the active D1 size and SHA-256 exactly. Automated live-page checks passed at 1440px and 375px with version 0.5.10, build 93, the published checksum and zero console errors; the same production URL was opened visibly in VS Code Integrated Browser.
 - Cloudflare intentionally does not support automated browsers for solving production challenges. The production login CAPTCHA itself was not bypassed; the official test-key flow plus the corrected unmodified identity are the automated evidence, and the updated normal desktop build is the human-use verification surface.
+
+[STEP] 2026-11-22 — Updated the Assistant provider, follow-up review and answer display. See [verification ledger](docs/plans/ai-assistant-stronger-and-smarter.md#ledger).

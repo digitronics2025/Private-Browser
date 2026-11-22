@@ -13,7 +13,7 @@ import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { canPauseTrackersAt, TrackerProtection } from '../electron/tracker-protection';
 import { memorySaverOrigin } from '../electron/memory-saver';
 import { MIN_SPLIT_WIDTH, splitPageAllowed } from '../electron/split-view';
-import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
+import { AI_SYSTEM_PROMPT, assistantContextLimit, validateAssistantExcerpts, assistantQuestion, aiUserPrompt, recentAssistantTurns, type AssistantTurn, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
 import { browsingDataVisitIds, requireBrowsingDataInput } from '../electron/browsing-data';
@@ -264,9 +264,11 @@ export function installPreviewApi(): void {
     { origin: 'https://mail.google.com', capability: 'notifications', duration: 'session' },
   ] : [];
   let previewProvider: AiProviderStatus = { configured: false };
+  let assistantHistory: AssistantTurn[] = [];
+  let historyBinding = '';
   let assistantPage: AiPagePreview | undefined;
   let claudeExcerpt: PageExcerptReview | undefined;
-  let assistantReview: { data: AiRequestReview; context: string[]; withEvidence: boolean } | undefined;
+  let assistantReview: { data: AiRequestReview; context: string[]; question: string; binding: string; history: AssistantTurn[]; withEvidence: boolean } | undefined;
   const assistantExtraSources = new Map<string, AssistantSelectionSource>();
   let timeoutFixtureUsed = false;
   let previewRequest: { id: string; finish: (answer: AssistantAnswer) => void } | undefined;
@@ -1177,6 +1179,7 @@ export function installPreviewApi(): void {
       if (params.get('localAi') !== 'sample') throw new Error('A sample reading page is unavailable.');
       assistantReview = undefined;
       assistantExtraSources.clear();
+      assistantHistory = [];
       assistantPage = {
         id: crypto.randomUUID(), accountSpaceId: state.activeAccountSpaceId, tabId: state.activeTabId,
         service: 'browser', sourceRevision: 'preview-ai-page', sourceUrl: 'https://example.test/article',
@@ -1211,24 +1214,25 @@ export function installPreviewApi(): void {
       });
       const includeCurrent = !additional.length || Boolean(text.text.trim());
       const excerpts = [...(includeCurrent ? [{ ...assistantPage, text: text.text, redactions: text.redactions }] : []), ...additional];
-      if (excerpts.reduce((total, excerpt) => total + excerpt.text.length, 0) > MAX_ASSISTANT_CONTEXT) {
-        throw new Error('Reduce the combined excerpts to 12,000 characters.');
-      }
+      const limit = assistantContextLimit(previewProvider.mode);
+      const size = excerpts.reduce((total, source) => total + source.text.length, 0);
+      validateAssistantExcerpts(text.text, additional.map(source => source.text), limit);
       const question = redactSensitiveText(String(questionValue).trim());
-      const parent = additional.length ? { title: 'Reviewed webpages', url: 'See source origins below' } : assistantPage;
+      const binding = JSON.stringify(excerpts.map(source => [source.id, source.text]));
+      const history = recentAssistantTurns(binding === historyBinding ? assistantHistory : [], limit - size);
       const data: AiRequestReview = {
         id: crypto.randomUUID(), mode: previewProvider.mode, model: previewProvider.model,
         destination: previewProvider.mode === 'local' ? 'http://127.0.0.1:11434/api/chat' : `${previewProvider.endpoint}/chat/completions`,
-        systemPrompt: AI_SYSTEM_PROMPT, userPrompt: aiUserPrompt({ ...parent, text: formatAssistantExcerpts(excerpts, additional.length > 0) }, assistantQuestion(question.text, withEvidence === true)),
+        systemPrompt: AI_SYSTEM_PROMPT, userPrompt: aiUserPrompt({ ...assistantPage, sources: excerpts, history }, assistantQuestion(question.text, withEvidence === true)),
         redactions: excerpts.reduce((total, source) => total + source.redactions, question.redactions),
       };
-      assistantReview = { data, context: excerpts.map((source) => source.text), withEvidence: withEvidence === true };
+      assistantReview = { data, question: question.text, history, binding, context: excerpts.map((source) => source.text), withEvidence: withEvidence === true };
       return data;
     },
     sendReviewedAssistant: async (id) => {
       if (!assistantPage || assistantPage.accountSpaceId !== state.activeAccountSpaceId || assistantPage.tabId !== state.activeTabId
         || !assistantReview || assistantReview.data.id !== id) throw new Error('Review the request before sending it.');
-      const { data, context, withEvidence } = assistantReview;
+      const { data, context, withEvidence, history, binding, question } = assistantReview;
       assistantReview = undefined;
       requireAssistantPolicy(data.mode);
       recordAssistantReceipt(data.mode, data.destination, 'page-request');
@@ -1239,12 +1243,12 @@ export function installPreviewApi(): void {
       if (params.get('aiRequest') === 'waiting') {
         return new Promise<AssistantAnswer>((finish) => { previewRequest = { id: data.id, finish }; });
       }
-      assistantPage = undefined;
-      assistantExtraSources.clear();
       const answer = 'The sample shows a brass kettle on the shelf.';
       const fixture = withEvidence ? JSON.stringify({ findings: [{
         claim: answer, quote: params.get('aiSources') === 'unverified' ? 'This passage does not occur in the sample.' : 'A brass kettle sits on the shelf.',
       }] }) : answer;
+      historyBinding = binding;
+      assistantHistory = [...history, { question, answer }].slice(-4);
       return readAssistantAnswer(fixture, withEvidence, context);
     },
     cancelReviewedAssistant: async (id) => {
@@ -1280,6 +1284,8 @@ export function installPreviewApi(): void {
     },
     revokeAiContext: async () => {
       claudeExcerpt = undefined;
+      assistantHistory = [];
+      historyBinding = '';
       assistantReview = undefined;
       assistantPage = undefined;
       assistantExtraSources.clear();
