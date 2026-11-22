@@ -22,8 +22,13 @@ describe('release workflow', () => {
 
   it('requires the owner-approved main commit before production publication', () => {
     const windows = workflow.slice(workflow.indexOf('  windows-installer:'));
-    expect(windows).toContain("github.event_name == 'push' && github.ref == 'refs/heads/main'");
-    expect(windows).toContain('vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == github.sha');
+    const approval = step('Validate exact-commit release approval');
+    expect(workflow).toContain('default: false');
+    expect(approval).toContain("github.event_name == 'workflow_dispatch' && inputs.publish");
+    expect(approval).toContain('vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED');
+    expect(approval).toContain('github.ref_protected');
+    expect(approval).toContain('"$GITHUB_REF" != refs/heads/main || "$PROTECTED_REF" != true || "$APPROVED_SHA" != "$GITHUB_SHA"');
+    expect(windows).toContain("needs.verify.outputs.production == 'true'");
     expect(windows).toContain("'production-release' || 'windows-verification'");
     expect(step('Publish installer from private R2')).toContain("if: env.PRIVATE_BROWSER_STABLE_BUILD == 'true'");
   });
@@ -46,14 +51,23 @@ describe('release workflow', () => {
 
   it('requires a signed candidate, verifies private R2 bytes and suspends a failed release without an eligible restore', () => {
     const packaging = step('Build hardened Windows installer');
+    const loadSigner = step('Load approved Windows signing certificate');
     const signed = step('Verify signed app and installer');
     const publish = step('Publish installer from private R2');
-    expect(packaging).toContain('Production signing and the approved publisher fingerprint are required.');
+    expect(loadSigner).toContain('if: env.PRIVATE_BROWSER_STABLE_BUILD');
+    expect(loadSigner).toContain('import-windows-publisher.ps1');
+    expect(packaging).toContain('steps.signer.outputs.thumbprint');
+    expect(packaging).not.toContain('secrets.');
+    expect(step('Remove production signing certificate')).toContain('-DeleteKey');
     expect(signed).toContain('record-windows-publisher.ps1');
     expect(signed).toContain('win-unpacked/Private Browser.exe');
     expect(publish).toContain('verify-release-candidate.mjs "$installer" "$candidate_dir/candidate.exe"');
+    expect(publish).toContain('git ls-remote --exit-code origin refs/heads/main');
+    expect(publish.indexOf('Main advanced after release approval')).toBeLessThan(publish.indexOf('r2 object put'));
     expect(publish.indexOf('read-active-release.mjs')).toBeLessThan(publish.indexOf('r2 object put'));
     expect(publish.indexOf('cmp --silent')).toBeLessThan(publish.indexOf('publish-release.mjs'));
+    expect(publish).toContain('live.commitSha !== process.env.GITHUB_SHA || live.sha256 !== process.argv[3]');
+    expect(publish).toContain('Check that exact release in D1 before retrying.');
     expect(publish).toContain('verify-live-release.mjs');
     expect(publish).toContain('activate-release.mjs "$previous_id" "$published_id"');
     expect(publish).toContain('suspend-release.mjs "$published_id"');

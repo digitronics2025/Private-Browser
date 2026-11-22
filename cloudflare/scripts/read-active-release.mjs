@@ -30,8 +30,8 @@ export async function readActiveRelease() {
   });
   if (response.status === 404 && mode === 'public') return undefined;
   if (!response.ok) throw new Error(`Cannot read the active release (${response.status})`);
-  const { version, buildNumber, commitSha } = await response.json();
-  return { version, buildNumber, commitSha };
+  const { version, buildNumber, commitSha, sha256 } = await response.json();
+  return { version, buildNumber, commitSha, sha256 };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

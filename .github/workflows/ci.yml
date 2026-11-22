@@ -5,11 +5,9 @@ name: Verify and package
 #   Ready PR        -> `verify` only (Ubuntu). No Windows runner, no installer, no artifacts.
 #                      For a Windows-specific change, run this workflow manually on the PR
 #                      branch (Actions -> Verify and package -> Run workflow) before merging.
-#   Push to main    -> `verify`, then — only when the application changed — the Windows
-#                      transport/Electron journeys + installer. Public publication of the
-#                      Agent Mode build requires the owner's release approval variable.
-#                      Download-service inputs are reported separately from installer publication.
-#   workflow_dispatch -> verify + Windows journeys + installer for the chosen ref (never publishes).
+#   Push to main    -> verify and, for app changes, verify an unsigned Windows installer.
+#   workflow_dispatch -> verify + Windows installer for the chosen ref. An explicit production
+#                        request requires protected main, exact SHA approval and environment review.
 
 on:
   push:
@@ -17,6 +15,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Sign and publish the owner-approved main commit
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -126,7 +129,22 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      production: ${{ steps.release.outputs.production }}
     steps:
+      - name: Validate exact-commit release approval
+        id: release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish
+        shell: bash
+        env:
+          APPROVED_SHA: ${{ vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED }}
+          PROTECTED_REF: ${{ github.ref_protected }}
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main || "$PROTECTED_REF" != true || "$APPROVED_SHA" != "$GITHUB_SHA" ]]; then
+            echo '::error::Production requires protected main and owner approval of this exact commit.'
+            exit 1
+          fi
+          echo 'production=true' >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
@@ -170,9 +188,9 @@ jobs:
       )
     runs-on: windows-latest
     timeout-minutes: 30
-    environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == github.sha && 'production-release' || 'windows-verification' }}
+    environment: ${{ needs.verify.outputs.production == 'true' && 'production-release' || 'windows-verification' }}
     env:
-      PRIVATE_BROWSER_STABLE_BUILD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == github.sha }}
+      PRIVATE_BROWSER_STABLE_BUILD: ${{ needs.verify.outputs.production == 'true' }}
 
     # No job-level secrets: `npm ci` must not run with credentials in its
     # environment, or any dependency's install script can read them.
@@ -220,15 +238,23 @@ jobs:
         run: |
           $version = (node -p "require('./package.json').version").Trim()
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Load approved Windows signing certificate
+        if: env.PRIVATE_BROWSER_STABLE_BUILD == 'true'
+        id: signer
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_PFX: ${{ secrets.PRODUCTION_WINDOWS_SIGNING_CERTIFICATE }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.PRODUCTION_WINDOWS_SIGNING_PASSWORD }}
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256 }}
+        run: ./cloudflare/scripts/import-windows-publisher.ps1
       - name: Build hardened Windows installer
         shell: pwsh
         env:
-          CSC_LINK: ${{ env.PRIVATE_BROWSER_STABLE_BUILD == 'true' && secrets.PRODUCTION_WINDOWS_SIGNING_CERTIFICATE || '' }}
-          CSC_KEY_PASSWORD: ${{ env.PRIVATE_BROWSER_STABLE_BUILD == 'true' && secrets.PRODUCTION_WINDOWS_SIGNING_PASSWORD || '' }}
+          PRIVATE_BROWSER_WINDOWS_SIGNER_THUMBPRINT: ${{ steps.signer.outputs.thumbprint }}
           PRIVATE_BROWSER_WINDOWS_PUBLISHERS: ${{ env.PRIVATE_BROWSER_STABLE_BUILD == 'true' && vars.WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256 || '' }}
         run: |
-          if ($env:PRIVATE_BROWSER_STABLE_BUILD -eq 'true' -and (!$env:CSC_LINK -or !$env:CSC_KEY_PASSWORD -or !$env:PRIVATE_BROWSER_WINDOWS_PUBLISHERS)) {
-            throw 'Production signing and the approved publisher fingerprint are required.'
+          if ($env:PRIVATE_BROWSER_STABLE_BUILD -eq 'true' -and !$env:PRIVATE_BROWSER_WINDOWS_SIGNER_THUMBPRINT) {
+            throw 'Production signing certificate is missing from the Windows certificate store.'
           }
           npm run dist
           exit $LASTEXITCODE
@@ -247,6 +273,12 @@ jobs:
           ./cloudflare/scripts/record-windows-publisher.ps1 -Installer $app.FullName -Sha256 $appHash -Destination release/APP-PUBLISHER.json -SigningConfigured -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256
           npm sbom --sbom-format cyclonedx | Out-File -Encoding utf8 release/SBOM.cdx.json
           exit $LASTEXITCODE
+      - name: Remove production signing certificate
+        if: always() && steps.signer.outputs.thumbprint != ''
+        shell: pwsh
+        env:
+          SIGNER_THUMBPRINT: ${{ steps.signer.outputs.thumbprint }}
+        run: Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:SIGNER_THUMBPRINT" -DeleteKey -ErrorAction Stop
       - name: Exercise the installed Windows release candidate
         shell: pwsh
         env:
@@ -317,6 +349,11 @@ jobs:
           test -n "$CLOUDFLARE_ACCOUNT_ID"
           test -n "$PRIVATE_BROWSER_RELEASE_AUTOMATION_KEY"
           test -n "$PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE"
+          main_ref="$(git ls-remote --exit-code origin refs/heads/main)"
+          if [[ "${main_ref%%$'\t'*}" != "$GITHUB_SHA" ]]; then
+            echo '::error::Main advanced after release approval. Obtain approval for the new commit.'
+            exit 1
+          fi
           previous="$(node cloudflare/scripts/read-active-release.mjs)"
           if [[ -z "$previous" ]]; then previous='{}'; fi
           export PREVIOUS_RELEASE_REVISION="$(node -e 'const v=JSON.parse(process.argv[1]);if(/^[a-f0-9]{40}$/.test(v.commitSha))process.stdout.write(v.commitSha)' "$previous")"
@@ -334,8 +371,19 @@ jobs:
           npx --no-install wrangler r2 object put "private-browser-releases/$object_key.publisher.json" --file release/PUBLISHER.json --content-type application/json --remote
           npx --no-install wrangler r2 object get "private-browser-releases/$object_key.publisher.json" --file "$candidate_dir/publisher.json" --remote
           cmp --silent release/PUBLISHER.json "$candidate_dir/publisher.json"
-          publication="$(node cloudflare/scripts/publish-release.mjs "$installer" "$object_key")"
-          published_id="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).id)' "$publication")"
+          published_id="stable-${{ steps.packaged-version.outputs.version }}-$GITHUB_RUN_NUMBER"
+          if ! node cloudflare/scripts/publish-release.mjs "$installer" "$object_key" > /dev/null; then
+            # Registration may have committed before a response reached the runner.
+            # Reconcile before attempting recovery against this exact candidate.
+            if ! active="$(node cloudflare/scripts/read-active-release.mjs)" || [[ -z "$active" ]] || ! node -e '
+              const live = JSON.parse(process.argv[1]);
+              const candidateId = `stable-${live.version}-${live.buildNumber}`;
+              if (candidateId !== process.argv[2] || live.commitSha !== process.env.GITHUB_SHA || live.sha256 !== process.argv[3]) process.exit(1);
+            ' "$active" "$published_id" "$digest"; then
+              echo "::error::Registration failed and the active feed does not confirm $published_id. Check that exact release in D1 before retrying."
+              exit 1
+            fi
+          fi
           if delivered="$(node cloudflare/scripts/verify-live-release.mjs "$installer")"; then
             printf '### Stable installer verified\n\n```json\n%s\n```\n' "$delivered" >> "$GITHUB_STEP_SUMMARY"
           else

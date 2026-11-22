@@ -12,7 +12,7 @@ environment secrets through the approved credential custody process.
 
 | Secret | Scope |
 |---|---|
-| `PRODUCTION_WINDOWS_SIGNING_CERTIFICATE`, `PRODUCTION_WINDOWS_SIGNING_PASSWORD` | Approved Windows signing material |
+| `PRODUCTION_WINDOWS_SIGNING_CERTIFICATE`, `PRODUCTION_WINDOWS_SIGNING_PASSWORD` | Approved base64 PKCS#12 bundle and password |
 | `PRODUCTION_RELEASE_R2_TOKEN`, `PRODUCTION_RELEASE_ACCOUNT_ID` | Production release bucket read and write |
 | `PRODUCTION_RELEASE_VERIFY_DEVICE` | Enrolled release verification device |
 | `PRODUCTION_RELEASE_AUTOMATION_KEY` | Worker release registration and bounded recovery |
@@ -24,8 +24,16 @@ device or distribution administration privileges.
 Set the public certificate SHA-256 as `WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256`
 in the protected environment and point `PRIVATE_BROWSER_DOWNLOAD_URL` at the
 reviewed production Worker origin. The owner must still approve the exact main
-commit using the existing release approval variable. Keep ordinary Windows
-verification runs free of production credentials.
+commit in the `PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED` repository variable.
+After approval, select **Verify and package** → **Run workflow**, choose `main`,
+and enable **Sign and publish the owner-approved main commit**. The production
+environment reviewer must approve the job before it can access credentials.
+Ordinary Windows verification uses the default unchecked input.
+
+The production signing step imports the bundle from memory into the Windows
+user certificate store on the disposable runner. Packaging selects the approved
+certificate by its public store thumbprint. The password stays in the import
+step and the workflow removes the certificate and key after signing.
 
 Before first use, deploy the approved Worker and apply migration 0005 through
 the Cloudflare owner workflow. Verify installation and upgrade from 0.6.58 in

@@ -401,17 +401,18 @@ runs **only for pull requests** — a `main` run is never cancelled. Node 22 wit
 npm cache in every job.
 
 **CI levels.** Draft PR: nothing. Ready PR: `verify` on Ubuntu only. An app change
-on `main` runs verification and the Windows installer job. An owner-approved
-public release also requires the exact approved commit SHA in the
-`PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED` GitHub Actions repository variable.
-Windows-specific PRs use a manual
-dispatch on their branch to verify and package without publishing.
+on `main` runs verification and builds an unsigned Windows installer.
+Windows-specific PRs use manual dispatch on their branch with the default
+unchecked publish input. For production, the owner sets the exact approved
+commit SHA in the `PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED` repository
+variable. The operator dispatches the workflow on protected `main` with
+**Sign and publish the owner-approved main commit** enabled.
 
 **No job declares secrets.** Every credential is attached to the one step that
 uses it, so `npm ci` and the test suite never run with production values in their
-environment where a dependency's install script could read them (audit finding
-F-11). `publish-cloudflare-release` has its own non-cancelling group; a cancel
-between the R2 upload and D1 registration would strand the object (F-21, F-41).
+environment where a dependency's install script could read them (F-11).
+Production and verification runs on `main` share a concurrency group that
+leaves the running job active (F-21, F-41).
 
 **A failed `verify` keeps its browser test evidence.** The `playwright-evidence`
 artifact (`test-results/` and `blob-report/`, 7 days) is uploaded only on failure.
@@ -421,16 +422,16 @@ profiles, never real browsing data.
 **A documentation-only push builds and publishes nothing.** The `changes` job checks out at
 `fetch-depth: 0` and diffs against the commit production runs (the public
 manifest's `commitSha`, if an ancestor), else `github.event.before`, else
-`HEAD~1`; if every changed path is docs, Windows and publish are skipped. An app change whose run never published still ships with the next push (F-04, F-41).
+`HEAD~1`. When only documentation changed, the Windows verification job is
+skipped (F-04, F-41).
 
-**Application releases are versioned automatically.** On a `main` push,
+**Application releases are versioned automatically.** During production dispatch,
 `prepare-release-version.mjs` reads the public manifest (no configured URL or no
 release yet: it keeps the declared version, so forks still build). It keeps
 a manually raised stable version from `package.json`, or increments the active
 patch version when the declared version is not higher. The Windows job patches
-both package files only in its runner, builds that version and adds `VERSION.txt`
-to the artifact. The publish job restores that exact version before writing R2
-and D1, so the installer filename, object key and manifest cannot disagree.
+both package files in its runner. The same job builds, smoke-tests and publishes
+that version from the same installer file.
 
 | Job | Runs on | Does |
 | --- | --- | --- |
@@ -441,15 +442,15 @@ and D1, so the installer filename, object key and manifest cannot disagree.
 ### codeql.yml
 
 [codeql.yml](../../.github/workflows/codeql.yml) runs GitHub CodeQL's
-`security-extended` JavaScript/TypeScript queries on non-docs pushes to `main`,
-every Monday, and on dispatch (not on PRs). It has read-only repository access plus the minimum
+`security-extended` JavaScript/TypeScript queries on pull requests to `main`,
+non-docs pushes to `main`, every Monday, and on dispatch. It has read-only repository access plus the minimum
 `security-events: write` permission required to publish findings.
 
-The Windows job uses the `production-release` environment when the owner
-approval variable matches the exact commit pushed to `main`. Configure the
-environment with required review and restrict it to the protected release branch
-before saving production credentials. Other Windows builds use the
-`windows-verification` environment without production credentials.
+An approved production dispatch uses the `production-release` environment.
+Configure required review and restrict deployments to protected `main` before
+saving production credentials. Immediately before uploading, the workflow
+checks that the approved commit is still at the tip of `main`. Other Windows
+builds use the `windows-verification` environment without production credentials.
 
 Production builds sign the application and installer, verify the approved
 timestamped publisher, and smoke-test the installed candidate. Publication
