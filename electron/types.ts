@@ -1,5 +1,6 @@
 import type { BrowserSettings, BrowserSettingsPatch, SpellcheckLanguage } from './browser-settings.js';
 import type { AccountPanelPreferences, PinnablePanelTool, UiPreferences } from './ui-preferences.js';
+import type { BrowsingProtectionStatus } from './browsing-protection.js';
 
 export type { SideAppCommand, SideAppId, SideAppRect, SideAppSnapshot, SideAppStatus } from './side-app-registry.js';
 import type { SideAppSnapshot } from './side-app-registry.js';
@@ -614,6 +615,7 @@ export interface PrivacyEvent {
 }
 
 export interface BrowserSnapshot {
+  browsingProtection?: BrowsingProtectionStatus | 'pending';
   memorySaverSite?: { origin: string; keptAwake: boolean };
   sessionLock?: 'windows' | 'idle';
   workspaces: Workspace[];

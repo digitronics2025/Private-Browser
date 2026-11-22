@@ -845,6 +845,7 @@ export function installPreviewApi(): void {
       }
       publish();
     },
+    changeBrowsingPrivacy: async () => { throw new Error('Browsing privacy settings are available in the Windows app.'); },
     setUiPreferences: async (patch, expectedAccount) => {
       if (expectedAccount !== undefined && expectedAccount !== state.activeAccountSpaceId) throw new Error('The Account Space changed. Open the tool again.');
       const { sidePanelTool, ...globalPreferences } = patch as UiPreferencesPatch;

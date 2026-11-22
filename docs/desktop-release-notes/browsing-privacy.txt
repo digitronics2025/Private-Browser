@@ -1,0 +1,1 @@
+Encrypt local browsing data, keep a separate recovery file, and choose how long Private Browser keeps history.
