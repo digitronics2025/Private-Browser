@@ -85,6 +85,12 @@ async function capturePopupReview() {
 
 test('a payment popup opens as a real window that can talk to the checkout page', async () => {
   const page = await openCheckout('personal');
+  const checkoutId = await page.evaluate(async () => {
+    const { activeTabId } = await window.privateBrowser.getState();
+    await window.privateBrowser.newTab();
+    await window.privateBrowser.activateTab(activeTabId);
+    return activeTabId;
+  });
   const windowsBefore = await windowCount();
   const review = await capturePopupReview();
 
@@ -124,8 +130,7 @@ test('a payment popup opens as a real window that can talk to the checkout page'
   expect(await application!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((window) => window.webContents.getURL().startsWith('file:') && window.webContents.getURL().includes('win.ini')))).toBe(false);
 
   // Closing the tab closes its popup.
-  const checkoutTab = tabs.find((tab) => tab.url === `${origin}/checkout`)!;
-  await page.evaluate((id) => window.privateBrowser.closeTab(id), checkoutTab.id);
+  await page.evaluate((id) => window.privateBrowser.closeTab(id), checkoutId);
   await expect.poll(windowCount).toBe(windowsBefore);
 });
 
