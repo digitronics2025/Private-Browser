@@ -189,6 +189,7 @@ import type {
   TabSetInput,
 } from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
+import { notesStatus, type NotesDraftChoice, type NotesDraftReview, type NotesPanelCommand } from './notes-panel.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
 
@@ -314,6 +315,7 @@ class BrowserController {
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
   private claudeExcerpt?: AssistantCapture & { expiresAt: number };
   private assistantReview?: AssistantCapture & { review: AiRequestReview; question: string; withEvidence: boolean; expiresAt: number; additional: AssistantCapture[]; excerpts: string[] };
+  private notesDraft?: { review: NotesDraftReview; generation: number; url: string; delivering: boolean };
   private activeAssistant?: { id: string; mode: 'local' | 'cloud'; controller: AbortController };
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
@@ -1158,7 +1160,89 @@ class BrowserController {
   }
 
   clearSideAppData(id: SideAppId): Promise<void> {
+    if (this.store.get().activeWorkspaceId === 'banking') return Promise.reject(new Error('Side apps are unavailable in Banking'));
     return this.sideApps.clearData(id);
+  }
+
+  private notesAccount(): AccountSpaceId {
+    const state = this.store.get();
+    const active = this.activeAccountSpaceId(state);
+    const account = state.accountSpaces.find(({ id }) => id === active);
+    if (this.sessionIsLocked || this.store.isReadOnly() || !account || account.locked || state.activeWorkspaceId === 'banking') {
+      throw new Error('Notes is unavailable in this Account Space.');
+    }
+    return active;
+  }
+
+  async runNotesPanelCommand(kind: NotesPanelCommand) {
+    const account = this.notesAccount();
+    const result = await this.sideApps.notesCommand({ kind }, () => {
+      try { return this.notesAccount() === account; } catch { return false; }
+    });
+    if (kind === 'status') return notesStatus(result);
+    if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) {
+      throw new Error('Open the Notes library, close any editor, and try again.');
+    }
+  }
+
+  private prepareNotesDraft(tabId: string, generation: number, selection: string): void {
+    if (!this.notesSourceCurrent(tabId, generation)) return;
+    const tab = this.activeTab(this.store.get());
+    const source = new URL(tab.url).origin;
+    const result = redactSensitiveText(selection.slice(0, 8_000));
+    if (!result.text.trim()) return;
+    const lifetime = 2 * 60_000;
+    const id = randomUUID();
+    const review = { id, accountSpaceId: tab.accountSpaceId, tabId, source, title: 'Excerpt from ' + new URL(tab.url).host.slice(0, 140),
+      text: result.text.slice(0, 8_000), redactions: result.redactions, expiresAt: Date.now() + lifetime };
+    this.notesDraft = { review, generation, url: tab.url, delivering: false };
+    setTimeout(() => this.cancelNotesDraft(id), lifetime).unref();
+    this.window.webContents.send('notes:draft-review', review);
+  }
+
+  private notesSourceCurrent(tabId: string, generation: number): boolean {
+    try {
+      const account = this.notesAccount();
+      const tab = this.activeTab(this.store.get());
+      const runtime = this.runtimeTabs.get(tabId);
+      const contents = runtime?.view?.webContents;
+      return tab.accountSpaceId === account && tab.id === tabId && !tab.isHome && !isProtectedPage(tab.url) && classifyAiSource(tab.url) === 'browser'
+        && !!contents && !contents.isDestroyed() && !runtime.certificateError && !runtime.problem && !agentHost?.isLentContents(contents.id)
+        && runtime.navigationGeneration === generation && contents.getURL() === tab.url;
+    } catch { return false; }
+  }
+
+  cancelNotesDraft(id: string): void {
+    if (this.notesDraft?.review.id === id) this.notesDraft = undefined;
+  }
+
+  async deliverNotesDraft(choice: NotesDraftChoice, copyOnly: boolean): Promise<void> {
+    const draft = this.notesDraft;
+    const isCurrent = () => draft && this.notesDraft === draft && this.notesSourceCurrent(draft.review.tabId, draft.generation)
+      && this.activeTab(this.store.get()).url === draft.url && draft.review.expiresAt > Date.now();
+    if (!draft || draft.review.id !== choice.id || draft.delivering || !isCurrent()) throw new Error('Select the text again to review a new Notes draft.');
+    const title = choice.title.trim();
+    const text = choice.text;
+    if (!title || !text.trim()) throw new Error('Add a title and text first.');
+    if (redactSensitiveText(title).redactions || redactSensitiveText(text).redactions) {
+      throw new Error('Remove or redact sensitive details before continuing.');
+    }
+    const source = choice.includeSource ? draft.review.source : undefined;
+    draft.delivering = true;
+    try {
+      if (copyOnly) {
+        await this.clipboardGuard.copy(text + (source ? '\n\nSource: ' + source : ''), () => {
+          if (!isCurrent() || clipboardQuit !== 'not-started') throw new Error('The selected page changed.');
+        });
+      } else {
+        this.setUiPreferences({ sidePanelOpen: true, sidePanelTool: 'easynote' }, this.notesAccount());
+        const result = await this.sideApps.notesCommand({ kind: 'draft', title, text, source }, () => Boolean(isCurrent()));
+        if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) {
+          throw new Error('Notes could not open the draft. Close any open or recovered Notes draft, or copy the excerpt.');
+        }
+      }
+      this.cancelNotesDraft(choice.id);
+    } finally { draft.delivering = false; }
   }
 
   /**
@@ -4793,7 +4877,8 @@ class BrowserController {
         () => !this.window.isDestroyed() && !contents.isDestroyed() && view.getVisible()
           && runtime.navigationGeneration === generation && this.activeTab(this.store.get()).id === tabId,
         (url) => this.addBackgroundTab(tab.workspaceId, url, tab.accountSpaceId),
-        () => Boolean(this.developerTarget(tabId)));
+        () => Boolean(this.developerTarget(tabId)),
+        this.notesSourceCurrent(tabId, generation) ? (selection) => this.prepareNotesDraft(tabId, generation, selection) : undefined);
     });
     view.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown') {
@@ -5198,6 +5283,7 @@ class BrowserController {
 
   private hideAllViews(): void {
     this.popupReview.cancel();
+    this.notesDraft = undefined;
     this.fillPicker.close();
     for (const runtime of this.runtimeTabs.values()) {
       if (runtime.view?.getVisible()) runtime.memorySaver.lastVisibleAt = Date.now();
@@ -5716,6 +5802,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:set-overlay-open', (_event, open: boolean) => controller!.setOverlayOpen(open));
   handle('side-app:set-bounds', (_event, id: SideAppId, rect: SideAppRect | null) => controller!.setSideAppBounds(id, rect));
   handle('side-app:command', (_event, id: SideAppId, command: SideAppCommand) => controller!.sideAppCommand(id, command));
+  handle('notes:command', (_event, kind: NotesPanelCommand) => controller!.runNotesPanelCommand(kind));
+  handle('notes:cancel-draft', (_event, id: string) => controller!.cancelNotesDraft(id));
+  handle('notes:deliver-draft', (_event, choice: NotesDraftChoice, copyOnly: boolean) => controller!.deliverNotesDraft(choice, copyOnly));
   handle('side-app:clear-data', (_event, id: SideAppId) => controller!.clearSideAppData(id));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));

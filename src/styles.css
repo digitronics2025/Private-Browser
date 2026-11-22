@@ -1191,3 +1191,6 @@ kbd { font: inherit; }
 .split-controls { display: flex; align-items: center; gap: 3px; margin: 0 4px; }
 .split-controls button { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-muted); }
 .split-controls button:not(:disabled):hover, .split-controls button:focus-visible { background: var(--hover); color: var(--text); }
+.notes-draft-dialog label { display: grid; gap: 5px; }
+.notes-draft-dialog textarea { width: 100%; padding: 8px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); resize: vertical; }
+.notes-draft-dialog .notes-draft-source { display: flex; align-items: center; overflow-wrap: anywhere; }

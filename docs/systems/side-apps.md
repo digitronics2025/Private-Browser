@@ -12,9 +12,9 @@ verified_at: 028b9d2d
 
 ## Agent Brief
 
-The Notes panel labels the configured service as a shared library above the
-page. This notice describes the library's access mode and does not depend on
-whether the native page has loaded.
+The Notes panel reports the service's access mode when the library is ready.
+It labels personal mode as shared and protected mode as requiring sign-in.
+Notes separately reports local drafts, pending changes and sync status.
 
 **Scope.** A trusted web app shown in the side panel next to the page, the way
 Chrome shows an extension's side panel. **Claude** (`https://claude.ai/new`) and
@@ -152,15 +152,21 @@ query. Authentication, owner identity, API behavior, permissions and storage are
 unchanged. The app caches its own shell and uses local IndexedDB offline after
 initial loading. CSP and frame protections remain unchanged.
 
-The owner deliberately uses **AUTH_MODE=personal**: anyone with the URL can read
-and edit the cloud library. A browser panel does not make it private. Local
-notes are ordinary IndexedDB, without the encrypted Vault's protections.
+Production requires sign-in. Personal mode is shared and labelled as such.
+Local Notes storage uses IndexedDB in the panel partition.
 
-This version never captures page text, selections, forms, history or clipboard
-contents, never inserts automatically, and never sends notes to Claude or the
-AI provider. Future selected-text saving, explicit insertion and saved assistant
-instructions require separate narrowly scoped designs preserving AI preview,
-redaction, single-use approval and protected-page restrictions.
+Use **Search Notes**, **Favorites**, or **Recent** to find a note. The library
+search accepts `lang:darija` and `tag:delivery`. **Export Notes** opens its existing backup
+screen. The clear confirmation reports the latest sync time and local work to
+preserve before clearing.
+
+On an ordinary page, select visible text and choose **Save selected text to
+Notes…** in the context menu. Review the bounded excerpt and whether to include
+its source site. **Open Notes draft** passes the edited text to the pinned Notes
+view. Choose **Create Snippet** there to add it to the library. **Copy excerpt**
+is a separate action. The browser refuses protected pages, form controls,
+child frames and stale selections. It sends neither clipboard contents nor note
+text to Claude or an AI provider.
 
 ## Adding an app
 
