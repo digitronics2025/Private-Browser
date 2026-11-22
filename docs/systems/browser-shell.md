@@ -582,7 +582,11 @@ Three guards keep a view on http and https:
    and "Sign in with" flows use — gets a **real popup window**
    (`popupWindowResponse` in [popup-windows.ts](../../electron/popup-windows.ts)),
    because those flows need `window.opener`; as a tab they fail (Google Pay:
-   OR_BIBED_15). Everything else becomes a sanitized tab and the handler returns
+   OR_BIBED_15). The hidden window's initial HTTP request waits for a native
+   decision showing the requesting origin, destination and Account Space.
+   The original request continues after approval, with its method preserved.
+   Cancel, a workspace or tab change, and the 30-second expiry close the window.
+   Everything else becomes a sanitized tab and the handler returns
    `{ action: 'deny' }`: foreground → `newTab`, otherwise `addBackgroundTab`,
    which changes no active workspace, Account Space or tab. The workspace id is
    captured in the closure when the view is built. Every guard is attached before
@@ -592,7 +596,7 @@ Three guards keep a view on http and https:
    A popup window inherits the opener's session (same Account Space only),
    is sandboxed with context isolation and no preload, has `parent` set to the
    main window and `outlivesOpener: false`, so closing the tab or locking its
-   Account Space closes it. `adoptPopupWindow` (on `did-create-window`) removes
+   Account Space closes it. `adoptPopupWindow` removes
    its menu, routes its own `window.open` through the same `openFromPage`, gives
    it the navigation guards below, and titles it `host — page title` since it
    has no address bar.
@@ -606,8 +610,8 @@ Three guards keep a view on http and https:
 The chrome window's own `setWindowOpenHandler` denies unconditionally. Chrome,
 page views and popup windows all cancel `will-attach-webview`.
 
-The `newTab` call inside the popup handler is fire-and-forget (`void`); a failure
-there is not reported anywhere.
+The Privacy log gives reasons and recovery steps for blocked site-opened
+windows and supported permission requests in the current Account Space.
 
 ## Launch, Single Instance and Deep Links
 
