@@ -16,3 +16,20 @@ test('reviews local and cloud metadata before enabling either conflict choice', 
   await expect(page.getByRole('status').filter({ hasText: 'Both encrypted recovery copies are saved' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Show conflict recovery files' })).toBeVisible();
 });
+
+test('requires a local or cloud choice for each differing entry', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 820 });
+  await page.goto('/?vaultConflict=entries');
+  await page.getByRole('button', { name: 'Browser menu', exact: true }).click();
+  await page.getByRole('menuitem', { name: /^MyVault/ }).click();
+  const conflict = page.getByRole('region', { name: 'MyVault sync conflict' });
+  await conflict.getByRole('button', { name: 'Review versions' }).click();
+  await conflict.getByText('Choose entries individually', { exact: true }).click();
+  const apply = conflict.getByRole('button', { name: 'Apply entry choices' });
+  await expect(apply).toBeDisabled();
+  await conflict.getByRole('combobox', { name: /^Local reference/ }).selectOption('local');
+  await expect(apply).toBeDisabled();
+  await conflict.getByRole('combobox', { name: /^Cloud reference/ }).selectOption('cloud');
+  await apply.click();
+  await expect(page.getByRole('status').filter({ hasText: 'Entry choices saved' })).toBeVisible();
+});

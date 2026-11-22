@@ -6,6 +6,7 @@ import type { TotpConfig, VaultEnvelope, VaultItem, VaultPayload } from './types
 import type { PasskeyCredential } from './security/passkeys/types.js';
 import { isConnectionState, MyVaultDiskStore, type BrokerConnectionState, type StoreBlockReason } from './vault-store.js';
 import { PlatformUnlockError, platformUnlockKeyName, type PlatformUnlockSigner } from './windows-hello.js';
+import { planVaultEntrySelection, reconcileVaultItems, type VaultEntryDecision, type VaultEntryDifference } from './conflict-items.js';
 
 export type BrokerLifecycle = 'unconfigured' | 'locked' | 'unlocked' | 'conflict' | 'recovery-required';
 export type BrokerSyncState = 'disabled' | 'idle' | 'dirty' | 'syncing' | 'synced' | 'conflict' | 'error';
@@ -525,7 +526,7 @@ export class VaultBroker {
     this.markConflict();
   }
 
-  async conflictReview(): Promise<{ local: ConflictEntryMetadata[]; cloud: ConflictEntryMetadata[]; localUpdatedAt: string; cloudUpdatedAt: string }> {
+  async conflictReview(): Promise<{ local: ConflictEntryMetadata[]; cloud: ConflictEntryMetadata[]; localUpdatedAt: string; cloudUpdatedAt: string; itemChoices?: VaultEntryDifference[] }> {
     const { session, conflictRemote, envelope, payload } = this;
     if (!conflictRemote || !session || !envelope || !payload) throw new Error('No MyVault conflict is pending');
     const cloud = await decryptWithSession(conflictRemote.envelope, session);
@@ -536,7 +537,19 @@ export class VaultBroker {
         title: 'Passkey for ' + passkey.rpId, type: 'passkey', username: passkey.userName, favorite: false, updatedAt: passkey.createdAt })),
     ];
     return { local: review(payload), cloud: review(cloud),
-      localUpdatedAt: envelope.updatedAt, cloudUpdatedAt: conflictRemote.updatedAt };
+      localUpdatedAt: envelope.updatedAt, cloudUpdatedAt: conflictRemote.updatedAt,
+      itemChoices: planVaultEntrySelection(payload, cloud)?.choices.map(({ metadata }) => metadata) };
+  }
+
+  async prepareVaultEntryResolution(basis: VaultEnvelope, cloud: VaultEnvelope, choices: VaultEntryDecision[]): Promise<VaultEnvelope> {
+    const { session, envelope, payload } = this;
+    if (!session || !payload || envelope !== basis || !this.conflictRemote) throw new Error('The conflict changed. Review it again.');
+    const remote = await decryptWithSession(cloud, session);
+    if (this.session !== session || this.envelope !== envelope || this.payload !== payload) throw new Error('The conflict changed. Review it again.');
+    const result = reconcileVaultItems(payload, remote, choices);
+    const encrypted = await encryptVaultPayload(result, envelope, session);
+    if (this.session !== session || this.envelope !== envelope || this.payload !== payload) throw new Error('The conflict changed. Review it again.');
+    return encrypted;
   }
 
   saveConflictRecovery(local: VaultEnvelope, cloud: VaultEnvelope): void {

@@ -956,6 +956,7 @@ export interface VaultConflictReview {
   cloudVersion: number;
   local: VaultConflictSide;
   cloud: VaultConflictSide;
+  itemChoices?: import('./myvault/conflict-items.js').VaultEntryDifference[];
 }
 
 export type VaultFillReadiness = 'ready' | 'locked' | 'connect' | 'no-match' | 'unsupported' | 'manual' | 'choose-login' | 'unavailable';

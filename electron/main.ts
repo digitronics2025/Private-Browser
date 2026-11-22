@@ -146,7 +146,8 @@ import { fillPickerBounds, type FillPickerChoice } from './myvault/fill-picker-m
 import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
 import { FILL_PICKER_MAX_ROWS, isAutomaticFillPageUrl, orderFillCandidates, selectAutomaticFillEntry } from './myvault/automatic-fill.js';
 import { MyVaultSyncClient } from './myvault/vault-sync.js';
-import { VaultSyncController } from './myvault/sync-controller.js';
+import { VaultSyncController, type VaultConflictResolution } from './myvault/sync-controller.js';
+import type { VaultEntryDecision } from './myvault/conflict-items.js';
 import type { PairDialogValue } from './myvault/secure-dialog-contract.js';
 import { VaultMigrationService } from './myvault/vault-migration.js';
 import { canInstallPasskeyProvider, InternalPasskeyController, type PasskeyOptIns } from './myvault/passkey-controller.js';
@@ -4015,10 +4016,10 @@ class BrowserController {
       return { updatedAt, entries: entries.length, changes };
     };
     return { id: review.id, cloudVersion: review.cloudVersion, local: describe(review.local, review.cloud, review.localUpdatedAt),
-      cloud: describe(review.cloud, review.local, review.cloudUpdatedAt) };
+      cloud: describe(review.cloud, review.local, review.cloudUpdatedAt), itemChoices: review.itemChoices };
   }
 
-  async resolveVaultConflict(choice: 'cloud' | 'local', reviewId: string) {
+  async resolveVaultConflict(choice: VaultConflictResolution, reviewId: string) {
     this.assertVaultSurface();
     const owner = this.vaultConflictOwner;
     if (!owner || owner.id !== reviewId || owner.account !== this.activeAccountSpaceId(this.store.get())) {
@@ -6112,6 +6113,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:reconnect', () => controller!.listVault().lifecycle === 'unlocked' ? controller!.syncVaultNow() : undefined);
   handle('vault:conflict-review', () => controller!.getVaultConflictReview());
   handle('vault:resolve-conflict', (_event, choice: 'cloud' | 'local', reviewId: string) => controller!.resolveVaultConflict(choice, reviewId));
+  handle('vault:resolve-entry-conflict', (_event, reviewId: string, entries: VaultEntryDecision[]) => controller!.resolveVaultConflict({ entries }, reviewId));
   handle('vault:show-conflict-recovery', () => controller!.showVaultConflictRecovery());
   handle('vault:migration-status', () => controller!.migrationStatus());
   handle('vault:migrate-legacy', () => controller!.migrateLegacyVault());

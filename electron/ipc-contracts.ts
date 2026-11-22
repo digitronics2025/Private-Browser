@@ -539,6 +539,18 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); if (!['password', 'passphrase', 'pin'].includes(String(args[0]))) throw new Error('Invalid generated credential kind'); return;
     case 'vault:resolve-conflict':
       exact(args, 2); if (args[0] !== 'cloud' && args[0] !== 'local') throw new Error('Choose the cloud or local vault explicitly'); requireUuid(args[1], 'conflict review'); return;
+    case 'vault:resolve-entry-conflict': {
+      exact(args, 2); requireUuid(args[0], 'vault review');
+      if (!Array.isArray(args[1]) || !args[1].length || args[1].length > 100) throw new Error('Invalid vault entry choices');
+      const ids = new Set<string>();
+      for (const entry of args[1]) {
+        const value = requireExactKeys(entry, ['id', 'keep']);
+        if (typeof value.id !== 'string' || !/^[a-f0-9]{64}$/.test(value.id) || ids.has(value.id)
+          || (value.keep !== 'local' && value.keep !== 'cloud')) throw new Error('Invalid vault entry choice');
+        ids.add(value.id);
+      }
+      return;
+    }
     case 'vault:open-editor':
       between(args, 0, 1); if (args[0] !== undefined) requireBoundedText(args[0], 'origin', 2048); return;
     case 'vault:import-reviewed-chrome-passwords':
