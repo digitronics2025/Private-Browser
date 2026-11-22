@@ -1,7 +1,12 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+async function openAssistantPreview(page: Page, url: string): Promise<void> {
+  await page.goto(url);
+  await page.waitForFunction(() => Boolean(window.privateBrowser));
+}
 
 test('finds exact passages in the local preview without a model, then clears them when changing spaces', async ({ page }) => {
-  await page.goto('/?localAi=sample');
+  await openAssistantPreview(page, '/?localAi=sample');
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
   await panel.getByRole('button', { name: 'Read page locally' }).click();
@@ -22,7 +27,7 @@ test('finds exact passages in the local preview without a model, then clears the
 
 test('checks installed local models and labels the saved provider without a key field', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 800 });
-  await page.goto('/?localAi=sample');
+  await openAssistantPreview(page, '/?localAi=sample');
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
   await panel.getByRole('button', { name: 'Connect', exact: true }).click();
@@ -44,7 +49,7 @@ test('checks installed local models and labels the saved provider without a key 
 
 test('reviews edited selection, destination and redacted question before approval', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 820 });
-  await page.goto('/?localAi=sample');
+  await openAssistantPreview(page, '/?localAi=sample');
   await page.evaluate(() => window.privateBrowser.configureAiProvider({ mode: 'local', model: 'preview-small:latest' }));
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
@@ -74,7 +79,7 @@ test('uses all four presets, saves edits in the current space and copies an answ
       writeText: async (text: string) => { document.documentElement.dataset.copiedAnswer = text; },
     } });
   });
-  await page.goto('/?localAi=sample');
+  await openAssistantPreview(page, '/?localAi=sample');
   await page.evaluate(() => window.privateBrowser.configureAiProvider({ mode: 'local', model: 'preview-small:latest' }));
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
@@ -105,7 +110,7 @@ test('uses all four presets, saves edits in the current space and copies an answ
 
 test('reports insufficient information when the reply quotes text outside the approved selection', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 820 });
-  await page.goto('/?localAi=sample&aiSources=unverified');
+  await openAssistantPreview(page, '/?localAi=sample&aiSources=unverified');
   await page.evaluate(() => window.privateBrowser.configureAiProvider({ mode: 'local', model: 'preview-small:latest' }));
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
@@ -119,7 +124,7 @@ test('reports insufficient information when the reply quotes text outside the ap
 });
 
 test('requires another review and approval after a timeout', async ({ page }) => {
-  await page.goto('/?localAi=sample&aiRequest=timeout-once');
+  await openAssistantPreview(page, '/?localAi=sample&aiRequest=timeout-once');
   await page.evaluate(() => window.privateBrowser.configureAiProvider({ mode: 'local', model: 'preview-small:latest' }));
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
@@ -137,7 +142,7 @@ test('requires another review and approval after a timeout', async ({ page }) =>
 
 test('estimates cloud price locally and cancels a pending request on demand', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 820 });
-  await page.goto('/?localAi=sample&aiRequest=waiting');
+  await openAssistantPreview(page, '/?localAi=sample&aiRequest=waiting');
   await page.evaluate(() => window.privateBrowser.configureAiProvider({ endpoint: 'https://ai-fixture.example.com/v1', model: 'fixture', apiKey: '' }));
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
@@ -156,7 +161,7 @@ test('estimates cloud price locally and cancels a pending request on demand', as
 
 test('shows cloud settings and receipts for only the current Account Space', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 820 });
-  await page.goto('/?localAi=sample');
+  await openAssistantPreview(page, '/?localAi=sample');
   await page.evaluate(() => window.privateBrowser.configureAiProvider({ endpoint: 'https://ai-fixture.example.com/v1', model: 'fixture', apiKey: '' }));
   await page.getByRole('button', { name: 'Side panel', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Side panel' });
@@ -179,7 +184,7 @@ test('shows cloud settings and receipts for only the current Account Space', asy
 
 test('reviews several selected sources and lets the user remove each excerpt before sending', async ({ page }) => {
   await page.setViewportSize({ width: 430, height: 820 });
-  await page.goto('/?localAi=sample');
+  await openAssistantPreview(page, '/?localAi=sample');
   await page.evaluate(async () => {
     const api = window.privateBrowser;
     await api.configureAiProvider({ mode: 'local', model: 'preview-small:latest' });

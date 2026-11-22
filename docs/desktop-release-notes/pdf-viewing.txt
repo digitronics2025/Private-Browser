@@ -1,0 +1,1 @@
+Find, print and save ordinary PDFs from the Browser menu. Banking opens a protected preview with text search and blocks print and save.

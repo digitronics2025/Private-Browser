@@ -5,6 +5,7 @@ import { downloadRisk, isAllowedRemoteUrl, stripTrackingParameters } from './sec
 import { problemForFailedLoad } from './startup-restore.js';
 import { clampSideAppBounds, isSideAppUrl, SIDE_APP_IDS, sideAppDefinition, type SideAppCommand, type SideAppDefinition, type SideAppId, type SideAppRect, type SideAppSnapshot, type SideAppStatus } from './side-app-registry.js';
 import type { PrivacyEvent } from './types.js';
+import { notesBridgeScript, type NotesPanelRequest } from './notes-panel.js';
 
 /**
  * The side app's view. A side app is just another hostile remote page: its own
@@ -121,6 +122,32 @@ export class SideAppHost {
         return;
       }
     }
+  }
+
+  async notesCommand(request: NotesPanelRequest, allowed: () => boolean): Promise<unknown> {
+    if (!allowed()) throw new Error('Return to Notes in the original Account Space.');
+    const runtime = this.runtime('easynote');
+    const view = this.ensureView(runtime);
+    if (!view) return null;
+    const contents = view.webContents;
+    const origin = new URL(runtime.definition.homeUrl).origin;
+    const deadline = Date.now() + 2_500;
+    do {
+      if (!allowed()) throw new Error('The Account Space changed. Try again from Notes.');
+      if (contents.isDestroyed() || runtime.view !== view) return null;
+      if (runtime.status === 'ready' && contents.getURL() && new URL(contents.getURL()).origin === origin) {
+        const result = await contents.executeJavaScript(notesBridgeScript(origin, request)).catch(() => null);
+        if (result !== null) {
+          if (!allowed() || contents.isDestroyed() || runtime.view !== view || new URL(contents.getURL()).origin !== origin) {
+            throw new Error('The Notes page changed before the action finished.');
+          }
+          if (request.kind === 'search' && view.getVisible()) contents.focus();
+          return result;
+        }
+      } else if (runtime.status !== 'idle' && runtime.status !== 'loading') return null;
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    } while (Date.now() < deadline);
+    return null;
   }
 
   /** Deliberately forget this partition only: cookies, storage, cache and drafts. */
