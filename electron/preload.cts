@@ -61,6 +61,7 @@ const api = {
   undoTabBatch: (): Promise<void> => ipcRenderer.invoke('browser:undo-tab-batch'),
   stop: (): Promise<void> => ipcRenderer.invoke('browser:stop'),
   newTab: (workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:new-tab', workspaceId, url, accountSpaceId),
+  openTemporaryBrowsing: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:open-temporary-browsing', accountSpaceId),
   closeTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:close-tab', tabId),
   activateTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:activate-tab', tabId),
   setSplitView: (tabId?: string): Promise<void> => ipcRenderer.invoke('browser:set-split-view', tabId),

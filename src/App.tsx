@@ -676,6 +676,8 @@ export default function App() {
             onClose={closeMenu}
             actions={{
               newTab: () => void act(() => window.privateBrowser.newTab()),
+              openTemporaryBrowsing: workspace.id !== 'banking' && !activeAccount?.locked && !state.recovery
+                ? () => void act(() => window.privateBrowser.openTemporaryBrowsing(state.activeAccountSpaceId)) : undefined,
               reopenClosedTab: () => void act(() => window.privateBrowser.reopenClosedTab()),
               reopenRecentTab: (id) => void act(() => window.privateBrowser.reopenRecentTab(id)),
               undoTabBatch: () => void act(() => window.privateBrowser.undoTabBatch()),
