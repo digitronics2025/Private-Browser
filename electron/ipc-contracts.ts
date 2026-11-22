@@ -14,7 +14,7 @@ import { isAllowedRemoteUrl } from './security.js';
 import { MAX_ADDRESS_QUERY_LENGTH } from './address-matches.js';
 import { MAX_REFERENCE_LENGTH, requireBrowserSettingsPatch } from './browser-settings.js';
 import { requireBrowsingDataInput } from './browsing-data.js';
-import { isPinnablePanelTool, requireUiPreferencesPatch } from './ui-preferences.js';
+import { HISTORY_RETENTION_DAYS, isPinnablePanelTool, requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
 import { notesPanelCommands, type NotesPanelCommand } from './notes-panel.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
@@ -240,6 +240,15 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     }
     case 'ui:set-preferences':
       between(args, 1, 2); requireUiPreferencesPatch(args[0]); if (args[1] !== undefined) requireAccountSpaceId(args[1]); return;
+    case 'privacy:browsing': {
+      between(args, 2, 3); requireAccountSpaceId(args[0]);
+      const action = args[1];
+      const value = args[2];
+      if (action === 'retention' && typeof value === 'number' && HISTORY_RETENTION_DAYS.includes(value)) return;
+      if (action === 'log' && typeof value === 'boolean') return;
+      if ((action === 'protect' || action === 'export' || action === 'restore') && value === undefined) return;
+      throw new Error('Invalid browsing privacy action');
+    }
     case 'ui:set-panel-pin':
       exact(args, 3); requireAccountSpaceId(args[0]);
       if (!isPinnablePanelTool(args[1]) || typeof args[2] !== 'boolean') throw new Error('Invalid tool pin');
