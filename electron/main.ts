@@ -2982,6 +2982,17 @@ class BrowserController {
       return this.vscodeBridge.request(action, { projectId, reference: source.reference });
     }
     if ((action.startsWith('test.') || action.startsWith('reports.')) && !projectId) throw new Error('Choose an approved workspace first.');
+    if (action === 'test.run' && payload.kind === 'record-flow') {
+      const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+      if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 7))) throw new Error('Install Private Browser Bridge 0.4.7 or later to record a fixture.');
+      const active = this.requireDeveloperTarget().tab;
+      const url = typeof payload.url === 'string' ? localDevelopmentAddress(payload.url) : undefined;
+      if (!url || active.url !== url.href || url.search || url.hash || payload.liveUrl) {
+        throw new Error('Open the local fixture in front and use its plain URL to record.');
+      }
+      const discovered = localDevelopmentAddress(bridge.project?.devServerUrl ?? '');
+      if (discovered && discovered.origin !== url.origin) throw new Error('Open the selected project’s local fixture first.');
+    }
     if (action === 'test.configuration' || (action === 'test.run' && (payload.viewports || payload.fixture
       || payload.kind === 'baseline' || payload.kind === 'baseline-compare'))) {
       const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
