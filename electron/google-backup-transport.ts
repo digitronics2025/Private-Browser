@@ -66,18 +66,85 @@ export class GoogleDriveAppDataTransport implements EncryptedBackupTransport {
   }
 
   private async authorizedFetch(url: string | URL, token: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
+    return authorizeDriveAppData(this.request, url, token, init, signal);
+  }
+}
+
+export interface BookmarkReplicaTransport {
+  reserve(account: AccountSpaceId, signal?: AbortSignal): Promise<string>;
+  read(account: AccountSpaceId, fileId: string, signal?: AbortSignal): Promise<RemoteEncryptedBackup | undefined>;
+  create(account: AccountSpaceId, fileId: string, bytes: Buffer, signal?: AbortSignal): Promise<void>;
+  save(account: AccountSpaceId, fileId: string, etag: string, bytes: Buffer, signal?: AbortSignal): Promise<void>;
+}
+
+export function isDriveFileId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{10,256}$/.test(value);
+}
+
+/** Uses the paired object directly. No filename search can silently switch a device to another library. */
+export class GoogleDriveBookmarkTransport implements BookmarkReplicaTransport {
+  constructor(private readonly tokens: GoogleTokenBroker, private readonly request: typeof fetch = fetch) {}
+
+  async reserve(account: AccountSpaceId, signal?: AbortSignal): Promise<string> {
+    const response = await this.fetch(account, 'https://www.googleapis.com/drive/v3/files/generateIds?count=1&space=appDataFolder&type=files', {}, signal);
+    if (!response.ok) throw new Error('Drive could not reserve a bookmark library.');
+    const result = await readBoundedJson(response, 16 * 1024) as { ids?: unknown[] };
+    if (!Array.isArray(result.ids) || result.ids.length !== 1 || !isDriveFileId(result.ids[0])) throw new Error('Drive returned an invalid bookmark location.');
+    return result.ids[0];
+  }
+
+  async read(account: AccountSpaceId, fileId: string, signal?: AbortSignal): Promise<RemoteEncryptedBackup | undefined> {
+    const response = await this.fetch(account, this.fileUrl(fileId) + '?alt=media', {}, signal);
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new Error('Drive could not read the paired bookmark library.');
+    const etag = response.headers.get('etag');
+    if (!etag || etag.startsWith('W/') || etag.length > 512) throw new Error('Drive could not provide a safe bookmark revision.');
+    return { bytes: await readBoundedBytes(response, 5_000_000), etag, fileId };
+  }
+
+  async create(account: AccountSpaceId, fileId: string, bytes: Buffer, signal?: AbortSignal): Promise<void> {
+    if (!isDriveFileId(fileId) || bytes.byteLength > 4_800_000) throw new Error('Invalid bookmark sync upload.');
+    const boundary = 'private-browser-bookmarks-' + randomUUID();
+    const metadata = { id: fileId, name: 'private-browser-bookmarks.encrypted', parents: ['appDataFolder'], mimeType: 'application/octet-stream' };
+    const header = Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`);
+    const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const response = await this.fetch(account, 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+      { method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body: Buffer.concat([header, bytes, footer]) }, signal);
+    if (!response.ok && response.status !== 409) throw new Error('Drive could not create the bookmark library.');
+    await response.body?.cancel().catch(() => undefined);
+  }
+
+  async save(account: AccountSpaceId, fileId: string, etag: string, bytes: Buffer, signal?: AbortSignal): Promise<void> {
+    if (!etag || etag.startsWith('W/') || bytes.byteLength > 4_800_000) throw new Error('Invalid bookmark sync update.');
+    const destination = this.fileUrl(fileId).replace('/drive/v3/', '/upload/drive/v3/') + '?uploadType=media&fields=id';
+    const response = await this.fetch(account, destination, { method: 'PATCH', headers: { 'Content-Type': 'application/octet-stream', 'If-Match': etag }, body: Buffer.from(bytes) }, signal);
+    if (response.status === 412) throw new Error('Bookmarks changed on another device. Review sync again.');
+    if (!response.ok) throw new Error('Drive could not save the paired bookmark library.');
+    await response.body?.cancel().catch(() => undefined);
+  }
+
+  private async fetch(account: AccountSpaceId, url: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
+    return authorizeDriveAppData(this.request, url, await this.tokens.getAccessToken(account, 'encrypted-backup', signal), init, signal);
+  }
+
+  private fileUrl(id: string): string {
+    if (!isDriveFileId(id)) throw new Error('Invalid paired bookmark location.');
+    return 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id);
+  }
+}
+
+async function authorizeDriveAppData(request: typeof fetch, url: string | URL, token: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:' || parsed.hostname !== 'www.googleapis.com') throw new Error('Unexpected backup endpoint');
     const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     combined.throwIfAborted();
-    return await this.request(parsed, {
+    return await request(parsed, {
       ...init,
       headers: { ...init.headers, Authorization: `Bearer ${token}`, Accept: 'application/json' },
       signal: combined,
       redirect: 'error',
     });
-  }
 }
 
 async function readBoundedBytes(response: Response, maximum: number): Promise<Uint8Array> {

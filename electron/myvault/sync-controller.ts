@@ -3,6 +3,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { VaultBroker } from './vault-broker.js';
 import { MyVaultSyncClient, VaultSyncConflictError, type RemoteVault } from './vault-sync.js';
 import type { VaultEnvelope } from './types.js';
+import type { VaultEntryDecision } from './conflict-items.js';
+
+export type VaultConflictResolution = 'cloud' | 'local' | { entries: VaultEntryDecision[] };
 
 interface ConflictReview {
   id: string;
@@ -49,7 +52,7 @@ export class VaultSyncController {
     this.review = undefined;
   }
 
-  resolveConflict(choice: 'cloud' | 'local', id: string, assertOwner?: () => void): Promise<void> {
+  resolveConflict(choice: VaultConflictResolution, id: string, assertOwner?: () => void): Promise<void> {
     if (this.active) throw new Error('Wait for the current MyVault sync to finish.');
     const review = this.review;
     this.review = undefined;
@@ -58,7 +61,7 @@ export class VaultSyncController {
     return this.active;
   }
 
-  private async applyConflictChoice(choice: 'cloud' | 'local', review: ConflictReview, assertOwner?: () => void): Promise<void> {
+  private async applyConflictChoice(choice: VaultConflictResolution, review: ConflictReview, assertOwner?: () => void): Promise<void> {
     const checkCurrent = () => {
       assertOwner?.();
       const snapshot = this.broker.trustedSyncSnapshot();
@@ -82,11 +85,23 @@ export class VaultSyncController {
       }
       return;
     }
+    const desired = choice === 'local' ? review.local : await this.broker.prepareVaultEntryResolution(review.local, latest.envelope, choice.entries);
+    checkCurrent();
+    let written: RemoteVault | undefined;
     try {
-      const remote = await this.client.pushVault(connection.endpoint, connection.deviceToken, review.local, latest.version);
-      this.broker.markPushSucceeded(review.local, remote.version);
+      written = await this.client.pushVault(connection.endpoint, connection.deviceToken, desired, latest.version);
+      if (choice === 'local') {
+        this.broker.markPushSucceeded(review.local, written.version);
+      } else {
+        checkCurrent();
+        if (!isDeepStrictEqual(written.envelope, desired)) throw new Error('The cloud copy changed after saving. Review it again.');
+        if (await this.broker.acceptRemote(written, { basis: review.local, assertOwner }) === 'conflict') {
+          throw new Error('The local vault changed after saving. Review the two copies again.');
+        }
+      }
     } catch (error) {
       if (error instanceof VaultSyncConflictError) this.broker.setConflict(error.remote);
+      else if (written && choice !== 'local') this.broker.setConflict(written);
       throw error;
     }
   }

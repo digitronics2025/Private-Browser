@@ -76,7 +76,8 @@ export function installPreviewApi(): void {
   const fixtureReply = crypto.randomUUID();
   const vaultHealthFixture = { id: 'preview-vault-health', label: 'Sample login', username: 'sample@example.test',
     url: 'https://shop.example.test', hasTotp: false, updatedAt: '2026-11-21T10:00:00Z' };
-  const conflictFixture = params.get('vaultConflict') === 'sample';
+  const conflictMode = params.get('vaultConflict');
+  const conflictFixture = conflictMode === 'sample' || conflictMode === 'entries';
   let conflictResolved = false;
   const conflictId = crypto.randomUUID();
   const state: BrowserSnapshot = {
@@ -555,10 +556,17 @@ export function installPreviewApi(): void {
       if (!conflictFixture || conflictResolved) return desktopOnly();
       return { id: conflictId, cloudVersion: 3,
         local: { entries: 2, updatedAt: '2026-11-20T08:00:00Z', changes: [{ id: 'l1', label: 'Local reference', username: '', kind: 'only-copy' }] },
-        cloud: { entries: 2, updatedAt: '2026-11-21T12:00:00Z', changes: [{ id: 'c1', label: 'Cloud reference', username: '', kind: 'changed' }] } };
+        cloud: { entries: 2, updatedAt: '2026-11-21T12:00:00Z', changes: [{ id: 'c1', label: 'Cloud reference', username: '', kind: 'changed' }] },
+        itemChoices: conflictMode === 'entries' ? [{ id: 'a'.repeat(64), local: { title: 'Local reference', type: 'login' as const, updatedAt: '2026-11-20T08:00:00Z' } },
+          { id: 'b'.repeat(64), cloud: { title: 'Cloud reference', type: 'login' as const, updatedAt: '2026-11-21T12:00:00Z' } }] : undefined };
     },
     resolveVaultConflict: async (_choice, id) => {
       if (!conflictFixture || conflictResolved || id !== conflictId) return desktopOnly();
+      conflictResolved = true;
+      return handlers.listVault();
+    },
+    resolveVaultEntryConflict: async (id, entries) => {
+      if (conflictMode !== 'entries' || conflictResolved || id !== conflictId || entries.length !== 2) return desktopOnly();
       conflictResolved = true;
       return handlers.listVault();
     },
@@ -878,6 +886,7 @@ export function installPreviewApi(): void {
       publish();
     },
     changeBrowsingPrivacy: async () => { throw new Error('Browsing privacy settings are available in the Windows app.'); },
+    changeBookmarkSync: async () => undefined,
     setUiPreferences: async (patch, expectedAccount) => {
       if (expectedAccount !== undefined && expectedAccount !== state.activeAccountSpaceId) throw new Error('The Account Space changed. Open the tool again.');
       const { sidePanelTool, ...globalPreferences } = patch as UiPreferencesPatch;

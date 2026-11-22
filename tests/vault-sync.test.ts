@@ -123,6 +123,52 @@ describe('VaultSyncController', () => {
     expect(broker.conflictRecoveryFolder()).toBeDefined();
   });
 
+  it('applies only the reviewed entry choices and preserves both earlier encrypted copies', async () => {
+    const { broker, envelope } = await brokerSetup();
+    await broker.saveLogin({ title: 'Keep local fixture', username: 'one', password: 'local-entry-secret', url: 'https://local.example.test' });
+    await broker.saveLogin({ title: 'Remove local fixture', username: 'two', password: 'remove-entry-secret', url: 'https://local.example.test' });
+    const { session, payload } = await unlockVault(PASSWORD, envelope);
+    const time = new Date().toISOString();
+    const cloudItem = { id: 'cloud-entry', title: 'Keep cloud fixture', type: 'login' as const, username: 'three', password: 'cloud-entry-secret',
+      url: 'https://cloud.example.test', folder: '', vault: 'Personal', favorite: false, tags: [], updatedAt: time };
+    const cloudEnvelope = await encryptVaultPayload({ ...payload, items: [cloudItem] }, envelope, session);
+    const remote = { envelope: cloudEnvelope, version: 2, updatedAt: time };
+    broker.setConflict(remote);
+    let pushed: VaultEnvelope | undefined;
+    const client = new MyVaultSyncClient(async (_url, init) => {
+      if (init?.method !== 'PUT') return Response.json(remote);
+      const body = JSON.parse(String(init.body)) as { expectedVersion: number; envelope: VaultEnvelope };
+      expect(body.expectedVersion).toBe(2);
+      expect(broker.conflictRecoveryFolder()).toBeDefined();
+      pushed = body.envelope;
+      return Response.json({ envelope: body.envelope, version: 3, updatedAt: time });
+    });
+    const controller = new VaultSyncController(broker, client);
+    const review = await controller.reviewConflict();
+    expect(review.itemChoices).toHaveLength(3);
+    expect(JSON.stringify(review.itemChoices)).not.toContain('-entry-secret');
+    await controller.resolveConflict({ entries: review.itemChoices!.map((entry) => ({ id: entry.id,
+      keep: entry.local?.title === 'Keep local fixture' ? 'local' : 'cloud' })) }, review.id);
+    expect(broker.status()).toMatchObject({ lifecycle: 'unlocked', sync: 'synced', remoteVersion: 3 });
+    expect(broker.searchMetadata().map(({ title }) => title).sort()).toEqual(['Keep cloud fixture', 'Keep local fixture']);
+    const saved = await unlockVault(PASSWORD, pushed!);
+    expect(saved.payload.items.map(({ id }) => id)).toContain(cloudItem.id);
+    const backup = broker.conflictRecoveryFolder()!;
+    const directory = join(backup, readdirSync(backup)[0]);
+    expect(parseVaultArchive(readFileSync(join(directory, 'cloud.myvault'), 'utf8'))).toEqual(cloudEnvelope);
+    const local = parseVaultArchive(readFileSync(join(directory, 'local.myvault'), 'utf8'));
+    expect((await unlockVault(PASSWORD, local)).payload.items).toHaveLength(2);
+  });
+
+  it('keeps individual selection unavailable when other payload fields differ', async () => {
+    const { broker, envelope } = await brokerSetup();
+    await broker.saveLogin({ title: 'Comparison fixture', username: 'fixture', password: 'fixture-secret', url: 'https://local.example.test' });
+    const { session, payload } = await unlockVault(PASSWORD, envelope);
+    const remote = await encryptVaultPayload({ ...payload, preferences: { ...payload.preferences, autoLockSeconds: payload.preferences.autoLockSeconds + 30 } }, envelope, session);
+    broker.setConflict({ envelope: remote, version: 2, updatedAt: remote.updatedAt });
+    expect((await broker.conflictReview()).itemChoices).toBeUndefined();
+  });
+
   it('preserves a newer local edit made while a push is in flight', async () => {
     const { broker } = await brokerSetup();
     await broker.saveLogin({ title: 'First', username: 'a', password: 'one', url: 'https://one.example' });
