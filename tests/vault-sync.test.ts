@@ -1,8 +1,8 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createEmptyVaultPayload, createVault, encryptVaultPayload, unlockVault } from '../electron/myvault/security/vault-crypto';
+import { createEmptyVaultPayload, createVault, encryptVaultPayload, parseVaultArchive, unlockVault } from '../electron/myvault/security/vault-crypto';
 import { VaultBroker } from '../electron/myvault/vault-broker';
 import { MyVaultDiskStore, type SafeStorageAdapter } from '../electron/myvault/vault-store';
 import { VaultSyncController } from '../electron/myvault/sync-controller';
@@ -69,6 +69,60 @@ describe('MyVaultSyncClient contract', () => {
 });
 
 describe('VaultSyncController', () => {
+  it('keeps both reviewed ciphertext copies recoverable before applying a cloud choice', async () => {
+    const { broker, envelope } = await brokerSetup();
+    const login = await broker.saveLogin({ title: 'Local only entry', username: 'fixture-user', password: 'local copy synthetic password', url: 'https://local.example.test' });
+    const updatedAt = new Date().toISOString();
+    const cloud = { envelope, version: 4, updatedAt };
+    broker.setConflict(cloud);
+    const methods: Array<string | undefined> = [];
+    const client = new MyVaultSyncClient(async (_url, init) => {
+      methods.push(init?.method);
+      return new Response(JSON.stringify(cloud), { status: 200 });
+    });
+    const resolver = new VaultSyncController(broker, client);
+    const review = await resolver.reviewConflict();
+    expect(review).toMatchObject({ cloudVersion: 4, cloudUpdatedAt: updatedAt, local: [{ title: login.title }], cloud: [] });
+    expect(JSON.stringify(review)).not.toContain('local copy synthetic password');
+    await resolver.resolveConflict('cloud', review.id);
+    expect(methods).toEqual(['GET']);
+    expect(broker.searchMetadata()).toHaveLength(0);
+    const root = broker.conflictRecoveryFolder()!;
+    const folders = readdirSync(root);
+    expect(folders).toHaveLength(1);
+    const localCopy = readFileSync(join(root, folders[0]!, 'local.myvault'), 'utf8');
+    const cloudCopy = readFileSync(join(root, folders[0]!, 'cloud.myvault'), 'utf8');
+    expect(localCopy).not.toContain('local copy synthetic password');
+    expect((await unlockVault(PASSWORD, parseVaultArchive(localCopy))).payload.items[0]).toMatchObject({ id: login.id });
+    expect(parseVaultArchive(cloudCopy)).toEqual(envelope);
+    expect(() => resolver.resolveConflict('cloud', review.id)).toThrow(/Review the current/);
+  });
+
+  it('requires a fresh review when another device updates the vault after inspection', async () => {
+    const { broker, envelope } = await brokerSetup();
+    await broker.saveLogin({ title: 'Local draft', username: 'fixture-user', password: 'fixture-secret', url: 'https://local.example.test' });
+    const cloud = { envelope, version: 2, updatedAt: new Date().toISOString() };
+    broker.setConflict(cloud);
+    let version = 3;
+    let writes = 0;
+    const client = new MyVaultSyncClient(async (_url, init) => {
+      if (init?.method === 'PUT') { writes++; version = 4; return new Response(JSON.stringify({ ...cloud, version }), { status: 409 }); }
+      return new Response(JSON.stringify({ ...cloud, version }), { status: 200 });
+    });
+    const resolver = new VaultSyncController(broker, client);
+    const first = await resolver.reviewConflict();
+    await expect(resolver.resolveConflict('local', first.id)).rejects.toThrow(/cloud vault changed/i);
+    expect(writes).toBe(0);
+    expect(broker.conflictRecoveryFolder()).toBeUndefined();
+    const updated = await resolver.reviewConflict();
+    expect(updated.cloudVersion).toBe(3);
+    await expect(resolver.resolveConflict('local', updated.id)).rejects.toBeInstanceOf(VaultSyncConflictError);
+    expect(writes).toBe(1);
+    expect((await resolver.reviewConflict()).cloudVersion).toBe(4);
+    expect(broker.status()).toMatchObject({ lifecycle: 'conflict', dirty: true, remoteVersion: 1 });
+    expect(broker.conflictRecoveryFolder()).toBeDefined();
+  });
+
   it('preserves a newer local edit made while a push is in flight', async () => {
     const { broker } = await brokerSetup();
     await broker.saveLogin({ title: 'First', username: 'a', password: 'one', url: 'https://one.example' });
