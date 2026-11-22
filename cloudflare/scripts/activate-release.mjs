@@ -7,13 +7,13 @@ import { requireProductionReleaseEndpoint } from './require-https-endpoint.mjs';
  */
 const [id, expectedActiveId] = process.argv.slice(2);
 const endpoint = requireProductionReleaseEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
-const adminKey = process.env.PRIVATE_BROWSER_ADMIN_API_KEY;
-if (!id || !/^stable-\d+\.\d+\.\d+-\d+$/.test(id) || !endpoint || !adminKey) {
-  throw new Error('Release activation needs an exact stable release id, the service URL and the admin key');
+const key = expectedActiveId ? process.env.PRIVATE_BROWSER_RELEASE_AUTOMATION_KEY : process.env.PRIVATE_BROWSER_ADMIN_API_KEY;
+if (!id || !/^stable-\d+\.\d+\.\d+-\d+$/.test(id) || !endpoint || !key) {
+  throw new Error('Release activation needs an exact stable release id, the service URL and the authorized release key');
 }
 const response = await fetch(`${endpoint}/api/v1/admin/releases/activate`, {
   method: 'POST',
-  headers: { 'content-type': 'application/json', 'x-api-key': adminKey },
+  headers: { 'content-type': 'application/json', 'x-api-key': key },
   body: JSON.stringify({ id, channel: 'stable', expectedActiveId }),
   redirect: 'error',
   signal: AbortSignal.timeout(30_000),

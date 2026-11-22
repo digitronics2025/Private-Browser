@@ -15,7 +15,11 @@ environment secrets through the approved credential custody process.
 | `PRODUCTION_WINDOWS_SIGNING_CERTIFICATE`, `PRODUCTION_WINDOWS_SIGNING_PASSWORD` | Approved Windows signing material |
 | `PRODUCTION_RELEASE_R2_TOKEN`, `PRODUCTION_RELEASE_ACCOUNT_ID` | Production release bucket read and write |
 | `PRODUCTION_RELEASE_VERIFY_DEVICE` | Enrolled release verification device |
-| `PRODUCTION_RELEASE_ADMIN_KEY` | Worker release registration and recovery |
+| `PRODUCTION_RELEASE_AUTOMATION_KEY` | Worker release registration and bounded recovery |
+
+Configure the same release automation credential as the Worker’s
+`RELEASE_AUTOMATION_KEY` secret. It must differ from `ADMIN_API_KEY` and has no
+device or distribution administration privileges.
 
 Set the public certificate SHA-256 as `WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256`
 in the protected environment and point `PRIVATE_BROWSER_DOWNLOAD_URL` at the

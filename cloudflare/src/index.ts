@@ -13,6 +13,7 @@ export interface Env {
   DOWNLOAD_ACCESS_TOKEN: string;
   SIGNING_SECRET: string;
   ADMIN_API_KEY: string;
+  RELEASE_AUTOMATION_KEY?: string;
   LINK_TTL_SECONDS?: string;
 }
 
@@ -62,6 +63,12 @@ async function isClientAuthorized(request: Request, env: Env): Promise<boolean> 
 
 async function isAdminAuthorized(request: Request, env: Env): Promise<boolean> {
   return secretsReady(env) && constantTimeEqual(request.headers.get('x-api-key') ?? '', env.ADMIN_API_KEY);
+}
+
+async function isReleaseAutomationAuthorized(request: Request, env: Env): Promise<boolean> {
+  const key = env.RELEASE_AUTOMATION_KEY;
+  return Boolean(secretsReady(env) && key && key.length >= 32 && key !== env.ADMIN_API_KEY
+    && await constantTimeEqual(request.headers.get('x-api-key') ?? '', key));
 }
 
 function secretsReady(env: Env): boolean {
@@ -317,7 +324,7 @@ async function verifyArtifact(bucket: R2Bucket, key: string, size: number, expec
 
 async function handlePublish(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed('POST');
-  if (!(await isAdminAuthorized(request, env))) return notFound();
+  if (!(await isReleaseAutomationAuthorized(request, env))) return notFound();
   if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return json({ error: 'unsupported_media_type' }, 415);
   let input;
   try {
@@ -389,7 +396,8 @@ async function handlePublish(request: Request, env: Env): Promise<Response> {
  */
 async function handleActivate(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed('POST');
-  if (!(await isAdminAuthorized(request, env))) return notFound();
+  const admin = await isAdminAuthorized(request, env);
+  if (!admin && !(await isReleaseAutomationAuthorized(request, env))) return notFound();
   if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return json({ error: 'unsupported_media_type' }, 415);
   let id: string;
   let channel: 'stable' | 'beta';
@@ -407,6 +415,7 @@ async function handleActivate(request: Request, env: Env): Promise<Response> {
     if (error instanceof RangeError) return json({ error: 'payload_too_large' }, 413, { 'cache-control': PRIVATE_CACHE });
     return json({ error: 'invalid_activation', detail: error instanceof Error ? error.message : 'Invalid JSON' }, 400, { 'cache-control': PRIVATE_CACHE });
   }
+  if (!admin && !expectedActiveId) return notFound();
   const row = await env.DB.prepare('SELECT * FROM releases WHERE id = ?1 AND app_id = ?2 AND channel = ?3').bind(id, APP_ID, channel).first<Pick<ReleaseRecord, 'id' | 'object_key' | 'size_bytes' | 'version' | 'build_number' | 'sha256' | 'object_etag'>>();
   if (!row) return json({ error: 'release_not_found' }, 404, { 'cache-control': PRIVATE_CACHE });
   const publisher = await releasePublisher(env, row);
@@ -434,7 +443,7 @@ async function handleActivate(request: Request, env: Env): Promise<Response> {
 
 async function handleSuspend(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed('POST');
-  if (!(await isAdminAuthorized(request, env))) return notFound();
+  if (!(await isReleaseAutomationAuthorized(request, env))) return notFound();
   let id: unknown;
   try { id = (await readAdminJson(request) as { id?: unknown })?.id; } catch { return json({ error: 'invalid_release' }, 400); }
   if (typeof id !== 'string' || !/^stable-\d+\.\d+\.\d+-\d+$/.test(id)) return json({ error: 'invalid_release' }, 400);

@@ -5,6 +5,7 @@ import { signValue } from '../src/auth';
 import type { ReleaseManifest, ReleaseRecord } from '../src/protocol';
 
 const accessToken = 'download-token-abcdefghijklmnopqrstuvwxyz012345';
+const releaseKey = 'fixture-release-automation-'.repeat(2);
 const signingSecret = 'signing-secret-abcdefghijklmnopqrstuvwxyz012345';
 const adminKey = 'admin-secret-abcdefghijklmnopqrstuvwxyz012345';
 const bytes = new TextEncoder().encode('0123456789abcdef');
@@ -144,7 +145,7 @@ let env: Env;
 beforeEach(() => {
   database = new FakeDatabase();
   bucket = new FakeBucket();
-  env = { DB: database as unknown as D1Database, RELEASES: bucket as unknown as R2Bucket, DOWNLOAD_ACCESS_TOKEN: accessToken, SIGNING_SECRET: signingSecret, ADMIN_API_KEY: adminKey, LINK_TTL_SECONDS: '900' };
+  env = { DB: database as unknown as D1Database, RELEASES: bucket as unknown as R2Bucket, DOWNLOAD_ACCESS_TOKEN: accessToken, SIGNING_SECRET: signingSecret, ADMIN_API_KEY: adminKey, RELEASE_AUTOMATION_KEY: releaseKey, LINK_TTL_SECONDS: '900' };
 });
 
 async function request(path: string, init?: RequestInit) {
@@ -400,7 +401,7 @@ ${expires}`));
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
     const publish = (body: typeof input) => request('/api/v1/admin/releases', {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(body),
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(body),
     });
     bucket.keys.add(input.objectKey);
     bucket.object = new Uint8Array(bytes.length);
@@ -414,7 +415,7 @@ ${expires}`));
     expect(database.batches).toBe(1);
   });
 
-  it('refuses to publish for any credential that is not the administrator key', async () => {
+  it('refuses to publish without the separate release key', async () => {
     const input = {
       version: '9.9.9', buildNumber: 999, channel: 'stable', objectKey: release.object_key,
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
@@ -422,7 +423,7 @@ ${expires}`));
     const rejected: Record<string, string>[] = [
       { 'content-type': 'application/json' },
       { 'content-type': 'application/json', 'x-api-key': '' },
-      { 'content-type': 'application/json', 'x-api-key': `${adminKey}x` },
+      { 'content-type': 'application/json', 'x-api-key': adminKey },
       { 'content-type': 'application/json', 'x-api-key': adminKey.slice(0, -1) },
       // The client download token must not be accepted for publishing.
       { 'content-type': 'application/json', 'x-api-key': accessToken },
@@ -441,7 +442,7 @@ ${expires}`));
   });
 
   it('refuses to publish when the administrator key is too weak to be real', async () => {
-    env.ADMIN_API_KEY = 'short';
+    env.RELEASE_AUTOMATION_KEY = 'short';
     const input = {
       version: '9.9.9', buildNumber: 999, channel: 'stable', objectKey: release.object_key,
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
@@ -459,7 +460,7 @@ ${expires}`));
       version: '0.3.0', buildNumber: 8, channel: 'stable', objectKey: release.object_key,
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
-    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: 'release_version_not_bumped' });
     expect(database.batches).toBe(0);
@@ -472,7 +473,7 @@ ${expires}`));
       version: '0.2.0', buildNumber: 99, channel: 'stable', objectKey: release.object_key,
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
-    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: 'release_version_not_bumped' });
     expect(database.batches).toBe(0);
@@ -483,7 +484,7 @@ ${expires}`));
       version: '0.3.1', buildNumber: 8, channel: 'stable', objectKey: release.object_key,
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
-    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(201);
     expect(database.batches).toBe(1);
   });
@@ -495,7 +496,7 @@ ${expires}`));
       version: '0.4.0-beta.1', buildNumber: 10, channel: 'beta', objectKey: release.object_key,
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
-    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(201);
     expect(database.active('private-browser', 'beta')).toMatchObject({ version: '0.4.0-beta.1', channel: 'beta' });
     // Stable is untouched, and /update.json still serves it.
@@ -510,7 +511,7 @@ ${expires}`));
       id: release.id, version: '0.1.0', buildNumber: 9, channel: 'stable', objectKey: release.object_key,
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
-    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: 'release_identity_conflict' });
     expect(database.batches).toBe(0);
@@ -518,7 +519,7 @@ ${expires}`));
 
   // F-57: the body ceiling is enforced before the body is parsed.
   it('refuses an oversized publish body', async () => {
-    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify({ padding: 'x'.repeat(40_000) }) });
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify({ padding: 'x'.repeat(40_000) }) });
     expect(response.status).toBe(413);
     expect(database.batches).toBe(0);
   });
@@ -530,7 +531,7 @@ ${expires}`));
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
     bucket.keys.add(newer.objectKey);
-    const published = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(newer) });
+    const published = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(newer) });
     expect(published.status).toBe(201);
     expect(database.active('private-browser', 'stable')).toMatchObject({ version: '0.3.1' });
 
@@ -565,7 +566,7 @@ ${expires}`));
       version: '0.2.9', buildNumber: 2, channel: 'stable', objectKey: release.object_key,
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
-    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
+    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: 'release_downgrade_rejected' });
     expect(database.batches).toBe(0);

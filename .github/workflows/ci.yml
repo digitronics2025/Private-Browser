@@ -310,12 +310,12 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_RELEASE_ACCOUNT_ID }}
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
           PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE: ${{ secrets.PRODUCTION_RELEASE_VERIFY_DEVICE }}
-          PRIVATE_BROWSER_ADMIN_API_KEY: ${{ secrets.PRODUCTION_RELEASE_ADMIN_KEY }}
+          PRIVATE_BROWSER_RELEASE_AUTOMATION_KEY: ${{ secrets.PRODUCTION_RELEASE_AUTOMATION_KEY }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
-          test -n "$PRIVATE_BROWSER_ADMIN_API_KEY"
+          test -n "$PRIVATE_BROWSER_RELEASE_AUTOMATION_KEY"
           test -n "$PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE"
           previous="$(node cloudflare/scripts/read-active-release.mjs)"
           if [[ -z "$previous" ]]; then previous='{}'; fi

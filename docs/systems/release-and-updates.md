@@ -122,7 +122,7 @@ message and returns 500 `internal_error`.
 | `/api/v1/releases/public/latest` | GET, HEAD | none | `handlePublicLatest`. Returns the active stable signed manifest for installed-app version checks. Requires deployment secrets, returns 404 when no release exists, and never returns a client or administrator credential. |
 | `/api/v1/releases/latest` | GET, HEAD | client bearer | `handleLatest`. 404 on bad token or no release. Returns the signed manifest; HEAD returns the headers with no body. |
 | `/update.json` | GET, HEAD | client bearer | **The same handler.** This is the path the desktop client calls. |
-| `/api/v1/admin/releases` | POST | admin `x-api-key` | `handlePublish`. Registers a release (body ≤ 32 KB, else 413). See below. |
+| `/api/v1/admin/releases` | POST | release automation `x-api-key` | `handlePublish`. Registers a release (body ≤ 32 KB, else 413). See below. |
 | `/api/v1/admin/releases/activate` | POST | admin `x-api-key` | `handleActivate`: `{id, channel}` re-activates an existing release whose R2 object still matches; the pipeline's rollback. |
 | `/download` | GET, HEAD | none | Alias of the canonical public page. Existing signed manifest URLs continue to work, but each page load creates a new installer signature rather than extending or reusing the query expiry. |
 | `/download/latest.exe` | GET, HEAD | signed link | `handleBinary`. Streams the R2 object, with single-range support. |
@@ -169,7 +169,8 @@ Two distinct levels, and they never overlap.
 | Level | Function | Credential | Header | Routes |
 | --- | --- | --- | --- | --- |
 | Client | `isClientAuthorized` | `DOWNLOAD_ACCESS_TOKEN` | `authorization: Bearer <token>` | `/api/v1/releases/latest`, `/update.json` |
-| Admin | `isAdminAuthorized` | `ADMIN_API_KEY` | `x-api-key` | `POST /api/v1/admin/releases` |
+| Release automation | `isReleaseAutomationAuthorized` | `RELEASE_AUTOMATION_KEY` | `x-api-key` | Registration and recovery of the exact failed release |
+| Admin | `isAdminAuthorized` | `ADMIN_API_KEY` | `x-api-key` | Distribution, device administration and explicit restore |
 
 `/`, `/download` and `/api/v1/releases/public/latest` are intentionally public but
 still require `secretsReady` because their installer links must be signed.
