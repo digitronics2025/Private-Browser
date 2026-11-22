@@ -62,7 +62,8 @@ describe('Cloudflare release protocol', () => {
     let receipt = { schemaVersion: 1, sha256: release.sha256, status: 'verified', publisher: 'Publisher <Fixture>' };
     const requested: string[] = [];
     const env = {
-      DB: { prepare: () => prepared },
+      DB: { prepare: (sql: string) => sql.includes('FROM release_distribution')
+        ? { first: async () => ({ mode: 'public' }) } : prepared },
       RELEASES: { get: async (key: string) => {
         requested.push(key);
         return { size: 300, json: async () => receipt };

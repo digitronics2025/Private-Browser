@@ -31,7 +31,7 @@ it('requires verified enrollment for private feeds and range requests and reject
   });
   const setPrivate = { mode: 'private', confirm: 'SWITCH_TO_PRIVATE' };
   try {
-    for (const migration of ['0001_releases.sql', '0002_prevent_downgrades.sql', '0004_release_device_enrollment.sql']) {
+    for (const migration of ['0001_releases.sql', '0002_prevent_downgrades.sql', '0003_release_restore_history.sql', '0004_release_device_enrollment.sql']) {
       database.exec(readFileSync(new URL(`../migrations/${migration}`, import.meta.url), 'utf8'));
     }
     database.prepare(`INSERT INTO releases (id,app_id,version,build_number,channel,object_key,filename,content_type,size_bytes,sha256,commit_sha,release_notes,published_at,is_active)
