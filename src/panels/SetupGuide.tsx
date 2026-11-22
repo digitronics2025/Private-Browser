@@ -3,7 +3,7 @@ import type { BrowserSnapshot } from '../../electron/types';
 import { PanelHeader } from './common';
 import { SafeDiagnostics } from './SafeDiagnostics';
 
-export function SetupGuide({ state, isDefault, chromeImported, firstLaunch, onAccounts, onImport, onDefault, onVault, onSearch, onExit, onFinish }: {
+export function SetupGuide({ state, isDefault, chromeImported, firstLaunch, onAccounts, onImport, onDefault, onVault, onSearch, onPrivacy, onExit, onFinish }: {
   state: BrowserSnapshot;
   isDefault: boolean | null;
   chromeImported: boolean;
@@ -13,6 +13,7 @@ export function SetupGuide({ state, isDefault, chromeImported, firstLaunch, onAc
   onDefault: () => void;
   onVault: () => void;
   onSearch: () => void;
+  onPrivacy: () => void;
   onExit: () => void;
   onFinish: () => void;
 }) {
@@ -26,6 +27,8 @@ export function SetupGuide({ state, isDefault, chromeImported, firstLaunch, onAc
       action: 'Choose search engine', run: onSearch, disabled: protectedSpace },
     { title: 'Chrome data', detail: chromeImported ? 'A Chrome import has run' : 'Optional bookmarks and history import',
       action: 'Choose Chrome data', run: onImport, disabled: protectedSpace },
+    { title: 'Browsing privacy', detail: 'Optional device encryption. Keep a separate recovery file and passphrase for a new device.',
+      action: 'Review browsing privacy', run: onPrivacy, disabled: protectedSpace || state.browsingProtection === undefined },
     { title: 'Default browser', detail: isDefault === true ? 'Ready in Windows' : isDefault === false ? 'Optional Windows setting' : 'Checking Windows association…',
       action: 'Open Windows Default Apps', run: onDefault, disabled: protectedSpace },
     { title: 'MyVault', detail: vaultStatus === 'unlocked' ? 'Unlocked and ready' : vaultStatus === 'locked' ? 'Paired and locked'

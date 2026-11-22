@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Bookmark, Home, Search, Palette, Check, ChevronRight, Code2, Download, ExternalLink, Globe2, LoaderCircle, LockKeyhole, RefreshCw, Settings, Shield, ShieldCheck, Upload, TriangleAlert, X } from 'lucide-react';
 import type { AccountSpaceId, BrowserSettings, BrowserSettingsPatch, BrowserSnapshot, ChromeImportResult, ChromeProfileSource, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, UiPreferences, UiPreferencesPatch } from '../../electron/types';
 import type { ChromeImportReview, ChromeSettingChoice, ChromeSettingsSelection, ManagedUpdateStatus } from '../../electron/types';
@@ -13,6 +13,8 @@ import { AgentsPanel } from './AgentsPanel';
 import { SafeDiagnostics } from './SafeDiagnostics';
 import type { DiagnosticReason } from '../lib/safe-diagnostics';
 import { Bot } from 'lucide-react';
+
+const BrowsingPrivacySettings = lazy(() => import('./BrowsingPrivacySettings'));
 
 const THEME_OPTIONS = [['system', 'Match Windows'], ['light', 'Light'], ['dark', 'Dark']] as const;
 const BOOKMARK_BAR_OPTIONS = [['always', 'Always'], ['new-tab', 'New Tab only'], ['hidden', 'Hidden']] as const;
@@ -33,6 +35,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
 }) {
   const [isDefault, setIsDefault] = useState<boolean | null>(null);
   const [settingsPage, setSettingsPage] = useState<'overview' | 'updates' | 'setup' | 'agents'>(entry);
+  const [reviewPrivacy, setReviewPrivacy] = useState(false);
   useEffect(() => { if (entry === 'setup') setSettingsPage('setup'); }, [entry]);
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
@@ -253,6 +256,10 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
     return <SetupGuide state={state} isDefault={isDefault} firstLaunch={ui.offerSetupGuide}
       chromeImported={ui.importedChromeData} onAccounts={onManageAccounts} onVault={onOpenVault}
       onDefault={() => void runDefaultBrowserAction(window.privateBrowser.openDefaultBrowserSettings)}
+      onPrivacy={() => {
+        setReviewPrivacy(true);
+        exitSetup();
+      }}
       onSearch={() => {
         exitSetup();
         requestAnimationFrame(() => searchSection.current?.querySelector('select')?.focus());
@@ -411,6 +418,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       </label>
       <p>Eligible inactive pages reload when selected. Use Site information to keep a site awake in its Account Space.</p>
     </fieldset>
+    <Suspense fallback={null}><BrowsingPrivacySettings state={state} onToast={onToast} reveal={reviewPrivacy} onReveal={() => setReviewPrivacy(false)} /></Suspense>
     <div className="settings-card"><div className="settings-row"><span><Bookmark size={17} /></span><div><strong>Bookmarks bar</strong><small>Where the bookmarks bar appears. Shortcut: Ctrl+Shift+B.</small></div></div>
       <div className="segmented" role="radiogroup" aria-label="Bookmarks bar">{BOOKMARK_BAR_OPTIONS.map(([mode, label]) => <button type="button" key={mode} role="radio" aria-checked={ui.bookmarkBarMode === mode} className={ui.bookmarkBarMode === mode ? 'active' : ''} onClick={() => onUiChange({ bookmarkBarMode: mode })}>{label}</button>)}</div>
     </div>
