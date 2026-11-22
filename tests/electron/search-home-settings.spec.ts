@@ -165,10 +165,11 @@ test('search engine, Home page and startup settings work in the real app and sur
     const custom = panel.getByRole('textbox', { name: 'Custom search address' });
     await custom.fill(`${origin.replace('https:', 'http:')}/search?q=%s`);
     await panel.getByRole('button', { name: 'Save search address' }).click();
-    await expect(page.getByRole('status')).toContainText('https://');
+    const toast = page.getByRole('status').and(page.locator('.toast'));
+    await expect(toast).toContainText('https://');
     await custom.fill(`${origin}/search?q=%s`);
     await panel.getByRole('button', { name: 'Save search address' }).click();
-    await expect(page.getByRole('status')).toContainText('Search engine saved');
+    await expect(toast).toContainText('Search engine saved');
     await address().fill('hello world');
     await address().press('Enter');
     await expect(address()).toHaveValue(`${origin}/search?q=hello%20world`);
@@ -179,7 +180,7 @@ test('search engine, Home page and startup settings work in the real app and sur
     await home.getByRole('radio', { name: 'Web address' }).click();
     await panel.getByRole('textbox', { name: 'Home page address' }).fill(`${origin}/home`);
     await panel.getByRole('button', { name: 'Save Home page' }).click();
-    await expect(page.getByRole('status')).toContainText('Home page saved');
+    await expect(toast).toContainText('Home page saved');
     await page.getByRole('button', { name: 'Home', exact: true }).click();
     await expect(address()).toHaveValue(`${origin}/home`);
     await expect(page.getByRole('tab', { name: /Settings home fixture/ })).toBeVisible();
