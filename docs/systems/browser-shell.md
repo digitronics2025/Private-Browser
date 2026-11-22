@@ -245,7 +245,7 @@ still uses the bounded recent-history snapshot.
 navigates the active tab to `resolveHomeUrl(settings, workspace.protected)`: the
 Home address when one is set, otherwise `private://home`, and **always**
 `private://home` in a protected workspace (Banking), whatever the setting says.
-Ctrl+T, empty address input and closing the last tab still mean the New Tab page.
+Ctrl+T and empty address input open the New Tab page. Closing the last tab in the active Account Space exits the desktop app through its normal shutdown path. Tabs in other spaces follow the usual session restore settings.
 
 **Startup.** The browser captures its startup settings before showing the first
 window. Changes made while it loads take effect at the next launch. A launch
@@ -766,7 +766,7 @@ only if the application window has already been destroyed.
 - **Downloads are process-lifetime only.** They vanish on restart and the map has no
   eviction, so a long session accumulates entries that are re-serialised on every
   broadcast.
-- **Closing the last tab of a workspace can move the user.** `closeTab` falls back
+- **Closing a hidden space’s last tab can move the user.** `closeTab` falls back
   to `newTab(tab.workspaceId)`, and `newTab` sets `activeWorkspaceId`. The
   `browser:close-tab` channel accepts any tab id; today the UI only offers the
   active workspace's tabs, so this is latent rather than reachable.

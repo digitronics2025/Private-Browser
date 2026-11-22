@@ -1065,8 +1065,12 @@ class BrowserController {
     const state = this.store.get();
     const tab = state.tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
-    this.endSplitForTab(tabId, tab.accountSpaceId);
     const accountTabs = state.tabs.filter((candidate) => candidate.accountSpaceId === tab.accountSpaceId);
+    if (accountTabs.length === 1 && tab.accountSpaceId === state.activeAccountSpaceByWorkspace[state.activeWorkspaceId]) {
+      app.quit();
+      return;
+    }
+    this.endSplitForTab(tabId, tab.accountSpaceId);
     const closedIndex = accountTabs.findIndex((candidate) => candidate.id === tabId);
     const siblings = accountTabs.filter((candidate) => candidate.id !== tab.id);
     const nextId = siblings[Math.min(closedIndex, siblings.length - 1)]?.id;

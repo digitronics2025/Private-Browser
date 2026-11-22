@@ -944,11 +944,12 @@ export function installPreviewApi(): void {
     closeTab: async (value) => {
       const tab = state.tabs.find((item) => item.id === value);
       if (!tab) return;
+      const siblings = state.tabs.filter((item) => item.accountSpaceId === tab.accountSpaceId);
+      if (siblings.length === 1 && tab.accountSpaceId === state.activeAccountSpaceId) return desktopOnly();
       if (!tab.isHome && tab.workspaceId !== 'banking') {
         const closed = { id: tab.id, title: tab.title, url: tab.url, closedAt: new Date().toISOString() };
         closedByAccount.set(tab.accountSpaceId, [closed, ...(closedByAccount.get(tab.accountSpaceId) ?? [])].slice(0, 25));
       }
-      const siblings = state.tabs.filter((item) => item.accountSpaceId === tab.accountSpaceId);
       if (siblings.length === 1) { Object.assign(tab, homeTab(tab.id, tab.workspaceId, tab.accountSpaceId)); publish(); return; }
       const index = siblings.indexOf(tab);
       state.tabs = state.tabs.filter((item) => item.id !== tab.id);

@@ -1219,12 +1219,33 @@ test('switches to an existing tab through the real address bar bridge', async ()
     .toBe(initial.activeTabId);
 });
 
+for (const action of ['close button', 'Ctrl+W'] as const) {
+  test(`closing the last visible tab with ${action} exits the desktop app`, async () => {
+    const page = await application!.firstWindow();
+    await page.evaluate(() => window.privateBrowser.newTab());
+    await page.getByRole('button', { name: 'Close New tab', exact: true }).last().click();
+    const lastTab = page.getByRole('button', { name: 'Close New tab', exact: true });
+    await expect(lastTab).toHaveCount(1);
+    const exited = application!.waitForEvent('close');
+    if (action === 'close button') await lastTab.click();
+    else {
+      // The key-down closes the app before Playwright can send the key-up.
+      await application!.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()!.webContents.sendInputEvent({
+        type: 'keyDown', keyCode: 'W', modifiers: ['control'],
+      }));
+    }
+    await exited;
+    application = undefined;
+  });
+}
+
 test('keeps recently closed entries local to their Account Space', async () => {
   const page = await application!.firstWindow();
   const owner = await page.evaluate(() => window.privateBrowser.addLocalAccountSpace('personal', 'Closed tab owner', 'sky'));
   await page.evaluate((url) => window.privateBrowser.navigate(url), origin);
   const getState = () => page.evaluate(() => window.privateBrowser.getState());
   const original = (await getState()).activeTabId;
+  await page.evaluate(() => window.privateBrowser.newTab());
   await page.evaluate((id) => window.privateBrowser.closeTab(id), original);
   const [closed] = (await getState()).recentlyClosedTabs!;
   expect(closed).toMatchObject({ id: original, url: origin + '/' });

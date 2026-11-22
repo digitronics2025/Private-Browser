@@ -123,6 +123,7 @@ test('a bookmark keeps the icon of a site after its tab closes and across a rest
   await expect.poll(async () => (await page.evaluate(() => window.privateBrowser.getState())).bookmarkIcons['127.0.0.1']).toMatch(/^data:image\/png;base64,/);
 
   const tabId = (await page.evaluate(() => window.privateBrowser.getState())).tabs.find((tab) => tab.url.startsWith(origin))!.id;
+  await page.evaluate(() => window.privateBrowser.newTab());
   await page.evaluate((id) => window.privateBrowser.closeTab(id), tabId);
   await expect.poll(async () => (await page.evaluate(() => window.privateBrowser.getState())).tabs.some((tab) => tab.url.startsWith(origin))).toBe(false);
   await expect(page.locator('.bookmark-bar .bookmark-item img').first()).toHaveAttribute('src', /^data:image\/png;base64,/);
