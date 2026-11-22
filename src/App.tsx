@@ -320,7 +320,10 @@ export default function App() {
       case 'bookmark-manager': openTool('bookmarks'); break;
       case 'history': openTool('history'); break;
       case 'downloads': openTool('downloads'); break;
-      case 'find': if (!activeTab.isHome) { setFindOpen(true); setFindFocus((value) => value + 1); } break;
+      case 'find':
+        if (state.pdfDocument?.mode === 'protected') void act(() => window.privateBrowser.openPdfInTab());
+        else if (!activeTab.isHome) { setFindOpen(true); setFindFocus((value) => value + 1); }
+        break;
       case 'print': void act(() => window.privateBrowser.print()); break;
       case 'zoom-in': void act(() => window.privateBrowser.zoom('in')); break;
       case 'zoom-out': void act(() => window.privateBrowser.zoom('out')); break;
@@ -598,7 +601,7 @@ export default function App() {
               onMenu={() => setMenu((current) => (current === 'browser' ? null : 'browser'))}
             />
             {liveLayout.bookmarkBar > 0 && <BookmarkBar key={activeAccount.id} bookmarks={accountBookmarks} savedFolders={accountFolders} mode={ui.bookmarkBarMode} favicons={favicons} actions={bookmarkActions} />}
-            {findOpen && !activeTab.isHome && <FindBar tabId={activeTab.id} focusSignal={findFocus} onClose={() => setFindOpen(false)} />}
+            {findOpen && !activeTab.isHome && state.pdfDocument?.mode !== 'protected' && <FindBar tabId={activeTab.id} focusSignal={findFocus} onClose={() => setFindOpen(false)} />}
           </>
         )}
 
@@ -606,6 +609,18 @@ export default function App() {
         {state.startupTabRecovery ? (
           <StartupRecovery key={state.startupTabRecovery.failedTabId} tabs={workspaceTabs} failedTabId={state.startupTabRecovery.failedTabId}
             onRestore={(ids) => act(() => window.privateBrowser.restoreSelectedTabs(ids))} />
+        ) : state.pdfDocument?.mode === 'protected' ? (
+          <div className="page-surface page-recovery">
+            <section className="recovery-card" aria-labelledby="protected-pdf-title">
+              <h2 id="protected-pdf-title">Protected PDF</h2>
+              <p>{state.pdfDocument.canOpen ? 'Read or find text in a protected preview. Saving and printing are blocked.'
+                : 'This document uses a one-time request. Reopen it from the original site if the site provides a link.'}</p>
+              <div className="recovery-actions">
+                {state.pdfDocument.canOpen && <button type="button" className="primary-button" onClick={() => void act(() => window.privateBrowser.openPdfInTab())}>Open protected preview</button>}
+                <button type="button" className="secondary-button" disabled={!activeTab.canGoBack} onClick={() => void act(() => window.privateBrowser.back())}>Back</button>
+              </div>
+            </section>
+          </div>
         ) : activeTab.restorePaused || activeTab.problem ? (
           <PageRecovery tab={activeTab} onReload={() => void act(() => window.privateBrowser.reload())} onBack={() => void act(() => window.privateBrowser.back())} />
         ) : activeTab.isHome ? (
@@ -709,7 +724,12 @@ export default function App() {
               zoom: (direction) => void act(() => window.privateBrowser.zoom(direction)),
               toggleFullscreen: () => void act(() => window.privateBrowser.toggleFullscreen()),
               print: () => void act(() => window.privateBrowser.print()),
-              find: () => { setFindOpen(true); setFindFocus((value) => value + 1); },
+              openPdf: state.pdfDocument?.canOpen ? () => void act(() => window.privateBrowser.openPdfInTab()) : undefined,
+              savePdf: state.pdfDocument?.mode === 'native' && state.pdfDocument.canOpen ? () => void act(() => window.privateBrowser.savePdf()) : undefined,
+              find: () => {
+                if (state.pdfDocument?.mode === 'protected') void act(() => window.privateBrowser.openPdfInTab());
+                else { setFindOpen(true); setFindFocus((value) => value + 1); }
+              },
               copyLink: () => void act(() => window.privateBrowser.copyText(activeTab.url), 'Link copied'),
               reviewClaudeExcerpt: !activeTab.isHome && !workspace.protected && !isProtectedPage(activeTab.url)
                 ? () => void act(async () => setClaudeExcerpt(await window.privateBrowser.prepareClaudeExcerpt()))
