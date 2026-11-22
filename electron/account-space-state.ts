@@ -28,7 +28,7 @@ import { AccountStore, type AccountSpaceRecord, type SafeStorageAdapter } from '
 import { BrowsingProtection, type BrowsingProtectionStatus } from './browsing-protection.js';
 import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation.js';
 import { pruneBookmarkIcons, sanitizeBookmarkIcons } from './bookmark-icons.js';
-import { isAllowedRemoteUrl, retainedTabUrl, sensitiveNavigationUrl } from './security.js';
+import { isAllowedRemoteUrl, minimizeRetainedTab, sensitiveNavigationUrl } from './security.js';
 import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings, sanitizeWorkspaceSettings } from './browser-settings.js';
 import { chromeProfileReceipts } from './chrome-profile-preferences.js';
 import { sanitizeAccountPanel, sanitizeUiPreferences } from './ui-preferences.js';
@@ -37,11 +37,7 @@ import { sanitizeBrowserRoutines } from './browser-routines.js';
 import { orderAccountTabs } from './tab-organization.js';
 
 function minimizeStoredNavigation(state: AccountBrowsingStateV2): AccountBrowsingStateV2 {
-  const tabs = state.tabs.map(tab => {
-    const url = retainedTabUrl(tab.url);
-    if (url === tab.url) return tab;
-    return { ...tab, title: url === 'private://home' ? 'New tab' : new URL(url).hostname, url, isHome: url === 'private://home' };
-  });
+  const tabs = state.tabs.map(minimizeRetainedTab);
   const history = state.history.filter(entry => !sensitiveNavigationUrl(entry.url));
   if (history.length === state.history.length && tabs.every((tab, index) => tab === state.tabs[index])) return state;
   return { ...state, tabs, history };

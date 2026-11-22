@@ -84,6 +84,13 @@ export function retainedTabUrl(value: string): string {
   }
 }
 
+export function minimizeRetainedTab<T extends { url: string; title: string; isHome: boolean }>(tab: T): T {
+  const url = retainedTabUrl(tab.url);
+  if (url === tab.url) return tab;
+  const isHome = url === 'private://home';
+  return { ...tab, url, title: isHome ? 'New tab' : new URL(url).hostname, isHome };
+}
+
 /** Surface look-alike internationalised domains without blocking legitimate IDNs. */
 export function navigationWarning(value: string): 'insecure' | 'idn' | undefined {
   try {
