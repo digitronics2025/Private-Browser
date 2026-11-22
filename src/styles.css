@@ -684,6 +684,9 @@ kbd { font: inherit; }
 .project-summary strong { margin-top: 3px; font-size: var(--fs-md); }
 .project-summary span, .project-summary p { margin: 2px 0 0; color: var(--text-muted); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-summary p { grid-column: 1 / -1; }
+.project-summary.patch-review { grid-template-columns: minmax(0, 1fr); }
+.patch-review textarea { display: block; box-sizing: border-box; width: 100%; resize: vertical; }
+.patch-review p, .patch-review li { white-space: normal; overflow-wrap: anywhere; }
 .git-revision p { white-space: normal; overflow-wrap: anywhere; }
 .git-revision > .bridge-action-row { grid-column: 1 / -1; flex-direction: row; flex-wrap: wrap; }
 .bridge-action-row { display: flex; gap: 6px; }
