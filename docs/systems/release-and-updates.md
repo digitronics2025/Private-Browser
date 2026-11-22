@@ -133,12 +133,10 @@ five records. The query is sequential after `latestRelease`; the Worker does not
 run dependent D1 reads in parallel. History is informational and does not expose
 download URLs for old installers.
 
-[page.ts](../../cloudflare/src/page.ts) receives a typed page model: active
-release, history, signed download URL, canonical origin, render timestamp and the
-fixed public developer profile. It emits one script-free responsive document
-with semantic headings, UTC-backed `<time>` values, release notes, source commit,
-checksum, install steps and the developer profile link. Every D1 value is escaped
-before interpolation.
+[page.ts](../../cloudflare/src/page.ts) renders the active release, source commit,
+history, timestamp and install steps as escaped, script-free HTML. The
+[publisher receipt](../reference/windows-publisher-verification.md) is tied to
+the installer checksum. It appears separately from the signed download link.
 
 `handlePublish` in order: 405 unless POST → 404 unless admin-authorised → 415
 unless `content-type` starts with `application/json` → 400 `invalid_release` if
