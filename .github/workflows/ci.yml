@@ -228,6 +228,42 @@ jobs:
           CSC_LINK: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CODE_SIGNING_PASSWORD }}
         run: npm run dist
+      - name: Exercise the installed Windows release candidate
+        shell: pwsh
+        env:
+          PRIVATE_BROWSER_PACKAGED_VERSION: ${{ steps.packaged-version.outputs.version }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: packaged-windows-smoke.json
+        run: |
+          $installDirectory = Join-Path $env:RUNNER_TEMP ('private-browser-smoke-' + [guid]::NewGuid().ToString('N'))
+          $installerName = "Private-Browser-$env:PRIVATE_BROWSER_PACKAGED_VERSION-Setup.exe"
+          $installer = Get-Item -LiteralPath (Join-Path release $installerName) -ErrorAction Stop
+          $installed = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installDirectory") -WindowStyle Hidden -PassThru -Wait
+          if ($installed.ExitCode -ne 0) { throw "The Windows candidate installer exited with $($installed.ExitCode)" }
+          $env:PRIVATE_BROWSER_PACKAGED_EXE = Join-Path $installDirectory 'Private Browser.exe'
+          $checksum = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "### Installed Windows smoke · $env:PRIVATE_BROWSER_PACKAGED_VERSION" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          "Installer SHA-256: $checksum" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+          npx playwright test --config playwright.packaged.config.ts | Tee-Object -FilePath packaged-windows-smoke.txt
+          $testExit = $LASTEXITCODE
+          if (Test-Path -LiteralPath packaged-windows-smoke.json) {
+            $report = Get-Content -LiteralPath packaged-windows-smoke.json -Raw | ConvertFrom-Json
+            $scenario = $report.suites[0].specs[0].tests[0].results[0]
+            foreach ($step in $scenario.steps) {
+              $status = if ($step.error -or $step.duration -lt 0) { 'Failed' } else { 'Passed' }
+              "- $status · $($step.title)" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+            }
+          }
+          if ($testExit -ne 0) { exit $testExit }
+      - name: Keep installed Windows smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: packaged-windows-smoke
+          path: |
+            packaged-windows-smoke.txt
+            packaged-windows-smoke.json
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Smoke install the private VSIX in an isolated profile
         shell: pwsh
         run: |
