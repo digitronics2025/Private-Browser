@@ -256,6 +256,7 @@ const api = {
   resetVaultPicks: (accountId: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('vault:reset-picks', accountId),
   vaultFillReadiness: (): Promise<VaultFillReadiness> => ipcRenderer.invoke('vault:fill-readiness'),
   requestSaveFromPage: (): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:save-from-page'),
+  setWordPressSaveSite: (id: string, origin: string, enabled: boolean): Promise<void> => ipcRenderer.invoke('vault:wordpress-save-setting', id, origin, enabled),
   requestVaultDelete: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:request-delete', id),
   acknowledgeVaultRecovery: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:acknowledge-recovery'),
   copyPassword: (id: string): Promise<void> => ipcRenderer.invoke('vault:copy-password', id),

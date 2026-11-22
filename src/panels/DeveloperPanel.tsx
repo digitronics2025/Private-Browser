@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Code2, Copy, FileCode2, LoaderCircle, LockKeyhole, PanelRightClose, PanelRightOpen, Play, ScanSearch, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react';
 import { BridgePairingGuide } from './BridgePairingGuide';
 import { DevelopmentServer } from './DevelopmentServer';
@@ -8,6 +8,8 @@ import type { AiPagePreview, BridgeStatus, BrowserTab, DeveloperPageInfo, DevToo
 import { PanelHeader } from './common';
 import { ControlCenterSection } from './ControlCenterSection';
 import { SafeDiagnostics } from './SafeDiagnostics';
+
+const DeveloperPatchReview = lazy(() => import('./DeveloperPatchReview'));
 
 function ProjectRevision({ onOpen, projectId }: { onOpen: (url: string) => void; projectId: string }) {
   const [revision, setRevision] = useState<GitRevision | null>();
@@ -253,6 +255,9 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
       {tab === 'ai' && <div className="bridge-pane"><div className="ai-privacy-note"><ShieldCheck size={16} /><p><strong>You control every upload.</strong> Cookies, storage, form values, headers, bodies, URL queries, secrets, and protected pages are always excluded.</p></div><label className="bridge-check"><input type="checkbox" checked={includeDom} onChange={(event) => setIncludeDom(event.target.checked)} /> Include structural DOM metadata</label><label className="bridge-check"><input type="checkbox" checked={includeScreenshot} onChange={(event) => setIncludeScreenshot(event.target.checked)} /> Include a compressed screenshot</label><button className="primary-button full" disabled={!activeTab.developerToolsAllowed || loading} onClick={() => void run(async () => { setAiAnswer(''); setAiPreview(await window.privateBrowser.prepareDeveloperAiPreview({ includeDom, includeScreenshot })); }, 'Sanitized AI context is ready for review')}><Sparkles size={14} /> Preview debugging context</button>
         {aiPreview && <div className="ai-context-preview"><div><small>EXACT CONTEXT · {aiPreview.redactions} REDACTIONS</small><button onClick={() => void window.privateBrowser.revokeAiContext().then(() => setAiPreview(null))}>Clear</button></div>{aiPreview.screenshotDataUrl && <img src={aiPreview.screenshotDataUrl} alt="Approved page screenshot preview" />}<pre>{aiPreview.text}</pre>{aiPreview.dom && <details><summary>Structural DOM</summary><pre>{aiPreview.dom}</pre></details>}<div className="bridge-action-row"><button onClick={() => void askDeveloperAi('Explain the observed page and diagnostic evidence.')}>Explain</button><button onClick={() => void askDeveloperAi('Diagnose the most likely root cause and recommend a minimal fix.')}>Diagnose</button></div><div className="bridge-action-row"><button onClick={() => void window.privateBrowser.copyText(aiPreview.text).then(() => onToast('Context copied')).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}><Copy size={13} />Copy</button><button className="primary-button" disabled={!connected || !project} onClick={() => void run(async () => { const approval = await window.privateBrowser.approveAiPreview(aiPreview.id); await window.privateBrowser.runBridgeAction('ai.handoff', { approvalToken: approval.token, action: 'Diagnose and propose a fix' }); setAiPreview(null); }, 'Opened secure handoff in VS Code')}>Fix in VS Code</button></div></div>}
         {aiAnswer && <div className="ai-answer"><Sparkles size={14} /><p>{aiAnswer}</p><button onClick={() => setAiAnswer('')}>Clear answer</button></div>}
+        {connected && project && <Suspense fallback={null}><DeveloperPatchReview key={project.project.id}
+          report={report?.projectId === project.project.id && report.kind !== 'live-site' ? report : undefined}
+          onReport={(value) => { setReport(value); setReportHistoryRevision((revision) => revision + 1); }} onToast={onToast} /></Suspense>}
       </div>}
       {tab === 'center' && <ControlCenterSection activeTab={activeTab} onToast={onToast} />}
       {loading && <div className="bridge-working"><LoaderCircle size={13} /> Working locally…</div>}{bridge.error && <div className="bridge-error"><TriangleAlert size={14} />{bridge.error}</div>}

@@ -53,6 +53,16 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
       }),
       setUiPreferences: async (patch: Record<string, unknown>) => { ui = { ...ui, ...patch }; notify?.(getState()); },
       runBridgeAction: async (action: string, payload: Record<string, unknown> = {}) => {
+        const patch = { id: 'bade0000-0000-4000-8000-000000000010', files: ['example.ts'] };
+        if (action === 'ai.review-patch') {
+          document.documentElement.dataset.patchReview = JSON.stringify(payload.edits);
+          return patch;
+        }
+        if (action === 'ai.apply-patch' || action === 'ai.undo-patch') {
+          if (payload.id !== patch.id) throw new Error('The fixture did not receive the reviewed ID');
+          document.documentElement.dataset.patchDecision = action;
+          return patch;
+        }
         if (action === 'inspect.open-source') document.documentElement.dataset.confirmedSource = String(payload.reference);
         if (action === 'project.revision') return { branch: 'topic/review', commit, staged: 1, unstaged: 2, untracked: 0, conflicts: 0, githubRepository: 'example/app' };
         if (action === 'reports.search') {
@@ -100,6 +110,28 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
     }, { get: (target, property) => property in target ? target[property as keyof typeof target] : async () => undefined });
     Object.defineProperty(window, 'privateBrowser', { value: api });
   }, { state: snapshot(workspaceId), connected, inspection, scenario });
+}
+
+for (const width of [430, 1280]) {
+  test(`opens a separate patch review and waits for an explicit apply at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 850 });
+    await installMock(page, 'development', true);
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Side panel', exact: true }).click();
+    await page.getByRole('tab', { name: 'Developer Bridge', exact: true }).click();
+    await page.getByRole('tab', { name: 'AI Fix', exact: true }).click();
+    const review = page.getByRole('region', { name: 'Review a proposed patch' });
+    const proposed = JSON.stringify([{ path: 'example.ts', newText: 'export const enabled = true;' }]);
+    await review.getByLabel('Proposed file replacements').fill(proposed);
+    await review.getByRole('button', { name: 'Review in VS Code', exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-patch-review', proposed);
+    await expect(review.getByText('example.ts', { exact: true })).toBeVisible();
+    expect(await page.locator('html').getAttribute('data-patch-decision')).toBeNull();
+    await review.getByRole('button', { name: 'Apply reviewed patch', exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-patch-decision', 'ai.apply-patch');
+    await review.getByRole('button', { name: 'Undo patch', exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-patch-decision', 'ai.undo-patch');
+  });
 }
 
 test('sends the exact local route, fixture and selected viewports for baseline comparison', async ({ page }) => {

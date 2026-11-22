@@ -9,6 +9,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let client: BridgeClient;
   const service = new ProjectService(context, (event, payload) => { void client?.notify(event as never, payload); });
   client = new BridgeClient(context, (method, payload) => service.handle(method, payload), (next, nextDetail) => {
+    if (next !== 'connected') service.clearPatchReviews();
     state = next; detail = nextDetail ?? '';
     status.text = next === 'connected' ? '$(link) Private Browser' : next === 'connecting' ? '$(sync~spin) Private Browser' : next === 'error' ? '$(error) Private Browser' : '$(debug-disconnect) Private Browser';
     status.tooltip = next === 'connected' ? `Connected. ${detail}` : detail || 'Private Browser is disconnected';
