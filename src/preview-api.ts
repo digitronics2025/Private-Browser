@@ -944,11 +944,12 @@ export function installPreviewApi(): void {
     closeTab: async (value) => {
       const tab = state.tabs.find((item) => item.id === value);
       if (!tab) return;
+      const siblings = state.tabs.filter((item) => item.accountSpaceId === tab.accountSpaceId);
+      if (siblings.length === 1 && tab.accountSpaceId === state.activeAccountSpaceId) return desktopOnly();
       if (!tab.isHome && tab.workspaceId !== 'banking') {
         const closed = { id: tab.id, title: tab.title, url: tab.url, closedAt: new Date().toISOString() };
         closedByAccount.set(tab.accountSpaceId, [closed, ...(closedByAccount.get(tab.accountSpaceId) ?? [])].slice(0, 25));
       }
-      const siblings = state.tabs.filter((item) => item.accountSpaceId === tab.accountSpaceId);
       if (siblings.length === 1) { Object.assign(tab, homeTab(tab.id, tab.workspaceId, tab.accountSpaceId)); publish(); return; }
       const index = siblings.indexOf(tab);
       state.tabs = state.tabs.filter((item) => item.id !== tab.id);
@@ -1050,7 +1051,7 @@ export function installPreviewApi(): void {
       state.bookmarks = existing ? state.bookmarks.filter((item) => item !== existing) : [...state.bookmarks, { id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, title: tab.title, url: tab.url, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order: 99, orderPath: [99] }];
       publish();
     },
-    saveBookmarkToFolder: async (id, tabId, url, folder) => {
+    saveBookmarkToFolder: async (id, tabId, url, folder, title) => {
       const tab = activeTab();
       if (id !== state.activeAccountSpaceId || tab.id !== tabId || tab.url !== url || tab.isHome) throw new Error('The page changed');
       const owned = state.bookmarks.filter((item) => item.accountSpaceId === id);
@@ -1060,7 +1061,7 @@ export function installPreviewApi(): void {
         return;
       }
       const orderPath = nextBookmarkOrder(owned, getPreviewFolders(id), folder);
-      state.bookmarks.push({ id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: id, title: tab.title, url,
+      state.bookmarks.push({ id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: id, title: title?.trim() ?? tab.title, url,
         location: folder.location, folderPath: [...folder.path], order: orderPath[0], orderPath, createdAt: new Date().toISOString() });
       publish();
     },

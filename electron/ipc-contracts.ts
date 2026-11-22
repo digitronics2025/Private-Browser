@@ -334,7 +334,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'bookmarks:move':
       exact(args, 3); requireBookmarkLevel(args[0]); requireBookmarkKey(args[1]); requireIndex(args[2]); return;
     case 'bookmarks:rename':
-      exact(args, 2); requireBoundedText(args[0], 'bookmark identifier', 200); requireNonEmptyText(args[1], 'bookmark name', 500); return;
+      exact(args, 2); requireBoundedText(args[0], 'bookmark identifier', 200); requireBoundedText(args[1], 'bookmark name', 500); return;
     case 'bookmarks:edit-address':
       exact(args, 2); requireNonEmptyText(args[0], 'bookmark identifier', 200);
       if (!isAllowedRemoteUrl(requireNonEmptyText(args[1], 'bookmark address', 4096))) throw new Error('Enter an HTTP or HTTPS bookmark address');
@@ -352,8 +352,10 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'bookmarks:move-folder':
       exact(args, 3); requireAccountSpaceId(args[0]); requireBookmarkLevel(args[1]); requireBookmarkLevel(args[2]); return;
     case 'bookmarks:save-to-folder':
-      exact(args, 4); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'tab identifier', 200);
-      requireNonEmptyText(args[2], 'page address', 4096); requireBookmarkLevel(args[3]); return;
+      between(args, 4, 5); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'tab identifier', 200);
+      requireNonEmptyText(args[2], 'page address', 4096); requireBookmarkLevel(args[3]);
+      if (args[4] !== undefined) requireBoundedText(args[4], 'bookmark name', 500);
+      return;
     case 'bookmarks:remove':
     case 'browser:open-bookmark':
       exact(args, 1); requireBoundedText(args[0], 'bookmark identifier', 200); return;

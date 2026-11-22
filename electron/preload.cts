@@ -167,8 +167,8 @@ const api = {
     ipcRenderer.invoke('bookmarks:add-folder', account, parent, name),
   moveBookmarkFolder: (account: AccountSpaceId, source: BookmarkLevelInput, parent: BookmarkLevelInput): Promise<void> =>
     ipcRenderer.invoke('bookmarks:move-folder', account, source, parent),
-  saveBookmarkToFolder: (account: AccountSpaceId, tabId: string, url: string, folder: BookmarkLevelInput): Promise<void> =>
-    ipcRenderer.invoke('bookmarks:save-to-folder', account, tabId, url, folder),
+  saveBookmarkToFolder: (account: AccountSpaceId, tabId: string, url: string, folder: BookmarkLevelInput, title?: string): Promise<void> =>
+    ipcRenderer.invoke('bookmarks:save-to-folder', account, tabId, url, folder, title),
   renameBookmarkFolder: (level: BookmarkLevelInput, name: string, nextName: string, id?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('bookmarks:rename-folder', level, name, nextName, id),
   removeBookmarkFolder: (level: BookmarkLevelInput, name: string, id?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('bookmarks:remove-folder', level, name, id),
   exportBookmarks: (): Promise<boolean> => ipcRenderer.invoke('bookmarks:export'),

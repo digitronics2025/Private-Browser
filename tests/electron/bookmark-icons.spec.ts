@@ -115,10 +115,15 @@ test('a bookmark keeps the icon of a site after its tab closes and across a rest
   );
   await expect.poll(async () => (await page.evaluate(() => window.privateBrowser.getState())).tabs.find((tab) => tab.url.startsWith(origin))?.favicon).toMatch(/^data:image\/png;base64,/);
 
-  await page.evaluate(() => window.privateBrowser.toggleBookmark());
+  await page.getByRole('button', { name: 'Bookmark this tab', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Bookmark this tab in a folder' });
+  await dialog.getByLabel('Name', { exact: true }).fill('');
+  await dialog.getByRole('button', { name: 'Save bookmark' }).click();
+  await expect(dialog).toBeHidden();
   await expect.poll(async () => (await page.evaluate(() => window.privateBrowser.getState())).bookmarkIcons['127.0.0.1']).toMatch(/^data:image\/png;base64,/);
 
   const tabId = (await page.evaluate(() => window.privateBrowser.getState())).tabs.find((tab) => tab.url.startsWith(origin))!.id;
+  await page.evaluate(() => window.privateBrowser.newTab());
   await page.evaluate((id) => window.privateBrowser.closeTab(id), tabId);
   await expect.poll(async () => (await page.evaluate(() => window.privateBrowser.getState())).tabs.some((tab) => tab.url.startsWith(origin))).toBe(false);
   await expect(page.locator('.bookmark-bar .bookmark-item img').first()).toHaveAttribute('src', /^data:image\/png;base64,/);
@@ -128,6 +133,7 @@ test('a bookmark keeps the icon of a site after its tab closes and across a rest
   application = await launch();
   page = await application.firstWindow();
   await expect(page.locator('.bookmark-bar .bookmark-item img').first()).toHaveAttribute('src', /^data:image\/png;base64,/);
+  await expect(page.getByRole('navigation', { name: 'Bookmarks bar' }).getByRole('button', { name: '127.0.0.1', exact: true })).toHaveText('');
   // Showing a remembered icon must never contact the site.
   expect(iconRequests).toBe(requestsBeforeRestart);
 });
