@@ -174,6 +174,7 @@ import { chromeImportBookmarkStamp, chromeImportKey, planChromeImport } from './
 import type { ChromeImportReview } from './types.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
 import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
+import { TemporaryBrowsing } from './temporary-browsing.js';
 import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
@@ -383,6 +384,7 @@ class BrowserController {
   private windowsHelloAvailable?: boolean;
   private windowsHelloProbe?: Promise<boolean>;
   private readonly fillCapabilities = new FillCapabilityStore();
+  private readonly temporaryBrowsing = new TemporaryBrowsing((id, url, title) => this.keepTemporaryBookmark(id, url, title));
   private readonly fillPicker: FillPicker = new FillPicker(() => this.window, { choose: (choice) => void this.handleFillPickerChoice(choice) });
   private readonly vaultSync: VaultSyncController;
   private dirtySyncTimer?: NodeJS.Timeout;
@@ -499,6 +501,7 @@ class BrowserController {
       }
     });
     this.window.on('closed', () => {
+      this.temporaryBrowsing.close();
       if (this.downloadProgressTimer) clearTimeout(this.downloadProgressTimer);
       this.downloadProgressTimer = undefined;
       this.downloadProgressAccounts.clear();
@@ -1907,6 +1910,7 @@ class BrowserController {
   }
 
   private closeAccountViews(accountSpaceId: AccountSpaceId): void {
+    this.temporaryBrowsing.close(accountSpaceId);
     this.fillPicker.close();
     this.splitPairs.delete(accountSpaceId);
     const ids = new Set(this.store.get().tabs.filter((tab) => tab.accountSpaceId === accountSpaceId).map((tab) => tab.id));
@@ -1995,6 +1999,7 @@ class BrowserController {
   private enforceSessionLock(): void {
     // Hide first. Subsequent IPC cannot reopen content while the lock marker is set.
     this.hideAllViews();
+    this.temporaryBrowsing.close();
     this.sideApps.closeAll();
     this.managedUpdate.cancelTransfer();
     agentHost?.stop();
@@ -2075,7 +2080,24 @@ class BrowserController {
     this.broadcast();
   }
 
-  private addBookmark(state: RuntimeBrowserStateV2, tab: RuntimeBrowserStateV2['tabs'][number], folder: BookmarkLevelInput): void {
+  async openTemporaryBrowsing(accountSpaceId: AccountSpaceId): Promise<void> {
+    const state = this.store.get();
+    const account = state.accountSpaces.find((item) => item.id === accountSpaceId);
+    if (!account || this.store.isReadOnly() || this.activeDownloadAccount(state) !== accountSpaceId || this.window.isDestroyed()) {
+      throw new Error('Open an unlocked regular Account Space to start temporary browsing.');
+    }
+    await this.temporaryBrowsing.open(this.window, account);
+  }
+
+  private keepTemporaryBookmark(accountSpaceId: AccountSpaceId, url: string, title: string): void {
+    this.requireEditableBookmarkAccount(accountSpaceId);
+    const state = this.store.get();
+    if (state.bookmarks.some((item) => item.accountSpaceId === accountSpaceId && item.url === url)) return;
+    this.store.update((next) => this.addBookmark(next, { accountSpaceId, url, title, workspaceId: state.activeWorkspaceId }, { location: 'bar', path: [] }));
+    this.broadcast();
+  }
+
+  private addBookmark(state: RuntimeBrowserStateV2, tab: Pick<RuntimeBrowserStateV2['tabs'][number], 'accountSpaceId' | 'workspaceId' | 'title' | 'url'>, folder: BookmarkLevelInput): void {
     const owned = state.bookmarks.filter((item) => item.accountSpaceId === tab.accountSpaceId);
     if (owned.length >= 25_000) throw new Error('This Account Space has reached its bookmark limit.');
     const orderPath = nextBookmarkOrder(owned, state.bookmarkFoldersByAccountSpace?.[tab.accountSpaceId] ?? [], folder);
@@ -2968,7 +2990,7 @@ class BrowserController {
       }
     }
     if (action === 'test.configuration') {
-      const result = await this.vscodeBridge.request(action, { projectId });
+      const result = await this.vscodeBridge.request(action, { projectId, includeKeyboard: true });
       this.requireDeveloperWorkspace();
       if (this.sessionIsLocked || this.vscodeBridge.status().project?.project.id !== projectId) throw new Error('The selected project changed.');
       return testConfigurationSchema.parse(result);
@@ -4951,6 +4973,7 @@ class BrowserController {
   private async showActiveTab(): Promise<void> {
     if (this.startingWindow || this.sessionIsLocked) return;
     const state = this.store.get();
+    if (state.activeWorkspaceId === 'banking') this.temporaryBrowsing.close();
     const tab = this.activeTab(state);
     const locked = state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked;
     if (!locked && !tab.isHome && !tab.restorePaused && !this.runtimeTabs.get(tab.id)?.problem && this.startupTabRecovery?.accountSpaceId !== tab.accountSpaceId && isAllowedRemoteUrl(tab.url)) {
@@ -5527,6 +5550,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:restore-selected-tabs', (_event, ids: string[]) => controller!.restoreSelectedTabs(ids));
   handle('browser:stop', () => controller!.stop());
   handle('browser:new-tab', (_event, workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId) => controller!.newTab(workspaceId, url, accountSpaceId));
+  handle('browser:open-temporary-browsing', (_event, id: AccountSpaceId) => controller!.openTemporaryBrowsing(id));
   handle('browser:close-tab', (_event, id: string) => controller!.closeTab(id));
   handle('browser:activate-tab', (_event, id: string) => controller!.activateTab(id));
   handle('browser:set-split-view', (_event, id?: string) => controller!.setSplitView(id));

@@ -114,7 +114,7 @@ export const TEST_VIEWPORTS = ['desktop', 'tablet', 'mobile'] as const;
 export const testViewportSchema = z.enum(TEST_VIEWPORTS);
 export type TestViewport = z.infer<typeof testViewportSchema>;
 export const testFixtureSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,39}\.json$/);
-export const testConfigurationSchema = z.object({ fixtures: z.array(testFixtureSchema).max(25) }).strict();
+export const testConfigurationSchema = z.object({ fixtures: z.array(testFixtureSchema).max(25), keyboardFixtures: z.array(testFixtureSchema).max(25).optional() }).strict();
 export const reportFindingSchema = z.object({
   status: reportStatusSchema, title: z.string().max(300), cause: z.string().max(2_000), evidence: z.string().max(8_000),
   location: z.string().max(2_000).optional(), recommendation: z.string().max(2_000),

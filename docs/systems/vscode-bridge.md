@@ -143,7 +143,9 @@ is a file in `private-browser-fixtures/` inside the approved project. A fixture
 uses `{"version":1,"responses":[{"path":"/api/items","status":200,"json":[]}]}`.
 Use up to 20 same-origin GET data responses in a file under 64 KiB. The runner
 rechecks the fixture digest before using it and blocks service workers for the
-isolated scenario. Keep fixture data free of credentials.
+isolated scenario. Keep fixture data free of credentials. See
+[Keyboard smoke checks](../developer-keyboard-smoke.md) for saved focus checks
+and repeat timing on simulated viewports.
 
 **Save local baseline** captures screenshots in the normal local report store.
 **Compare with baseline** requires the same project, route, fixture digest and

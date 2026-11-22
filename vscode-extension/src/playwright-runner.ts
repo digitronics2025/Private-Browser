@@ -7,6 +7,7 @@ import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 import type { TestViewport } from '@private-browser/bridge-protocol';
 import { loadTestFixture, SCENARIO_VIEWPORTS } from './test-scenario.js';
+import { runKeyboardSmoke, smokeLatency } from './keyboard-smoke.js';
 
 interface Input {
   reportId: string; projectId: string; startedAt: string; kind: string; url: string; liveUrl?: string; root: string; artifactRoot: string;
@@ -17,12 +18,16 @@ interface Finding { status: 'passed' | 'attention' | 'failed' | 'skipped'; title
 async function main(): Promise<void> {
   const input = JSON.parse(Buffer.from(process.argv[2] ?? '', 'base64url').toString('utf8')) as Input;
   const requireFromProject = createRequire(join(input.root, 'package.json'));
-  const { chromium } = requireFromProject('@playwright/test') as typeof import('@playwright/test');
+  const { chromium, expect } = requireFromProject('@playwright/test') as typeof import('@playwright/test');
   await mkdir(input.artifactRoot, { recursive: true });
   const fixture = input.fixture ? await loadTestFixture(input.root, input.fixture) : undefined;
   if (fixture && fixture.digest !== input.fixtureDigest) throw new Error('The approved fixture changed before the test started.');
   const mockResponses = new Map(fixture?.responses.map((item) => [item.path, item]));
   const target = new URL(input.url);
+  const smoke = input.kind === 'performance' || input.kind === 'accessibility' ? fixture?.smoke : undefined;
+  if (smoke && (!input.confineScenario || !['localhost', '127.0.0.1', '[::1]'].includes(target.hostname))) {
+    throw new Error('Keyboard smoke checks require an approved loopback fixture.');
+  }
   const browser = await chromium.launch({ headless: input.kind !== 'record-flow' });
   const findings: Finding[] = []; const artifacts: Array<{ id: string; name: string; kind: 'screenshot' | 'trace' | 'diff' | 'test' | 'log'; size: number }> = [];
   const startedAt = input.startedAt;
@@ -32,11 +37,19 @@ async function main(): Promise<void> {
     for (const viewport of viewports) {
       const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, storageState: undefined,
         acceptDownloads: false, ...(input.confineScenario ? { serviceWorkers: 'block' as const } : {}) });
+      if (smoke) await context.routeWebSocket('**/*', (route) => { void route.close(); });
       let redirected = false;
+      let blockedRequests = 0;
       if (input.confineScenario || fixture) {
         await context.route('**/*', async (route) => {
           const request = route.request();
           const url = new URL(request.url());
+          if (smoke && (url.origin !== target.origin || !['GET', 'HEAD'].includes(request.method())
+            || request.isNavigationRequest() && url.href !== target.href)) {
+            blockedRequests++;
+            await route.abort();
+            return;
+          }
           if (input.confineScenario && request.isNavigationRequest()) {
             if (url.origin !== target.origin || request.method() !== 'GET') { await route.abort(); return; }
             const response = await route.fetch({ maxRedirects: 0, timeout: 15_000 });
@@ -136,7 +149,24 @@ async function main(): Promise<void> {
           return { domContentLoaded: nav?.domContentLoadedEventEnd ?? 0, load: nav?.loadEventEnd ?? 0, lcp: lcpEntries.at(-1)?.startTime ?? 0, cls: shifts.filter((item) => !item.hadRecentInput).reduce((sum, item) => sum + (item.value ?? 0), 0), inp: null };
         });
         const passes = metrics.lcp <= 2500 && metrics.cls <= 0.1;
-        findings.push({ status: passes ? 'passed' : 'attention', title: 'Core Web Vitals', cause: `LCP ${Math.round(metrics.lcp)} ms · CLS ${metrics.cls.toFixed(3)} · INP needs an interaction`, evidence: JSON.stringify(metrics), recommendation: passes ? 'Exercise a key interaction to measure INP.' : 'Profile the largest content paint and layout shifts, then re-run.' });
+        findings.push({ status: passes ? 'passed' : 'attention', title: 'Core Web Vitals',
+          cause: `LCP ${Math.round(metrics.lcp)} ms · CLS ${metrics.cls.toFixed(3)}${smoke ? '' : ' · INP needs an interaction'}`,
+          evidence: JSON.stringify(metrics), recommendation: passes ? smoke ? 'Review the measured keyboard steps below.' : 'Exercise a key interaction to measure INP.'
+            : 'Profile the largest content paint and layout shifts, then re-run.' });
+      }
+      if (smoke && response?.ok()) {
+        const result = await runKeyboardSmoke(page, expect, target.href, smoke);
+        const latency = smokeLatency(result.samples);
+        const platform = `${viewport.name} viewport simulation · ${viewport.width} × ${viewport.height} CSS pixels`;
+        findings.push({ status: result.issue ? 'failed' : 'passed', title: `${viewport.name} keyboard smoke check`,
+          cause: result.issue ?? `${result.runs.length} repeats met the ${smoke.budgetMs} ms budget.`,
+          evidence: `${platform}. ${result.runs.length}/${smoke.repeats} repeats completed. ${latency
+            ? `${result.samples.length} checked steps. Median ${latency.median} ms and 90th percentile ${latency.p90} ms from key press to the expected state.`
+            : 'No step finished.'}`,
+          recommendation: result.issue ? 'Inspect the failed focus or visibility step and rerun the same fixture.' : 'Use a real device for device-specific behavior.' });
+        if (blockedRequests) findings.push({ status: 'attention', title: `${viewport.name} blocked requests`,
+          cause: `${blockedRequests} requests were outside the read-only fixture scope.`, evidence: platform,
+          recommendation: 'Keep the fixture on its selected route and provide synthetic responses for required data.' });
       }
       if (input.kind === 'record-flow') {
         await page.pause();

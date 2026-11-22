@@ -23,7 +23,7 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
       ...(scenario ? { devServerUrl: 'http://127.0.0.1:5173/' } : {}) };
     const commit = 'a'.repeat(40);
     let bridge: { state: string; browserVersion: string; extensionVersion?: string; project?: typeof project; pairingCode?: string; pairingExpiresAt?: number; activity?: string; vscodeVersion?: string; instanceId?: string } = connected
-      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: scenario ? '0.4.5' : '0.4.3', vscodeVersion: '1.95.3', instanceId: 'abad0000-0000-4000-8000-000000000010', project }
+      ? { state: 'connected', browserVersion: '0.6.0', extensionVersion: scenario ? '0.4.6' : '0.4.3', vscodeVersion: '1.95.3', instanceId: 'abad0000-0000-4000-8000-000000000010', project }
       : { state: 'disconnected', browserVersion: '0.4.0' };
     let ui: Record<string, unknown> = {};
     let server: Record<string, unknown> = { phase: 'stopped', expectedUrl: 'http://localhost:5173/' };
@@ -67,7 +67,7 @@ async function installMock(page: import('@playwright/test').Page, workspaceId: '
           document.documentElement.dataset.replayedReport = String(payload.reportId);
           return report;
         }
-        if (action === 'test.configuration') return { fixtures: ['catalogue.json'] };
+        if (action === 'test.configuration') return { fixtures: ['catalogue.json'], keyboardFixtures: ['catalogue.json'] };
         if (action === 'test.run') {
           if (scenario) {
             document.documentElement.dataset.testScenario = JSON.stringify(payload);
@@ -116,6 +116,10 @@ test('sends the exact local route, fixture and selected viewports for baseline c
   await scenario.getByRole('button', { name: 'Compare with baseline' }).click();
   await expect.poll(() => page.locator('html').getAttribute('data-test-scenario')).toBe(JSON.stringify({
     kind: 'baseline-compare', url: 'http://127.0.0.1:5173/catalogue/prices', viewports: ['desktop', 'mobile'], fixture: 'catalogue.json',
+  }));
+  await scenario.getByRole('button', { name: 'Run keyboard smoke check' }).click();
+  await expect.poll(() => page.locator('html').getAttribute('data-test-scenario')).toBe(JSON.stringify({
+    kind: 'performance', url: 'http://127.0.0.1:5173/catalogue/prices', viewports: ['desktop', 'mobile'], fixture: 'catalogue.json',
   }));
   await scenario.getByLabel('Route', { exact: true }).fill('//external.example.test/catalogue');
   await expect(scenario.getByRole('button', { name: 'Save local baseline' })).toBeDisabled();

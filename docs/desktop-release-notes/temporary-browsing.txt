@@ -1,0 +1,1 @@
+Open a temporary browsing window from the browser menu. Website data and history clear when it closes, and bookmarks are kept only after confirmation.
