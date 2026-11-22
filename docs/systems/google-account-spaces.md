@@ -185,6 +185,15 @@ cancellation, `Retry-After`, and jittered exponential retry. Token refresh is
 coalesced per account. Writes use single-use capabilities bound to account,
 service, normalized payload and optional AI source revision.
 
+The Account Space manager offers an on-demand overview in the active, unlocked
+Google space. It shows only enabled read modules. Gmail displays recent inbox
+headers, Drive displays allowed files, and Calendar displays upcoming primary
+calendar events. Each section loads up to 10 items per page and 50 per visit.
+Results and paging state stay in memory. Original links open in the same space.
+This view uses the existing grants and does not request expanded access.
+See [Review Google actions](../google-action-review.md) for replies, shares,
+meeting invitations and encrypted retry receipts.
+
 ## Permissions
 
 Decisions key on Account Space UUID, exact HTTPS origin and capability. `once`
@@ -197,6 +206,17 @@ remain operating-system user-gesture pickers. Downloads use the same decision
 model outside Banking.
 
 ## Encrypted Drive backup
+
+Before uploading, compare this computer's counts with the latest encrypted
+backup and the counts a merge would produce. The confirmation applies to the
+reviewed local data and remote file revision. If either changes, start a new
+review. The newest encrypted backup keeps up to two earlier generations within
+the existing 8 MiB limit. Choose an earlier generation in Restore to review its
+items before adding them. Only ciphertext goes to Drive.
+
+New backups default to a local 14-day reminder. Choose 7, 14 or 30 days, or turn
+it off in the Account Space manager. A due reminder appears on New Tab in the
+owning, unlocked space. Saving a backup advances the reminder date.
 
 Backup uses Node `crypto` AES-256-GCM with a random 256-bit recovery key and a
 versioned authenticated envelope. The recovery code is shown once and must be
@@ -264,6 +284,14 @@ No live-Google success claim is valid without completing step 6 privately.
 Chrome import, bookmark folders and the bookmark bar are implemented and scoped
 to the explicitly selected Account Space. Chrome Sync is not implemented or
 advertised, and imports intentionally exclude live sessions and Google tokens.
+
+**Import from Chrome** suggests a destination by matching a local profile name
+to an unlocked Account Space in the current workspace. A destination remains
+explicit. Bookmarks and history go to that space. Search engine, Home page,
+and startup settings are separate opt-ins for the workspace. The local
+receipt records an opaque profile key and destination ID so the same detected
+profile does not import twice. A complete undo within the current session
+reopens that profile for import. Changed bookmarks and settings stay in place.
 
 For migration rollback, close the app, keep every timestamped recovery file,
 choose **Restore v1** in the recovery screen, and restart. Never rename an

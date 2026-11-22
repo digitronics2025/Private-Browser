@@ -1,0 +1,1 @@
+Pair two Windows devices for encrypted bookmark sync and review deletions and conflicts before updating the shared library.

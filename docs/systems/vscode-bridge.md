@@ -9,7 +9,7 @@ verified_at: dcd6823a
 
 # VS Code Bridge
 
-> Last verified: 2026-09-25
+> Last verified: 2026-11-21
 
 ## Agent Brief
 
@@ -129,10 +129,29 @@ Chromium DevTools remain available only on non-protected Development pages.
 Element selection uses Electron's main-process `webContents.debugger` CDP
 session without exposing a remote-debugging socket. When native DevTools already
 owns the debugger, the same bounded evaluation runs through the main process.
-Selectors contain only IDs, tag names, and a few classes. Route, framework,
-viewport, console sources, failed requests, active editor, and confidence labels
-are presented without claiming an exact React component when only a nearest
-match exists.
+Selectors contain only IDs, tag names, and a few classes. The inspector groups
+request failures by sanitized URL, method, type and outcome for the current tab.
+Each group shows its count and first and last occurrence. Source opening requires
+companion 0.4.4, the selected project's running local server and a confirmed
+workspace file for a direct HTML route or explicit asset reference. The companion
+rechecks the short-lived file reference and project grant on open. Other elements
+show the available source confidence and keep opening disabled.
+
+With companion 0.4.5, **Local test scenario** runs an exact relative route with
+the chosen desktop, tablet and mobile viewports. An optional synthetic fixture
+is a file in `private-browser-fixtures/` inside the approved project. A fixture
+uses `{"version":1,"responses":[{"path":"/api/items","status":200,"json":[]}]}`.
+Use up to 20 same-origin GET data responses in a file under 64 KiB. The runner
+rechecks the fixture digest before using it and blocks service workers for the
+isolated scenario. Keep fixture data free of credentials. See
+[Keyboard smoke checks](../developer-keyboard-smoke.md) for saved focus checks
+and repeat timing on simulated viewports.
+
+**Save local baseline** captures screenshots in the normal local report store.
+**Compare with baseline** requires the same project, route, fixture digest and
+viewport set. The comparison keeps the exact source report for reruns. A
+document that loads while background requests keep running produces a separate
+attention finding. A redirect or document load failure remains a failed check.
 
 Quick Test and Test Everything execute approved project checks. Current Page,
 Responsive, Accessibility, Performance, Record Flow, Live Website, and
@@ -176,13 +195,20 @@ open in VS Code.
 Users can list, open, delete, clear, and change retention (1–365 days, 10–500
 reports). Defaults are 30 days and 100 reports.
 
+Bridge 0.4.3 adds **Report history** for currently approved projects. Filter the
+local reports by project, route, date, and result. **Stop test** cancels only the
+selected project’s test. **Rerun with saved settings** reuses the selected
+report’s effective inputs. Replay settings use VS Code’s encrypted local
+storage. Sensitive routes are eligible only within the current session.
+**Review export** shows a JSON summary with counts and result metadata.
+
 ## Packaging and Compatibility
 
-The extension and browser are both version 0.4.0, require protocol v1, and the
-extension declares VS Code `^1.95.0`. `npm run extension:package` creates the
-fixed `build/private-browser-bridge.vsix` embedded in the installer. `npm run
-dist` also emits `release/private-browser-bridge-0.4.0.vsix` as a separate
-private CI artifact. Marketplace publication is intentionally absent.
+The browser and extension use protocol v1. The extension is version 0.4.3 and
+requires VS Code `^1.95.0`. `npm run extension:package` creates the fixed
+`build/private-browser-bridge.vsix` embedded in the installer. `npm run dist`
+also emits `release/private-browser-bridge-0.4.3.vsix` as a separate private CI
+artifact.
 
 Protocol incompatibility requires updating both the browser and VSIX from the
 same release. Remote SSH, Codespaces, WSL extension hosts, virtual workspaces,

@@ -1,14 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { chromeCollections } from './chrome-collections.js';
 import type {
   AccountBrowsingStateV2,
   AccountSpaceHealth,
+  AccountSpaceBrowserTab,
   AccountSpaceId,
   AccountSpaceSummary,
   AddressMatch,
   BrowserStateManifestV2,
   HistoryPage,
   HistoryQuery,
+  PrivacyEvent,
   RuntimeBrowserStateV2,
   StateRecoveryStatus,
   WorkspaceId,
@@ -55,11 +58,30 @@ export class RuntimeStateStore {
     for (const record of initialization.accounts) this.records.set(record.id, record);
     for (const recovery of initialization.accountRecoveries) if (recovery.accountSpaceId) this.recovering.add(recovery.accountSpaceId);
     this.state = combine(initialization.manifest, initialization.accounts, initialization.accountStates, initialization.accountRecoveries, accountStore);
+    if (this.state.ui.historyRetentionDays || this.state.ui.minimalPrivacyLog) {
+      applyBrowsingRetention(this.state);
+      this.queueSave(250);
+    }
     rememberExternalLinkAccount(this.state);
   }
 
   get(): RuntimeBrowserStateV2 {
     return structuredClone(this.state);
+  }
+
+  getTab(tabId: string): AccountSpaceBrowserTab | undefined {
+    const tab = this.state.tabs.find(({ id }) => id === tabId);
+    return tab && { ...tab };
+  }
+
+  /** Clone only the browsing collections that the active chrome can display. */
+  getChromeState(): RuntimeBrowserStateV2 {
+    const state = this.state;
+    const accountSpaceId = state.activeAccountSpaceByWorkspace[state.activeWorkspaceId];
+    if (!accountSpaceId) throw new Error('The active workspace has no Account Space');
+    const icons = state.bookmarkIconsByAccountSpace[accountSpaceId];
+    return structuredClone({ ...state, ...chromeCollections(state, accountSpaceId, state.activeWorkspaceId),
+      bookmarkIconsByAccountSpace: icons ? { [accountSpaceId]: icons } : {} });
   }
 
   isReadOnly(): boolean {
@@ -73,6 +95,18 @@ export class RuntimeStateStore {
   sessionPrivacyPreferences(): { lockOnWindowsSession?: boolean; idleLockMinutes?: number } {
     const { lockOnWindowsSession, idleLockMinutes } = this.state.ui;
     return { lockOnWindowsSession, idleLockMinutes };
+  }
+
+  memorySaverMinutes(): number {
+    return this.state.ui.memorySaverMinutes ?? 0;
+  }
+
+  keepsSiteAwake(accountSpaceId: AccountSpaceId, origin: string): boolean {
+    return this.records.get(accountSpaceId)?.memorySaverExclusions?.includes(origin) === true;
+  }
+
+  offersWordPressSave(accountSpaceId: AccountSpaceId, origin: string): boolean {
+    return this.records.get(accountSpaceId)?.wordPressSaveOrigins?.includes(origin) === true;
   }
 
   addressMatches(accountSpaceId: AccountSpaceId, text: string): AddressMatch[] {
@@ -115,7 +149,7 @@ export class RuntimeStateStore {
 
   partitionFor(id: AccountSpaceId): string {
     const record = this.records.get(id);
-    if (!record || this.state.recovery?.accountSpaceId === id) throw new Error('Account Space is unavailable while it is in recovery');
+    if (!record || this.recovering.has(id)) throw new Error('Account Space is unavailable while it is in recovery');
     return record.partitionKey;
   }
 
@@ -157,6 +191,12 @@ export class RuntimeStateStore {
     if (!this.pendingWrites) return;
     this.persist(this.state);
     this.finishPendingWrites();
+  }
+
+  enableBrowsingProtection(): void {
+    if (this.readOnly || this.recovering.size) throw new Error('Resolve Account Space recovery before enabling browsing encryption.');
+    this.flushPendingWrites();
+    this.persistedStore.enableBrowsingProtection(this.state.accountSpaces.map(({ id }) => id));
   }
 
   private queueSave(delay: number): void {
@@ -233,6 +273,7 @@ export class RuntimeStateStore {
       delete state.activeTabByAccountSpace[id];
       delete state.shortcutsByAccountSpace[id];
       delete state.bookmarkIconsByAccountSpace[id];
+      if (state.bookmarkFoldersByAccountSpace) delete state.bookmarkFoldersByAccountSpace[id];
       if (state.sidePanelsByAccountSpace) delete state.sidePanelsByAccountSpace[id];
       if (state.activeAccountSpaceByWorkspace[account.workspaceId] === id) state.activeAccountSpaceByWorkspace[account.workspaceId] = replacement.id;
     });
@@ -272,6 +313,7 @@ export class RuntimeStateStore {
       ui: next.ui,
       settings: next.settings,
       workspaceSettings: next.workspaceSettings,
+      chromeProfileImports: next.chromeProfileImports,
       routines: next.routines,
     };
     const tabsByAccount = byAccount(next.tabs);
@@ -287,6 +329,7 @@ export class RuntimeStateStore {
         tabs: tabs.map(({ loading: _loading, canGoBack: _back, canGoForward: _forward, favicon: _favicon, developerToolsAllowed: _tools, developerToolsOpen: _toolsOpen, securityWarning: _warning, audible: _audible, muted: _muted, zoomPercent: _zoom, problem: _problem, ...tab }) => tab),
         activeTabId: next.activeTabByAccountSpace[account.id],
         bookmarks: bookmarksByAccount.get(account.id) ?? [],
+        ...(next.bookmarkFoldersByAccountSpace?.[account.id]?.length ? { bookmarkFolders: next.bookmarkFoldersByAccountSpace[account.id] } : {}),
         history: historyByAccount.get(account.id) ?? [],
         ...(next.historyTrimmedByAccountSpace?.[account.id] ? { historyTrimmed: true } : {}),
         ...(next.tabGroupsByAccountSpace?.[account.id]?.length ? { tabGroups: next.tabGroupsByAccountSpace[account.id] } : {}),
@@ -334,7 +377,16 @@ function combine(
   recoveries: StateRecoveryStatus[],
   accountStore: AccountStore,
 ): RuntimeBrowserStateV2 {
-  const accountSpaces = records.map((record) => accountStore.toSummary(record)).sort(accountSort);
+  const recovering = new Set(recoveries.flatMap((recovery) => recovery.accountSpaceId ? [recovery.accountSpaceId] : []));
+  const accountSpaces = records.map((record) => accountStore.toSummary(record));
+  for (const workspace of WORKSPACES) {
+    const id = manifest.activeAccountSpaceByWorkspace[workspace.id];
+    if (id && recovering.has(id) && !accountSpaces.some((account) => account.id === id)) {
+      accountSpaces.push(recoveryAccount(id, workspace.id, workspace.name));
+    }
+  }
+  for (const account of accountSpaces) if (recovering.has(account.id)) account.locked = true;
+  accountSpaces.sort(accountSort);
   const tabs = accountStates.flatMap((state) => state.tabs.map((tab) => ({
     ...tab,
     loading: false,
@@ -344,6 +396,12 @@ function combine(
     developerToolsOpen: false,
   })));
   const activeTabByAccountSpace = Object.fromEntries(accountStates.map((state) => [state.accountSpaceId, state.activeTabId]));
+  for (const account of accountSpaces) {
+    if (!recovering.has(account.id)) continue;
+    const tab = recoveryTab(account);
+    tabs.push(tab);
+    activeTabByAccountSpace[account.id] = tab.id;
+  }
   const accountHealth: AccountSpaceHealth[] = records.map((record) => ({
     accountSpaceId: record.id,
     status: record.googleConnection,
@@ -353,7 +411,8 @@ function combine(
     if (!recovery.accountSpaceId) continue;
     accountHealth.push({ accountSpaceId: recovery.accountSpaceId, status: 'account-corrupt', checkedAt: new Date().toISOString(), detailCode: 'record-unreadable' });
   }
-  const firstRecovery = recoveries[0];
+  const activeId = manifest.activeAccountSpaceByWorkspace[manifest.activeWorkspaceId];
+  const firstRecovery = recoveries.find((recovery) => recovery.accountSpaceId === activeId) ?? recoveries[0];
   return {
     version: 2,
     activeWorkspaceId: manifest.activeWorkspaceId,
@@ -362,6 +421,7 @@ function combine(
     tabs,
     activeTabByAccountSpace,
     bookmarks: accountStates.flatMap((state) => state.bookmarks),
+    bookmarkFoldersByAccountSpace: Object.fromEntries(accountStates.flatMap((state) => state.bookmarkFolders?.length ? [[state.accountSpaceId, state.bookmarkFolders]] : [])),
     history: accountStates.flatMap((state) => state.history),
     historyTrimmedByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.historyTrimmed).map((state) => [state.accountSpaceId, true as const])),
     tabGroupsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.tabGroups?.length).map((state) => [state.accountSpaceId, state.tabGroups!])),
@@ -371,6 +431,7 @@ function combine(
     ui: sanitizeUiPreferences(manifest.ui, manifest.bookmarkBarVisible),
     settings: sanitizeBrowserSettings(manifest.settings),
     workspaceSettings: sanitizeWorkspaceSettings(manifest.workspaceSettings),
+    chromeProfileImports: manifest.chromeProfileImports,
     routines: manifest.routines ?? defaultBrowserRoutines(manifest.activeAccountSpaceByWorkspace),
     shortcutsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.shortcuts).map((state) => [state.accountSpaceId, state.shortcuts!])),
     bookmarkIconsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.bookmarkIcons).map((state) => [state.accountSpaceId, state.bookmarkIcons!])),
@@ -442,41 +503,33 @@ function normalizeRuntimeState(state: RuntimeBrowserStateV2, recovering: Readonl
   for (const removed of retainedHistory.slice(RETAINED_HISTORY_LIMIT)) trimmedAccounts[removed.accountSpaceId] = true;
   state.history = retainedHistory.slice(0, RETAINED_HISTORY_LIMIT);
   state.privacyLog = state.privacyLog.slice(0, 100);
+  applyBrowsingRetention(state);
+}
+
+export function applyBrowsingRetention(state: Pick<RuntimeBrowserStateV2, 'ui' | 'history' | 'historyTrimmedByAccountSpace' | 'privacyLog'>, now = Date.now()): void {
+  if (state.ui.historyRetentionDays) {
+    const cutoff = now - state.ui.historyRetentionDays * 86_400_000;
+    const trimmed = state.historyTrimmedByAccountSpace ??= {};
+    state.history = state.history.filter(({ visitedAt, accountSpaceId }) => {
+      if (Date.parse(visitedAt) >= cutoff) return true;
+      trimmed[accountSpaceId] = true;
+      return false;
+    });
+  }
+  if (!state.ui.minimalPrivacyLog) return;
+  const labels: Record<PrivacyEvent['kind'], string> = { 'local-read': 'Local access', 'cloud-approved': 'Approved cloud access', blocked: 'Blocked action', vault: 'MyVault event' };
+  state.privacyLog = state.privacyLog.flatMap(({ id, at, kind, accountSpaceId, service }) => {
+    const timestamp = Date.parse(at);
+    if (!Object.hasOwn(labels, kind) || !Number.isFinite(timestamp)) return [];
+    const minute = new Date(Math.floor(timestamp / 60_000) * 60_000).toISOString();
+    return [{ id, at: minute, kind, title: labels[kind], detail: '', accountSpaceId, service }];
+  });
 }
 
 function recoveryRuntimeState(recovery: StateRecoveryStatus): RuntimeBrowserStateV2 {
   const now = new Date().toISOString();
-  const accountSpaces = WORKSPACES.map((workspace, order) => ({
-    id: randomUUID() as AccountSpaceId,
-    workspaceId: workspace.id,
-    label: `${workspace.name} recovery`,
-    color: 'slate' as const,
-    order,
-    kind: 'local' as const,
-    createdAt: now,
-    lastUsedAt: now,
-    locked: true,
-    googleConnection: 'locked' as const,
-    websiteStatus: 'unknown' as const,
-    enabledModules: [],
-    grantedScopes: [],
-    backupEnabled: false,
-    backupIncludesOpenTabs: false,
-    backupIncludesHistory: false,
-  }));
-  const tabs = accountSpaces.map((account) => ({
-    id: randomUUID(),
-    workspaceId: account.workspaceId,
-    accountSpaceId: account.id,
-    title: 'Recovery',
-    url: 'private://home',
-    isHome: true,
-    loading: false,
-    canGoBack: false,
-    canGoForward: false,
-    developerToolsAllowed: false,
-    developerToolsOpen: false,
-  }));
+  const accountSpaces = WORKSPACES.map((workspace, order) => recoveryAccount(randomUUID() as AccountSpaceId, workspace.id, workspace.name, order));
+  const tabs = accountSpaces.map(recoveryTab);
   return {
     version: 2,
     activeWorkspaceId: 'digitronics',
@@ -495,6 +548,22 @@ function recoveryRuntimeState(recovery: StateRecoveryStatus): RuntimeBrowserStat
     accountSpaces,
     accountHealth: accountSpaces.map((account) => ({ accountSpaceId: account.id, status: 'locked', checkedAt: now })),
     recovery,
+  };
+}
+
+function recoveryAccount(id: AccountSpaceId, workspaceId: WorkspaceId, name: string, order = 0): AccountSpaceSummary {
+  const now = new Date().toISOString();
+  return {
+    id, workspaceId, label: `${name} recovery`, color: 'slate', order, kind: 'local', createdAt: now, lastUsedAt: now,
+    locked: true, googleConnection: 'locked', websiteStatus: 'unknown', enabledModules: [], grantedScopes: [],
+    backupEnabled: false, backupIncludesOpenTabs: false, backupIncludesHistory: false,
+  };
+}
+
+function recoveryTab(account: AccountSpaceSummary): AccountSpaceBrowserTab {
+  return {
+    id: randomUUID(), workspaceId: account.workspaceId, accountSpaceId: account.id, title: 'Recovery', url: 'private://home',
+    isHome: true, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false,
   };
 }
 

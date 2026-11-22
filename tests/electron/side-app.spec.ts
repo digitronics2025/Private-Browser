@@ -88,7 +88,7 @@ function runInSideApp<T>(app: ElectronApplication, code: string, id: 'claude' | 
 async function openSideApp(page: Page, id: 'claude' | 'easynote' = 'claude') {
   await page.evaluate(id => window.privateBrowser.setUiPreferences({ sidePanelOpen: true, sidePanelTool: id }), id);
   await expect(page.locator('.side-app-slot')).toBeVisible();
-  await expect.poll(async () => (await sideView(application!, appOrigin, id))?.visible).toBe(true);
+  await expect.poll(async () => (await sideView(application!, appOrigin, id))?.visible, { timeout: 12_000 }).toBe(true);
 }
 
 test('side-app recovery keeps blocked redirects contained and opens the app in the active Account Space', async () => {

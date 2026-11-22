@@ -1,0 +1,1 @@
+Keep menus responsive while tabs load and files download. The Downloads panel updates progress without refreshing the rest of the browser.

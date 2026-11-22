@@ -22,5 +22,6 @@ export default defineConfig({
   build: {
     sourcemap: false,
     outDir: 'dist',
+    rollupOptions: { input: { browser: 'index.html', pdf: 'pdf-view.html' } },
   },
 });

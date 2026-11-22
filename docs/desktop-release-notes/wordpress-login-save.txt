@@ -1,0 +1,1 @@
+Opt in to saving verified WordPress sign-ins and password changes in MyVault, with a site-specific opt-out in each Account Space.

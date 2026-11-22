@@ -1,5 +1,6 @@
-import type { BrowserSettings, SpellcheckLanguage } from './browser-settings.js';
+import type { BrowserSettings, BrowserSettingsPatch, SpellcheckLanguage } from './browser-settings.js';
 import type { AccountPanelPreferences, PinnablePanelTool, UiPreferences } from './ui-preferences.js';
+import type { BrowsingProtectionStatus } from './browsing-protection.js';
 
 export type { SideAppCommand, SideAppId, SideAppRect, SideAppSnapshot, SideAppStatus } from './side-app-registry.js';
 import type { SideAppSnapshot } from './side-app-registry.js';
@@ -88,6 +89,9 @@ export interface AccountSpaceSummary {
   enabledModules: GoogleModule[];
   grantedScopes: string[];
   backupEnabled: boolean;
+  backupLastUploadedAt?: string;
+  backupReminderDays?: BackupReminderDays;
+  backupReminderAt?: string;
   backupIncludesOpenTabs: boolean;
   backupIncludesHistory: boolean;
 }
@@ -184,6 +188,7 @@ export interface PermissionPromptResponse {
 export interface GoogleOperationResult<T = unknown> {
   ok: boolean;
   data?: T;
+  receipt?: GoogleActionReceipt;
   error?: {
     code:
       | 'GOOGLE_CONFIGURATION_REQUIRED'
@@ -203,6 +208,19 @@ export interface GoogleOperationResult<T = unknown> {
   };
 }
 
+export interface GoogleActionReceipt {
+  id: string;
+  state: 'pending' | 'confirmed' | 'unconfirmed';
+  at: string;
+  providerId?: string;
+}
+
+export interface GmailReplyDraft {
+  sourceRevision: string;
+  recipient: string;
+  subject: string;
+}
+
 interface BackupRestoreCount { added: number; duplicates: number; capacityExceeded: number }
 
 export interface BackupRestorePreview {
@@ -211,7 +229,28 @@ export interface BackupRestorePreview {
   accountLabel: string;
   workspaceId: WorkspaceId;
   createdAt: string;
-  counts: { bookmarks: BackupRestoreCount; history: BackupRestoreCount; tabs: BackupRestoreCount };
+  generations?: BackupGenerationSummary[];
+  counts: { bookmarks: BackupRestoreCount; folders?: BackupRestoreCount; history: BackupRestoreCount; tabs: BackupRestoreCount };
+}
+
+export interface BackupGenerationSummary {
+  createdAt: string;
+  bookmarks: number;
+  folders: number;
+  tabs: number;
+  history: number;
+}
+
+export type BackupReminderDays = 0 | 7 | 14 | 30;
+
+export interface BackupUploadPreview {
+  id: string;
+  accountSpaceId: AccountSpaceId;
+  local: BackupGenerationSummary;
+  remote?: BackupGenerationSummary;
+  merged?: BackupGenerationSummary;
+  generations: BackupGenerationSummary[];
+  conflict: boolean;
 }
 
 export type GoogleService = 'gmail' | 'drive' | 'calendar' | 'contacts' | 'backup';
@@ -244,6 +283,23 @@ export interface GmailMessageHeader {
 export interface GmailOverview {
   unreadCount: number;
   recent: GmailMessageHeader[];
+}
+
+export type GoogleOverviewService = 'gmail' | 'drive' | 'calendar';
+
+export interface GoogleOverviewItem {
+  id: string;
+  title: string;
+  detail?: string;
+  date?: string;
+  original?: string;
+}
+
+export interface GoogleOverviewPage {
+  items: GoogleOverviewItem[];
+  page: number;
+  next?: string;
+  limited: boolean;
 }
 
 export interface DriveFileSummary {
@@ -306,6 +362,7 @@ export interface AccountBrowsingStateV2 {
   tabs: Array<Pick<AccountSpaceBrowserTab, 'id' | 'workspaceId' | 'accountSpaceId' | 'title' | 'url' | 'isHome' | 'restorePaused' | 'pinned' | 'groupId'>>;
   activeTabId: string;
   bookmarks: AccountSpaceBookmark[];
+  bookmarkFolders?: BookmarkFolder[];
   history: AccountSpaceHistoryEntry[];
   historyTrimmed?: boolean;
   tabGroups?: TabGroup[];
@@ -340,6 +397,10 @@ export interface BookmarkLevelInput {
   path: string[];
 }
 
+export interface BookmarkFolder extends BookmarkLevelInput {
+  orderPath: number[];
+}
+
 export type BookmarkEntryKeyInput = { kind: 'bookmark'; id: string } | { kind: 'folder'; name: string };
 
 export interface BrowserStateManifestV2 {
@@ -355,6 +416,7 @@ export interface BrowserStateManifestV2 {
   /** Optional: builds before 0.7.0 ignore it and fall back to defaults. */
   settings?: BrowserSettings;
   workspaceSettings?: Partial<Record<WorkspaceId, BrowserSettings>>;
+  chromeProfileImports?: Record<string, AccountSpaceId>;
   routines?: BrowserRoutine[];
 }
 
@@ -424,6 +486,7 @@ export interface BrowserTab {
   canGoForward: boolean;
   isHome: boolean;
   restorePaused?: boolean;
+  sleeping?: boolean;
   pinned?: boolean;
   groupId?: string;
   problem?: TabProblem;
@@ -533,6 +596,12 @@ export type DownloadFolderMode = 'ask' | 'automatic' | 'default';
 export interface DownloadFolderStatus { ask: boolean; available: boolean; name?: string }
 export interface DownloadBatchStatus { active: number; completed: number; stopped: number }
 
+export interface DownloadByteProgress {
+  accountSpaceId: AccountSpaceId;
+  revision: number;
+  entries: Pick<DownloadEntry, 'id' | 'receivedBytes' | 'totalBytes'>[];
+}
+
 export type DownloadAction = 'pause' | 'resume' | 'retry' | 'cancel';
 
 export interface PrivacyEvent {
@@ -546,17 +615,24 @@ export interface PrivacyEvent {
 }
 
 export interface BrowserSnapshot {
+  pdfDocument?: import('./pdf-preview.js').PdfDocumentStatus;
+  wordPressSaveSite?: { origin: string; enabled: boolean };
+  browsingProtection?: BrowsingProtectionStatus | 'pending';
+  memorySaverSite?: { origin: string; keptAwake: boolean };
   sessionLock?: 'windows' | 'idle';
   workspaces: Workspace[];
   activeWorkspaceId: WorkspaceId;
   activeTabId: string;
+  splitView?: { leftTabId: string; rightTabId: string; suspended: boolean };
   tabs: BrowserTab[];
   bookmarks: Bookmark[];
+  bookmarkFolders?: BookmarkFolder[];
   history: HistoryEntry[];
   downloads: DownloadEntry[];
   downloadHistory?: DownloadHistoryStatus;
   downloadFolder?: DownloadFolderStatus;
   downloadBatch?: DownloadBatchStatus;
+  downloadProgressRevision?: number;
   sidePanelPins?: PinnablePanelTool[];
   managedUpdate?: ManagedUpdateStatus;
   privacyLog: PrivacyEvent[];
@@ -619,7 +695,14 @@ export interface ChromeProfileSource {
   isDefault: boolean;
   hasBookmarks: boolean;
   hasHistory: boolean;
+  hasPreferences?: boolean;
+  suggestedAccountSpaceId?: AccountSpaceId;
+  imported?: boolean;
+  importedInto?: AccountSpaceId;
 }
+
+export type ChromeSettingChoice = 'search' | 'home' | 'startup';
+export type ChromeSettingsSelection = Partial<Record<ChromeSettingChoice, boolean>>;
 
 export interface ChromeImportOptions {
   profileId: string;
@@ -627,12 +710,14 @@ export interface ChromeImportOptions {
   accountSpaceId: AccountSpaceId;
   bookmarks: boolean;
   history: boolean;
+  settings?: ChromeSettingsSelection;
 }
 
 export interface ChromeImportResult {
   imported: { bookmarks: number; history: number; passwords: number };
   skipped: { bookmarks: number; history: number; passwords: number };
   warnings: string[];
+  appliedSettings?: ChromeSettingChoice[];
 }
 
 export interface ChromeImportReview {
@@ -645,6 +730,7 @@ export interface ChromeImportReview {
   folders: Array<{ location: Bookmark['location']; path: string[]; count: number }>;
   moreFolders: number;
   historyRange?: { from: string; through: string };
+  settingsPatch?: BrowserSettingsPatch;
 }
 
 export interface RuntimeBrowserStateV2 {
@@ -655,6 +741,7 @@ export interface RuntimeBrowserStateV2 {
   tabs: AccountSpaceBrowserTab[];
   activeTabByAccountSpace: Record<string, string>;
   bookmarks: AccountSpaceBookmark[];
+  bookmarkFoldersByAccountSpace?: Record<string, BookmarkFolder[]>;
   history: AccountSpaceHistoryEntry[];
   historyTrimmedByAccountSpace?: Record<string, true>;
   tabGroupsByAccountSpace?: Record<string, TabGroup[]>;
@@ -664,6 +751,7 @@ export interface RuntimeBrowserStateV2 {
   ui: UiPreferences;
   settings: BrowserSettings;
   workspaceSettings?: Partial<Record<WorkspaceId, BrowserSettings>>;
+  chromeProfileImports?: Record<string, AccountSpaceId>;
   routines?: BrowserRoutine[];
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
   bookmarkIconsByAccountSpace: Record<string, Record<string, string>>;
@@ -679,6 +767,7 @@ export interface AiPagePreview {
   tabId: string;
   service: 'browser' | 'gmail' | 'drive' | 'calendar' | 'contacts';
   sourceRevision: string;
+  capturedAt?: string;
   sourceUrl: string;
   title: string;
   url: string;
@@ -776,6 +865,8 @@ export interface DeveloperConsoleEntry {
 
 export interface DeveloperNetworkIssue {
   at: string;
+  firstAt?: string;
+  count?: number;
   method: string;
   resourceType: string;
   url: string;
@@ -809,9 +900,9 @@ export type DeveloperBridgeAction =
   | 'project.open' | 'project.revision' | 'source.open'
   | 'server.discover' | 'server.status' | 'server.start' | 'server.stop' | 'server.restart'
   | 'inspect.page' | 'inspect.open-source'
-  | 'test.run' | 'test.cancel' | 'test.rerun' | 'test.save-artifact'
-  | 'ai.handoff' | 'ai.apply-edits'
-  | 'reports.list' | 'reports.get' | 'reports.delete' | 'reports.clear' | 'reports.open' | 'reports.retention';
+  | 'test.configuration' | 'test.run' | 'test.cancel' | 'test.rerun' | 'test.save-artifact'
+  | 'ai.handoff' | 'ai.apply-edits' | 'ai.review-patch' | 'ai.apply-patch' | 'ai.undo-patch' | 'ai.rerun-patch'
+  | 'reports.list' | 'reports.search' | 'reports.get' | 'reports.delete' | 'reports.clear' | 'reports.open' | 'reports.retention';
 
 export interface DeveloperPageInfo {
   route: string;
@@ -820,7 +911,9 @@ export interface DeveloperPageInfo {
   selector?: string;
   element?: string;
   sourcePath?: string;
+  sourceReference?: string;
   confidence?: 'exact' | 'source-map' | 'nearest';
+  failures?: DeveloperNetworkIssue[];
 }
 
 export interface VaultItemInput {
@@ -850,6 +943,21 @@ export interface VaultStatus {
   /** 'enrolled' offers Windows Hello unlock; 'available' offers turning it on. */
   platformUnlock?: 'unavailable' | 'available' | 'enrolled';
   generation?: number;
+  conflictRecoveryAvailable?: boolean;
+}
+
+export interface VaultConflictSide {
+  updatedAt: string;
+  entries: number;
+  changes: { id: string; label: string; username: string; kind: 'only-copy' | 'changed' }[];
+}
+
+export interface VaultConflictReview {
+  id: string;
+  cloudVersion: number;
+  local: VaultConflictSide;
+  cloud: VaultConflictSide;
+  itemChoices?: import('./myvault/conflict-items.js').VaultEntryDifference[];
 }
 
 export type VaultFillReadiness = 'ready' | 'locked' | 'connect' | 'no-match' | 'unsupported' | 'manual' | 'choose-login' | 'unavailable';
@@ -949,6 +1057,18 @@ export interface ControlCenterTask {
   updatedAt: string;
   /** Where the task opens in the Control Center dashboard. */
   dashboardUrl: string;
+  browserContext?: {
+    route?: string;
+    routeMatch: boolean;
+    capturedAt: string;
+    receipt?: ControlCenterEvidenceReceipt;
+  };
+}
+
+export interface ControlCenterEvidenceReceipt {
+  name: string;
+  capturedAt: string;
+  attachedAt: string;
 }
 
 export interface ControlCenterSendInput {

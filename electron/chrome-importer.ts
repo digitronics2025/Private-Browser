@@ -3,10 +3,15 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import type { AccountSpaceId, Bookmark, ChromeImportResult, ChromePasswordIssue, ChromePasswordSkipReason, ChromeProfileSource, HistoryEntry, VaultItemInput, WorkspaceId } from './types.js';
+import type { AccountSpaceId, Bookmark, BookmarkFolder, ChromeImportResult, ChromePasswordIssue, ChromePasswordSkipReason, ChromeProfileSource, HistoryEntry, VaultItemInput, WorkspaceId } from './types.js';
 import { isAllowedRemoteUrl } from './security.js';
+import { MAX_BOOKMARK_FOLDERS, validateBookmarkFolders } from './bookmark-tree.js';
+import type { BrowserSettingsPatch } from './browser-settings.js';
+import type { ChromeSettingChoice, ChromeSettingsSelection } from './types.js';
+import { selectedChromeSettings } from './chrome-profile-preferences.js';
 
 const MAX_BOOKMARK_FILE_BYTES = 32 * 1024 * 1024;
+const MAX_CHROME_PREFERENCE_BYTES = 8 * 1024 * 1024;
 const MAX_IMPORTED_BOOKMARKS = 25_000;
 const MAX_BOOKMARK_DEPTH = 20;
 const MAX_IMPORTED_HISTORY = 10_000;
@@ -30,8 +35,10 @@ interface ProfileRecord extends ChromeProfileSource {
 
 export interface ChromeProfileData {
   bookmarks: Bookmark[];
+  folders?: BookmarkFolder[];
   history: HistoryEntry[];
   result: ChromeImportResult;
+  settingsPatch?: BrowserSettingsPatch;
 }
 
 function chromeUserDataDirectory(platform = process.platform): string {
@@ -62,10 +69,11 @@ function detectProfileRecords(userDataDirectory = chromeUserDataDirectory()): Pr
         isDefault: entry.name === 'Default',
         hasBookmarks: existsSync(join(directory, 'Bookmarks')),
         hasHistory: existsSync(join(directory, 'History')),
+        hasPreferences: existsSync(join(directory, 'Preferences')),
         directory,
       };
     })
-    .filter((profile) => profile.hasBookmarks || profile.hasHistory)
+    .filter((profile) => profile.hasBookmarks || profile.hasHistory || profile.hasPreferences)
     .sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || left.name.localeCompare(right.name));
 }
 
@@ -80,9 +88,10 @@ function chromeTime(value?: string | number): string {
   return Number.isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
 }
 
-export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): { bookmarks: Bookmark[]; skipped: number; truncated: boolean } {
+export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId): { bookmarks: Bookmark[]; folders: BookmarkFolder[]; skipped: number; truncated: boolean } {
   const parsed = JSON.parse(content) as ChromeBookmarksFile;
   const bookmarks: Bookmark[] = [];
+  const folders: BookmarkFolder[] = [];
   let skipped = 0;
   let truncated = false;
 
@@ -110,16 +119,19 @@ export function parseChromeBookmarks(content: string, workspaceId: WorkspaceId, 
     }
     if (node.type !== 'folder' && !Array.isArray(node.children)) return;
     const nextPath = node.name ? [...folderPath, node.name.slice(0, 200)] : folderPath;
+    if (node.name && folders.length < MAX_BOOKMARK_FOLDERS) folders.push({ location, path: nextPath, orderPath });
     for (const [childOrder, child] of (node.children ?? []).entries()) visit(child, location, nextPath, [...orderPath, childOrder]);
   };
 
   const roots = parsed.roots ?? {};
   for (const [rootName, root] of Object.entries(roots)) {
     const location: Bookmark['location'] = rootName === 'bookmark_bar' ? 'bar' : 'other';
-    const prefix = rootName === 'bookmark_bar' || rootName === 'other' ? [] : [root.name || 'Mobile bookmarks'];
-    for (const [order, child] of (root.children ?? []).entries()) visit(child, location, prefix, [order]);
+    const prefix = rootName === 'bookmark_bar' || rootName === 'other' ? [] : [(root.name || 'Mobile bookmarks').slice(0, 200)];
+    const rootOrder = prefix.length ? [0] : [];
+    if (prefix.length && folders.length < MAX_BOOKMARK_FOLDERS) folders.push({ location, path: prefix, orderPath: rootOrder });
+    for (const [order, child] of (root.children ?? []).entries()) visit(child, location, prefix, [...rootOrder, order]);
   }
-  return { bookmarks, skipped, truncated };
+  return { bookmarks, folders: validateBookmarkFolders(folders), skipped, truncated };
 }
 
 function readBookmarks(directory: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId) {
@@ -128,7 +140,7 @@ function readBookmarks(directory: string, workspaceId: WorkspaceId, accountSpace
   try {
     descriptor = openSync(filePath, 'r');
   } catch (error: unknown) {
-    if (isMissingFile(error)) return { bookmarks: [] as Bookmark[], skipped: 0, truncated: false };
+    if (isMissingFile(error)) return { bookmarks: [] as Bookmark[], folders: [] as BookmarkFolder[], skipped: 0, truncated: false };
     throw error;
   }
   try {
@@ -182,13 +194,27 @@ function isMissingFile(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
-export function readChromeProfile(profileId: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId, includeBookmarks: boolean, includeHistory: boolean, userDataDirectory?: string): ChromeProfileData {
+const SETTING_LABELS: Record<ChromeSettingChoice, string> = { search: 'search engine', home: 'Home page', startup: 'startup settings' };
+
+function readChromePreferences(directory: string): unknown {
+  const descriptor = openSync(join(directory, 'Preferences'), 'r');
+  try {
+    if (fstatSync(descriptor).size > MAX_CHROME_PREFERENCE_BYTES) throw new Error('Chrome preferences file is unusually large');
+    return JSON.parse(readFileSync(descriptor, 'utf8')) as unknown;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+export function readChromeProfile(profileId: string, workspaceId: WorkspaceId, accountSpaceId: AccountSpaceId, includeBookmarks: boolean, includeHistory: boolean,
+  userDataDirectory?: string, choice: ChromeSettingsSelection = {}): ChromeProfileData {
   if (!['digitronics', 'tenten', 'development', 'personal'].includes(workspaceId)) throw new Error('Choose a non-banking workspace for imported Chrome data');
   const profile = detectProfileRecords(userDataDirectory).find((candidate) => candidate.id === profileId);
   if (!profile) throw new Error('Chrome profile was not found');
-  if (!includeBookmarks && !includeHistory) throw new Error('Choose at least one data type to import');
+  const includeSettings = Object.values(choice).some(Boolean);
+  if (!includeBookmarks && !includeHistory && !includeSettings) throw new Error('Choose at least one data type or workspace setting');
   const warnings: string[] = [];
-  let bookmarkData = { bookmarks: [] as Bookmark[], skipped: 0, truncated: false };
+  let bookmarkData = { bookmarks: [] as Bookmark[], folders: [] as BookmarkFolder[], skipped: 0, truncated: false };
   let historyData = { history: [] as HistoryEntry[], skipped: 0 };
   if (includeBookmarks) {
     try { bookmarkData = readBookmarks(profile.directory, workspaceId, accountSpaceId); }
@@ -199,13 +225,25 @@ export function readChromeProfile(profileId: string, workspaceId: WorkspaceId, a
     catch { warnings.push('Chrome history could not be read. Close Chrome and try again.'); }
   }
   if (bookmarkData.truncated) warnings.push(`Only the first ${MAX_IMPORTED_BOOKMARKS.toLocaleString()} bookmarks were accepted for safety.`);
+  let settings: ReturnType<typeof selectedChromeSettings> | undefined;
+  if (includeSettings) {
+    try {
+      settings = selectedChromeSettings(readChromePreferences(profile.directory), choice);
+      for (const key of settings.unavailable) warnings.push(`Chrome ${SETTING_LABELS[key]} could not be imported.`);
+    } catch {
+      warnings.push('Chrome workspace settings could not be read.');
+    }
+  }
   return {
     bookmarks: bookmarkData.bookmarks,
+    folders: bookmarkData.folders,
     history: historyData.history,
+    settingsPatch: settings?.applied.length ? settings.patch : undefined,
     result: {
       imported: { bookmarks: 0, history: 0, passwords: 0 },
       skipped: { bookmarks: bookmarkData.skipped, history: historyData.skipped, passwords: 0 },
       warnings,
+      appliedSettings: settings?.applied.length ? settings.applied : undefined,
     },
   };
 }

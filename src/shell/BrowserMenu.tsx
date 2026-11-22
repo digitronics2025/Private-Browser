@@ -6,6 +6,7 @@ import { SIDE_PANEL_NAMES } from './side-panel-tools';
 
 export interface BrowserMenuActions {
   newTab: () => void;
+  openTemporaryBrowsing?: () => void;
   reopenClosedTab: () => void;
   reopenRecentTab: (id: string) => void;
   undoTabBatch: () => void;
@@ -13,6 +14,7 @@ export interface BrowserMenuActions {
   manageAccounts: () => void;
   openTool: (tool: SidePanelTool) => void;
   toggleBookmark: () => void;
+  bookmarkToFolder: () => void;
   pinCurrentPage?: () => void;
   setUi: (patch: Partial<UiPreferences>) => void;
   exportBookmarks: () => void;
@@ -20,6 +22,8 @@ export interface BrowserMenuActions {
   zoom: (direction: 'in' | 'out' | 'reset') => void;
   toggleFullscreen: () => void;
   print: () => void;
+  openPdf?: () => void;
+  savePdf?: () => void;
   find: () => void;
   copyLink: () => void;
   reviewClaudeExcerpt?: () => void;
@@ -58,6 +62,7 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
   return (
     <MenuSurface anchor={anchor} placement="bottom-end" label="Browser menu" className="browser-menu" onClose={onClose}>
       <MenuItem icon={SquarePlus} label="New tab" shortcut="Ctrl+T" onSelect={actions.newTab} />
+      {actions.openTemporaryBrowsing && <MenuItem icon={Shield} label="New temporary browsing window" onSelect={actions.openTemporaryBrowsing} />}
       <MenuItem icon={RotateCcw} label="Reopen closed tab" shortcut="Ctrl+Shift+T" disabled={!state.canReopenClosedTab} onSelect={actions.reopenClosedTab} />
       {state.closedTabBatch && <MenuItem icon={RotateCcw} label={state.closedTabBatch.groupName ? 'Reopen group ' + state.closedTabBatch.groupName : 'Undo tab close'}
         hint={state.closedTabBatch.count + (state.closedTabBatch.count === 1 ? ' tab' : ' tabs')} onSelect={actions.undoTabBatch} />}
@@ -81,6 +86,7 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
       <MenuItem icon={Download} label={SIDE_PANEL_NAMES.downloads} shortcut="Ctrl+J" onSelect={() => actions.openTool('downloads')} />
       <SubmenuItem id="bookmarks" icon={Star} label="Bookmarks">
         <MenuItem icon={Star} label={bookmarked ? 'Remove bookmark' : 'Bookmark this tab'} shortcut="Ctrl+D" disabled={tab.isHome} onSelect={actions.toggleBookmark} />
+        <MenuItem icon={Star} label="Bookmark this tab in a folder…" disabled={tab.isHome} onSelect={actions.bookmarkToFolder} />
         {actions.pinCurrentPage && <MenuItem label="Pin current page to New Tab" onSelect={actions.pinCurrentPage} />}
         <SubmenuItem id="bookmark-bar-mode" label="Bookmarks bar">
           {BAR_MODES.map((mode) => <MenuItem key={mode.id} role="menuitemradio" checked={ui.bookmarkBarMode === mode.id} label={mode.label} onSelect={() => actions.setUi({ bookmarkBarMode: mode.id })} />)}
@@ -101,8 +107,10 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
         <button type="button" role="menuitem" aria-label="Full screen" title="Full screen (F11)" onClick={() => { actions.toggleFullscreen(); onClose(); }}><Maximize2 size={15} /></button>
       </div>
       <MenuSeparator />
-      <MenuItem icon={Printer} label="Print…" shortcut="Ctrl+P" disabled={tab.isHome} onSelect={actions.print} />
-      <MenuItem icon={Search} label="Find…" shortcut="Ctrl+F" disabled={tab.isHome} onSelect={actions.find} />
+      {actions.openPdf && <MenuItem icon={Link2} label={state.pdfDocument?.mode === 'protected' ? 'Open protected preview' : 'Open PDF in new tab'} onSelect={actions.openPdf} />}
+      {actions.savePdf && <MenuItem icon={Download} label="Save PDF…" onSelect={actions.savePdf} />}
+      <MenuItem icon={Printer} label="Print…" shortcut="Ctrl+P" disabled={tab.isHome || state.pdfDocument?.mode === 'protected'} onSelect={actions.print} />
+      <MenuItem icon={Search} label="Find…" shortcut="Ctrl+F" disabled={tab.isHome || state.pdfDocument?.mode === 'protected' && !state.pdfDocument.canOpen} onSelect={actions.find} />
       <MenuItem icon={Link2} label="Copy link" disabled={tab.isHome} onSelect={actions.copyLink} />
       <SubmenuItem id="more-tools" icon={Wrench} label="More tools">
         <MenuItem icon={Code2} label="Developer tools" shortcut="F12" disabled={!tab.developerToolsAllowed} onSelect={actions.toggleDeveloperTools} />

@@ -28,11 +28,23 @@ export const bridgeMethodSchema = z.enum([
   'project.list', 'project.authorize', 'project.inspect', 'project.open', 'project.revision', 'source.open',
   'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart',
   'inspect.page', 'inspect.open-source',
-  'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact',
-  'ai.handoff', 'ai.apply-edits',
-  'reports.list', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention',
+  'test.configuration', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact',
+  'ai.handoff', 'ai.apply-edits', 'ai.review-patch', 'ai.apply-patch', 'ai.undo-patch', 'ai.rerun-patch',
+  'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention',
 ]);
 export type BridgeMethod = z.infer<typeof bridgeMethodSchema>;
+
+const patchPathSchema = z.string().min(1).max(500).refine((path) => path.split('/').every((segment) =>
+  /^[^.:\\\u0000-\u001f][^:\\\u0000-\u001f]*$/.test(segment) && !/[. ]$/.test(segment) && !/^(?:node_modules|dist|build)$/i.test(segment)));
+export const reviewedPatchInputSchema = z.object({
+  edits: z.array(z.object({ path: patchPathSchema, newText: z.string().max(100_000).refine((value) => !value.includes('\0')) }).strict()).min(1).max(12),
+  reportId: z.string().uuid().optional(),
+}).strict().refine(({ edits }) => new Set(edits.map(({ path }) => path.toLowerCase())).size === edits.length
+  && new TextEncoder().encode(JSON.stringify(edits)).byteLength <= 100_000, 'Use distinct workspace files and a patch under 100 kB');
+export const reviewedPatchResultSchema = z.object({
+  id: z.string().uuid(), files: z.array(patchPathSchema).min(1).max(12), reportId: z.string().uuid().optional(),
+}).strict();
+export type ReviewedPatchResult = z.infer<typeof reviewedPatchResultSchema>;
 
 export const projectSummarySchema = z.object({
   id: z.string().min(8).max(128), name: z.string().min(1).max(200), path: z.string().min(1).max(2_000),
@@ -69,6 +81,20 @@ export function localDevelopmentAddress(value: string): URL | undefined {
 }
 
 const localDevelopmentAddressSchema = z.string().max(512).refine((value) => Boolean(localDevelopmentAddress(value)));
+export const inspectionSourceSchema = z.object({
+  reference: z.string().uuid(),
+  path: z.string().min(1).max(500),
+});
+
+export function inspectionSourcePath(pathname: string): string | undefined {
+  let decoded: string;
+  try { decoded = decodeURIComponent(pathname); } catch { return undefined; }
+  if (decoded.length > 500 || !/^\/[\w./ -]+$/.test(decoded)) return undefined;
+  const segments = decoded.slice(1).split('/');
+  if (segments.some((part) => !part || part === '.' || part === '..' || /^(?:\.git|node_modules)$/i.test(part))) return undefined;
+  return /\.(?:html?|css|[cm]?jsx?|tsx?|vue|svelte)$/i.test(decoded) ? segments.join('/') : undefined;
+}
+
 export const devServerStatusSchema = z.object({
   phase: z.enum(['stopped', 'waiting', 'ready', 'stopping', 'failed', 'missing-command']),
   expectedUrl: localDevelopmentAddressSchema.optional(),
@@ -94,8 +120,13 @@ export const gitRevisionSchema = z.object({
 export type GitRevision = z.infer<typeof gitRevisionSchema>;
 
 export const reportStatusSchema = z.enum(['passed', 'attention', 'failed', 'skipped']);
-export const testKindSchema = z.enum(['quick', 'everything', 'current-page', 'live-site', 'compare', 'responsive', 'accessibility', 'performance', 'record-flow']);
+export const testKindSchema = z.enum(['quick', 'everything', 'current-page', 'live-site', 'compare', 'responsive', 'accessibility', 'performance', 'record-flow', 'baseline', 'baseline-compare']);
 export type TestKind = z.infer<typeof testKindSchema>;
+export const TEST_VIEWPORTS = ['desktop', 'tablet', 'mobile'] as const;
+export const testViewportSchema = z.enum(TEST_VIEWPORTS);
+export type TestViewport = z.infer<typeof testViewportSchema>;
+export const testFixtureSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,39}\.json$/);
+export const testConfigurationSchema = z.object({ fixtures: z.array(testFixtureSchema).max(25), keyboardFixtures: z.array(testFixtureSchema).max(25).optional() }).strict();
 export const reportFindingSchema = z.object({
   status: reportStatusSchema, title: z.string().max(300), cause: z.string().max(2_000), evidence: z.string().max(8_000),
   location: z.string().max(2_000).optional(), recommendation: z.string().max(2_000),
@@ -107,6 +138,38 @@ export const testReportSchema = z.object({
   artifacts: z.array(z.object({ id: z.string().uuid(), name: z.string().min(1).max(300).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/), kind: z.enum(['screenshot', 'trace', 'diff', 'test', 'log']), size: z.number().int().nonnegative().max(MAX_ARTIFACT_BYTES) }).strict()).max(100),
 }).strict();
 export type TestReport = z.infer<typeof testReportSchema>;
+
+export const reportRunParametersSchema = z.object({
+  projectId: z.string().min(8).max(128), kind: testKindSchema,
+  url: z.string().max(4096).optional(), liveUrl: z.string().max(4096).optional(),
+  viewports: z.array(testViewportSchema).min(1).max(TEST_VIEWPORTS.length).refine((value) => new Set(value).size === value.length).optional(),
+  fixture: testFixtureSchema.optional(),
+  fixtureDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  baselineReportId: z.string().uuid().optional(),
+}).strict();
+export type ReportRunParameters = z.infer<typeof reportRunParametersSchema>;
+
+export const reportHistoryQuerySchema = z.object({
+  project: z.string().max(128).optional(), text: z.string().trim().max(160).optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), status: reportStatusSchema.optional(),
+  page: z.number().int().min(1).max(500).default(1),
+}).strict();
+export type ReportHistoryQuery = z.input<typeof reportHistoryQuerySchema>;
+
+export const reportHistoryRowSchema = z.object({
+  id: z.string().uuid(), projectId: z.string().min(8).max(128), projectName: z.string().max(300),
+  title: z.string().max(300), route: z.string().max(300).optional(), kind: testKindSchema, status: reportStatusSchema,
+  finishedAt: z.string().datetime(), findings: z.number().int().min(0).max(200), artifacts: z.number().int().min(0).max(100),
+  replayable: z.boolean(),
+}).strict();
+export type ReportHistoryRow = z.infer<typeof reportHistoryRowSchema>;
+
+export const reportHistoryPageSchema = z.object({
+  page: z.number().int().min(1), total: z.number().int().min(0), pages: z.number().int().min(1),
+  projects: z.array(z.object({ id: z.string().min(8).max(128), name: z.string().max(300) }).strict()).max(50),
+  rows: z.array(reportHistoryRowSchema).max(20),
+}).strict();
+export type ReportHistoryPage = z.infer<typeof reportHistoryPageSchema>;
 
 export const bridgeStatusSchema = z.object({
   state: z.enum(['disconnected', 'pairing', 'connected', 'incompatible', 'error']), browserVersion: z.string().max(50),

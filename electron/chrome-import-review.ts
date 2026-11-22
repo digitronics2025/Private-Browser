@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
-import { bookmarkImportIdentity, planImportedBookmarks } from './bookmark-tree.js';
+import { appendBookmarkFolders, bookmarkImportIdentity, planImportedBookmarks } from './bookmark-tree.js';
 import type { ChromeProfileData } from './chrome-importer.js';
-import type { Bookmark, ChromeImportReview, ChromeImportResult, HistoryEntry } from './types.js';
+import type { Bookmark, BookmarkFolder, ChromeImportReview, ChromeImportResult, HistoryEntry } from './types.js';
 
 type BrowsingData = { bookmarks: Bookmark[]; history: HistoryEntry[] };
 type ReviewSummary = Omit<ChromeImportReview, 'id' | 'accountSpaceId'>;
 
-export function planChromeImport(current: BrowsingData, source: ChromeProfileData): BrowsingData & { summary: ReviewSummary } {
+export function planChromeImport(current: BrowsingData, source: ChromeProfileData, savedFolders: BookmarkFolder[] = []): BrowsingData & { folders: BookmarkFolder[]; summary: ReviewSummary } {
   const planned = planImportedBookmarks(current.bookmarks, source.bookmarks);
   const historyKey = (item: HistoryEntry) => JSON.stringify([item.accountSpaceId, item.url, item.visitedAt]);
   const known = new Set(current.history.map(historyKey));
@@ -21,6 +21,10 @@ export function planChromeImport(current: BrowsingData, source: ChromeProfileDat
     history.push(item);
   }
   const folders = new Map<string, ChromeImportReview['folders'][number]>();
+  const incomingFolders = appendBookmarkFolders(savedFolders, source.folders ?? []).slice(savedFolders.length);
+  for (const folder of incomingFolders) {
+    folders.set(JSON.stringify([folder.location, folder.path]), { location: folder.location, path: folder.path, count: 0 });
+  }
   for (const item of planned.accepted) {
     const key = JSON.stringify([item.location, item.folderPath]);
     const row = folders.get(key);
@@ -36,9 +40,11 @@ export function planChromeImport(current: BrowsingData, source: ChromeProfileDat
       history: source.result.skipped.history + duplicateHistory + historyOverLimit,
     },
     warnings: source.result.warnings,
+    appliedSettings: source.result.appliedSettings,
   };
   return {
     bookmarks: planned.accepted,
+    folders: incomingFolders,
     history,
     summary: {
       result, duplicates: planned.duplicates + duplicateHistory,
@@ -46,12 +52,13 @@ export function planChromeImport(current: BrowsingData, source: ChromeProfileDat
       overLimit: planned.overLimit + historyOverLimit,
       folders: [...folders.values()].slice(0, 50), moreFolders: Math.max(0, folders.size - 50),
       historyRange: range.length ? { from: range[0], through: range.at(-1)! } : undefined,
+      settingsPatch: source.settingsPatch,
     },
   };
 }
 
-export function chromeImportKey(data: BrowsingData): string {
-  return createHash('sha256').update(JSON.stringify([data.bookmarks.map(({ id }) => id), data.history.map(({ id }) => id)])).digest('hex');
+export function chromeImportKey(data: BrowsingData & { folders?: BookmarkFolder[] }): string {
+  return createHash('sha256').update(JSON.stringify([data.bookmarks.map(({ id }) => id), data.history.map(({ id }) => id), data.folders ?? []])).digest('hex');
 }
 
 export function chromeImportBookmarkStamp(bookmark: Bookmark): string {

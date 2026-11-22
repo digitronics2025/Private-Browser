@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ExternalLink, RefreshCcw, Send, ShieldCheck } from 'lucide-react';
 import type { AiPagePreview, BrowserTab, ControlCenterRepository, ControlCenterStatus, ControlCenterTask } from '../../electron/types';
 
@@ -17,16 +17,25 @@ const STATUS_LABEL: Record<string, string> = {
   FAILED: 'Failed', CANCELLED: 'Cancelled', COMPLETED: 'Completed', INTERRUPTED: 'Interrupted',
 };
 
-async function waitForLoad(tabId: string): Promise<void> {
+async function waitForLoad(tabId: string, url: string): Promise<void> {
   const deadline = Date.now() + 20_000;
   // Give the reload a moment to start before watching for it to finish.
   await new Promise((resolve) => setTimeout(resolve, 300));
   while (Date.now() < deadline) {
     const state = await window.privateBrowser.getState();
     const tab = state.tabs.find((item) => item.id === tabId);
-    if (!tab || !tab.loading) return;
+    if (!tab || state.activeTabId !== tabId || tab.url !== url) throw new Error('Return to the original page and check it again.');
+    if (!tab.loading) return;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
+  throw new Error('The original page is still loading. Check it again when it is ready.');
+}
+
+function EvidenceAge({ value }: { value: string }) {
+  const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 60_000));
+  const relative = minutes < 1 ? 'just now' : minutes < 60 ? minutes + ' min ago'
+    : minutes < 1440 ? Math.floor(minutes / 60) + ' h ago' : Math.floor(minutes / 1440) + ' days ago';
+  return <time dateTime={value} title={new Date(value).toLocaleString()}>{relative}</time>;
 }
 
 export function ControlCenterSection({ activeTab, onToast }: { activeTab: BrowserTab; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
@@ -41,7 +50,10 @@ export function ControlCenterSection({ activeTab, onToast }: { activeTab: Browse
   /** The task a preview re-checks; null when the preview reports a new problem. */
   const [recheckFor, setRecheckFor] = useState<ControlCenterTask | null>(null);
   const [tasks, setTasks] = useState<ControlCenterTask[]>([]);
+  const [listError, setListError] = useState('');
   const [busy, setBusy] = useState(false);
+  const refreshId = useRef(0);
+  const activeRefresh = useRef<number>();
 
   const connected = status?.state === 'connected';
 
@@ -53,17 +65,33 @@ export function ControlCenterSection({ activeTab, onToast }: { activeTab: Browse
   };
 
   const refresh = async () => {
-    const next = await window.privateBrowser.getControlCenterStatus();
-    setStatus(next);
-    if (next.state === 'connected') setTasks(await window.privateBrowser.listControlCenterTasks());
+    if (activeRefresh.current !== undefined) return;
+    const id = ++refreshId.current;
+    activeRefresh.current = id;
+    try {
+      const next = await window.privateBrowser.getControlCenterStatus();
+      if (refreshId.current !== id) return;
+      setStatus(next);
+      if (next.state === 'connected') {
+        const latest = await window.privateBrowser.listControlCenterTasks();
+        if (refreshId.current !== id) return;
+        setTasks(latest);
+        setListError('');
+      }
+    } catch {
+      if (refreshId.current === id) setListError('Could not read the latest Control Center status. Retry the connection.');
+    } finally {
+      if (activeRefresh.current === id) activeRefresh.current = undefined;
+    }
   };
 
   useEffect(() => {
-    void refresh().catch(() => undefined);
+    setTasks([]);
+    void refresh();
     // Poll only while this section is on screen.
-    const timer = window.setInterval(() => void refresh().catch(() => undefined), 5000);
-    return () => window.clearInterval(timer);
-  }, []);
+    const timer = window.setInterval(() => void refresh(), 5000);
+    return () => { refreshId.current += 1; activeRefresh.current = undefined; window.clearInterval(timer); };
+  }, [activeTab.id, activeTab.url]);
 
   useEffect(() => {
     if (!connected) return;
@@ -85,6 +113,9 @@ export function ControlCenterSection({ activeTab, onToast }: { activeTab: Browse
     const approval = await window.privateBrowser.approveAiPreview(preview.id);
     if (recheckFor) {
       const result = await window.privateBrowser.recheckControlCenterTask({ approvalToken: approval.token, taskId: recheckFor.id });
+      setTasks((items) => items.map((item) => item.id === recheckFor.id && item.browserContext ? {
+        ...item, browserContext: { ...item.browserContext, capturedAt: result.capturedAt, receipt: result },
+      } : item));
       onToast(`Re-check attached to ${recheckFor.id} (${result.name})`);
     } else {
       const task = await window.privateBrowser.sendToControlCenter({ approvalToken: approval.token, repositoryId, note });
@@ -97,16 +128,19 @@ export function ControlCenterSection({ activeTab, onToast }: { activeTab: Browse
   });
 
   const checkAgain = (task: ControlCenterTask) => run(async () => {
+    const current = (await window.privateBrowser.listControlCenterTasks()).find((item) => item.id === task.id);
+    if (!current?.browserContext?.routeMatch || !DONE.has(current.status)) throw new Error('Open the original route before checking this task.');
     // The tab keeps console and network entries across reloads; a re-check must
     // show only what the page does now, so the old entries go first.
     await window.privateBrowser.clearDeveloperDiagnostics();
     await window.privateBrowser.reload();
-    await waitForLoad(activeTab.id);
+    await waitForLoad(activeTab.id, activeTab.url);
     setRecheckFor(task);
     setPreview(await window.privateBrowser.prepareDeveloperAiPreview({ includeDom: false, includeScreenshot: false }));
   }, 'Page reloaded — review the fresh evidence');
 
-  if (!status) return <div className="bridge-pane"><div className="developer-tip"><ShieldCheck size={16} /><p>Looking for the Control Center on this computer…</p></div></div>;
+  if (!status) return <div className="bridge-pane"><div className="developer-tip"><ShieldCheck size={16} /><p role="status">{listError || 'Looking for the Control Center on this computer…'}</p></div>
+    {listError && <button disabled={busy} onClick={() => void run(refresh)}>Retry</button>}</div>;
 
   return <div className="bridge-pane control-center-pane">
     <div className="bridge-status-card">
@@ -118,6 +152,8 @@ export function ControlCenterSection({ activeTab, onToast }: { activeTab: Browse
       {status.state !== 'not-paired' && <button onClick={() => void run(async () => setStatus(await window.privateBrowser.disconnectControlCenter()), 'Control Center link removed')}>Disconnect</button>}
     </div>
     {status.detail && <p className="control-center-detail" role="status">{status.detail}</p>}
+    {listError && connected && <p className="control-center-detail" role="status">{listError}</p>}
+    {(status.state === 'unreachable' || listError) && <button disabled={busy} onClick={() => void run(refresh)}><RefreshCcw size={14} /> Retry</button>}
 
     {status.state === 'not-paired' && <div className="project-summary control-center-pair">
       <div><small>PAIR</small><strong>Pair with the Control Center</strong><span>In the Control Center open Tools → Connected apps → Pair Private Browser, then type the eight-digit code here. Continue only if the key it shows matches the key shown here after pairing.</span></div>
@@ -139,17 +175,26 @@ export function ControlCenterSection({ activeTab, onToast }: { activeTab: Browse
         {preview.screenshotDataUrl && <img src={preview.screenshotDataUrl} alt="Screenshot that will be sent" />}
         <pre>{preview.text}</pre>
         {preview.dom && <details><summary>Structural DOM</summary><pre>{preview.dom}</pre></details>}
+        {preview.capturedAt && <p>Evidence captured <EvidenceAge value={preview.capturedAt} />.</p>}
         <p className="control-center-detail">It goes only to the Control Center on this computer, as untrusted evidence for its agents. One approval sends it once.</p>
         <div className="bridge-action-row"><button className="primary-button" disabled={busy} onClick={() => void send()}><Send size={13} />{recheckFor ? `Attach to ${recheckFor.id}` : 'Send to Control Center'}</button></div>
       </div>}
+    </>}
 
+    {(connected || tasks.length > 0) && <>
       <div className="control-center-tasks" aria-label="Tasks sent from this browser">
         <small className="control-center-heading">SENT FROM THIS BROWSER</small>
         {tasks.length === 0 ? <p className="control-center-detail">Nothing sent yet.</p> : tasks.slice(0, 6).map((task) => <div className="report-row control-center-task" key={task.id}>
           <span className={DONE.has(task.status) ? (task.status === 'COMPLETED' ? 'passed' : 'failed') : 'running'} />
-          <div><strong>{task.id} · {task.title}</strong><small>{STATUS_LABEL[task.status] ?? task.status}{task.currentStageName && !DONE.has(task.status) ? ` · ${task.currentStageName}` : ''}{task.finalStatus ? ` · ${task.finalStatus === 'READY' ? 'Ready' : 'Needs your action'}` : ''}{task.blocker ? ` · ${task.blocker}` : ''}</small></div>
+          <div><strong>{task.id} · {task.title}</strong><small>{STATUS_LABEL[task.status] ?? task.status}{task.currentStageName && !DONE.has(task.status) ? ` · ${task.currentStageName}` : ''}{task.finalStatus ? ` · ${task.finalStatus === 'READY' ? 'Ready' : 'Needs your action'}` : ''}{task.blocker ? ` · ${task.blocker}` : ''}</small>
+            {task.browserContext && <small>Evidence captured <EvidenceAge value={task.browserContext.capturedAt} /></small>}
+            {task.browserContext?.receipt && <small>Evidence attached · {task.browserContext.receipt.name} · <EvidenceAge value={task.browserContext.receipt.attachedAt} /></small>}
+            {!task.browserContext && DONE.has(task.status) && <small>Original route unavailable in this Account Space</small>}
+          </div>
           <button aria-label={`Open ${task.id} in the Control Center`} onClick={() => void window.privateBrowser.newTab('development', task.dashboardUrl)}><ExternalLink size={12} /></button>
-          {DONE.has(task.status) && <button disabled={busy || !activeTab.developerToolsAllowed} onClick={() => void checkAgain(task)}><RefreshCcw size={12} />Check again</button>}
+          {DONE.has(task.status) && task.browserContext?.routeMatch && <button disabled={!connected || busy || !activeTab.developerToolsAllowed} onClick={() => void checkAgain(task)}><RefreshCcw size={12} />Check again</button>}
+          {task.browserContext?.route && !task.browserContext.routeMatch && <button disabled={busy} onClick={() => void run(() =>
+            window.privateBrowser.newTab('development', task.browserContext!.route))}>Open original page</button>}
         </div>)}
       </div>
     </>}

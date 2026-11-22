@@ -15,8 +15,9 @@ import { isAllowedRemoteUrl } from './security.js';
 import { MAX_ADDRESS_QUERY_LENGTH } from './address-matches.js';
 import { MAX_REFERENCE_LENGTH, requireBrowserSettingsPatch } from './browser-settings.js';
 import { requireBrowsingDataInput } from './browsing-data.js';
-import { isPinnablePanelTool, requireUiPreferencesPatch } from './ui-preferences.js';
+import { HISTORY_RETENTION_DAYS, isPinnablePanelTool, requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
+import { notesPanelCommands, type NotesPanelCommand } from './notes-panel.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
 import { MAX_BOOKMARK_EDIT_BATCH } from './bookmark-maintenance.js';
@@ -26,6 +27,12 @@ const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox
 
 export function validateIpcArguments(channel: string, args: unknown[]): void {
   switch (channel) {
+    case 'browser:set-memory-saver-site':
+      exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 300); requireBoolean(args[2]); return;
+    case 'google:overview-page':
+      between(args, 3, 4); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation');
+      if (args[2] !== 'gmail' && args[2] !== 'drive' && args[2] !== 'calendar') throw new Error('Unknown Google overview');
+      if (args[3] !== undefined) requireUuid(args[3], 'overview cursor'); return;
     case 'browser:set-tracker-compatibility':
       exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 2048);
       if (typeof args[2] !== 'boolean') throw new Error('Invalid tracker compatibility setting');
@@ -155,6 +162,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       between(args, 2, 4); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); if (args[2] !== undefined) requireBoundedText(args[2], 'Google search query', 500); if (args[3] !== undefined) requireBoolean(args[3]); return;
     case 'google:gmail-prepare-send':
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireGmailSend(args[1]); optionalRevision(args[2]); return;
+    case 'google:gmail-reply-draft':
+      exact(args, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); requireIdentifier(args[2]); return;
     case 'google:gmail-send':
       between(args, 4, 5); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); requireGmailSend(args[2]); requireUuid(args[3], 'confirmation'); optionalRevision(args[4]); return;
     case 'google:drive-create':
@@ -172,8 +181,19 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'backup:upload':
       between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation');
       if (args[2] !== undefined && args[2] !== 'merge' && args[2] !== 'overwrite') throw new Error('Invalid backup conflict decision'); return;
+    case 'backup:preview-upload':
+      exact(args, 2); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); return;
+    case 'backup:apply-upload':
+      exact(args, 3); requireUuid(args[0], 'backup review'); requireUuid(args[1], 'operation');
+      if (args[2] !== 'merge' && args[2] !== 'overwrite') throw new Error('Invalid backup conflict decision'); return;
+    case 'backup:set-reminder':
+      exact(args, 2); requireAccountSpaceId(args[0]);
+      if (args[1] !== 0 && args[1] !== 7 && args[1] !== 14 && args[1] !== 30) throw new Error('Invalid backup reminder'); return;
     case 'backup:preview-restore':
-      between(args, 2, 3); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation'); if (args[2] !== undefined) requireBoundedText(args[2], 'recovery code', 64); return;
+      between(args, 2, 4); requireAccountSpaceId(args[0]); requireUuid(args[1], 'operation');
+      if (args[2] !== undefined) requireBoundedText(args[2], 'recovery code', 64);
+      if (args[3] !== undefined) requireNonEmptyText(args[3], 'backup generation', 30); return;
+    case 'backup:cancel-upload':
     case 'backup:apply-restore':
     case 'backup:cancel-restore':
       exact(args, 1); requireUuid(args[0], 'backup review'); return;
@@ -198,8 +218,41 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 2); requireSideAppId(args[0]); if (!isSideAppCommand(args[1])) throw new Error('Invalid side app command'); return;
     case 'side-app:clear-data':
       exact(args, 1); requireSideAppId(args[0]); return;
+    case 'notes:command':
+      exact(args, 1);
+      if (typeof args[0] !== 'string' || !notesPanelCommands.includes(args[0] as NotesPanelCommand)) throw new Error('Invalid Notes command');
+      return;
+    case 'notes:cancel-draft':
+      exact(args, 1); requireNonEmptyText(args[0], 'draft identifier', 64); return;
+    case 'notes:deliver-draft': {
+      exact(args, 2);
+      const draft = requireExactKeys(args[0], ['id', 'title', 'text', 'includeSource']);
+      requireNonEmptyText(draft.id, 'draft identifier', 64);
+      requireNonEmptyText(draft.title, 'draft title', 160);
+      requireNonEmptyText(draft.text, 'draft text', 8_000);
+      if (typeof draft.includeSource !== 'boolean' || typeof args[1] !== 'boolean') throw new Error('Invalid Notes draft choice');
+      return;
+    }
     case 'ui:set-preferences':
       between(args, 1, 2); requireUiPreferencesPatch(args[0]); if (args[1] !== undefined) requireAccountSpaceId(args[1]); return;
+    case 'privacy:browsing': {
+      between(args, 2, 3); requireAccountSpaceId(args[0]);
+      const action = args[1];
+      const value = args[2];
+      if (action === 'retention' && typeof value === 'number' && HISTORY_RETENTION_DAYS.includes(value)) return;
+      if (action === 'log' && typeof value === 'boolean') return;
+      if ((action === 'protect' || action === 'export' || action === 'restore') && value === undefined) return;
+      throw new Error('Invalid browsing privacy action');
+    }
+    case 'bookmarks:sync': {
+      between(args, 2, 4); requireAccountSpaceId(args[0]);
+      if (args[1] === 'apply') {
+        requireUuid(args[2], 'bookmark sync review');
+        if (args[3] !== undefined && args[3] !== 'local' && args[3] !== 'remote') throw new Error('Invalid bookmark conflict choice');
+      } else if (typeof args[1] !== 'string' || !['status', 'start', 'export-pairing', 'import-pairing', 'review', 'unpair'].includes(args[1])
+        || args[2] !== undefined || args[3] !== undefined) throw new Error('Invalid bookmark sync action');
+      return;
+    }
     case 'ui:set-panel-pin':
       exact(args, 3); requireAccountSpaceId(args[0]);
       if (!isPinnablePanelTool(args[1]) || typeof args[2] !== 'boolean') throw new Error('Invalid tool pin');
@@ -292,13 +345,22 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'bookmarks:import-html':
     case 'bookmarks:undo-many':
       exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'bookmarks:add-folder':
+      exact(args, 3); requireAccountSpaceId(args[0]); requireBookmarkLevel(args[1]); requireNonEmptyText(args[2], 'folder name', 200); return;
+    case 'bookmarks:move-folder':
+      exact(args, 3); requireAccountSpaceId(args[0]); requireBookmarkLevel(args[1]); requireBookmarkLevel(args[2]); return;
+    case 'bookmarks:save-to-folder':
+      exact(args, 4); requireAccountSpaceId(args[0]); requireNonEmptyText(args[1], 'tab identifier', 200);
+      requireNonEmptyText(args[2], 'page address', 4096); requireBookmarkLevel(args[3]); return;
     case 'bookmarks:remove':
     case 'browser:open-bookmark':
       exact(args, 1); requireBoundedText(args[0], 'bookmark identifier', 200); return;
     case 'bookmarks:rename-folder':
-      exact(args, 3); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200); requireNonEmptyText(args[2], 'folder name', 200); return;
+      between(args, 3, 4); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200); requireNonEmptyText(args[2], 'folder name', 200);
+      if (args[3] !== undefined) requireAccountSpaceId(args[3]); return;
     case 'bookmarks:remove-folder':
-      exact(args, 2); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200); return;
+      between(args, 2, 3); requireBookmarkLevel(args[0]); requireNonEmptyText(args[1], 'folder name', 200);
+      if (args[2] !== undefined) requireAccountSpaceId(args[2]); return;
     case 'shortcuts:set': {
       exact(args, 2); requireAccountSpaceId(args[0]);
       if (args[1] === null) return;
@@ -327,6 +389,13 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       requireAccountSpaceId(input.accountSpaceId);
       requireBoolean(input.bookmarks);
       requireBoolean(input.history);
+      if (input.settings !== undefined) {
+        const selection = requireObject(input.settings);
+        for (const [key, value] of Object.entries(selection)) {
+          if (!['search', 'home', 'startup'].includes(key)) throw new Error('Unknown Chrome workspace setting');
+          requireBoolean(value);
+        }
+      }
       return;
     }
     case 'recovery:act':
@@ -367,6 +436,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 2); requireNonEmptyText(args[0], 'download identifier', 200);
       if (args[1] !== 'pause' && args[1] !== 'resume' && args[1] !== 'retry' && args[1] !== 'cancel') throw new Error('Invalid download action');
       return;
+    case 'browser:set-split-view':
+      between(args, 0, 1); if (args[0] !== undefined) requireNonEmptyText(args[0], 'tab identifier', 200); return;
     case 'browser:activate-tab':
     case 'browser:duplicate-tab':
     case 'browser:reopen-recent-tab':
@@ -385,6 +456,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); requireWorkspaceId(args[0]); return;
     case 'browser:navigate':
       exact(args, 1); requireBoundedText(args[0], 'address', 4096); return;
+    case 'browser:open-temporary-browsing':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'browser:new-tab':
       between(args, 0, 3);
       if (args[0] !== undefined) requireWorkspaceId(args[0]);
@@ -466,10 +539,24 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); requireBoundedText(args[0], 'copied text', 2 * 1024 * 1024); return;
     case 'vault:reset-picks':
       exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'vault:wordpress-save-setting':
+      exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 512); requireBoolean(args[2]); return;
     case 'vault:copy-generated':
       exact(args, 1); if (!['password', 'passphrase', 'pin'].includes(String(args[0]))) throw new Error('Invalid generated credential kind'); return;
     case 'vault:resolve-conflict':
-      exact(args, 1); if (args[0] !== 'cloud' && args[0] !== 'local') throw new Error('Choose the cloud or local vault explicitly'); return;
+      exact(args, 2); if (args[0] !== 'cloud' && args[0] !== 'local') throw new Error('Choose the cloud or local vault explicitly'); requireUuid(args[1], 'conflict review'); return;
+    case 'vault:resolve-entry-conflict': {
+      exact(args, 2); requireUuid(args[0], 'vault review');
+      if (!Array.isArray(args[1]) || !args[1].length || args[1].length > 100) throw new Error('Invalid vault entry choices');
+      const ids = new Set<string>();
+      for (const entry of args[1]) {
+        const value = requireExactKeys(entry, ['id', 'keep']);
+        if (typeof value.id !== 'string' || !/^[a-f0-9]{64}$/.test(value.id) || ids.has(value.id)
+          || (value.keep !== 'local' && value.keep !== 'cloud')) throw new Error('Invalid vault entry choice');
+        ids.add(value.id);
+      }
+      return;
+    }
     case 'vault:open-editor':
       between(args, 0, 1); if (args[0] !== undefined) requireBoundedText(args[0], 'origin', 2048); return;
     case 'vault:import-reviewed-chrome-passwords':
@@ -489,7 +576,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
 
 /** Channels that carry no arguments at all. */
 const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
-  'browser:undo-tab-batch',
+  'browser:undo-tab-batch', 'pdf:open', 'pdf:save',
   'ai:check-provider', 'ai:clear-provider', 'ai:local-models', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
   'side-app:prepare-claude-excerpt',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
@@ -498,7 +585,7 @@ const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-cancel-pairing', 'developer:bridge-pair', 'developer:bridge-projects',
   'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',
   'google:clear-configuration', 'system:is-default-browser', 'system:open-default-browser-settings', 'system:test-default-browser', 'updates:check', 'updates:clear',
-  'updates:open-history', 'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review',
+  'updates:open-history', 'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review', 'vault:show-conflict-recovery',
   'vault:clipboard-clear', 'vault:clipboard-deadline', 'vault:fill-readiness', 'vault:form-shape', 'vault:hello-disable', 'vault:hello-enable', 'vault:hello-unlock', 'vault:list', 'vault:lock',
   'vault:review-chrome-passwords',
   'vault:migrate-legacy', 'vault:migration-status', 'vault:reconnect', 'vault:request-pairing', 'vault:request-unlock',

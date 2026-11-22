@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { rememberBookmarkFolders, validateBookmarkFolders } from './bookmark-tree.js';
 import type {
   AccountBrowsingStateV2,
   AccountSpaceBookmark,
@@ -23,11 +24,13 @@ import type {
   StateRecoveryStatus,
   WorkspaceId,
 } from './types.js';
-import { AccountStore, type AccountSpaceRecord } from './account-store.js';
+import { AccountStore, type AccountSpaceRecord, type SafeStorageAdapter } from './account-store.js';
+import { BrowsingProtection, type BrowsingProtectionStatus } from './browsing-protection.js';
 import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation.js';
 import { pruneBookmarkIcons, sanitizeBookmarkIcons } from './bookmark-icons.js';
 import { isAllowedRemoteUrl } from './security.js';
 import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings, sanitizeWorkspaceSettings } from './browser-settings.js';
+import { chromeProfileReceipts } from './chrome-profile-preferences.js';
 import { sanitizeAccountPanel, sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
 import { sanitizeBrowserRoutines } from './browser-routines.js';
@@ -61,15 +64,19 @@ export type AccountSpaceStateInitialization =
 export interface AccountSpaceStateStoreOptions {
   paths: AccountSpaceStatePaths;
   accountStore: AccountStore;
+  browsingEncryption?: SafeStorageAdapter;
   now?: () => Date;
   onMigrationPhase?: (phase: 'journal' | 'accounts' | 'account-states' | 'manifest') => void;
 }
 
 export class AccountSpaceStateStore {
   private readonly now: () => Date;
+  private readonly protection: BrowsingProtection;
+  private protectionPending = false;
 
   constructor(private readonly options: AccountSpaceStateStoreOptions) {
     this.now = options.now ?? (() => new Date());
+    this.protection = new BrowsingProtection(join(dirname(options.paths.manifestFilePath), 'browsing-device-key.json'), options.browsingEncryption);
   }
 
   initialize(): AccountSpaceStateInitialization {
@@ -85,7 +92,35 @@ export class AccountSpaceStateStore {
 
   saveAccountState(state: AccountBrowsingStateV2): void {
     const sanitized = validateAccountState(state);
-    atomicWriteJson(this.accountStatePath(sanitized.accountSpaceId), sanitized);
+    this.writeBrowsingState(this.accountStatePath(sanitized.accountSpaceId), sanitized);
+  }
+
+  protectionStatus(): BrowsingProtectionStatus | 'pending' {
+    const status = this.protection.status();
+    return status === 'on' && this.protectionPending ? 'pending' : status;
+  }
+
+  enableBrowsingProtection(ids: readonly AccountSpaceId[]): void {
+    // Validate every current file before establishing the policy. A restart can
+    // finish the conversion if an atomic write is interrupted after this point.
+    const files = ids.map((id) => this.readBrowsingState(id));
+    this.protection.enable(atomicWriteJson);
+    this.protectionPending = true;
+    for (const { state, protected: encrypted } of files) if (!encrypted) this.saveAccountState(state);
+    this.protectionPending = false;
+  }
+
+  private writeBrowsingState(path: string, state: AccountBrowsingStateV2): void {
+    atomicWriteJson(path, this.protection.isEnabled() ? this.protection.encode(state.accountSpaceId, state) : state);
+  }
+
+  private readBrowsingState(id: AccountSpaceId): { state: AccountBrowsingStateV2; protected: boolean } {
+    const parsed: unknown = JSON.parse(readFileSync(this.accountStatePath(id), 'utf8'));
+    const result = this.protection.decode(id, parsed);
+    if (!result.protected && this.protection.status() === 'unavailable') throw new Error('The local browsing encryption key is unavailable.');
+    const state = validateAccountState(result.value as AccountBrowsingStateV2);
+    if (state.accountSpaceId !== id) throw new Error('Account state identity mismatch');
+    return { state, protected: result.protected };
   }
 
   recoveryTargetPath(accountSpaceId?: AccountSpaceId): string {
@@ -110,7 +145,7 @@ export class AccountSpaceStateStore {
     }
   }
 
-  /** Deletes an Account Space's plaintext browsing file once it is no longer in the manifest. */
+  /** Deletes the Account Space browsing file once it is no longer in the manifest. */
   removeAccountState(accountSpaceId: AccountSpaceId): void {
     const statePath = this.accountStatePath(accountSpaceId);
     rmSync(statePath, { force: true });
@@ -124,7 +159,7 @@ export class AccountSpaceStateStore {
       // browsing file when the encrypted record is damaged, the record when the
       // browsing file is (F-37).
       let workspaceId: WorkspaceId | undefined;
-      try { workspaceId = validateAccountState(JSON.parse(readFileSync(statePath, 'utf8')) as AccountBrowsingStateV2).workspaceId; }
+      try { workspaceId = this.readBrowsingState(accountSpaceId).state.workspaceId; }
       catch { /* try the record */ }
       const loaded = this.options.accountStore.load(accountSpaceId);
       const recordIntact = loaded.status === 'ok';
@@ -239,9 +274,12 @@ export class AccountSpaceStateStore {
       }
       accounts.push(loadedAccount.record);
       try {
-        const parsed = JSON.parse(readFileSync(this.accountStatePath(accountSpaceId), 'utf8')) as AccountBrowsingStateV2;
-        const state = validateAccountState(parsed);
+        const { state, protected: encrypted } = this.readBrowsingState(accountSpaceId);
         if (state.workspaceId !== loadedAccount.record.workspaceId) throw new Error('Account state ownership mismatch');
+        if (this.protection.isEnabled() && !encrypted) {
+          try { this.saveAccountState(state); }
+          catch { this.protectionPending = true; }
+        }
         accountStates.push(state);
       } catch {
         const statePath = this.accountStatePath(accountSpaceId);
@@ -250,7 +288,8 @@ export class AccountSpaceStateStore {
       }
     }
 
-    validateActiveMembership(manifest, accounts, accountRecoveries);
+    try { validateActiveMembership(manifest, accounts, accountRecoveries); }
+    catch { return { status: 'recovery', recovery: this.preserveBrowserStateForRecovery(this.options.paths.manifestFilePath, 'invalid-state', existsSync(this.options.paths.legacyFilePath)) }; }
     return { status: 'ready', manifest, accounts, accountStates, accountRecoveries };
   }
 
@@ -319,7 +358,7 @@ export class AccountSpaceStateStore {
   }
 
   private stageAccountState(state: AccountBrowsingStateV2): void {
-    atomicWriteJson(`${this.accountStatePath(state.accountSpaceId)}.staged`, validateAccountState(state));
+    this.writeBrowsingState(`${this.accountStatePath(state.accountSpaceId)}.staged`, validateAccountState(state));
   }
 
   private publishStagedAccountState(id: AccountSpaceId): void {
@@ -389,6 +428,7 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
     ui,
     settings: sanitizeBrowserSettings(input.settings),
     workspaceSettings: sanitizeWorkspaceSettings(input.workspaceSettings),
+    chromeProfileImports: chromeProfileReceipts(input.chromeProfileImports),
     routines: sanitizeBrowserRoutines(input.routines),
   };
 }
@@ -434,12 +474,14 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
     orderPath: Array.isArray(item.orderPath) ? item.orderPath.slice(0, 20).filter((part) => Number.isSafeInteger(part) && part >= 0) : [index],
   }));
   const history = sanitizeAccountItems<AccountSpaceHistoryEntry>(input.history, input.accountSpaceId, workspaceId, 10_000);
+  const bookmarkFolders = rememberBookmarkFolders(bookmarks, validateBookmarkFolders(input.bookmarkFolders));
   const historyTrimmed = input.historyTrimmed === true || (Array.isArray(input.history) && input.history.length > 10_000);
   const shortcuts = sanitizeShortcutTiles(input.shortcuts);
   const bookmarkIcons = pruneBookmarkIcons(sanitizeBookmarkIcons(input.bookmarkIcons), bookmarks);
   const tabGroups = groups.filter((group) => tabs.some((tab) => tab.groupId === group.id));
   const sidePanel = workspaceId === 'banking' ? undefined : sanitizeAccountPanel(input.sidePanel);
-  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history, ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}), ...(sidePanel ? { sidePanel } : {}) };
+  return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history,
+    ...(bookmarkFolders.length ? { bookmarkFolders } : {}), ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}), ...(sidePanel ? { sidePanel } : {}) };
 }
 
 export const MAX_SHORTCUT_TILES = 12;
@@ -535,7 +577,8 @@ function validateActiveMembership(
   for (const workspace of WORKSPACES) {
     const activeId = manifest.activeAccountSpaceByWorkspace[workspace.id];
     const recovering = recoveries.some((recovery) => recovery.accountSpaceId === activeId);
-    if (!recovering && !accounts.some((account) => account.id === activeId && account.workspaceId === workspace.id)) {
+    const known = accounts.find((account) => account.id === activeId);
+    if ((known && known.workspaceId !== workspace.id) || (!known && !recovering)) {
       throw new Error('Active Account Space crosses a workspace boundary');
     }
   }

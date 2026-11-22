@@ -3,7 +3,8 @@ import { open } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
 import { SAXParser } from 'parse5-sax-parser';
 import { isAllowedRemoteUrl } from './security.js';
-import type { AccountSpaceId, Bookmark, WorkspaceId } from './types.js';
+import type { AccountSpaceId, Bookmark, BookmarkFolder, WorkspaceId } from './types.js';
+import { MAX_BOOKMARK_FOLDERS, validateBookmarkFolders } from './bookmark-tree.js';
 
 const maxFileBytes = 16 * 1024 * 1024;
 const maxBookmarks = 25_000;
@@ -30,10 +31,11 @@ export async function readBookmarkHtml(filePath: string, destination: Destinatio
   }
 }
 
-export async function parseBookmarkHtml(html: string, destination: Destination): Promise<{ bookmarks: Bookmark[]; skipped: number }> {
+export async function parseBookmarkHtml(html: string, destination: Destination): Promise<{ bookmarks: Bookmark[]; folders: BookmarkFolder[]; skipped: number }> {
   if (Buffer.byteLength(html) > maxFileBytes) throw new Error('Choose a bookmark HTML file smaller than 16 MB.');
   const parser = new SAXParser();
   const bookmarks: Bookmark[] = [];
+  const folders: BookmarkFolder[] = [];
   const levels: Level[] = [];
   let depth = 0;
   let ignoredDepth = 0;
@@ -84,8 +86,12 @@ export async function parseBookmarkHtml(html: string, destination: Destination):
         if (!parent) levels.push({ location: 'other', folderPath: [], orderPath: [], next: 0 });
         else if (folder?.toolbar && depth === 2) levels.push({ location: 'bar', folderPath: [], orderPath: [], next: 0 });
         else if (folder && depth === 2 && folder.name.toLowerCase() === 'other bookmarks') levels.push({ location: 'other', folderPath: [], orderPath: [], next: 0 });
-        else levels.push({ location: parent.location, folderPath: [...parent.folderPath, folder?.name ?? 'Untitled folder'],
-          orderPath: [...parent.orderPath, parent.next++], next: 0 });
+        else {
+          const level = { location: parent.location, folderPath: [...parent.folderPath, folder?.name ?? 'Untitled folder'],
+            orderPath: [...parent.orderPath, parent.next++], next: 0 };
+          levels.push(level);
+          if (folders.length < MAX_BOOKMARK_FOLDERS) folders.push({ location: level.location, path: level.folderPath, orderPath: level.orderPath });
+        }
       }
       folder = undefined;
       inItem = false;
@@ -121,5 +127,5 @@ export async function parseBookmarkHtml(html: string, destination: Destination):
   await finished(parser);
   finishCaption();
   if (!recognized || !sawRoot) throw new Error('Choose a standard browser bookmark HTML export.');
-  return { bookmarks, skipped };
+  return { bookmarks, folders: validateBookmarkFolders(folders), skipped };
 }

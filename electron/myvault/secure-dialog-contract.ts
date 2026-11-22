@@ -1,4 +1,4 @@
-export type SecureDialogKind = 'unlock' | 'enroll-hello' | 'edit-login' | 'update-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair';
+export type SecureDialogKind = 'unlock' | 'enroll-hello' | 'edit-login' | 'update-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair' | 'export-browsing' | 'restore-browsing' | 'export-bookmark-pair' | 'import-bookmark-pair';
 
 export const SECURE_CREDENTIAL_PRESETS = {
   password: { label: 'Password, 24 characters with symbols', kind: 'password', length: 24, symbols: true },
@@ -47,6 +47,11 @@ export function normalizeAuthenticatorSecret(value: string | undefined): string 
 
 export function parseSecureDialogValue(kind: SecureDialogKind, value: unknown): SecureDialogValue {
   const input = record(value);
+  if (kind === 'export-browsing' || kind === 'restore-browsing' || kind === 'export-bookmark-pair' || kind === 'import-bookmark-pair') {
+    const password = textField(input, 'password', 1_024)!;
+    if (password.length < 16 || ((kind === 'export-browsing' || kind === 'export-bookmark-pair') && input.confirmPassword !== password)) throw new Error('Invalid recovery passphrase');
+    return { password };
+  }
   if (kind === 'unlock' || kind === 'enroll-hello') return { password: textField(input, 'password', 1024)! };
   if (kind === 'edit-login' || kind === 'update-login') {
     const url = textField(input, 'url', 2048)!;

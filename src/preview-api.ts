@@ -1,14 +1,18 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
-import type { ChromeImportOptions, ChromePasswordImportReview } from '../electron/types';
+import type { NotesDraftReview } from '../electron/notes-panel';
+import { chromeCollections } from '../electron/chrome-collections';
+import type { ChromeImportOptions, ChromePasswordImportReview, GoogleActionReceipt, GoogleMutationConfirmation } from '../electron/types';
 import type { VaultHealthReport } from '../electron/types';
 import type { PermissionGrantSummary, SitePermissionStatus } from '../electron/types';
 import type { AiPagePreview, AiRequestReview, AssistantAnswer, AssistantReceipt, AssistantSelectionEdit, AssistantSelectionSource, PageExcerptReview } from '../electron/types';
-import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
+import type { AccountSpaceId, AiProviderInput, AiProviderStatus, BackupRestorePreview, BackupUploadPreview, Bookmark, BookmarkLevelInput, BrowserSnapshot, BrowserTab, GoogleModule, RecentlyClosedTab, ShortcutTile, TabBatchScope, TabGroup, TabOrganizationAction, UiPreferencesPatch, Workspace, WorkspaceId } from '../electron/types';
 import { isPinnablePanelTool, mergeUiPreferences, DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
 import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, requireBrowserSettingsPatch, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace } from '../electron/browser-settings';
-import type { BrowserSettings, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
+import type { BrowserSettings, BrowserSettingsPatch, ManagedUpdateStatus, PinnablePanelTool, SidePanelTool } from '../electron/types';
 import { parseWebAddress, redactSensitiveText } from '../electron/security';
 import { canPauseTrackersAt, TrackerProtection } from '../electron/tracker-protection';
+import { memorySaverOrigin } from '../electron/memory-saver';
+import { MIN_SPLIT_WIDTH, splitPageAllowed } from '../electron/split-view';
 import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, assistantQuestion, aiUserPrompt, formatAssistantExcerpts, readAssistantAnswer } from '../electron/ai-prompt';
 import { findAddressMatches } from '../electron/address-matches';
 import { queryHistory } from '../electron/history-query';
@@ -21,7 +25,7 @@ import { appendTabSetBookmarks, resolveTabSet } from '../electron/tab-sets';
 import type { ReferenceSearchInput, TabSetInput } from '../electron/types';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
-import { moveTabWithinAccountSpace, removeBookmark, renameBookmark, reorderBookmarkEntry } from '../electron/bookmark-tree';
+import { createBookmarkFolder, editBookmarkFolder, moveTabWithinAccountSpace, nextBookmarkOrder, rememberBookmarkFolders, removeBookmark, renameBookmark, reorderBookmarkLevel } from '../electron/bookmark-tree';
 import { defaultClientLimits, newAgentSpaceSettings } from '@private-browser/bridge-protocol/agent-permission-model';
 import type { AgentUiStatus } from '../electron/agent-types';
 
@@ -57,16 +61,26 @@ function bookmark(id: string, title: string, url: string, folderPath: string[], 
 /** Credential-free data so the chrome can be reviewed in a normal browser during development. */
 export function installPreviewApi(): void {
   if (!import.meta.env.DEV || 'privateBrowser' in window || new URLSearchParams(location.search).get('preview') === 'bridge') return;
+  const params = new URLSearchParams(location.search);
+  const overviewFixture = params.get('googleOverview') === 'sample';
+  const googleActionFixture = params.get('googleActions');
+  const googleModules: GoogleModule[] = googleActionFixture ? ['identity', 'gmail-metadata', 'gmail-send', 'drive-files', 'calendar-write'] : overviewFixture
+    ? ['identity', 'gmail-metadata', 'drive-files'] : ['identity', 'gmail-metadata', 'drive-files', 'calendar-read'];
   const accounts = [
     account(ids.digitronics, 'digitronics', 'Digitronics', 'indigo'), account(ids.tenten, 'tenten', 'TenTen', 'amber'), account(ids.development, 'development', 'Development', 'violet'),
     account(ids.personal, 'personal', 'Personal', 'emerald'),
-    { ...account(ids.google, 'personal', 'Operations', 'sky', 1), kind: 'google' as const, email: 'operations@example.com', displayName: 'Operations Team', googleConnection: 'connected' as const, websiteStatus: 'session-data-present' as const, enabledModules: ['identity', 'gmail-metadata', 'drive-files', 'calendar-read'] as const, grantedScopes: ['openid', 'email', 'profile'] },
+    { ...account(ids.google, 'personal', 'Operations', 'sky', 1), kind: 'google' as const, email: 'operations@example.com', displayName: 'Operations Team', googleConnection: 'connected' as const, websiteStatus: 'session-data-present' as const, enabledModules: googleModules, grantedScopes: ['openid', 'email', 'profile'] },
     account(ids.banking, 'banking', 'Banking', 'rose'),
   ];
   const google = ids.google as AccountSpaceId;
-  const params = new URLSearchParams(location.search);
+  const overviewCursor = overviewFixture || googleActionFixture ? crypto.randomUUID() : undefined;
+  const fixtureReply = crypto.randomUUID();
   const vaultHealthFixture = { id: 'preview-vault-health', label: 'Sample login', username: 'sample@example.test',
     url: 'https://shop.example.test', hasTotp: false, updatedAt: '2026-11-21T10:00:00Z' };
+  const conflictMode = params.get('vaultConflict');
+  const conflictFixture = conflictMode === 'sample' || conflictMode === 'entries';
+  let conflictResolved = false;
+  const conflictId = crypto.randomUUID();
   const state: BrowserSnapshot = {
     settings: { ...DEFAULT_BROWSER_SETTINGS },
     availableSpellcheckLanguages: ['en', 'fr'],
@@ -152,9 +166,21 @@ export function installPreviewApi(): void {
   const syncDarkMode = () => { state.windowState.darkMode = state.ui.theme === 'system' ? media.matches : state.ui.theme === 'dark'; };
   syncDarkMode();
   const listeners = new Set<(snapshot: BrowserSnapshot) => void>();
+  const chromeSnapshot = (): BrowserSnapshot => structuredClone({ ...state, ...chromeCollections(state, state.activeAccountSpaceId, state.activeWorkspaceId) });
   let backupRestoreReview: BackupRestorePreview | undefined;
-  if (params.get('backupRestore') === 'sample') {
-    state.accountSpaces.find(({ id }) => id === google)?.enabledModules.push('encrypted-backup');
+  let backupUploadReview: BackupUploadPreview | undefined;
+  const backupGenerationFixture = params.get('backupGenerations') === 'sample';
+  const previousBackups = [
+    { createdAt: '2026-11-20T12:00:00.000Z', bookmarks: 5, folders: 2, tabs: 2, history: 0 },
+    { createdAt: '2026-11-09T12:00:00.000Z', bookmarks: 2, folders: 1, tabs: 0, history: 0 },
+  ];
+  if (params.get('backupRestore') === 'sample' || backupGenerationFixture) {
+    const account = state.accountSpaces.find(({ id }) => id === google)!;
+    account.enabledModules.push('encrypted-backup');
+    if (backupGenerationFixture) Object.assign(account, {
+      backupEnabled: true, backupReminderDays: 14, backupReminderAt: new Date(Date.now() + 60_000).toISOString(),
+      backupLastUploadedAt: previousBackups[0].createdAt,
+    });
   }
   const closedByAccount = new Map<AccountSpaceId, RecentlyClosedTab[]>();
   let routines = defaultBrowserRoutines(Object.fromEntries(accounts.filter((account) => account.id !== google).map((account) => [account.workspaceId, account.id])));
@@ -162,7 +188,34 @@ export function installPreviewApi(): void {
   const groupsByAccount = new Map<AccountSpaceId, TabGroup[]>();
   const batchesByAccount = new Map<AccountSpaceId, { entries: BrowserTab[]; groups: TabGroup[]; groupName?: string }>();
   const sampleDownloads = state.downloads;
+  const fixtureGoogleReviews = new Map<string, string>();
+  const fixtureGoogleReceipts = new Map<string, GoogleActionReceipt>();
+  const fixtureGoogleAccount = (id: AccountSpaceId) => {
+    if (!googleActionFixture || id !== google || state.activeAccountSpaceId !== id) throw new Error('Open the original Account Space.');
+  };
+  const prepareFixtureAction = (id: AccountSpaceId, service: 'gmail' | 'drive' | 'calendar', payload: unknown): GoogleMutationConfirmation => {
+    fixtureGoogleAccount(id);
+    const token = crypto.randomUUID();
+    fixtureGoogleReviews.set(token, JSON.stringify({ service, payload }));
+    return { accountSpaceId: id, service, token, action: 'Google action', target: 'Fixture', expiresAt: new Date(Date.now() + 300_000).toISOString() };
+  };
+  const applyFixtureAction = (id: AccountSpaceId, service: 'gmail' | 'drive' | 'calendar', payload: unknown, token: string) => {
+    fixtureGoogleAccount(id);
+    const reviewed = fixtureGoogleReviews.get(token);
+    fixtureGoogleReviews.delete(token);
+    if (reviewed !== JSON.stringify({ service, payload })) throw new Error('Review this Google action again.');
+    const prior = fixtureGoogleReceipts.get(reviewed);
+    if (prior) return { ok: false, receipt: prior };
+    const confirmed = googleActionFixture !== 'uncertain';
+    const receipt: GoogleActionReceipt = { id: crypto.randomUUID(), state: confirmed ? 'confirmed' : 'unconfirmed', at: new Date().toISOString(), providerId: confirmed ? 'fixture-google-reference' : undefined };
+    fixtureGoogleReceipts.set(reviewed, receipt);
+    return { ok: receipt.state === 'confirmed', receipt };
+  };
   const savedDownloadHistory = new Set<AccountSpaceId>();
+  const memorySites = new Map<AccountSpaceId, Set<string>>();
+  if (params.get('memorySaver') === 'sample') {
+    state.tabs.push(pageTab('preview-sleeping-tab', google, 'Reading list', 'https://reading.example.test/', { sleeping: true }));
+  }
   let trackerBlocking = state.trackerBlocking;
   const trackers = new TrackerProtection();
   if (params.get('trackers') === 'sample') {
@@ -195,7 +248,17 @@ export function installPreviewApi(): void {
   let pendingChromeImport: { id: string; options: ChromeImportOptions; owner: AccountSpaceId } | undefined;
   let clearDataReview: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string> } | undefined;
   let passwordReview: { review: ChromePasswordImportReview; accountId: AccountSpaceId } | undefined;
-  const chromeUndo = new Map<AccountSpaceId, { bookmark: boolean; history: boolean }>();
+  const chromeUndo = new Map<AccountSpaceId, { profileId: string; bookmark: boolean; history: boolean; settings?: BrowserSettings }>();
+  const importedChromeProfiles = new Map<string, AccountSpaceId>();
+  const chromeSettingsFixture = (options: ChromeImportOptions) => {
+    const selected = options.settings ?? {};
+    const patch: BrowserSettingsPatch = {
+      ...(selected.search ? { searchEngine: 'google' } : {}), ...(selected.home ? { homePage: 'url', homePageUrl: 'https://reference.example.test/' } : {}),
+      ...(selected.startup ? { startup: 'new-tab' } : {}),
+    };
+    const appliedSettings = (['search', 'home', 'startup'] as const).filter((key) => selected[key]);
+    return { patch: appliedSettings.length ? patch : undefined, appliedSettings };
+  };
   let sampleGrants: PermissionGrantSummary[] = params.get('permissions') === 'sample' ? [
     { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
     { origin: 'https://mail.google.com', capability: 'notifications', duration: 'session' },
@@ -211,7 +274,20 @@ export function installPreviewApi(): void {
   const assistantReceipts = new Map<AccountSpaceId, AssistantReceipt[]>();
   let vaultClipboardUntil: number | undefined;
   const bookmarkUndos = new Map<AccountSpaceId, BookmarkUndo>();
+  const savedBookmarkFolders = new Map([[google, rememberBookmarkFolders(state.bookmarks.filter((item) => item.accountSpaceId === google), [])]]);
+  const getPreviewFolders = (id: AccountSpaceId) => savedBookmarkFolders.get(id) ?? [];
+  const updatePreviewFolder = (id: AccountSpaceId, source: BookmarkLevelInput, destination?: BookmarkLevelInput) => {
+    if (id !== state.activeAccountSpaceId) throw new Error('The Account Space changed');
+    const result = editBookmarkFolder(state.bookmarks, getPreviewFolders(id), id, source, destination);
+    state.bookmarks = result.bookmarks;
+    savedBookmarkFolders.set(id, result.folders);
+    publish();
+  };
+  const splitPairs = new Map<AccountSpaceId, Pick<NonNullable<BrowserSnapshot['splitView']>, 'leftTabId' | 'rightTabId'>>();
+  let splitInsets = 0;
+  const splitSuspended = () => state.windowState.fullscreen || window.innerWidth - splitInsets < MIN_SPLIT_WIDTH;
   const publish = () => {
+    state.bookmarkFolders = getPreviewFolders(state.activeAccountSpaceId);
     state.settings = settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, state.activeWorkspaceId);
     const assistantUnavailable = state.activeWorkspaceId === 'banking' || state.accountSpaces.some((account) => account.id === state.activeAccountSpaceId && account.locked);
     state.assistantPolicy = assistantUnavailable ? { cloud: 'unavailable', receipts: [] } : {
@@ -222,9 +298,21 @@ export function installPreviewApi(): void {
     const privateWorkspace = state.activeWorkspaceId === 'banking';
     state.trackerBlocking = privateWorkspace || trackerBlocking;
     const activeTrackingTab = state.tabs.find(({ id }) => id === state.activeTabId);
+    const pair = splitPairs.get(state.activeAccountSpaceId);
+    state.splitView = undefined;
+    if (pair) {
+      const left = state.tabs.find((tab) => tab.id === pair.leftTabId);
+      const right = state.tabs.find((tab) => tab.id === pair.rightTabId);
+      if (!left || !right || !splitPageAllowed(left) || !splitPageAllowed(right)) splitPairs.delete(state.activeAccountSpaceId);
+      else if (!assistantUnavailable && (activeTrackingTab === left || activeTrackingTab === right)) {
+        state.splitView = { ...pair, suspended: splitSuspended() };
+      }
+    }
     state.trackerSite = activeTrackingTab && !activeTrackingTab.isHome ? trackers.status(state.activeAccountSpaceId,
       new URL(activeTrackingTab.url).origin, { enabled: trackerBlocking, strict: privateWorkspace,
         canPause: !privateWorkspace && trackerBlocking && canPauseTrackersAt(activeTrackingTab.url) }) : undefined;
+    const memorySite = !privateWorkspace && activeTrackingTab && !activeTrackingTab.isHome ? memorySaverOrigin(activeTrackingTab.url) : undefined;
+    state.memorySaverSite = memorySite ? { origin: memorySite, keptAwake: memorySites.get(state.activeAccountSpaceId)?.has(memorySite) === true } : undefined;
     state.downloads = sampleDownloads.filter((item) => item.accountSpaceId === state.activeAccountSpaceId);
     state.downloadHistory = state.activeWorkspaceId === 'banking' ? undefined : savedDownloadHistory.has(state.activeAccountSpaceId) ? 'on' : 'off';
     state.downloadFolder = state.activeWorkspaceId === 'banking' ? undefined : {
@@ -253,7 +341,7 @@ export function installPreviewApi(): void {
     groupsByAccount.set(state.activeAccountSpaceId, state.tabGroups);
     const batch = batchesByAccount.get(state.activeAccountSpaceId);
     state.closedTabBatch = batch ? { count: batch.entries.length, groupName: batch.groupName } : undefined;
-    listeners.forEach((listener) => listener(structuredClone(state)));
+    listeners.forEach((listener) => listener(chromeSnapshot()));
   };
   const requireAssistantPolicy = (mode: 'cloud' | 'local') => {
     if (state.assistantPolicy.cloud === 'unavailable') throw new Error('Assistant requests are unavailable in this Account Space.');
@@ -266,6 +354,7 @@ export function installPreviewApi(): void {
     publish();
   };
   media.addEventListener('change', () => { syncDarkMode(); publish(); });
+  globalThis.addEventListener('resize', () => { if (state.splitView && state.splitView.suspended !== splitSuspended()) publish(); });
   const activeTab = () => state.tabs.find((tab) => tab.id === state.activeTabId)!;
   const reopenPreviewTab = (id?: string) => {
     const closed = closedByAccount.get(state.activeAccountSpaceId);
@@ -357,36 +446,93 @@ export function installPreviewApi(): void {
     forward: desktopOnly,
     stop: async () => undefined,
     print: desktopOnly,
+    openPdfInTab: desktopOnly,
+    savePdf: desktopOnly,
     findInPage: desktopOnly,
     stopFindInPage: async () => undefined,
     setTabMuted: desktopOnly,
     hardReload: async () => handlers.reload(),
-    renameBookmarkFolder: desktopOnly,
-    removeBookmarkFolder: desktopOnly,
+    addBookmarkFolder: async (id, parent, name) => {
+      if (id !== state.activeAccountSpaceId) throw new Error('The Account Space changed');
+      savedBookmarkFolders.set(id, createBookmarkFolder(state.bookmarks.filter((item) => item.accountSpaceId === id), getPreviewFolders(id), parent, name));
+      publish();
+    },
+    moveBookmarkFolder: async (id, source, parent) => {
+      const name = source.path.at(-1);
+      if (!name) throw new Error('Choose a folder to move');
+      updatePreviewFolder(id, source, { location: parent.location, path: [...parent.path, name] });
+    },
+    renameBookmarkFolder: async (parent, name, next, id) => updatePreviewFolder(id ?? state.activeAccountSpaceId,
+      { ...parent, path: [...parent.path, name] }, { ...parent, path: [...parent.path, next.trim()] }),
+    removeBookmarkFolder: async (parent, name, id) => updatePreviewFolder(id ?? state.activeAccountSpaceId, { ...parent, path: [...parent.path, name] }),
     exportBookmarks: desktopOnly,
     quit: desktopOnly,
     deleteAccountSpace: desktopOnly,
     clearGoogleConfiguration: desktopOnly,
     cancelGoogleConnection: async () => false,
     gmailOverview: desktopOnly,
+    readGmailReplyDraft: async (id, _operation, messageId) => {
+      fixtureGoogleAccount(id);
+      if (messageId !== 'mail-current') throw new Error('The original message is unavailable.');
+      return { ok: true, data: { sourceRevision: fixtureReply, recipient: 'stocks@example.test', subject: 'New stock update' } };
+    },
+    googleOverviewPage: async (id, _operation, service, next) => {
+      if (!overviewCursor || id !== google || id !== state.activeAccountSpaceId || service === 'calendar') return desktopOnly();
+      if (service === 'drive') return { ok: true, data: { page: 1, limited: false, items: [
+        { id: 'file-fixture', title: 'Stock worksheet', original: 'https://drive.google.com/open?id=file-fixture' },
+      ] } };
+      if (next === overviewCursor) return { ok: true, data: { page: 2, limited: false, items: [
+        { id: 'mail-older', title: 'Previous stock update', detail: 'stocks@example.test' },
+      ] } };
+      return { ok: true, data: { page: 1, next: overviewCursor, limited: false, items: [
+        { id: 'mail-current', title: 'New stock update', detail: 'stocks@example.test', original: 'https://mail.google.com/mail/#inbox/mail-current' },
+      ] } };
+    },
     searchGmail: desktopOnly,
-    prepareGmailSend: desktopOnly,
-    sendGmail: desktopOnly,
+    prepareGmailSend: async (id, input, revision) => prepareFixtureAction(id, 'gmail', { input, revision }),
+    sendGmail: async (id, _operation, input, token, revision) => applyFixtureAction(id, 'gmail', { input, revision }, token),
     listDriveFiles: desktopOnly,
     createDriveFile: desktopOnly,
-    prepareDriveShare: desktopOnly,
-    shareDriveFile: desktopOnly,
+    prepareDriveShare: async (id, fileId, email, role) => prepareFixtureAction(id, 'drive', { fileId, email, role }),
+    shareDriveFile: async (id, _operation, fileId, email, role, token) => applyFixtureAction(id, 'drive', { fileId, email, role }, token),
     listCalendarEvents: desktopOnly,
-    prepareCalendarWrite: desktopOnly,
-    writeCalendarEvent: desktopOnly,
+    prepareCalendarWrite: async (id, action, input) => prepareFixtureAction(id, 'calendar', { action, input }),
+    writeCalendarEvent: async (id, _operation, action, input, token) => applyFixtureAction(id, 'calendar', { action, input }, token),
     listContacts: desktopOnly,
-    previewBackupRestore: async (id, _operation, code) => {
-      if (params.get('backupRestore') !== 'sample' || id !== google || code !== 'fixture-recovery-code') {
+    previewBackupUpload: async (id) => {
+      if (!backupGenerationFixture || id !== google || state.activeAccountSpaceId !== id) throw new Error('Open the enabled backup in its unlocked Account Space.');
+      backupUploadReview = { id: crypto.randomUUID(), accountSpaceId: id, conflict: true,
+        local: { createdAt: new Date().toISOString(), bookmarks: 3, folders: 1, tabs: 1, history: 0 },
+        remote: previousBackups[0], generations: previousBackups.slice(1),
+        merged: { createdAt: new Date().toISOString(), bookmarks: 6, folders: 2, tabs: 3, history: 0 } };
+      return backupUploadReview;
+    },
+    applyBackupUpload: async (id, _operation, resolution) => {
+      if (backupUploadReview?.id !== id || backupUploadReview.accountSpaceId !== state.activeAccountSpaceId) throw new Error('Review the backup again before saving.');
+      backupUploadReview = undefined;
+      document.documentElement.dataset.previewBackupResolution = resolution;
+      const account = state.accountSpaces.find(({ id }) => id === google)!;
+      account.backupLastUploadedAt = new Date().toISOString();
+      account.backupReminderAt = undefined;
+      publish();
+      return { status: 'uploaded', etag: 'fixture-backup-etag' };
+    },
+    cancelBackupUpload: async (id) => { if (backupUploadReview?.id === id) backupUploadReview = undefined; },
+    setBackupReminder: async (id, days) => {
+      if (!backupGenerationFixture || id !== google || state.activeAccountSpaceId !== id) throw new Error('The backup changed.');
+      const account = state.accountSpaces.find(({ id }) => id === google)!;
+      account.backupReminderDays = days;
+      account.backupReminderAt = days ? new Date(Date.now() + days * 86_400_000).toISOString() : undefined;
+      publish();
+    },
+    previewBackupRestore: async (id, _operation, code, generation) => {
+      if (id !== google || (!backupGenerationFixture && (params.get('backupRestore') !== 'sample' || code !== 'fixture-recovery-code'))) {
         throw new Error('Encrypted backup failed authentication or is corrupt.');
       }
       backupRestoreReview = {
         id: crypto.randomUUID(), accountSpaceId: id, accountLabel: 'Operations', workspaceId: 'personal',
-        createdAt: '2026-11-21T12:00:00.000Z',
+        createdAt: generation ?? (backupGenerationFixture ? previousBackups[0].createdAt : '2026-11-21T12:00:00.000Z'),
+        ...(backupGenerationFixture ? { generations: previousBackups } : {}),
         counts: { bookmarks: { added: 2, duplicates: 1, capacityExceeded: 0 },
           history: { added: 0, duplicates: 1, capacityExceeded: 0 }, tabs: { added: 1, duplicates: 0, capacityExceeded: 2 } },
       };
@@ -419,12 +565,30 @@ export function installPreviewApi(): void {
     requestVaultPairing: desktopOnly,
     lockVault: desktopOnly,
     syncVaultNow: desktopOnly,
-    getVaultConflictReview: async () => ({ local: [], cloud: [] }),
-    resolveVaultConflict: desktopOnly,
+    getVaultConflictReview: async () => {
+      if (!conflictFixture || conflictResolved) return desktopOnly();
+      return { id: conflictId, cloudVersion: 3,
+        local: { entries: 2, updatedAt: '2026-11-20T08:00:00Z', changes: [{ id: 'l1', label: 'Local reference', username: '', kind: 'only-copy' }] },
+        cloud: { entries: 2, updatedAt: '2026-11-21T12:00:00Z', changes: [{ id: 'c1', label: 'Cloud reference', username: '', kind: 'changed' }] },
+        itemChoices: conflictMode === 'entries' ? [{ id: 'a'.repeat(64), local: { title: 'Local reference', type: 'login' as const, updatedAt: '2026-11-20T08:00:00Z' } },
+          { id: 'b'.repeat(64), cloud: { title: 'Cloud reference', type: 'login' as const, updatedAt: '2026-11-21T12:00:00Z' } }] : undefined };
+    },
+    resolveVaultConflict: async (_choice, id) => {
+      if (!conflictFixture || conflictResolved || id !== conflictId) return desktopOnly();
+      conflictResolved = true;
+      return handlers.listVault();
+    },
+    resolveVaultEntryConflict: async (id, entries) => {
+      if (conflictMode !== 'entries' || conflictResolved || id !== conflictId || entries.length !== 2) return desktopOnly();
+      conflictResolved = true;
+      return handlers.listVault();
+    },
+    showVaultConflictRecovery: async () => { if (!conflictFixture || !conflictResolved) return desktopOnly(); },
     migrateLegacyVault: desktopOnly,
     cleanupLegacyVault: desktopOnly,
     openVaultEditor: desktopOnly,
     requestSaveFromPage: desktopOnly,
+    setWordPressSaveSite: desktopOnly,
     requestVaultDelete: desktopOnly,
     acknowledgeVaultRecovery: desktopOnly,
     copyPassword: desktopOnly,
@@ -457,7 +621,7 @@ export function installPreviewApi(): void {
       managedUpdate = { phase: 'launched', version: managedUpdate.version };
       publish();
     },
-    getState: async () => structuredClone(state),
+    getState: async () => chromeSnapshot(),
     controlDownload: async (id, action) => {
       const entry = sampleDownloads.find((item) => item.id === id && item.accountSpaceId === state.activeAccountSpaceId);
       if (!entry?.canCancel || state.activeWorkspaceId === 'banking') throw new Error('Download is unavailable in this Account Space');
@@ -609,6 +773,7 @@ export function installPreviewApi(): void {
       return queryHistory(scope, state.activeAccountSpaceId, input as Parameters<PrivateBrowserApi['queryHistory']>[1]);
     }) satisfies PrivateBrowserApi['queryHistory'],
     onState: (callback) => { listeners.add(callback as (snapshot: BrowserSnapshot) => void); return () => listeners.delete(callback as (snapshot: BrowserSnapshot) => void); },
+    onDownloadProgress: () => () => undefined,
     onCommand: () => () => undefined,
     onFindResult: () => () => undefined,
     onUpdateAvailable: () => () => undefined,
@@ -623,11 +788,43 @@ export function installPreviewApi(): void {
     },
     onVaultState: () => () => undefined,
     // Recorded on the document so browser tests can compare it with the visible chrome.
-    setLayout: async (layout) => { document.documentElement.dataset.previewLayout = JSON.stringify(layout); },
+    setLayout: async (layout) => {
+      document.documentElement.dataset.previewLayout = JSON.stringify(layout);
+      splitInsets = layout.left + layout.right;
+      if (state.splitView && state.splitView.suspended !== splitSuspended()) publish();
+    },
     setOverlayOpen: async () => undefined,
     // A normal browser has no native view to place; record the slot for browser tests instead.
     setSideAppBounds: async (_id, rect) => { document.documentElement.dataset.previewSideApp = JSON.stringify(rect); },
     sideAppCommand: async () => undefined,
+    notesPanelCommand: async (kind) => {
+      if (kind !== 'status') {
+        document.documentElement.dataset.previewNotesAction = kind;
+        return undefined;
+      }
+      return params.get('notes') === 'offline' ? undefined : {
+        mode: params.get('notes') === 'protected' ? 'protected' : 'personal', sync: 'idle',
+        drafts: 1, pending: 0, lastSuccessfulSyncAt: '2026-11-21T20:00:00.000Z',
+      };
+    },
+    onNotesDraft: (callback) => {
+      if (params.get('notesDraft') !== 'sample') return () => undefined;
+      const timer = window.setTimeout(() => {
+        const review: NotesDraftReview = { id: 'notes-draft-preview', accountSpaceId: state.activeAccountSpaceId, tabId: state.activeTabId,
+          title: 'Study notes', text: 'Selected browser excerpt.', source: 'https://example.test', redactions: 0, expiresAt: Date.now() + 120_000 };
+        callback(review);
+      }, 100);
+      return () => window.clearTimeout(timer);
+    },
+    deliverNotesDraft: async (draft, copyOnly) => {
+      document.documentElement.dataset.previewNotesDraft = JSON.stringify(draft);
+      if (copyOnly) return;
+      state.ui = { ...state.ui, sidePanelOpen: true };
+      if (!isPinnablePanelTool(commonPanelTool)) commonPanelTool = 'assistant';
+      previewPanelTools.set(state.activeAccountSpaceId, 'easynote');
+      publish();
+    },
+    cancelNotesDraft: async () => undefined,
     openDownload: async () => { throw new Error('This preview cannot open files. Use the desktop Downloads panel.'); },
     showDownload: async () => { throw new Error('This preview cannot open folders. Use the desktop Downloads panel.'); },
     setDownloadHistory: async (id, enabled) => {
@@ -701,6 +898,8 @@ export function installPreviewApi(): void {
       }
       publish();
     },
+    changeBrowsingPrivacy: async () => { throw new Error('Browsing privacy settings are available in the Windows app.'); },
+    changeBookmarkSync: async () => undefined,
     setUiPreferences: async (patch, expectedAccount) => {
       if (expectedAccount !== undefined && expectedAccount !== state.activeAccountSpaceId) throw new Error('The Account Space changed. Open the tool again.');
       const { sidePanelTool, ...globalPreferences } = patch as UiPreferencesPatch;
@@ -721,8 +920,22 @@ export function installPreviewApi(): void {
       publish();
     },
     toggleBookmarkBar: async () => { state.ui = mergeUiPreferences(state.ui, { bookmarkBarMode: state.ui.bookmarkBarMode === 'hidden' ? 'always' : 'hidden' }); publish(); },
-    activateTab: async (value) => { const tab = state.tabs.find((item) => item.id === value); if (tab) { state.activeTabId = tab.id; publish(); } },
+    activateTab: async (value) => { const tab = state.tabs.find((item) => item.id === value); if (tab) { tab.sleeping = undefined; state.activeTabId = tab.id; publish(); } },
+    setSplitView: async (otherTabId) => {
+      const id = state.activeAccountSpaceId;
+      if (otherTabId === undefined) splitPairs.delete(id);
+      else {
+        const active = activeTab();
+        const other = state.tabs.find((tab) => tab.id === otherTabId && tab.accountSpaceId === id);
+        if (!regularPanelAccount() || !other || other === active || !splitPageAllowed(active) || !splitPageAllowed(other)
+          || active.developerToolsOpen || other.developerToolsOpen) throw new Error('Choose two regular pages in this Account Space.');
+        if (splitSuspended()) throw new Error('Widen the browser to open two pages side by side.');
+        splitPairs.set(id, { leftTabId: active.id, rightTabId: other.id });
+      }
+      publish();
+    },
     newTab: async () => { const id = `preview-${crypto.randomUUID()}`; state.tabs.push(homeTab(id, state.activeWorkspaceId, state.activeAccountSpaceId)); state.activeTabId = id; publish(); },
+    openTemporaryBrowsing: desktopOnly,
     closeTab: async (value) => {
       const tab = state.tabs.find((item) => item.id === value);
       if (!tab) return;
@@ -832,7 +1045,27 @@ export function installPreviewApi(): void {
       state.bookmarks = existing ? state.bookmarks.filter((item) => item !== existing) : [...state.bookmarks, { id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, title: tab.title, url: tab.url, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order: 99, orderPath: [99] }];
       publish();
     },
-    moveBookmark: async (levelValue, keyValue, indexValue) => { state.bookmarks = reorderBookmarkEntry(state.bookmarks, state.activeAccountSpaceId, levelValue as { location: 'bar'; path: string[] }, keyValue as { kind: 'bookmark'; id: string }, Number(indexValue)); publish(); },
+    saveBookmarkToFolder: async (id, tabId, url, folder) => {
+      const tab = activeTab();
+      if (id !== state.activeAccountSpaceId || tab.id !== tabId || tab.url !== url || tab.isHome) throw new Error('The page changed');
+      const owned = state.bookmarks.filter((item) => item.accountSpaceId === id);
+      const existing = owned.find((item) => item.url === url);
+      if (existing) {
+        await handlers.changeBookmarks(id, [existing.id], folder);
+        return;
+      }
+      const orderPath = nextBookmarkOrder(owned, getPreviewFolders(id), folder);
+      state.bookmarks.push({ id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: id, title: tab.title, url,
+        location: folder.location, folderPath: [...folder.path], order: orderPath[0], orderPath, createdAt: new Date().toISOString() });
+      publish();
+    },
+    moveBookmark: async (level, key, index) => {
+      const id = state.activeAccountSpaceId;
+      const result = reorderBookmarkLevel(state.bookmarks, getPreviewFolders(id), id, level, key, index);
+      state.bookmarks = result.bookmarks;
+      savedBookmarkFolders.set(id, result.folders);
+      publish();
+    },
     renameBookmark: async (idValue, titleValue) => { state.bookmarks = renameBookmark(state.bookmarks, String(idValue), String(titleValue)); publish(); },
     removeBookmark: async (idValue) => { state.bookmarks = removeBookmark(state.bookmarks, String(idValue)); publish(); },
     editBookmarkAddress: async (idValue, address) => {
@@ -844,7 +1077,7 @@ export function installPreviewApi(): void {
     changeBookmarks: async (account, ids, destination) => {
       const current = state.activeAccountSpaceId;
       if (account !== current) throw new Error('The Account Space changed');
-      const result = changeBookmarkBatch(state.bookmarks, current, ids as string[], destination as BookmarkLevelInput | undefined);
+      const result = changeBookmarkBatch(state.bookmarks, current, ids as string[], destination as BookmarkLevelInput | undefined, getPreviewFolders(current));
       if (!result.undo) return 0;
       state.bookmarks = result.bookmarks;
       bookmarkUndos.set(current, result.undo);
@@ -876,6 +1109,14 @@ export function installPreviewApi(): void {
       trackers.pause(state.activeAccountSpaceId, origin, paused);
       publish();
     },
+    setMemorySaverSite: async (tabId, origin, keepAwake) => {
+      if (tabId !== state.activeTabId || state.memorySaverSite?.origin !== origin) throw new Error('The site changed. Open Site information again.');
+      const sites = memorySites.get(state.activeAccountSpaceId) ?? new Set<string>();
+      if (keepAwake) sites.add(origin);
+      else sites.delete(origin);
+      memorySites.set(state.activeAccountSpaceId, sites);
+      publish();
+    },
     switchAccountSpace: async (value) => { const id = value as AccountSpaceId; const selected = state.accountSpaces.find((item) => item.id === id); if (!selected || selected.locked) throw new Error('Account Space is unavailable'); state.activeAccountSpaceId = id; state.activeWorkspaceId = selected.workspaceId; state.activeTabId = state.tabs.find((tab) => tab.accountSpaceId === id)!.id; publish(); },
     switchWorkspace: async (value) => { const workspaceId = value as WorkspaceId; state.activeWorkspaceId = workspaceId; state.activeAccountSpaceId = state.accountSpaces.find((item) => item.workspaceId === workspaceId)!.id; state.activeTabId = state.tabs.find((tab) => tab.accountSpaceId === state.activeAccountSpaceId)!.id; publish(); },
     addLocalAccountSpace: async (workspaceValue, labelValue, colorValue, googleSetupPending) => {
@@ -890,7 +1131,12 @@ export function installPreviewApi(): void {
     },
     updateAccountSpace: async (idValue, labelValue, colorValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { if (typeof labelValue === 'string') selected.label = labelValue; if (typeof colorValue === 'string') selected.color = colorValue as typeof selected.color; publish(); } },
     reorderAccountSpaces: async (_workspace, orderValue) => { (orderValue as AccountSpaceId[]).forEach((id, order) => { const item = state.accountSpaces.find((candidate) => candidate.id === id); if (item) item.order = order; }); publish(); },
-    openInAccountSpace: async () => undefined,
+    openInAccountSpace: async (id, url) => {
+      if (overviewFixture && id === google && id === state.activeAccountSpaceId) {
+        await handlers.newTab();
+        await handlers.navigate(url);
+      }
+    },
     setAccountSpaceLocked: async (idValue, lockedValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.locked = Boolean(lockedValue); selected.googleConnection = selected.locked ? 'locked' : 'disconnected'; publish(); } },
     configureGoogle: async () => { state.googleConfiguration = { configured: true, source: 'encrypted-settings' }; publish(); },
     connectGoogleAccount: async (idValue, modulesValue) => { const selected = state.accountSpaces.find((item) => item.id === idValue); if (selected) { selected.kind = 'google'; delete selected.googleSetupPending; selected.email = selected.email ?? 'account@example.com'; selected.googleConnection = 'connected'; selected.enabledModules = [...modulesValue as typeof selected.enabledModules]; publish(); } return { ok: true }; },
@@ -1069,21 +1315,31 @@ export function installPreviewApi(): void {
     listChromeProfiles: (async () => {
       if (params.get('chrome') === 'error') throw new Error('The sample Chrome profiles could not be read');
       if (params.get('chrome') === 'empty') return [];
-      return [{ id: 'Default', name: 'Sample Chrome profile', isDefault: true, hasBookmarks: true, hasHistory: true }];
+      const profiles = [{ id: 'Default', name: 'Sample Chrome profile', isDefault: true, hasBookmarks: true, hasHistory: true, hasPreferences: true }];
+      if (params.get('chrome') === 'mapping') profiles.push({ id: 'Profile 1', name: 'Research', isDefault: false, hasBookmarks: true, hasHistory: false, hasPreferences: true });
+      return profiles.map((profile) => ({
+        ...profile,
+        suggestedAccountSpaceId: profile.isDefault && state.activeWorkspaceId !== 'banking' ? state.activeAccountSpaceId : undefined,
+        imported: importedChromeProfiles.has(profile.id),
+        importedInto: importedChromeProfiles.get(profile.id),
+      }));
     }) satisfies PrivateBrowserApi['listChromeProfiles'],
     previewChromeImport: (async (value: unknown) => {
       const options = value as ChromeImportOptions;
       const destination = state.accountSpaces.find((item) => item.id === options.accountSpaceId && item.workspaceId === state.activeWorkspaceId);
-      if (!destination || destination.locked || destination.workspaceId === 'banking' || options.profileId !== 'Default') throw new Error('Choose an available regular Account Space and sample profile');
-      const key = 'preview-import-' + destination.id;
+      if (!destination || destination.locked || destination.workspaceId === 'banking') throw new Error('Choose an available regular Account Space and sample profile');
+      if (importedChromeProfiles.has(options.profileId)) throw new Error('This Chrome profile has already been imported.');
+      const key = 'preview-import-' + options.profileId + '-' + destination.id;
       const addBookmark = options.bookmarks && !state.bookmarks.some((item) => item.id === key);
       const addHistory = options.history && !state.history.some((item) => item.id === key);
       const skipped = { bookmarks: Number(options.bookmarks && !addBookmark), history: Number(options.history && !addHistory), passwords: 0 };
       const timestamp = '2026-09-12T10:00:00.000Z';
       const id = crypto.randomUUID();
       pendingChromeImport = { id, options, owner: state.activeAccountSpaceId };
+      const { patch, appliedSettings } = chromeSettingsFixture(options);
       return {
-        id, accountSpaceId: destination.id, result: { imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 }, skipped, warnings: [] },
+        id, accountSpaceId: destination.id, settingsPatch: patch,
+        result: { imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 }, skipped, warnings: [], appliedSettings },
         duplicates: skipped.bookmarks + skipped.history, unsupported: 0, overLimit: 0,
         folders: addBookmark ? [{ location: 'bar', path: ['Sample folder'], count: 1 }] : [], moreFolders: 0,
         historyRange: addHistory ? { from: timestamp, through: timestamp } : undefined,
@@ -1101,34 +1357,45 @@ export function installPreviewApi(): void {
       const destination = state.accountSpaces.find((item) => item.id === id && item.workspaceId === state.activeWorkspaceId && item.workspaceId !== 'banking' && !item.locked);
       if (!destination) throw new Error('Choose an available regular Account Space');
       const undo = chromeUndo.get(destination.id);
-      const key = 'preview-import-' + destination.id;
+      const key = 'preview-import-' + undo?.profileId + '-' + destination.id;
       const bookmarks = state.bookmarks.length;
       const history = state.history.length;
       if (undo?.bookmark) state.bookmarks = state.bookmarks.filter((item) => item.id !== key || item.title !== 'Sample imported page');
       if (undo?.history) state.history = state.history.filter((item) => item.id !== key);
+      if (undo?.settings) workspaceSettings[destination.workspaceId] = undo.settings;
+      if (undo && !state.bookmarks.some((item) => item.id === key) && !state.history.some((item) => item.id === key)) {
+        importedChromeProfiles.delete(undo.profileId);
+      }
       chromeUndo.delete(destination.id);
       publish();
-      return { bookmarks: bookmarks - state.bookmarks.length, history: history - state.history.length };
+      return { bookmarks: bookmarks - state.bookmarks.length, history: history - state.history.length, settingsRestored: undo?.settings ? true : undefined };
     },
     importChrome: (async (value: unknown) => {
       const { profileId, accountSpaceId, workspaceId, bookmarks, history } = value as Parameters<PrivateBrowserApi['importChrome']>[0];
       const destination = state.accountSpaces.find((item) => item.id === accountSpaceId && item.workspaceId === workspaceId);
       if (!destination || destination.locked || workspaceId === 'banking') throw new Error('Choose an available regular Account Space');
-      if (profileId !== 'Default') throw new Error('The sample Chrome profile is unavailable');
+      if (importedChromeProfiles.has(profileId)) throw new Error('This Chrome profile has already been imported.');
       const url = 'https://example.test/chrome-import';
       const title = 'Sample imported page';
       const timestamp = '2026-09-12T10:00:00.000Z';
-      const id = 'preview-import-' + accountSpaceId;
+      const id = 'preview-import-' + profileId + '-' + accountSpaceId;
       const addBookmark = bookmarks && !state.bookmarks.some((item) => item.id === id);
       const addHistory = history && !state.history.some((item) => item.id === id);
       if (addBookmark) state.bookmarks.push({ id, accountSpaceId, workspaceId, title, url, createdAt: timestamp, location: 'bar', folderPath: ['Sample folder'], order: 500, orderPath: [500, 0] });
       if (addHistory) state.history.push({ id, accountSpaceId, workspaceId, title, url, visitedAt: timestamp });
-      if (addBookmark || addHistory) chromeUndo.set(accountSpaceId, { bookmark: addBookmark, history: addHistory });
+      const { patch, appliedSettings } = chromeSettingsFixture(value as ChromeImportOptions);
+      const before = patch ? settingsForWorkspace({ settings: DEFAULT_BROWSER_SETTINGS, workspaceSettings }, workspaceId) : undefined;
+      if (before && patch) workspaceSettings[workspaceId] = mergeBrowserSettings(before, patch);
+      if (addBookmark || addHistory || patch) {
+        importedChromeProfiles.set(profileId, accountSpaceId);
+        chromeUndo.set(accountSpaceId, { profileId, bookmark: addBookmark, history: addHistory, settings: before });
+      }
       publish();
       return {
         imported: { bookmarks: Number(addBookmark), history: Number(addHistory), passwords: 0 },
         skipped: { bookmarks: Number(bookmarks && !addBookmark), history: Number(history && !addHistory), passwords: 0 },
         warnings: [],
+        appliedSettings,
       };
     }) satisfies PrivateBrowserApi['importChrome'],
     reviewChromePasswords: async () => {
@@ -1206,7 +1473,8 @@ export function installPreviewApi(): void {
     openReleaseHistory: async () => handlers.navigate('https://private-browser-downloads.digitronics-electro.workers.dev/#release-history'),
     listVault: async () => ({ available: true,
       items: params.has('vaultHealth') && !params.has('vaultGuide') ? [vaultHealthFixture] : [],
-      lifecycle: params.get('vaultGuide') ? 'locked' : 'unlocked',
+      lifecycle: params.get('vaultGuide') ? 'locked' : conflictFixture && !conflictResolved ? 'conflict' : 'unlocked',
+      conflictRecoveryAvailable: conflictResolved,
       platformUnlock: params.get('vaultGuide') === 'enrolled' ? 'enrolled' : undefined, sync: 'idle', dirty: false, generation: 1 }),
     checkVaultHealth: async (id): Promise<VaultHealthReport> => {
       if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development' || params.has('vaultGuide')) {
@@ -1223,7 +1491,7 @@ export function installPreviewApi(): void {
     listControlCenterRepositories: async () => ({ repositories: [{ id: 'repo-shop', name: 'shop', devOrigin: 'http://127.0.0.1:5173' }, { id: 'repo-site', name: 'site', devOrigin: null }], suggestedId: 'repo-shop' }),
     listControlCenterTasks: async () => [{ id: 'TASK-0042', title: 'The cart page crashes when it is empty', repositoryName: 'shop', status: 'COMPLETED', currentStageName: 'Complete', blocker: null, finalStatus: 'READY', createdAt: '2026-09-24T10:00:00.000Z', updatedAt: '2026-09-24T10:20:00.000Z', dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0042' }],
     sendToControlCenter: async () => ({ id: 'TASK-0043', title: 'Preview task', repositoryName: 'shop', status: 'QUEUED', currentStageName: 'Investigate', blocker: null, finalStatus: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), dashboardUrl: 'http://127.0.0.1:4317/tasks/TASK-0043' }),
-    recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md' }),
+    recheckControlCenterTask: async () => ({ name: 'browser-recheck-1.md', capturedAt: new Date().toISOString(), attachedAt: new Date().toISOString() }),
     inspectVaultFormShape: async () => ({ hasUsername: false, hasPassword: false }),
     copyGeneratedCredential: async () => {
       if (state.activeWorkspaceId === 'banking') throw new Error('Vault clipboard is disabled in this workspace');

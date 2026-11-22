@@ -25,7 +25,10 @@ the main process may hand the trusted chrome renderer a still JPEG of the active
 page (`browser:freeze-content`). The image is held in renderer memory only while
 the menu is open and never written to disk or sent anywhere. It is never produced
 for Banking or other protected workspaces, for `isProtectedPage` URLs, or for a
-hidden view; those show a neutral backdrop instead. Page layout insets sent by the
+hidden view; those show a neutral backdrop instead. The backdrop is also used
+when two native pages are visible in split view. Split view admits only regular
+pages from the active Account Space and closes both pane surfaces for a prompt
+or overlay. Page layout insets sent by the
 renderer are clamped so the address bar and its security warning can never be
 covered by page content.
 
@@ -57,6 +60,11 @@ Automatic fill and the side panel's Fill require an exact origin match — schem
 The login picker (the list of saved accounts under a focused sign-in field) is drawn by the browser, not the page. It is a separate sandboxed view with context isolation, no Node, no DevTools, a nonce CSP and a preload with exactly two channels (`fill-picker:choose`, `fill-picker:highlight`). The page receives nothing from it, and it receives only usernames, titles and saved hosts, never an entry id or a secret. Besides exact-origin logins it offers, as Chrome does, logins saved for other addresses of the same site: same registrable domain per the Public Suffix List (so `a.co.ma` and `b.co.ma` are different sites), same port, never an https credential into an http page, and never for IP addresses, `localhost` or punycode. Each is labelled with the address it was saved for and fills only when the user picks it; nothing fills a same-site login automatically. Each Account Space remembers its last pick per site on this device in `safeStorage` ciphertext. Reset remembered picks clears only the active Account Space. It opens only in response to genuine user input, and a choice is a row index honoured once, from that view, while the fill context is unchanged. Banking and Development never show it.
 
 ## Account Spaces and local browsing data
+
+[Temporary browsing](docs/temporary-browsing.md) uses a new in-memory session
+for each opened window. Remote content runs in a sandboxed view with no preload
+or privileged IPC. Website permissions, pop-ups and downloads are blocked.
+Only an explicit, reviewed bookmark can reach the persistent Account Space.
 
 Optional Windows session and idle locking close live views, clear transient
 credentials, and pause the developer and Agent bindings. The old chrome
@@ -117,7 +125,9 @@ the active visible tab plus a source picker every time. Banking denies before
 saved grants. Popups become tabs in the originating account, except a
 `window.open` popup from the page in front (payment and sign-in flows), which
 opens as a sandboxed, preload-free window in the same account session, titled
-with its host, confined to http(s), and closed with its tab.
+with its host, confined to http(s), and closed with its tab. The initial
+request waits for a native confirmation bound to the opener, destination,
+method and Account Space. It expires after 30 seconds.
 
 Google service access uses narrow main-process clients, bounded ten-second
 requests and scope checks. Gmail sends, calendar mutations, Drive permission

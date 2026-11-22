@@ -4,13 +4,19 @@ import type { AddressMatch, BrowsingDataInput, BrowsingDataReview, HistoryPage, 
 import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
 import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth, PageExcerptReview } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, DownloadFolderMode, FindResult, PinnablePanelTool, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
+import type { BrowsingPrivacyAction } from './browsing-protection.js';
+import type { VaultEntryDecision } from './myvault/conflict-items.js';
+import type { BookmarkSyncAction, BookmarkSyncPreview, BookmarkSyncStatus } from './bookmark-sync.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
-import type { BackupRestorePreview } from './types.js';
+import type { BackupReminderDays, BackupRestorePreview, BackupUploadPreview, GoogleOverviewPage, GoogleOverviewService } from './types.js';
+import type { GmailReplyDraft, VaultConflictReview } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentSpaceSettings, ClientLimits } from '@private-browser/bridge-protocol/agent-permissions';
+import type { DownloadByteProgress } from './types.js';
+import type { NotesDraftChoice, NotesDraftReview, NotesPanelCommand, NotesPanelStatus } from './notes-panel.js';
 
 const api = {
   getAgentStatus: (): Promise<AgentUiStatus> => ipcRenderer.invoke('agents:status'),
@@ -61,8 +67,10 @@ const api = {
   undoTabBatch: (): Promise<void> => ipcRenderer.invoke('browser:undo-tab-batch'),
   stop: (): Promise<void> => ipcRenderer.invoke('browser:stop'),
   newTab: (workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:new-tab', workspaceId, url, accountSpaceId),
+  openTemporaryBrowsing: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:open-temporary-browsing', accountSpaceId),
   closeTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:close-tab', tabId),
   activateTab: (tabId: string): Promise<void> => ipcRenderer.invoke('browser:activate-tab', tabId),
+  setSplitView: (tabId?: string): Promise<void> => ipcRenderer.invoke('browser:set-split-view', tabId),
   switchWorkspace: (workspaceId: WorkspaceId): Promise<void> => ipcRenderer.invoke('browser:switch-workspace', workspaceId),
   switchAccountSpace: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('browser:switch-account-space', accountSpaceId),
   addressMatches: (accountSpaceId: AccountSpaceId, text: string): Promise<AddressMatch[]> => ipcRenderer.invoke('browser:address-matches', accountSpaceId, text),
@@ -90,6 +98,9 @@ const api = {
   connectGoogleAccount: (accountSpaceId: AccountSpaceId, modules: GoogleModule[], browserId: ExternalBrowserId): Promise<GoogleOperationResult> => ipcRenderer.invoke('google:connect', accountSpaceId, modules, browserId),
   cancelGoogleConnection: (accountSpaceId: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('google:cancel', accountSpaceId),
   gmailOverview: (accountSpaceId: AccountSpaceId, operationId: string): Promise<GoogleOperationResult<GmailOverview>> => ipcRenderer.invoke('google:gmail-overview-run', accountSpaceId, operationId),
+  readGmailReplyDraft: (accountSpaceId: AccountSpaceId, operationId: string, messageId: string): Promise<GoogleOperationResult<GmailReplyDraft>> =>
+    ipcRenderer.invoke('google:gmail-reply-draft', accountSpaceId, operationId, messageId),
+  googleOverviewPage: (accountSpaceId: AccountSpaceId, operationId: string, service: GoogleOverviewService, cursor?: string): Promise<GoogleOperationResult<GoogleOverviewPage>> => ipcRenderer.invoke('google:overview-page', accountSpaceId, operationId, service, cursor),
   searchGmail: (accountSpaceId: AccountSpaceId, operationId: string, query = ''): Promise<GoogleOperationResult<GmailMessageHeader[]>> => ipcRenderer.invoke('google:gmail-search-run', accountSpaceId, operationId, query),
   prepareGmailSend: (accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string): Promise<GoogleMutationConfirmation> => ipcRenderer.invoke('google:gmail-prepare-send', accountSpaceId, input, sourceRevision),
   sendGmail: (accountSpaceId: AccountSpaceId, operationId: string, input: GmailSendInput, confirmationToken: string, sourceRevision?: string): Promise<GoogleOperationResult<{ id: string; threadId?: string }>> => ipcRenderer.invoke('google:gmail-send', accountSpaceId, operationId, input, confirmationToken, sourceRevision),
@@ -104,7 +115,13 @@ const api = {
   createBackupRecoveryCode: (accountSpaceId: AccountSpaceId): Promise<string> => ipcRenderer.invoke('backup:create-recovery', accountSpaceId),
   verifyAndEnableBackup: (accountSpaceId: AccountSpaceId, recoveryCode: string, includeOpenTabs: boolean, includeHistory: boolean): Promise<void> => ipcRenderer.invoke('backup:verify-enable', accountSpaceId, recoveryCode, includeOpenTabs, includeHistory),
   uploadBackup: (accountSpaceId: AccountSpaceId, operationId: string, conflictResolution?: 'merge' | 'overwrite'): Promise<BackupWriteResult> => ipcRenderer.invoke('backup:upload', accountSpaceId, operationId, conflictResolution),
-  previewBackupRestore: (accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string): Promise<BackupRestorePreview> => ipcRenderer.invoke('backup:preview-restore', accountSpaceId, operationId, recoveryCode),
+  previewBackupUpload: (id: AccountSpaceId, operation: string): Promise<BackupUploadPreview> => ipcRenderer.invoke('backup:preview-upload', id, operation),
+  applyBackupUpload: (id: string, operation: string, resolution: 'merge' | 'overwrite'): Promise<BackupWriteResult> =>
+    ipcRenderer.invoke('backup:apply-upload', id, operation, resolution),
+  cancelBackupUpload: (id: string): Promise<void> => ipcRenderer.invoke('backup:cancel-upload', id),
+  setBackupReminder: (id: AccountSpaceId, days: BackupReminderDays): Promise<void> => ipcRenderer.invoke('backup:set-reminder', id, days),
+  previewBackupRestore: (accountSpaceId: AccountSpaceId, operationId: string, recoveryCode?: string, generation?: string): Promise<BackupRestorePreview> =>
+    ipcRenderer.invoke('backup:preview-restore', accountSpaceId, operationId, recoveryCode, generation),
   applyBackupRestore: (id: string): Promise<void> => ipcRenderer.invoke('backup:apply-restore', id),
   cancelBackupRestore: (id: string): Promise<void> => ipcRenderer.invoke('backup:cancel-restore', id),
   disableBackup: (accountSpaceId: AccountSpaceId): Promise<void> => ipcRenderer.invoke('backup:disable', accountSpaceId),
@@ -121,6 +138,8 @@ const api = {
     ipcRenderer.invoke('browser:open-bookmarks-in-background', accountSpaceId, ids),
   toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
   setUiPreferences: (patch: UiPreferencesPatch, accountId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('ui:set-preferences', patch, accountId),
+  changeBrowsingPrivacy: (id: AccountSpaceId, action: BrowsingPrivacyAction, value?: number | boolean): Promise<boolean> => ipcRenderer.invoke('privacy:browsing', id, action, value),
+  changeBookmarkSync: (id: AccountSpaceId, action: BookmarkSyncAction, review?: string, choice?: 'local' | 'remote'): Promise<BookmarkSyncStatus | BookmarkSyncPreview | undefined> => ipcRenderer.invoke('bookmarks:sync', id, action, review, choice),
   setSidePanelPin: (accountId: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean): Promise<void> => ipcRenderer.invoke('ui:set-panel-pin', accountId, tool, enabled),
   setBrowserSettings: (patch: BrowserSettingsPatch, workspace?: WorkspaceId): Promise<void> => ipcRenderer.invoke('settings:set', patch, workspace),
   freezeContent: (): Promise<string | null> => ipcRenderer.invoke('browser:freeze-content'),
@@ -129,6 +148,8 @@ const api = {
   reopenRecentTab: (id: string): Promise<void> => ipcRenderer.invoke('browser:reopen-recent-tab', id),
   zoom: (direction: 'in' | 'out' | 'reset'): Promise<void> => ipcRenderer.invoke('browser:zoom', direction),
   print: (): Promise<void> => ipcRenderer.invoke('browser:print'),
+  openPdfInTab: (): Promise<void> => ipcRenderer.invoke('pdf:open'),
+  savePdf: (): Promise<void> => ipcRenderer.invoke('pdf:save'),
   findInPage: (text: string, forward: boolean, findNext: boolean): Promise<void> => ipcRenderer.invoke('browser:find', text, forward, findNext),
   stopFindInPage: (): Promise<void> => ipcRenderer.invoke('browser:stop-find'),
   setTabMuted: (tabId: string, muted: boolean): Promise<void> => ipcRenderer.invoke('browser:set-tab-muted', tabId, muted),
@@ -141,8 +162,14 @@ const api = {
   changeBookmarks: (account: AccountSpaceId, ids: string[], destination?: BookmarkLevelInput): Promise<number> =>
     ipcRenderer.invoke('bookmarks:change-many', account, ids, destination),
   undoBookmarks: (account: AccountSpaceId): Promise<number> => ipcRenderer.invoke('bookmarks:undo-many', account),
-  renameBookmarkFolder: (level: BookmarkLevelInput, name: string, nextName: string): Promise<void> => ipcRenderer.invoke('bookmarks:rename-folder', level, name, nextName),
-  removeBookmarkFolder: (level: BookmarkLevelInput, name: string): Promise<void> => ipcRenderer.invoke('bookmarks:remove-folder', level, name),
+  addBookmarkFolder: (account: AccountSpaceId, parent: BookmarkLevelInput, name: string): Promise<void> =>
+    ipcRenderer.invoke('bookmarks:add-folder', account, parent, name),
+  moveBookmarkFolder: (account: AccountSpaceId, source: BookmarkLevelInput, parent: BookmarkLevelInput): Promise<void> =>
+    ipcRenderer.invoke('bookmarks:move-folder', account, source, parent),
+  saveBookmarkToFolder: (account: AccountSpaceId, tabId: string, url: string, folder: BookmarkLevelInput): Promise<void> =>
+    ipcRenderer.invoke('bookmarks:save-to-folder', account, tabId, url, folder),
+  renameBookmarkFolder: (level: BookmarkLevelInput, name: string, nextName: string, id?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('bookmarks:rename-folder', level, name, nextName, id),
+  removeBookmarkFolder: (level: BookmarkLevelInput, name: string, id?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('bookmarks:remove-folder', level, name, id),
   exportBookmarks: (): Promise<boolean> => ipcRenderer.invoke('bookmarks:export'),
   importBookmarkHtml: (accountSpaceId: AccountSpaceId): Promise<{ imported: number; skipped: number } | undefined> =>
     ipcRenderer.invoke('bookmarks:import-html', accountSpaceId),
@@ -154,12 +181,13 @@ const api = {
   confirmChromeImport: (id: string): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:confirm-chrome-import', id),
   discardChromeImport: (id: string): Promise<void> => ipcRenderer.invoke('browser:discard-chrome-import', id),
   canUndoChromeImport: (id: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('browser:can-undo-chrome-import', id),
-  undoChromeImport: (id: AccountSpaceId): Promise<{ bookmarks: number; history: number }> => ipcRenderer.invoke('browser:undo-chrome-import', id),
+  undoChromeImport: (id: AccountSpaceId): Promise<{ bookmarks: number; history: number; settingsRestored?: boolean }> => ipcRenderer.invoke('browser:undo-chrome-import', id),
   reviewChromePasswords: (): Promise<ChromePasswordImportReview | undefined> => ipcRenderer.invoke('vault:review-chrome-passwords'),
   importReviewedChromePasswords: (id: string): Promise<ChromePasswordImportResult> => ipcRenderer.invoke('vault:import-reviewed-chrome-passwords', id),
   discardChromePasswordReview: (id: string): Promise<void> => ipcRenderer.invoke('vault:discard-chrome-password-review', id),
   toggleTrackerBlocking: (): Promise<void> => ipcRenderer.invoke('browser:toggle-tracker-blocking'),
   setTrackerCompatibility: (tabId: string, origin: string, paused: boolean): Promise<void> => ipcRenderer.invoke('browser:set-tracker-compatibility', tabId, origin, paused),
+  setMemorySaverSite: (tabId: string, origin: string, keepAwake: boolean): Promise<void> => ipcRenderer.invoke('browser:set-memory-saver-site', tabId, origin, keepAwake),
   openDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:open-download', id),
   controlDownload: (id: string, action: DownloadAction): Promise<void> => ipcRenderer.invoke('browser:control-download', id, action),
   showDownload: (id: string): Promise<void> => ipcRenderer.invoke('browser:show-download', id),
@@ -186,7 +214,7 @@ const api = {
   listControlCenterRepositories: (): Promise<{ repositories: ControlCenterRepository[]; suggestedId: string | null }> => ipcRenderer.invoke('control-center:repositories'),
   listControlCenterTasks: (): Promise<ControlCenterTask[]> => ipcRenderer.invoke('control-center:tasks'),
   sendToControlCenter: (input: ControlCenterSendInput): Promise<ControlCenterTask> => ipcRenderer.invoke('control-center:send', input),
-  recheckControlCenterTask: (input: ControlCenterRecheckInput): Promise<{ name: string }> => ipcRenderer.invoke('control-center:recheck', input),
+  recheckControlCenterTask: (input: ControlCenterRecheckInput): Promise<import('./types.js').ControlCenterEvidenceReceipt> => ipcRenderer.invoke('control-center:recheck', input),
   prepareAiPreview: (scope?: AiPreviewScope): Promise<AiPagePreview> => ipcRenderer.invoke('ai:prepare-preview', scope),
   prepareAssistantSource: (id: string, tabId: string): Promise<AssistantSelectionSource> => ipcRenderer.invoke('ai:prepare-source', id, tabId),
   reviewAssistantRequest: (id: string, text: string, question: string, withEvidence?: boolean, edits?: AssistantSelectionEdit[]): Promise<AiRequestReview> => ipcRenderer.invoke('ai:review-request', id, text, question, withEvidence, edits),
@@ -204,6 +232,14 @@ const api = {
   prepareClaudeExcerpt: (): Promise<PageExcerptReview> => ipcRenderer.invoke('side-app:prepare-claude-excerpt'),
   cancelClaudeExcerpt: (id: string): Promise<void> => ipcRenderer.invoke('side-app:cancel-claude-excerpt', id),
   copyClaudeExcerpt: (id: string): Promise<void> => ipcRenderer.invoke('side-app:copy-claude-excerpt', id),
+  notesPanelCommand: (kind: NotesPanelCommand): Promise<NotesPanelStatus | undefined> => ipcRenderer.invoke('notes:command', kind),
+  cancelNotesDraft: (id: string): Promise<void> => ipcRenderer.invoke('notes:cancel-draft', id),
+  deliverNotesDraft: (draft: NotesDraftChoice, copyOnly: boolean): Promise<void> => ipcRenderer.invoke('notes:deliver-draft', draft, copyOnly),
+  onNotesDraft: (callback: (review: NotesDraftReview) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, review: NotesDraftReview) => callback(review);
+    ipcRenderer.on('notes:draft-review', listener);
+    return () => { ipcRenderer.removeListener('notes:draft-review', listener); };
+  },
   listVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:list'),
   requestVaultUnlock: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-unlock'),
   unlockVaultWithHello: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:hello-unlock'),
@@ -212,8 +248,10 @@ const api = {
   requestVaultPairing: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-pairing'),
   lockVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:lock'),
   syncVaultNow: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:sync'),
-  getVaultConflictReview: (): Promise<{ local: VaultItemMeta[]; cloud: VaultItemMeta[] }> => ipcRenderer.invoke('vault:conflict-review'),
-  resolveVaultConflict: (choice: 'cloud' | 'local'): Promise<VaultStatus> => ipcRenderer.invoke('vault:resolve-conflict', choice),
+  getVaultConflictReview: (): Promise<VaultConflictReview> => ipcRenderer.invoke('vault:conflict-review'),
+  resolveVaultConflict: (choice: 'cloud' | 'local', reviewId: string): Promise<VaultStatus> => ipcRenderer.invoke('vault:resolve-conflict', choice, reviewId),
+  resolveVaultEntryConflict: (reviewId: string, entries: VaultEntryDecision[]): Promise<VaultStatus> => ipcRenderer.invoke('vault:resolve-entry-conflict', reviewId, entries),
+  showVaultConflictRecovery: (): Promise<void> => ipcRenderer.invoke('vault:show-conflict-recovery'),
   getVaultMigrationStatus: (): Promise<{ legacyAvailable: boolean }> => ipcRenderer.invoke('vault:migration-status'),
   migrateLegacyVault: (): Promise<{ sourceCount: number; importedCount: number; skippedCount: number; validatedCount: number; phase: string }> => ipcRenderer.invoke('vault:migrate-legacy'),
   cleanupLegacyVault: (): Promise<boolean> => ipcRenderer.invoke('vault:cleanup-legacy'),
@@ -224,6 +262,7 @@ const api = {
   resetVaultPicks: (accountId: AccountSpaceId): Promise<boolean> => ipcRenderer.invoke('vault:reset-picks', accountId),
   vaultFillReadiness: (): Promise<VaultFillReadiness> => ipcRenderer.invoke('vault:fill-readiness'),
   requestSaveFromPage: (): Promise<VaultItemMeta | undefined> => ipcRenderer.invoke('vault:save-from-page'),
+  setWordPressSaveSite: (id: string, origin: string, enabled: boolean): Promise<void> => ipcRenderer.invoke('vault:wordpress-save-setting', id, origin, enabled),
   requestVaultDelete: (id: string): Promise<boolean> => ipcRenderer.invoke('vault:request-delete', id),
   acknowledgeVaultRecovery: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:acknowledge-recovery'),
   copyPassword: (id: string): Promise<void> => ipcRenderer.invoke('vault:copy-password', id),
@@ -249,6 +288,11 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, state: BrowserSnapshot) => callback(state);
     ipcRenderer.on('browser:state', listener);
     return () => { ipcRenderer.removeListener('browser:state', listener); };
+  },
+  onDownloadProgress: (callback: (progress: DownloadByteProgress) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: DownloadByteProgress) => callback(progress);
+    ipcRenderer.on('downloads:progress', listener);
+    return () => { ipcRenderer.removeListener('downloads:progress', listener); };
   },
   onCommand: (callback: (shortcut: Shortcut) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, shortcut: Shortcut) => callback(shortcut);

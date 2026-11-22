@@ -30,8 +30,8 @@ export function popupTitle(url: string, pageTitle: string): string {
  * and no other. `outlivesOpener: false` closes it with the tab, including when
  * the tab is closed or its Account Space locked.
  */
-export function popupWindowResponse(parent: BrowserWindow): WindowOpenHandlerResponse {
-  return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: popupWindowOptions(parent) };
+export function popupWindowResponse(parent: BrowserWindow, createWindow?: (options: BrowserWindowConstructorOptions) => WebContents): WindowOpenHandlerResponse {
+  return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: popupWindowOptions(parent), createWindow };
 }
 
 function popupWindowOptions(parent: BrowserWindow): BrowserWindowConstructorOptions {
@@ -47,6 +47,63 @@ function popupWindowOptions(parent: BrowserWindow): BrowserWindowConstructorOpti
       allowRunningInsecureContent: false,
     },
   };
+}
+
+type PopupReviewOutcome = 'continued' | 'cancelled' | 'expired' | 'changed';
+
+interface PopupReviewInputs {
+  url: string;
+  method: 'GET' | 'POST';
+  current: () => boolean;
+  ask: (signal: AbortSignal) => Promise<boolean>;
+  finish: (outcome: PopupReviewOutcome) => void;
+}
+
+/** Holds a popup's first request before its HTTP method or body leaves the session. */
+export class PopupReview {
+  private active?: { contentsId: number; request: PopupReviewInputs; hold?: (allowed: boolean) => void; signal: AbortSignal; settle: (outcome: PopupReviewOutcome) => void };
+
+  get pending(): boolean { return Boolean(this.active); }
+
+  cancel(): void { this.active?.settle('changed'); }
+
+  start(child: BrowserWindow, request: PopupReviewInputs, timeoutMs = 30_000): void {
+    const abort = new AbortController();
+    const contentsId = child.webContents.id;
+    const active = { contentsId, request, hold: undefined as ((allowed: boolean) => void) | undefined, signal: abort.signal, settle: (outcome: PopupReviewOutcome) => settle(outcome) };
+    const finishChild = () => settle('changed');
+    const timer = setTimeout(() => settle('expired'), timeoutMs);
+    const settle = (outcome: PopupReviewOutcome) => {
+      if (this.active !== active) return;
+      this.active = undefined;
+      clearTimeout(timer);
+      abort.abort();
+      child.removeListener('closed', finishChild);
+      const allowed = outcome === 'continued' && Boolean(active.hold) && request.current() && !child.isDestroyed();
+      active.hold?.(allowed);
+      if (allowed) child.show();
+      else if (!child.isDestroyed()) child.destroy();
+      request.finish(allowed ? 'continued' : outcome === 'continued' ? 'changed' : outcome);
+    };
+    this.active = active;
+    child.once('closed', finishChild);
+  }
+
+  hold(details: { webContentsId?: number; url: string; resourceType: string; method: string }, reply: (allowed: boolean) => void): boolean {
+    const active = this.active;
+    if (!active || details.webContentsId !== active.contentsId) return false;
+    const url = new URL(active.request.url);
+    url.hash = '';
+    if (active.hold || details.resourceType !== 'mainFrame' || details.url !== url.href || details.method !== active.request.method) {
+      reply(false);
+      return true;
+    }
+    active.hold = reply;
+    void Promise.resolve().then(() => active.request.ask(active.signal)).then(
+      (approved) => active.settle(approved ? 'continued' : 'cancelled'), () => active.settle('cancelled'),
+    );
+    return true;
+  }
 }
 
 /** Keeps a page on http(s) and strips campaign identifiers, for tabs and popups alike. */

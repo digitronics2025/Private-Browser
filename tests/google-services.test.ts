@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AccountStore, type SafeStorageAdapter } from '../electron/account-store';
 import { GoogleMutationConfirmations } from '../electron/google-confirmations';
 import { GoogleConfigurationStore } from '../electron/google-config';
+import { GoogleActionReceipts } from '../electron/google-action-receipts';
 import { GoogleServices, type CalendarWriteInput, type GmailSendInput } from '../electron/google-services';
 import { scopesForModules } from '../electron/google-scopes';
 import { GoogleTokenBroker } from '../electron/google-token-broker';
@@ -35,8 +36,11 @@ function fixture(request: typeof fetch, seedToken = true) {
   if (seedToken) broker.seedAccessToken(ID, 'access-secret', Date.parse('2026-09-12T11:00:00Z'));
   const confirmations = new GoogleMutationConfirmations(() => new Date('2026-09-12T10:00:00Z'));
   const waits: number[] = [];
-  const services = new GoogleServices(broker, confirmations, request, async (milliseconds) => { waits.push(milliseconds); }, () => 0);
-  return { root, accounts, broker, confirmations, services, waits };
+  const makeServices = () => new GoogleServices(broker, new GoogleActionReceipts({
+    read: (id) => accounts.require(id).googleActionReceipts ?? [],
+    write: (id, receipts) => { accounts.update(id, (record) => { record.googleActionReceipts = receipts; }); },
+  }), confirmations, request, async (milliseconds) => { waits.push(milliseconds); }, () => 0);
+  return { root, accounts, broker, confirmations, services: makeServices(), makeServices, waits };
 }
 
 describe('narrow resilient Google services', () => {
@@ -94,6 +98,54 @@ describe('narrow resilient Google services', () => {
     expect(request.mock.calls.some(([input]) => String(input).includes('format=metadata'))).toBe(true);
   });
 
+  it('pages only enabled overview modules and confines original links to Google', async () => {
+    const request = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'gmail.googleapis.com') {
+        if (url.pathname.endsWith('/messages')) {
+          expect(url.searchParams.get('maxResults')).toBe('10');
+          expect(url.searchParams.get('labelIds')).toBe('INBOX');
+          expect(url.searchParams.get('pageToken')).toBe('requested+/next');
+          return json({ messages: [{ id: 'm1' }], nextPageToken: 'mail-next' });
+        }
+        expect(url.searchParams.get('format')).toBe('metadata');
+        expect(url.searchParams.getAll('metadataHeaders')).toEqual(['From', 'Subject', 'Date']);
+        return json({ id: 'm1', threadId: 't1', payload: { headers: [{ name: 'Subject', value: 'Inbox subject' }], body: 'not displayed' } });
+      }
+      if (url.hostname === 'www.googleapis.com') {
+        expect(url.searchParams.get('q')).toBe('trashed = false');
+        expect(url.searchParams.get('orderBy')).toBe('modifiedTime desc');
+        return json({ files: [{ id: 'f1', name: 'Approved file', mimeType: 'application/pdf' }], nextPageToken: 'x'.repeat(2049) });
+      }
+      throw new Error('Unexpected overview request');
+    });
+    const { services } = fixture(request);
+    await expect(services.recentOverviewPage(ID, 'gmail', ['gmail-send'])).resolves.toMatchObject({ ok: false, error: { code: 'GOOGLE_POLICY_DENIED' } });
+    expect(request).not.toHaveBeenCalled();
+    await expect(services.recentOverviewPage(ID, 'gmail', ['gmail-metadata'], 'requested+/next')).resolves.toMatchObject({
+      ok: true, data: { token: 'mail-next', items: [{ id: 'm1', title: 'Inbox subject', original: 'https://mail.google.com/mail/#inbox/t1' }] },
+    });
+    await expect(services.recentOverviewPage(ID, 'drive', ['drive-files'])).resolves.toMatchObject({
+      ok: true, data: { token: undefined, items: [{ id: 'f1', title: 'Approved file', original: 'https://drive.google.com/open?id=f1' }] },
+    });
+    request.mockImplementationOnce(async (input) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe('/calendar/v3/calendars/primary/events');
+      expect(url.searchParams.get('timeMin')).toBe('2026-11-21T10:00:00.000Z');
+      expect(url.searchParams.get('orderBy')).toBe('startTime');
+      return json({ items: [
+        { id: 'e1', summary: 'Planning', start: { date: '2026-11-22' }, htmlLink: 'https://www.google.com/calendar/event?eid=abc_123&ignored=one' },
+        { id: 'e2', summary: 'Review', start: { date: '2026-11-23' }, htmlLink: 'https://outside.example.test/?eid=abc' },
+      ] });
+    });
+    await expect(services.recentOverviewPage(ID, 'calendar', ['calendar-read'], undefined, '2026-11-21T10:00:00.000Z')).resolves.toMatchObject({
+      ok: true, data: { items: [
+        { id: 'e1', title: 'Planning', date: '2026-11-22', original: 'https://calendar.google.com/calendar/event?eid=abc_123' },
+        { id: 'e2', title: 'Review', original: undefined },
+      ] },
+    });
+  });
+
   it('requires a payload-bound one-use confirmation before Gmail send', async () => {
     const request = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { raw: string };
@@ -111,6 +163,41 @@ describe('narrow resilient Google services', () => {
     await expect(services.sendGmail(ID, input, second.token, 'AI-REV-1')).resolves.toMatchObject({ ok: true, data: { id: 'sent-1' } });
     await expect(services.sendGmail(ID, input, second.token, 'AI-REV-1')).resolves.toMatchObject({ ok: false });
     expect(readFileSync(join(root, 'accounts', `${ID}.account.enc`), 'utf8')).not.toContain('Sensitive body');
+  });
+
+  it('uses metadata to reply in the original thread and remembers a confirmed receipt across broker reconstruction', async () => {
+    const request = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (init?.method !== 'POST') {
+        expect(url.pathname).toBe('/gmail/v1/users/me/messages/original');
+        expect(url.searchParams.get('format')).toBe('metadata');
+        expect(url.searchParams.getAll('metadataHeaders')).toEqual(['From', 'Reply-To', 'Subject', 'Message-ID', 'References']);
+        return json({ threadId: 'thread-1', payload: { headers: [
+          { name: 'From', value: 'Sample <original@example.test>' }, { name: 'Reply-To', value: 'support@example.test' },
+          { name: 'Subject', value: 'Exact subject' }, { name: 'Message-ID', value: '<message@example.test>' },
+          { name: 'References', value: '<older@example.test>' },
+        ] } });
+      }
+      const body = JSON.parse(String(init.body)) as { threadId: string; raw: string };
+      expect(body.threadId).toBe('thread-1');
+      expect(Buffer.from(body.raw, 'base64url').toString()).toContain('In-Reply-To: <message@example.test>\r\nReferences: <older@example.test> <message@example.test>');
+      return json({ id: 'sent-2', threadId: 'thread-1' });
+    });
+    const { services, makeServices, accounts } = fixture(request);
+    const source = (await services.readGmailReplySource(ID, 'original')).data!;
+    const input = { to: ['support@example.test'], subject: 'Exact subject', body: 'A private fixture message' };
+    expect(() => services.prepareGmailSend(ID, { ...input, to: ['other@example.test'] }, 'source-1', source)).toThrow(/recipient or subject changed/);
+    expect(() => services.prepareGmailSend(ID, { ...input, to: ['valid@example.test,extra@example.test'] })).toThrow(/Invalid email/);
+    const review = services.prepareGmailSend(ID, input, 'source-1', source);
+    const result = await services.sendGmail(ID, input, review.token, 'source-1', undefined, source);
+    expect(result.receipt).toMatchObject({ state: 'confirmed', providerId: 'sent-2' });
+    const rebuilt = makeServices();
+    const another = rebuilt.prepareGmailSend(ID, input, 'source-2', source);
+    await expect(rebuilt.sendGmail(ID, input, another.token, 'source-2', undefined, source)).resolves.toMatchObject({ ok: false, receipt: result.receipt });
+    expect(request).toHaveBeenCalledTimes(2);
+    const stored = JSON.stringify(accounts.require(ID).googleActionReceipts);
+    expect(stored).not.toContain(input.body);
+    expect(stored).not.toContain(input.to[0]);
   });
 
   it('confirms calendar invitations and creates a unique Meet request ID', async () => {
@@ -145,7 +232,11 @@ describe('narrow resilient Google services', () => {
     const offline = fixture(offlineRequest);
     const send = { to: ['recipient@example.test'], subject: 'One try', body: 'Body' };
     const confirmation = offline.services.prepareGmailSend(ID, send);
-    await expect(offline.services.sendGmail(ID, send, confirmation.token)).resolves.toMatchObject({ ok: false, error: { code: 'GOOGLE_OFFLINE' } });
+    const uncertain = await offline.services.sendGmail(ID, send, confirmation.token);
+    expect(uncertain).toMatchObject({ ok: false, error: { code: 'GOOGLE_OFFLINE' }, receipt: { state: 'unconfirmed' } });
+    const followup = offline.makeServices();
+    const retry = followup.prepareGmailSend(ID, send);
+    await expect(followup.sendGmail(ID, send, retry.token)).resolves.toMatchObject({ ok: false, receipt: uncertain.receipt });
     expect(offlineRequest).toHaveBeenCalledOnce();
   });
 

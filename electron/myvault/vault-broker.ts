@@ -6,6 +6,7 @@ import type { TotpConfig, VaultEnvelope, VaultItem, VaultPayload } from './types
 import type { PasskeyCredential } from './security/passkeys/types.js';
 import { isConnectionState, MyVaultDiskStore, type BrokerConnectionState, type StoreBlockReason } from './vault-store.js';
 import { PlatformUnlockError, platformUnlockKeyName, type PlatformUnlockSigner } from './windows-hello.js';
+import { planVaultEntrySelection, reconcileVaultItems, type VaultEntryDecision, type VaultEntryDifference } from './conflict-items.js';
 
 export type BrokerLifecycle = 'unconfigured' | 'locked' | 'unlocked' | 'conflict' | 'recovery-required';
 export type BrokerSyncState = 'disabled' | 'idle' | 'dirty' | 'syncing' | 'synced' | 'conflict' | 'error';
@@ -20,6 +21,10 @@ export interface VaultEntryMetadata {
   hasPassword: boolean;
   hasTotp: boolean;
   updatedAt: string;
+}
+
+interface ConflictEntryMetadata extends Omit<VaultEntryMetadata, 'type' | 'hasPassword' | 'hasTotp'> {
+  type: VaultItem['type'] | 'passkey';
 }
 
 export interface BrokerStatus {
@@ -451,9 +456,9 @@ export class VaultBroker {
     this.changed();
   }
 
-  trustedSyncSnapshot(): { envelope: VaultEnvelope; connection: BrokerConnectionState } {
+  trustedSyncSnapshot(): { envelope: VaultEnvelope; connection: BrokerConnectionState; generation: number } {
     if (!this.payload || !this.session || !this.envelope || !this.connection) throw new Error('MyVault is not connected and unlocked');
-    return { envelope: this.envelope, connection: { ...this.connection } };
+    return { envelope: this.envelope, connection: { ...this.connection }, generation: this.generation };
   }
 
   markSyncing(): void {
@@ -472,10 +477,9 @@ export class VaultBroker {
    *
    * `basis` is the local envelope the pull started from. If a mutation landed
    * since, replacing it would erase that change, so the pull becomes an explicit
-   * conflict instead (vault.md invariant 3). An explicit "keep cloud" choice
-   * passes no basis. A lock during the decrypt wins: nothing is re-opened.
+   * conflict instead (vault.md invariant 3). A lock during decrypt wins.
    */
-  acceptRemote(remote: RemoteVaultSnapshot, options: { basis?: VaultEnvelope; syncedAt?: string } = {}): Promise<'accepted' | 'conflict'> {
+  acceptRemote(remote: RemoteVaultSnapshot, options: { basis?: VaultEnvelope; syncedAt?: string; assertOwner?: () => void } = {}): Promise<'accepted' | 'conflict'> {
     return this.exclusive(async () => {
       const session = this.session;
       if (!session || !this.connection || !this.envelope) throw new Error('MyVault is locked');
@@ -485,9 +489,14 @@ export class VaultBroker {
       }
       const payload = await decryptWithSession(remote.envelope, session);
       if (this.session !== session) throw new Error('MyVault is locked');
+      options.assertOwner?.();
       const connection = { ...this.connection, remoteVersion: remote.version, dirty: false, lastSyncAt: options.syncedAt ?? new Date().toISOString() };
       this.store.writeEnvelope(remote.envelope);
-      this.store.writeConnection(connection);
+      try { this.store.writeConnection(connection); }
+      catch (error) {
+        this.store.writeEnvelope(this.envelope);
+        throw error;
+      }
       this.envelope = remote.envelope;
       this.payload = payload;
       this.connection = connection;
@@ -517,12 +526,39 @@ export class VaultBroker {
     this.markConflict();
   }
 
-  async conflictReview(): Promise<{ local: VaultEntryMetadata[]; cloud: VaultEntryMetadata[] }> {
-    if (!this.conflictRemote || !this.session) throw new Error('No MyVault conflict is pending');
-    const cloud = await decryptWithSession(this.conflictRemote.envelope, this.session);
-    const local = this.payload;
-    if (!local) throw new Error('MyVault is locked');
-    return { local: local.items.map(metadata), cloud: cloud.items.map(metadata) };
+  async conflictReview(): Promise<{ local: ConflictEntryMetadata[]; cloud: ConflictEntryMetadata[]; localUpdatedAt: string; cloudUpdatedAt: string; itemChoices?: VaultEntryDifference[] }> {
+    const { session, conflictRemote, envelope, payload } = this;
+    if (!conflictRemote || !session || !envelope || !payload) throw new Error('No MyVault conflict is pending');
+    const cloud = await decryptWithSession(conflictRemote.envelope, session);
+    if (this.session !== session || this.envelope !== envelope || this.conflictRemote !== conflictRemote) throw new Error('The conflict changed. Review it again.');
+    const review = (copy: VaultPayload): ConflictEntryMetadata[] => [
+      ...copy.items.map(({ id, title, type, username, url, favorite, updatedAt }) => ({ id, title, type, username, url, favorite, updatedAt })),
+      ...copy.passkeys.map((passkey): ConflictEntryMetadata => ({ id: 'passkey-' + createHash('sha256').update(passkey.id).digest('hex'),
+        title: 'Passkey for ' + passkey.rpId, type: 'passkey', username: passkey.userName, favorite: false, updatedAt: passkey.createdAt })),
+    ];
+    return { local: review(payload), cloud: review(cloud),
+      localUpdatedAt: envelope.updatedAt, cloudUpdatedAt: conflictRemote.updatedAt,
+      itemChoices: planVaultEntrySelection(payload, cloud)?.choices.map(({ metadata }) => metadata) };
+  }
+
+  async prepareVaultEntryResolution(basis: VaultEnvelope, cloud: VaultEnvelope, choices: VaultEntryDecision[]): Promise<VaultEnvelope> {
+    const { session, envelope, payload } = this;
+    if (!session || !payload || envelope !== basis || !this.conflictRemote) throw new Error('The conflict changed. Review it again.');
+    const remote = await decryptWithSession(cloud, session);
+    if (this.session !== session || this.envelope !== envelope || this.payload !== payload) throw new Error('The conflict changed. Review it again.');
+    const result = reconcileVaultItems(payload, remote, choices);
+    const encrypted = await encryptVaultPayload(result, envelope, session);
+    if (this.session !== session || this.envelope !== envelope || this.payload !== payload) throw new Error('The conflict changed. Review it again.');
+    return encrypted;
+  }
+
+  saveConflictRecovery(local: VaultEnvelope, cloud: VaultEnvelope): void {
+    if (!this.session || this.envelope !== local || !this.conflictRemote) throw new Error('The conflict changed. Review it again.');
+    this.store.saveConflictRecovery(local, cloud);
+  }
+
+  conflictRecoveryFolder(): string | undefined {
+    return this.store.hasConflictRecovery() ? this.store.conflictRecoveryPath : undefined;
   }
 
   pendingConflict() {

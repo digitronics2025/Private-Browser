@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Check, KeyRound, LoaderCircle, ShieldCheck, X } from 'lucide-react';
-import type { AccountSpaceId, Bookmark, BookmarkLevelInput, BrowserSnapshot, PageExcerptReview, Shortcut, ShortcutTile, SidePanelTool, UiPreferences, UiPreferencesPatch, WindowState } from '../electron/types';
+import type { AccountSpaceId, Bookmark, BookmarkFolder, BookmarkLevelInput, BrowserSnapshot, PageExcerptReview, Shortcut, ShortcutTile, SidePanelTool, UiPreferences, UiPreferencesPatch, WindowState } from '../electron/types';
+import { bookmarkFolderKey, bookmarkFolderLabel, bookmarkFolders } from '../electron/bookmark-maintenance';
+import { hasBookmarkPath } from '../electron/bookmark-tree';
 import { CHROME, computeChromeLayout, FRAME_COLORS } from '../electron/chrome-layout';
 import { resolveShortcut } from '../electron/shortcuts';
 import { DEFAULT_UI_PREFERENCES } from '../electron/ui-preferences';
@@ -19,11 +21,11 @@ import { ShieldStatusMenu, SiteInfoMenu, TabSearchMenu, ZoomMenu } from './shell
 import { PromptDialog, type PromptRequest } from './shell/PromptDialog';
 import { ClearBrowsingDataDialog } from './shell/ClearBrowsingDataDialog';
 import { ClaudeExcerptDialog } from './shell/ClaudeExcerptDialog';
+import type { NotesDraftReview } from '../electron/notes-panel';
 import { AccountManager } from './panels/AccountManager';
 import { PermissionOverlay, RecoveryOverlay } from './panels/Overlays';
 import { useModalFocus } from './lib/dialog';
 import { AssistantPanel } from './panels/AssistantPanel';
-import { SideAppPanel } from './panels/SideAppPanel';
 import { DeveloperPanel } from './panels/DeveloperPanel';
 import { VaultPanel } from './panels/VaultPanel';
 import { AutomationPanel } from './panels/AutomationPanel';
@@ -41,9 +43,13 @@ import { DEFAULT_BROWSER_SETTINGS, searchEngineLabel, type BrowserSettings } fro
 import { isAllowedRemoteUrl, isProtectedPage, stripTrackingParameters } from '../electron/security';
 import { useAgentStatus } from './panels/AgentsPanel';
 
+const SideAppPanel = lazy(() => import('./panels/SideAppPanel').then((module) => ({ default: module.SideAppPanel })));
+const NotesDraftDialog = lazy(() => import('./shell/NotesDraftDialog').then((module) => ({ default: module.NotesDraftDialog })));
+
 type MenuKind = 'browser' | 'profile' | 'shield' | 'tab-search' | 'site-info' | 'zoom';
 
 const DEFAULT_WINDOW_STATE: WindowState = { maximized: false, fullscreen: false, darkMode: true };
+const EMPTY_BOOKMARK_FOLDERS: BookmarkFolder[] = [];
 
 function nextPaint(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -65,6 +71,7 @@ export default function App() {
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
   const [accountManagerOpen, setAccountManagerOpen] = useState(false);
   const [claudeExcerpt, setClaudeExcerpt] = useState<PageExcerptReview>();
+  const [notesDraft, setNotesDraft] = useState<NotesDraftReview>();
   const [settingsEntry, setSettingsEntry] = useState<'overview' | 'setup'>('overview');
   const [vaultFullOpen, setVaultFullOpen] = useState(false);
   const [menu, setMenu] = useState<MenuKind | null>(null);
@@ -99,6 +106,7 @@ export default function App() {
   const searchPrompt = engineLabel ? `Search ${engineLabel} or enter address` : 'Search the web or enter address';
   const workspaceTabs = useMemo(() => state?.tabs.filter((tab) => tab.accountSpaceId === state.activeAccountSpaceId) ?? [], [state?.tabs, state?.activeAccountSpaceId]);
   const accountBookmarks = useMemo(() => state?.bookmarks.filter((item) => item.accountSpaceId === state.activeAccountSpaceId) ?? [], [state?.bookmarks, state?.activeAccountSpaceId]);
+  const accountFolders = state?.bookmarkFolders ?? EMPTY_BOOKMARK_FOLDERS;
   const favicons = useMemo(() => faviconsByHost(state?.tabs ?? [], state?.bookmarkIcons), [state?.tabs, state?.bookmarkIcons]);
   const ui: UiPreferences = { ...DEFAULT_UI_PREFERENCES, ...state?.ui, ...pendingUi };
   const windowState = state?.windowState ?? DEFAULT_WINDOW_STATE;
@@ -120,6 +128,18 @@ export default function App() {
   useEffect(() => disposer(window.privateBrowser.onUpdateAvailable((result) => {
     showToast(`Private Browser ${result.latest.version} is ready to download`);
   })), []);
+  useEffect(() => disposer(window.privateBrowser.onNotesDraft(setNotesDraft)), []);
+  useEffect(() => {
+    if (state && (state.sessionLock || (notesDraft && (notesDraft.accountSpaceId !== state.activeAccountSpaceId || notesDraft.tabId !== state.activeTabId)))) {
+      setNotesDraft(undefined);
+    }
+  }, [state?.sessionLock, state?.activeAccountSpaceId, state?.activeTabId, notesDraft]);
+  useEffect(() => {
+    if (!notesDraft) return;
+    const timer = window.setTimeout(() => setNotesDraft(undefined), Math.max(0, notesDraft.expiresAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [notesDraft]);
+  useEffect(() => { setNotesDraft(undefined); }, [activeTab?.url]);
 
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth);
@@ -203,18 +223,21 @@ export default function App() {
     };
   }, []);
 
-  // Freeze the page, then hide the live view, so menus and dialogs can draw over
-  // the content area. Protected pages come back as null and show a plain backdrop.
+  // Paint a backdrop before hiding the native view. A ready still can replace
+  // the backdrop while preparing the overlay. The menu never waits for capture.
   useEffect(() => {
     if (state?.sessionLock) return;
     let cancelled = false;
     if (overlayOpen) {
       setOverlayReady(false);
+      setFrozenFrame('');
       void (async () => {
-        const frame = await window.privateBrowser.freezeContent().catch(() => null);
-        if (cancelled) return;
-        setFrozenFrame(frame ?? '');
+        let preparing = true;
+        void window.privateBrowser.freezeContent().then((frame) => {
+          if (frame && preparing && !cancelled) setFrozenFrame(frame);
+        }).catch(() => undefined);
         await nextPaint();
+        preparing = false;
         if (cancelled) return;
         await window.privateBrowser.setOverlayOpen(overlayOpen).catch(() => undefined);
         if (!cancelled) setOverlayReady(true);
@@ -297,7 +320,10 @@ export default function App() {
       case 'bookmark-manager': openTool('bookmarks'); break;
       case 'history': openTool('history'); break;
       case 'downloads': openTool('downloads'); break;
-      case 'find': if (!activeTab.isHome) { setFindOpen(true); setFindFocus((value) => value + 1); } break;
+      case 'find':
+        if (state.pdfDocument?.mode === 'protected') void act(() => window.privateBrowser.openPdfInTab());
+        else if (!activeTab.isHome) { setFindOpen(true); setFindFocus((value) => value + 1); }
+        break;
       case 'print': void act(() => window.privateBrowser.print()); break;
       case 'zoom-in': void act(() => window.privateBrowser.zoom('in')); break;
       case 'zoom-out': void act(() => window.privateBrowser.zoom('out')); break;
@@ -398,16 +424,39 @@ export default function App() {
     void act(() => saveShortcuts(next), 'Shortcut moved');
   };
 
+  const chooseBookmarkFolder = (title: string, confirmLabel: string, allowed: (item: BookmarkLevelInput) => boolean,
+    submit: (folder: BookmarkLevelInput) => Promise<unknown>) => {
+    const folders = bookmarkFolders(accountBookmarks, accountFolders).filter(allowed);
+    setPrompt({ title, confirmLabel, fields: [{ name: 'folder', label: 'Destination folder', value: '',
+      options: folders.map((level) => ({ value: bookmarkFolderKey(level), label: bookmarkFolderLabel(level) })) }],
+    submit: ({ folder }) => {
+      const chosen = folders.find((entry) => bookmarkFolderKey(entry) === folder);
+      if (!chosen) throw new Error('Choose a destination folder.');
+      return submit(chosen);
+    } });
+  };
+  const bookmarkToFolder = () => {
+    if (activeTab.isHome) return;
+    chooseBookmarkFolder('Bookmark this tab in a folder', 'Save bookmark', () => true,
+      (folder) => window.privateBrowser.saveBookmarkToFolder(activeAccount.id, activeTab.id, activeTab.url, folder));
+  };
+  const createBookmarkFolder = (parent: BookmarkLevelInput) => setPrompt({ title: 'New bookmark folder', confirmLabel: 'Create folder',
+    fields: [{ name: 'name', label: 'Folder name', value: '', maxLength: 200 }],
+    submit: ({ name }) => window.privateBrowser.addBookmarkFolder(activeAccount.id, parent, name) });
+  const moveBookmarkFolder = (source: BookmarkLevelInput) => chooseBookmarkFolder('Move bookmark folder', 'Move folder',
+    (parent) => parent.path.length < 20 && (source.location !== parent.location || !hasBookmarkPath(parent.path, source.path)),
+    (parent) => window.privateBrowser.moveBookmarkFolder(activeAccount.id, source, parent));
+
   const bookmarkActions: BookmarkActions = {
     open: (id) => void act(() => window.privateBrowser.openBookmark(id)),
     openAll: (items) => setBookmarkBatch({ accountId: activeAccount.id, items }),
     copyLink: (url) => void act(() => window.privateBrowser.copyText(url), 'Link copied'),
     rename: (item) => setPrompt({ title: 'Edit bookmark name', description: 'Leave the name empty to show only the icon on the bookmarks bar.', confirmLabel: 'Save', fields: [{ name: 'title', label: 'Name', value: item.title, maxLength: 500, optional: true }], submit: (values) => window.privateBrowser.renameBookmark(item.id, values.title) }),
     remove: (item) => void act(() => window.privateBrowser.removeBookmark(item.id), 'Bookmark deleted'),
-    renameFolder: (level: BookmarkLevelInput, name) => setPrompt({ title: 'Rename folder', confirmLabel: 'Save', fields: [{ name: 'name', label: 'Folder name', value: name, maxLength: 200 }], submit: (values) => window.privateBrowser.renameBookmarkFolder(level, name, values.name) }),
+    renameFolder: (level: BookmarkLevelInput, name) => setPrompt({ title: 'Rename folder', confirmLabel: 'Save', fields: [{ name: 'name', label: 'Folder name', value: name, maxLength: 200 }], submit: (values) => window.privateBrowser.renameBookmarkFolder(level, name, values.name, activeAccount.id) }),
     removeFolder: (level, name, count) => {
       if (!window.confirm(`Delete the folder “${name}” and the ${count} bookmark${count === 1 ? '' : 's'} inside it?`)) return;
-      void act(() => window.privateBrowser.removeBookmarkFolder(level, name), 'Folder deleted');
+      void act(() => window.privateBrowser.removeBookmarkFolder(level, name, activeAccount.id), 'Folder deleted');
     },
     move: (level, key, toIndex) => void act(() => window.privateBrowser.moveBookmark(level, key, toIndex)),
     setMode: (mode) => setUi({ bookmarkBarMode: mode }),
@@ -430,7 +479,7 @@ export default function App() {
       case 'claude':
       case 'easynote': {
         const app = state.sideApps.find((app) => app.id === ui.sidePanelTool);
-        return app ? <SideAppPanel key={app.id} app={app} protectedWorkspace={workspace.protected} onToast={showToast} /> : null;
+        return app ? <Suspense fallback={null}><SideAppPanel key={app.id} app={app} protectedWorkspace={workspace.protected} onToast={showToast} /></Suspense> : null;
       }
       case 'assistant': return <AssistantPanel key={JSON.stringify([state.activeAccountSpaceId, activeTab.id, activeTab.url])} accountId={state.activeAccountSpaceId} workspace={state.activeWorkspaceId} policy={state.assistantPolicy ?? { cloud: 'unavailable', receipts: [] }} presets={browserSettings.assistantPrompts} tabs={state.tabs.filter((item) => item.accountSpaceId === state.activeAccountSpaceId && item.id !== activeTab.id && !item.isHome)} onToast={showToast} />;
       case 'developer': return <DeveloperPanel activeTab={activeTab} onToast={showToast} />;
@@ -444,8 +493,11 @@ export default function App() {
       case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} entry={settingsEntry}
         onSetupExit={() => setSettingsEntry('overview')} onManageAccounts={() => setAccountManagerOpen(true)}
         onOpenVault={() => openTool('vault')} onUiChange={setUi} onToast={showToast} />;
-      case 'bookmarks': return <BookmarksPanel key={activeAccount.id} bookmarks={accountBookmarks} favicons={favicons} undo={state.bookmarkUndo}
+      case 'bookmarks': return <BookmarksPanel key={activeAccount.id} bookmarks={accountBookmarks} savedFolders={accountFolders} favicons={favicons} undo={state.bookmarkUndo}
+        syncAccount={state.browsingProtection !== undefined && !workspace.protected ? activeAccount : undefined}
         onOpen={bookmarkActions.open} onRename={bookmarkActions.rename} onRemove={bookmarkActions.remove}
+        onCreateFolder={createBookmarkFolder} onMoveFolder={moveBookmarkFolder} onRenameFolder={bookmarkActions.renameFolder}
+        onDeleteFolder={bookmarkActions.removeFolder} onBookmarkPage={activeTab.isHome ? undefined : bookmarkToFolder}
         onImport={bookmarkActions.importBookmarks} onExport={bookmarkActions.exportBookmarks}
         onEditAddress={(item) => setPrompt({ title: 'Edit bookmark address', confirmLabel: 'Save',
           fields: [{ name: 'url', label: 'URL', value: item.url, type: 'url', maxLength: 4096 }],
@@ -478,6 +530,8 @@ export default function App() {
               onShield={() => setMenu((current) => (current === 'shield' ? null : 'shield'))}
               onTabSearch={() => setMenu((current) => (current === 'tab-search' ? null : 'tab-search'))}
               onActivate={(id) => void act(() => window.privateBrowser.activateTab(id))}
+              splitView={state.splitView}
+              onSplit={(id) => void act(() => window.privateBrowser.setSplitView(id))}
               onClose={(id) => void act(() => window.privateBrowser.closeTab(id))}
               onNewTab={() => void act(() => window.privateBrowser.newTab())}
               onMove={(id, index) => void act(() => window.privateBrowser.moveTab(id, index))}
@@ -538,6 +592,7 @@ export default function App() {
               onHome={() => void act(() => window.privateBrowser.goHome())}
               onSiteInfo={() => setMenu((current) => (current === 'site-info' ? null : 'site-info'))}
               onToggleBookmark={() => void act(() => window.privateBrowser.toggleBookmark())}
+              onBookmarkToFolder={bookmarkToFolder}
               onOpenVault={() => toggleTool('vault')}
               onZoomMenu={() => setMenu((current) => (current === 'zoom' ? null : 'zoom'))}
               onToggleSidePanel={() => ui.sidePanelOpen ? setUi({ sidePanelOpen: false }) : openTool(ui.sidePanelTool)}
@@ -546,8 +601,8 @@ export default function App() {
               onProfile={() => setMenu((current) => (current === 'profile' ? null : 'profile'))}
               onMenu={() => setMenu((current) => (current === 'browser' ? null : 'browser'))}
             />
-            {liveLayout.bookmarkBar > 0 && <BookmarkBar bookmarks={accountBookmarks} mode={ui.bookmarkBarMode} favicons={favicons} actions={bookmarkActions} />}
-            {findOpen && !activeTab.isHome && <FindBar tabId={activeTab.id} focusSignal={findFocus} onClose={() => setFindOpen(false)} />}
+            {liveLayout.bookmarkBar > 0 && <BookmarkBar key={activeAccount.id} bookmarks={accountBookmarks} savedFolders={accountFolders} mode={ui.bookmarkBarMode} favicons={favicons} actions={bookmarkActions} />}
+            {findOpen && !activeTab.isHome && state.pdfDocument?.mode !== 'protected' && <FindBar tabId={activeTab.id} focusSignal={findFocus} onClose={() => setFindOpen(false)} />}
           </>
         )}
 
@@ -555,6 +610,18 @@ export default function App() {
         {state.startupTabRecovery ? (
           <StartupRecovery key={state.startupTabRecovery.failedTabId} tabs={workspaceTabs} failedTabId={state.startupTabRecovery.failedTabId}
             onRestore={(ids) => act(() => window.privateBrowser.restoreSelectedTabs(ids))} />
+        ) : state.pdfDocument?.mode === 'protected' ? (
+          <div className="page-surface page-recovery">
+            <section className="recovery-card" aria-labelledby="protected-pdf-title">
+              <h2 id="protected-pdf-title">Protected PDF</h2>
+              <p>{state.pdfDocument.canOpen ? 'Read or find text in a protected preview. Saving and printing are blocked.'
+                : 'This document uses a one-time request. Reopen it from the original site if the site provides a link.'}</p>
+              <div className="recovery-actions">
+                {state.pdfDocument.canOpen && <button type="button" className="primary-button" onClick={() => void act(() => window.privateBrowser.openPdfInTab())}>Open protected preview</button>}
+                <button type="button" className="secondary-button" disabled={!activeTab.canGoBack} onClick={() => void act(() => window.privateBrowser.back())}>Back</button>
+              </div>
+            </section>
+          </div>
         ) : activeTab.restorePaused || activeTab.problem ? (
           <PageRecovery tab={activeTab} onReload={() => void act(() => window.privateBrowser.reload())} onBack={() => void act(() => window.privateBrowser.back())} />
         ) : activeTab.isHome ? (
@@ -585,6 +652,7 @@ export default function App() {
             onBackground={(background) => setUi({ newTabBackground: background })}
             onShowRecent={(showRecentOnNewTab) => setUi({ showRecentOnNewTab })}
             onTheme={(theme) => setUi({ theme })}
+            onManageBackup={() => setAccountManagerOpen(true)}
           />
         ) : (
           <div className="page-surface" aria-hidden="true">
@@ -612,7 +680,15 @@ export default function App() {
 
         {menu === 'shield' && <ShieldStatusMenu anchor={shieldButtonRef.current} state={state} workspace={workspace} onClose={closeMenu} onToggleTrackers={() => void act(() => window.privateBrowser.toggleTrackerBlocking(), state.trackerBlocking ? 'Tracker blocking paused' : 'Tracker blocking enabled')} onCompatibility={(origin, paused) => void act(() => window.privateBrowser.setTrackerCompatibility(state.activeTabId, origin, paused))} onOpenPrivacy={() => openTool('privacy')} onOpenSettings={() => openTool('settings')} />}
         {menu === 'tab-search' && <TabSearchMenu anchor={tabSearchButtonRef.current} tabs={workspaceTabs} activeTabId={activeTab.id} onActivate={(id) => void act(() => window.privateBrowser.activateTab(id))} onClose={closeMenu} />}
-        {menu === 'site-info' && <SiteInfoMenu anchor={siteInfoButtonRef.current} tab={activeTab} account={activeAccount} trackerBlocking={state.trackerSite?.blocking ?? state.trackerBlocking} onClose={closeMenu} onOpenPrivacy={() => openTool('privacy')} onResetZoom={() => void act(() => window.privateBrowser.zoom('reset'))} onToggleDeveloperTools={() => void act(() => window.privateBrowser.toggleDeveloperTools('right'))} />}
+        {menu === 'site-info' && <SiteInfoMenu anchor={siteInfoButtonRef.current} tab={activeTab} account={activeAccount} trackerBlocking={state.trackerSite?.blocking ?? state.trackerBlocking}
+          keepSiteAwake={state.memorySaverSite && (ui.memorySaverMinutes || state.memorySaverSite.keptAwake) ? {
+            enabled: state.memorySaverSite.keptAwake,
+            toggle: () => { const site = state.memorySaverSite!; void act(() => window.privateBrowser.setMemorySaverSite(activeTab.id, site.origin, !site.keptAwake)); },
+          } : undefined}
+          wordPressSave={state.wordPressSaveSite ? { enabled: state.wordPressSaveSite.enabled,
+            toggle: () => { const site = state.wordPressSaveSite!; void act(() => window.privateBrowser.setWordPressSaveSite(activeTab.id, site.origin, !site.enabled)); },
+          } : undefined}
+          onClose={closeMenu} onOpenPrivacy={() => openTool('privacy')} onResetZoom={() => void act(() => window.privateBrowser.zoom('reset'))} onToggleDeveloperTools={() => void act(() => window.privateBrowser.toggleDeveloperTools('right'))} />}
         {menu === 'zoom' && !activeTab.isHome && <ZoomMenu anchor={zoomButtonRef.current} zoom={activeTab.zoomPercent ?? 100} onZoom={(direction) => void act(() => window.privateBrowser.zoom(direction))} onClose={closeMenu} />}
         {menu === 'profile' && (
           <ProfileMenu
@@ -635,6 +711,8 @@ export default function App() {
             onClose={closeMenu}
             actions={{
               newTab: () => void act(() => window.privateBrowser.newTab()),
+              openTemporaryBrowsing: workspace.id !== 'banking' && !activeAccount?.locked && !state.recovery
+                ? () => void act(() => window.privateBrowser.openTemporaryBrowsing(state.activeAccountSpaceId)) : undefined,
               reopenClosedTab: () => void act(() => window.privateBrowser.reopenClosedTab()),
               reopenRecentTab: (id) => void act(() => window.privateBrowser.reopenRecentTab(id)),
               undoTabBatch: () => void act(() => window.privateBrowser.undoTabBatch()),
@@ -642,6 +720,7 @@ export default function App() {
               manageAccounts: () => setAccountManagerOpen(true),
               openTool,
               toggleBookmark: () => void act(() => window.privateBrowser.toggleBookmark()),
+              bookmarkToFolder,
               pinCurrentPage: canPinCurrentPage ? () => editShortcut(undefined, true) : undefined,
               setUi,
               exportBookmarks: bookmarkActions.exportBookmarks,
@@ -649,7 +728,12 @@ export default function App() {
               zoom: (direction) => void act(() => window.privateBrowser.zoom(direction)),
               toggleFullscreen: () => void act(() => window.privateBrowser.toggleFullscreen()),
               print: () => void act(() => window.privateBrowser.print()),
-              find: () => { setFindOpen(true); setFindFocus((value) => value + 1); },
+              openPdf: state.pdfDocument?.canOpen ? () => void act(() => window.privateBrowser.openPdfInTab()) : undefined,
+              savePdf: state.pdfDocument?.mode === 'native' && state.pdfDocument.canOpen ? () => void act(() => window.privateBrowser.savePdf()) : undefined,
+              find: () => {
+                if (state.pdfDocument?.mode === 'protected') void act(() => window.privateBrowser.openPdfInTab());
+                else { setFindOpen(true); setFindFocus((value) => value + 1); }
+              },
               copyLink: () => void act(() => window.privateBrowser.copyText(activeTab.url), 'Link copied'),
               reviewClaudeExcerpt: !activeTab.isHome && !workspace.protected && !isProtectedPage(activeTab.url)
                 ? () => void act(async () => setClaudeExcerpt(await window.privateBrowser.prepareClaudeExcerpt()))
@@ -670,6 +754,10 @@ export default function App() {
           setClaudeExcerpt(undefined);
           showToast('Excerpt copied. Paste it in Claude when ready.');
         }} />}
+        {notesDraft && <Suspense fallback={null}><NotesDraftDialog key={notesDraft.id} review={notesDraft} onClose={() => setNotesDraft(undefined)} onDone={(copied) => {
+          setNotesDraft(undefined);
+          showToast(copied ? 'Excerpt copied' : 'Draft opened in Notes');
+        }} /></Suspense>}
         {clearDataFor === activeAccount.id && <ClearBrowsingDataDialog activeId={activeAccount.id} protectedWorkspace={workspace.protected}
           accounts={state.accountSpaces.filter((account) => account.workspaceId === workspace.id)}
           onDone={() => setClearDataFor(undefined)} onCleared={(visits) => {

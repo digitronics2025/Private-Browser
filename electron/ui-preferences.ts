@@ -21,6 +21,9 @@ export interface UiPreferences {
   lockOnWindowsSession?: boolean;
   idleLockMinutes?: number;
   maskTodayIdentity?: boolean;
+  memorySaverMinutes?: number;
+  historyRetentionDays?: number;
+  minimalPrivacyLog?: boolean;
 }
 
 export type UiPreferencesPatch = Partial<UiPreferences>;
@@ -30,6 +33,8 @@ export const BOOKMARK_BAR_MODES: readonly BookmarkBarMode[] = ['always', 'new-ta
 export const SIDE_PANEL_TOOLS: readonly SidePanelTool[] = ['claude', 'easynote', 'assistant', 'developer', 'vault', 'automations', 'downloads', 'privacy', 'settings', 'bookmarks', 'history', 'shortcuts'];
 export const NEW_TAB_BACKGROUNDS: readonly NewTabBackground[] = ['plain', 'lagoon', 'dusk', 'mist', 'graphite'];
 export const IDLE_LOCK_MINUTES: readonly number[] = [0, 5, 15, 30, 60];
+export const MEMORY_SAVER_MINUTES: readonly number[] = [0, 5, 15, 30];
+export const HISTORY_RETENTION_DAYS: readonly number[] = [0, 30, 90, 365];
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   theme: 'system',
@@ -44,6 +49,7 @@ export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   lockOnWindowsSession: false,
   idleLockMinutes: 0,
   maskTodayIdentity: false,
+  memorySaverMinutes: 0,
 };
 
 function member<T extends string>(values: readonly T[], value: unknown): value is T {
@@ -84,6 +90,9 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
     lockOnWindowsSession: input.lockOnWindowsSession === true,
     idleLockMinutes: typeof input.idleLockMinutes === 'number' && IDLE_LOCK_MINUTES.includes(input.idleLockMinutes) ? input.idleLockMinutes : 0,
     maskTodayIdentity: input.maskTodayIdentity === true,
+    memorySaverMinutes: typeof input.memorySaverMinutes === 'number' && MEMORY_SAVER_MINUTES.includes(input.memorySaverMinutes) ? input.memorySaverMinutes : 0,
+    ...(typeof input.historyRetentionDays === 'number' && HISTORY_RETENTION_DAYS.includes(input.historyRetentionDays) ? { historyRetentionDays: input.historyRetentionDays } : {}),
+    ...(input.minimalPrivacyLog === true ? { minimalPrivacyLog: true } : {}),
   };
 }
 
@@ -91,7 +100,7 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
 export function requireUiPreferencesPatch(value: unknown): UiPreferencesPatch {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid interface preferences');
   const input = value as Record<string, unknown>;
-  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelCompact', 'sidePanelTool', 'newTabBackground', 'showRecentOnNewTab', 'offerSetupGuide', 'importedChromeData', 'lockOnWindowsSession', 'idleLockMinutes', 'maskTodayIdentity']);
+  const allowed = new Set(['theme', 'bookmarkBarMode', 'sidePanelOpen', 'sidePanelWidth', 'sidePanelCompact', 'sidePanelTool', 'newTabBackground', 'showRecentOnNewTab', 'offerSetupGuide', 'importedChromeData', 'lockOnWindowsSession', 'idleLockMinutes', 'maskTodayIdentity', 'memorySaverMinutes']);
   const keys = Object.keys(input);
   if (keys.length === 0 || keys.some((key) => !allowed.has(key))) throw new Error('Invalid interface preferences');
   const patch: UiPreferencesPatch = {};
@@ -117,6 +126,10 @@ export function requireUiPreferencesPatch(value: unknown): UiPreferencesPatch {
   if ('idleLockMinutes' in input) {
     if (typeof input.idleLockMinutes !== 'number' || !IDLE_LOCK_MINUTES.includes(input.idleLockMinutes)) throw new Error('Invalid idle lock time');
     patch.idleLockMinutes = input.idleLockMinutes;
+  }
+  if ('memorySaverMinutes' in input) {
+    if (typeof input.memorySaverMinutes !== 'number' || !MEMORY_SAVER_MINUTES.includes(input.memorySaverMinutes)) throw new Error('Invalid Memory Saver time');
+    patch.memorySaverMinutes = input.memorySaverMinutes;
   }
   return patch;
 }

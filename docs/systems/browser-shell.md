@@ -146,6 +146,14 @@ and the tab strip leaves that space free via CSS `env(titlebar-area-*)`.
 
 ## Tabs and WebContentsView Lifecycle
 
+**Memory Saver** is off by default. When enabled, it unloads inactive site
+views that opened through a verified GET and stayed untouched. Tabs with
+navigation history, active downloads, form fields, media, editable surfaces,
+service workers, or protected pages stay awake. The native unload handler may
+also keep a page open. Selecting a sleeping tab reloads its page. **Keep this
+site awake** in Site information saves the exact site origin in the encrypted
+record for that Account Space. Banking always stays awake.
+
 A tab has two halves. The persisted half lives in `StateStore` (id, workspaceId,
 title, url, isHome). The runtime half lives in `runtimeTabs: Map<string, RuntimeTab>`
 and holds the `WebContentsView` plus `loading`, `canGoBack`, `canGoForward`,
@@ -320,18 +328,16 @@ records the owning tab in `htmlFullscreenOwner`; `leave-html-full-screen` from
 that tab restores it. Esc inside a page leaves window full screen only when no
 page owns it. The renderer hides all chrome while `windowState.fullscreen`.
 
-**Menus over the page.** A `WebContentsView` always paints above the React tree,
-so any menu, dialog or resize drag that overlaps the page first calls
-`freezeContent()`: `capturePage()` on the active visible view, returned as a JPEG
-`data:` URL that the renderer paints in the page rectangle, followed by
-`setOverlayOpen(true)`, which hides every view with `setVisible(false)` but —
-unlike `hideAllViews` for tab switches — leaves docked DevTools attached. Home tabs, hidden
-views, protected workspaces (Banking) and `isProtectedPage` URLs return `null`
-and get a plain backdrop instead — protected pixels never enter the chrome
-renderer. The check covers both the stored tab URL and the URL the view is
-painting, refuses while a main-frame load is in flight, and discards the capture
-if the painted URL changed during it. Nothing is written to disk and the image is dropped when the overlay
-closes.
+**Split view.** See [Split view](../split-view.md).
+
+**Menus over the page.** A `WebContentsView` paints above React chrome. An
+overlapping menu, dialog or resize drag prepares a backdrop and hides the live
+views via `setOverlayOpen(true)`. Docked DevTools stay attached. A JPEG still
+may replace the backdrop during preparation. The menu can open while capture
+is pending. The still stays in renderer memory only until the overlay closes.
+`freezeContent()` checks both stored and painted URLs. It returns `null` for
+Home, hidden views, split panes, Banking, protected URLs, main-frame loads and expired or
+stale captures. See [Browser performance checks](../browser-performance.md).
 
 **The side app.** `applyLayout` first calls `layoutSideApps()`, which places or
 hides the selected Claude or Notes view in the side panel (hidden while `overlayOpen`, in full
@@ -578,7 +584,11 @@ Three guards keep a view on http and https:
    and "Sign in with" flows use — gets a **real popup window**
    (`popupWindowResponse` in [popup-windows.ts](../../electron/popup-windows.ts)),
    because those flows need `window.opener`; as a tab they fail (Google Pay:
-   OR_BIBED_15). Everything else becomes a sanitized tab and the handler returns
+   OR_BIBED_15). The hidden window's initial HTTP request waits for a native
+   decision showing the requesting origin, destination and Account Space.
+   The original request continues after approval, with its method preserved.
+   Cancel, a workspace or tab change, and the 30-second expiry close the window.
+   Everything else becomes a sanitized tab and the handler returns
    `{ action: 'deny' }`: foreground → `newTab`, otherwise `addBackgroundTab`,
    which changes no active workspace, Account Space or tab. The workspace id is
    captured in the closure when the view is built. Every guard is attached before
@@ -588,7 +598,7 @@ Three guards keep a view on http and https:
    A popup window inherits the opener's session (same Account Space only),
    is sandboxed with context isolation and no preload, has `parent` set to the
    main window and `outlivesOpener: false`, so closing the tab or locking its
-   Account Space closes it. `adoptPopupWindow` (on `did-create-window`) removes
+   Account Space closes it. `adoptPopupWindow` removes
    its menu, routes its own `window.open` through the same `openFromPage`, gives
    it the navigation guards below, and titles it `host — page title` since it
    has no address bar.
@@ -602,8 +612,8 @@ Three guards keep a view on http and https:
 The chrome window's own `setWindowOpenHandler` denies unconditionally. Chrome,
 page views and popup windows all cancel `will-attach-webview`.
 
-The `newTab` call inside the popup handler is fire-and-forget (`void`); a failure
-there is not reported anywhere.
+The Privacy log gives reasons and recovery steps for blocked site-opened
+windows and supported permission requests in the current Account Space.
 
 ## Launch, Single Instance and Deep Links
 

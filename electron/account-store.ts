@@ -9,12 +9,16 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { memorySaverExclusions } from './memory-saver.js';
+import { wordPressSaveOrigins } from './myvault/wordpress-save.js';
+import { readGoogleActionReceipts, type StoredGoogleActionReceipt } from './google-action-receipts.js';
 import type {
   AccountSpaceColor,
   AccountSpaceId,
   AccountSpaceKind,
   AccountSpaceSummary,
   AssistantReceipt,
+  BackupReminderDays,
   GoogleConnectionStatus,
   GoogleModule,
   PermissionCapability,
@@ -57,6 +61,9 @@ export interface AccountBackupConfiguration {
   wrappedRecoveryKey?: string;
   remoteEtag?: string;
   remoteFileId?: string;
+  enabledAt?: string;
+  lastUploadedAt?: string;
+  reminderDays?: BackupReminderDays;
   includeOpenTabs: boolean;
   includeHistory: boolean;
 }
@@ -92,9 +99,12 @@ export interface AccountSpaceRecord {
   enabledModules: GoogleModule[];
   grantedScopes: string[];
   permissionGrants: PersistedPermissionGrant[];
+  memorySaverExclusions?: string[];
+  wordPressSaveOrigins?: string[];
   backup: AccountBackupConfiguration;
   assistantCloudAllowed?: boolean;
   assistantReceipts?: AssistantReceipt[];
+  googleActionReceipts?: StoredGoogleActionReceipt[];
 }
 
 export type AccountRecordLoadResult =
@@ -245,6 +255,10 @@ export class AccountStore {
 
   toSummary(record: AccountSpaceRecord): AccountSpaceSummary {
     const avatar = record.googleIdentity?.avatar;
+    const backup = record.backup;
+    const base = backup.lastUploadedAt ?? backup.enabledAt ?? record.createdAt;
+    const reminderAt = backup.enabled && !record.locked && backup.reminderDays
+      ? new Date(Date.parse(base) + backup.reminderDays * 86_400_000).toISOString() : undefined;
     return {
       id: record.id,
       workspaceId: record.workspaceId,
@@ -264,6 +278,9 @@ export class AccountStore {
       enabledModules: [...record.enabledModules],
       grantedScopes: [...record.grantedScopes],
       backupEnabled: record.backup.enabled,
+      backupLastUploadedAt: !record.locked ? backup.lastUploadedAt : undefined,
+      backupReminderDays: !record.locked ? backup.reminderDays : undefined,
+      backupReminderAt: reminderAt,
       backupIncludesOpenTabs: record.backup.includeOpenTabs,
       backupIncludesHistory: record.backup.includeHistory,
     };
@@ -358,9 +375,12 @@ function validateRecord(value: unknown, expectedId: AccountSpaceId): AccountSpac
     enabledModules: requireGoogleModules(input.enabledModules ?? []),
     grantedScopes: validateScopes(input.grantedScopes ?? []),
     permissionGrants,
+    memorySaverExclusions: workspaceId !== 'banking' ? memorySaverExclusions(input.memorySaverExclusions) : undefined,
+    wordPressSaveOrigins: workspaceId !== 'banking' && workspaceId !== 'development' ? wordPressSaveOrigins(input.wordPressSaveOrigins) : undefined,
     backup,
     assistantCloudAllowed: input.assistantCloudAllowed === undefined ? undefined : input.assistantCloudAllowed === true,
     assistantReceipts: validateAssistantReceipts(input.assistantReceipts),
+    googleActionReceipts: workspaceId !== 'banking' ? readGoogleActionReceipts(input.googleActionReceipts) : undefined,
   };
   if (record.kind === 'google' && !record.googleIdentity) throw new Error('Google Account Space is missing identity data');
   return record;
@@ -410,9 +430,16 @@ function validateBackup(value: unknown): AccountBackupConfiguration {
     wrappedRecoveryKey: input.wrappedRecoveryKey ? requireShortText(input.wrappedRecoveryKey, 'Wrapped recovery key', 4096) : undefined,
     remoteEtag: input.remoteEtag ? requireShortText(input.remoteEtag, 'Remote ETag', 512) : undefined,
     remoteFileId: input.remoteFileId ? requireShortText(input.remoteFileId, 'Remote backup file ID', 512) : undefined,
+    enabledAt: backupDate(input.enabledAt),
+    lastUploadedAt: backupDate(input.lastUploadedAt),
+    reminderDays: input.reminderDays === 0 || input.reminderDays === 7 || input.reminderDays === 14 || input.reminderDays === 30 ? input.reminderDays : undefined,
     includeOpenTabs: input.includeOpenTabs === true,
     includeHistory: input.includeHistory === true,
   };
+}
+
+function backupDate(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= 30 && /^\d{4}-/.test(value) && Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
 function validateScopes(value: unknown): string[] {

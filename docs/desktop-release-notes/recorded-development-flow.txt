@@ -1,0 +1,1 @@
+Record actions on a local development fixture, pick the expected result, and review the replay before saving the generated Playwright test.
