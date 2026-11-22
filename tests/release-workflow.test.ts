@@ -53,6 +53,7 @@ describe('release workflow', () => {
     const packaging = step('Build hardened Windows installer');
     const loadSigner = step('Load approved Windows signing certificate');
     const signed = step('Verify signed app and installer');
+    const stage = step('Stage and verify private R2 objects');
     const publish = step('Publish installer from private R2');
     expect(loadSigner).toContain('if: env.PRIVATE_BROWSER_STABLE_BUILD');
     expect(loadSigner).toContain('import-windows-publisher.ps1');
@@ -61,11 +62,17 @@ describe('release workflow', () => {
     expect(step('Remove production signing certificate')).toContain('-DeleteKey');
     expect(signed).toContain('record-windows-publisher.ps1');
     expect(signed).toContain('win-unpacked/Private Browser.exe');
-    expect(publish).toContain('verify-release-candidate.mjs "$installer" "$candidate_dir/candidate.exe"');
+    expect(stage).toContain('verify-release-candidate.mjs "$installer" "$candidate_dir/candidate.exe"');
+    expect(stage).toContain("put-object --bucket");
+    expect(stage).toContain("--if-none-match '*'");
+    expect(stage).toContain('get-object --bucket');
+    expect(stage).toContain('cmp --silent');
+    expect(stage).not.toContain('PRODUCTION_RELEASE_AUTOMATION_KEY');
+    expect(publish).not.toContain('PRODUCTION_RELEASE_R2_');
     expect(publish).toContain('git ls-remote --exit-code origin refs/heads/main');
-    expect(publish.indexOf('Main advanced after release approval')).toBeLessThan(publish.indexOf('r2 object put'));
-    expect(publish.indexOf('read-active-release.mjs')).toBeLessThan(publish.indexOf('r2 object put'));
-    expect(publish.indexOf('cmp --silent')).toBeLessThan(publish.indexOf('publish-release.mjs'));
+    expect(stage.indexOf('Main advanced after release approval')).toBeLessThan(stage.indexOf('put-object --bucket'));
+    expect(publish.indexOf('read-active-release.mjs')).toBeLessThan(publish.indexOf('publish-release.mjs'));
+    expect(workflow.indexOf(stage)).toBeLessThan(workflow.indexOf(publish));
     expect(publish).toContain('live.commitSha !== process.env.GITHUB_SHA || live.sha256 !== process.argv[3]');
     expect(publish).toContain('Check that exact release in D1 before retrying.');
     expect(publish).toContain('verify-live-release.mjs');
@@ -81,7 +88,7 @@ describe('release workflow', () => {
     expect(smoke).toContain('Get-FileHash -LiteralPath $installer.FullName');
     expect(smoke.trim()).toMatch(/if \(\$testExit -ne 0\) \{ exit \$testExit \}$/);
     expect(workflow.indexOf(smoke)).toBeGreaterThan(workflow.indexOf(step('Build hardened Windows installer')));
-    expect(workflow.indexOf(smoke)).toBeLessThan(workflow.indexOf(step('Publish installer from private R2')));
+    expect(workflow.indexOf(smoke)).toBeLessThan(workflow.indexOf(step('Stage and verify private R2 objects')));
     expect(step('Keep signed release evidence')).not.toMatch(/\.exe|\.vsix/);
     expect(workflow).not.toContain('name: private-browser-windows');
   });

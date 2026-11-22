@@ -329,10 +329,10 @@ the Worker, never in this repo.
 | `SIGNING_SECRET` | `secrets.PRIVATE_BROWSER_SIGNING_SECRET` | HMAC for the expiring links |
 | `ADMIN_API_KEY` | `secrets.PRIVATE_BROWSER_ADMIN_API_KEY` | `x-api-key` on the publish route |
 
-The workflows additionally read `secrets.CLOUDFLARE_API_TOKEN`,
-`secrets.CLOUDFLARE_ACCOUNT_ID`, `secrets.CLOUDFLARE_D1_DATABASE_ID` (deploy
-only) and `vars.PRIVATE_BROWSER_DOWNLOAD_URL` — a repository **variable**, not a
-secret, because it is just the Worker's public URL.
+Workers Builds owns the deployment credentials. The Windows release workflow
+reads its staging, publishing, and signing credentials from the
+[protected production environment](../reference/windows-publisher-verification.md).
+`PRIVATE_BROWSER_DOWNLOAD_URL` is the public Worker origin.
 
 **The `database_id` in the tracked file is a placeholder of all zeros.** It is
 not the real database. [render-config.mjs](../../cloudflare/scripts/render-config.mjs)
@@ -454,8 +454,9 @@ builds use the `windows-verification` environment without production credentials
 
 Production builds sign the application and installer, verify the approved
 timestamped publisher, and smoke-test the installed candidate. Publication
-uploads the exact candidate to a digest-bound private R2 key and verifies the
-readback before registering it. GitHub artifacts carry only test and release
+stages the exact candidate under a digest-bound private R2 key with
+bucket-scoped S3 credentials. The workflow verifies the readback before using
+its separate Worker key to register the candidate. GitHub artifacts carry only test and release
 evidence. When live verification fails, the workflow restores an eligible
 signed release or suspends the exact failed release.
 

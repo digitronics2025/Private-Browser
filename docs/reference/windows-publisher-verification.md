@@ -13,7 +13,7 @@ environment secrets through the approved credential custody process.
 | Secret | Scope |
 |---|---|
 | `PRODUCTION_WINDOWS_SIGNING_CERTIFICATE`, `PRODUCTION_WINDOWS_SIGNING_PASSWORD` | Approved base64 PKCS#12 bundle and password |
-| `PRODUCTION_RELEASE_R2_TOKEN`, `PRODUCTION_RELEASE_ACCOUNT_ID` | Production release bucket read and write |
+| `PRODUCTION_RELEASE_R2_ACCESS_KEY_ID`, `PRODUCTION_RELEASE_R2_SECRET_ACCESS_KEY`, `PRODUCTION_RELEASE_ACCOUNT_ID` | R2 S3 Object Read & Write for `private-browser-releases` only |
 | `PRODUCTION_RELEASE_VERIFY_DEVICE` | Enrolled release verification device |
 | `PRODUCTION_RELEASE_AUTOMATION_KEY` | Worker release registration and bounded recovery |
 
@@ -41,8 +41,10 @@ disposable Windows profiles. Distribute the expected publisher identity via a
 trusted administrator or independently controlled owner channel. The older
 unsigned client itself cannot enforce an independent publisher identity.
 
-The workflow tests the exact signed installer, verifies its private R2 readback
-and checks Windows publisher evidence. Retain its `.publisher.json` object
+The workflow tests the exact signed installer. The staging step uses the
+bucket-scoped S3 credential to write new objects conditionally and verify the
+private R2 readback. A separate step uses the scoped Worker release key to
+publish. Retain the `.publisher.json` object
 alongside the installer. The verification checks include a download from the
 active feed and byte-range resume. Failed live verification restores only an
 eligible signed build. When no eligible predecessor exists, the workflow
