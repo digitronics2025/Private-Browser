@@ -600,6 +600,7 @@ export function installPreviewApi(): void {
     configureUpdateService: desktopOnly,
     enrollUpdateDevice: desktopOnly,
     clearUpdateService: desktopOnly,
+    openGooglePasswordManager: desktopOnly,
     openUpdatePage: desktopOnly,
     downloadManagedUpdate: async (version, sha256) => {
       if (!managedUpdate || state.activeWorkspaceId === 'banking') throw new Error('Download the installer using the desktop app.');

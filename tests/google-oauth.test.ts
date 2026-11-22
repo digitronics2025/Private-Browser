@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { AccountStore, type SafeStorageAdapter } from '../electron/account-store';
+import { ChildProcess } from 'node:child_process';
 import { ExternalBrowserLauncher } from '../electron/external-browser';
 import { GoogleConfigurationStore } from '../electron/google-config';
 import { fetchValidatedGoogleAvatar, GoogleOAuthManager, type GoogleOAuthClient } from '../electron/google-oauth';
@@ -242,12 +243,31 @@ describe('secure Google desktop OAuth', () => {
     const launcher = new ExternalBrowserLauncher(
       { ProgramFiles: root },
       'win32',
-      ((path, args, options) => { calls.push([path, args, options]); return { unref }; }),
+      ((path, args, options) => { calls.push([path, args, options]); return Object.assign(new ChildProcess(), { unref }); }),
     );
     launcher.launch('edge', 'https://accounts.google.com/o/oauth2/v2/auth?client_id=public');
     expect(calls).toEqual([[executable, ['https://accounts.google.com/o/oauth2/v2/auth?client_id=public'], { shell: false, detached: true, stdio: 'ignore' }]]);
     expect(unref).toHaveBeenCalledOnce();
     expect(() => launcher.launch('edge', 'https://attacker.example/')).toThrow(/non-Google/);
+  });
+
+  it('opens the fixed password vault in Chrome and reports missing or blocked Chrome', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'chrome-launch-'));
+    const folder = join(root, 'Google', 'Chrome', 'Application');
+    const executable = join(folder, 'chrome.exe');
+    const child = Object.assign(new ChildProcess(), { unref: vi.fn() });
+    const spawn = vi.fn(() => child);
+    const launcher = new ExternalBrowserLauncher({ ProgramFiles: root }, 'win32', spawn);
+    await expect(launcher.openGooglePasswordManager()).rejects.toThrow(/not found/);
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(executable, '');
+    const failed = launcher.openGooglePasswordManager();
+    child.emit('error', new Error('denied'));
+    await expect(failed).rejects.toThrow(/could not open/);
+    const launched = launcher.openGooglePasswordManager();
+    child.emit('spawn');
+    await launched;
+    expect(spawn).toHaveBeenLastCalledWith(executable, ['https://passwords.google.com/'], { shell: false, detached: true, stdio: 'ignore' });
   });
 
   it('encrypts a configured client ID and never accepts a client secret field', () => {

@@ -10,7 +10,7 @@ export interface ExternalBrowserChoice {
   executablePath: string;
 }
 
-type SpawnBrowser = (executablePath: string, args: string[], options: { shell: false; detached: true; stdio: 'ignore' }) => Pick<ChildProcess, 'unref'>;
+type SpawnBrowser = (executablePath: string, args: string[], options: { shell: false; detached: true; stdio: 'ignore' }) => Pick<ChildProcess, 'unref' | 'once'>;
 
 export class ExternalBrowserLauncher {
   constructor(
@@ -39,6 +39,22 @@ export class ExternalBrowserLauncher {
     if (!browser) throw new Error('Selected trusted external browser is not installed');
     const child = this.spawnBrowser(browser.executablePath, [parsed.toString()], { shell: false, detached: true, stdio: 'ignore' });
     child.unref();
+  }
+
+  async openGooglePasswordManager(): Promise<void> {
+    const chrome = this.discover().find(candidate => candidate.id === 'chrome');
+    if (!chrome) throw new Error('Google Chrome was not found. Check that it is installed.');
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = this.spawnBrowser(chrome.executablePath, ['https://passwords.google.com/'], {
+          shell: false, detached: true, stdio: 'ignore',
+        });
+        child.once('error', reject);
+        child.once('spawn', () => { child.unref(); resolve(); });
+      });
+    } catch {
+      throw new Error('Chrome could not open. Check whether your organization allows Chrome to start.');
+    }
   }
 
   private windowsCandidates(): ExternalBrowserChoice[] {
