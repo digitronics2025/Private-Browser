@@ -1,0 +1,1 @@
+Review proposed AI edits in VS Code, apply and undo exact changes, and rerun a linked test after saving the files.

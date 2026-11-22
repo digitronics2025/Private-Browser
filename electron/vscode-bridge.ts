@@ -41,7 +41,7 @@ interface SessionState {
 }
 
 /** Methods that wait on a VS Code modal or a language model: a person may take minutes. */
-const SLOW_METHODS: ReadonlySet<BridgeMethod> = new Set(['project.authorize', 'server.start', 'server.restart', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits']);
+const SLOW_METHODS: ReadonlySet<BridgeMethod> = new Set(['project.authorize', 'server.start', 'server.restart', 'test.save-artifact', 'ai.handoff', 'ai.apply-edits', 'ai.review-patch', 'ai.apply-patch', 'ai.undo-patch', 'ai.rerun-patch']);
 /** A session is live while its heartbeats (every 10 s) keep arriving. */
 const SESSION_LIVE_MS = 25_000;
 const MAX_EXPIRED_IDS = 200;

@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { memorySaverExclusions } from './memory-saver.js';
+import { wordPressSaveOrigins } from './myvault/wordpress-save.js';
 import { readGoogleActionReceipts, type StoredGoogleActionReceipt } from './google-action-receipts.js';
 import type {
   AccountSpaceColor,
@@ -99,6 +100,7 @@ export interface AccountSpaceRecord {
   grantedScopes: string[];
   permissionGrants: PersistedPermissionGrant[];
   memorySaverExclusions?: string[];
+  wordPressSaveOrigins?: string[];
   backup: AccountBackupConfiguration;
   assistantCloudAllowed?: boolean;
   assistantReceipts?: AssistantReceipt[];
@@ -374,6 +376,7 @@ function validateRecord(value: unknown, expectedId: AccountSpaceId): AccountSpac
     grantedScopes: validateScopes(input.grantedScopes ?? []),
     permissionGrants,
     memorySaverExclusions: workspaceId !== 'banking' ? memorySaverExclusions(input.memorySaverExclusions) : undefined,
+    wordPressSaveOrigins: workspaceId !== 'banking' && workspaceId !== 'development' ? wordPressSaveOrigins(input.wordPressSaveOrigins) : undefined,
     backup,
     assistantCloudAllowed: input.assistantCloudAllowed === undefined ? undefined : input.assistantCloudAllowed === true,
     assistantReceipts: validateAssistantReceipts(input.assistantReceipts),
