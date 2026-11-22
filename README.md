@@ -45,7 +45,7 @@ session in the toolbar. See the [Agent Mode setup guide](docs/agents/private-bro
 
 ## Run locally
 
-Requirements: Node.js 22.12+ and Windows 10/11 for the final desktop installer.
+Requirements: Node.js 22.13+ and Windows 10/11 for the final desktop installer.
 
 ```bash
 npm install

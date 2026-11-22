@@ -15,6 +15,7 @@ import type { GmailReplyDraft, VaultConflictReview } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
 import type { DownloadByteProgress } from './types.js';
+import type { NotesDraftChoice, NotesDraftReview, NotesPanelCommand, NotesPanelStatus } from './notes-panel.js';
 
 const api = {
   getAgentStatus: (): Promise<AgentUiStatus> => ipcRenderer.invoke('agents:status'),
@@ -144,6 +145,8 @@ const api = {
   reopenRecentTab: (id: string): Promise<void> => ipcRenderer.invoke('browser:reopen-recent-tab', id),
   zoom: (direction: 'in' | 'out' | 'reset'): Promise<void> => ipcRenderer.invoke('browser:zoom', direction),
   print: (): Promise<void> => ipcRenderer.invoke('browser:print'),
+  openPdfInTab: (): Promise<void> => ipcRenderer.invoke('pdf:open'),
+  savePdf: (): Promise<void> => ipcRenderer.invoke('pdf:save'),
   findInPage: (text: string, forward: boolean, findNext: boolean): Promise<void> => ipcRenderer.invoke('browser:find', text, forward, findNext),
   stopFindInPage: (): Promise<void> => ipcRenderer.invoke('browser:stop-find'),
   setTabMuted: (tabId: string, muted: boolean): Promise<void> => ipcRenderer.invoke('browser:set-tab-muted', tabId, muted),
@@ -226,6 +229,14 @@ const api = {
   prepareClaudeExcerpt: (): Promise<PageExcerptReview> => ipcRenderer.invoke('side-app:prepare-claude-excerpt'),
   cancelClaudeExcerpt: (id: string): Promise<void> => ipcRenderer.invoke('side-app:cancel-claude-excerpt', id),
   copyClaudeExcerpt: (id: string): Promise<void> => ipcRenderer.invoke('side-app:copy-claude-excerpt', id),
+  notesPanelCommand: (kind: NotesPanelCommand): Promise<NotesPanelStatus | undefined> => ipcRenderer.invoke('notes:command', kind),
+  cancelNotesDraft: (id: string): Promise<void> => ipcRenderer.invoke('notes:cancel-draft', id),
+  deliverNotesDraft: (draft: NotesDraftChoice, copyOnly: boolean): Promise<void> => ipcRenderer.invoke('notes:deliver-draft', draft, copyOnly),
+  onNotesDraft: (callback: (review: NotesDraftReview) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, review: NotesDraftReview) => callback(review);
+    ipcRenderer.on('notes:draft-review', listener);
+    return () => { ipcRenderer.removeListener('notes:draft-review', listener); };
+  },
   listVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:list'),
   requestVaultUnlock: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-unlock'),
   unlockVaultWithHello: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:hello-unlock'),

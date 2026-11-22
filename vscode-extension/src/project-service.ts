@@ -14,6 +14,7 @@ import { developmentPort, isDevelopmentPortListening, matchesPortConflict, repor
 import { resolveInspectionSource } from './inspection-source.js';
 import { listTestFixtures, loadTestFixture, scenarioKey, scenarioViewports } from './test-scenario.js';
 import { resolveInsideWorkspace, safeLiveOrigin, sanitizeOutput, stableFingerprint } from './security.js';
+import { recordingTarget } from './recorded-flow.js';
 
 type EventSink = (event: string, payload: unknown) => void;
 interface RunningProcess {
@@ -448,6 +449,10 @@ export class ProjectService {
     const { kind, url, liveUrl: approvedLiveUrl } = parameters;
     if (!url) return ReportStore.skipped(info.project.id, kind, 'No target URL', 'Start the development server or provide a trusted live URL.');
     const parsed = new URL(url);
+    if (kind === 'record-flow' && (!recordingTarget(parsed) || !canSaveReportParameters(parameters)
+      || parameters.fixture || parameters.viewports || approvedLiveUrl)) {
+      throw new Error('Record one approved synthetic loopback fixture with a plain URL.');
+    }
     const isLive = kind === 'live-site' || kind === 'compare';
     if (isLive && parameters.fixture) throw new Error('Data fixtures can only be used in local project tests.');
     if (kind !== 'live-site' && !['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname)) throw new Error('Use Live Website for a non-local target');
@@ -478,7 +483,7 @@ export class ProjectService {
       const runner = join(this.context.extensionPath, 'dist', 'playwright-runner.cjs');
       const target = kind === 'live-site' ? approvedLiveUrl : parsed.toString();
       const scenario = { viewports: scenarioViewports(parameters), fixture: parameters.fixture, fixtureDigest: parameters.fixtureDigest, baselineRoot,
-        confineScenario: !isLive && Boolean(parameters.viewports || parameters.fixture || kind === 'baseline' || kind === 'baseline-compare') };
+        confineScenario: !isLive && Boolean(parameters.viewports || parameters.fixture || kind === 'baseline' || kind === 'baseline-compare' || kind === 'record-flow') };
       const runnerInput = Buffer.from(JSON.stringify({ reportId, projectId: info.project.id, startedAt, kind, url: target, liveUrl: approvedLiveUrl, root: info.project.path, artifactRoot, ...scenario })).toString('base64url');
       const command: CommandSpec = { id: `playwright:${kind}`, label: `Playwright ${kind}`, executable: process.execPath, args: [runner, runnerInput], cwd: info.project.path, source: 'playwright', category: 'test', fingerprint: stableFingerprint({ runner, kind, root: info.project.path, target, liveUrl: approvedLiveUrl, ...scenario }) };
       await this.approveCommand(info.project.id, command);
@@ -571,9 +576,14 @@ export class ProjectService {
     if (!artifact) throw new Error('The selected generated test artifact does not exist');
     const source = await resolveInsideWorkspace(this.reports.artifactRoot(reportId), artifact.name); const text = await readFile(source, 'utf8');
     if (Buffer.byteLength(text) > 512 * 1024) throw new Error('The generated test is too large');
-    const destination = await resolveInsideWorkspace(folder.uri.fsPath, String(payload.path ?? 'tests/e2e/private-browser-recorded.spec.ts'), true);
+    const outputPath = String(payload.path ?? 'tests/e2e/private-browser-recorded.spec.ts');
+    const destination = await resolveInsideWorkspace(folder.uri.fsPath, outputPath, true);
+    const preview = await vscode.workspace.openTextDocument({ language: 'typescript', content: text });
+    await vscode.window.showTextDocument(preview, { preview: true });
     const answer = await vscode.window.showWarningMessage('Write the generated Playwright test into this workspace?', { modal: true, detail: destination }, 'Write exact path');
     if (answer !== 'Write exact path') throw new Error('Generated test approval was cancelled');
+    const current = await this.folderFor(projectId);
+    if (destination !== await resolveInsideWorkspace(current.uri.fsPath, outputPath, true)) throw new Error('The approved test path changed. Review it again.');
     const edit = new vscode.WorkspaceEdit(); const uri = vscode.Uri.file(destination);
     edit.createFile(uri, { overwrite: false, ignoreIfExists: false }); edit.insert(uri, new vscode.Position(0, 0), text);
     if (!await vscode.workspace.applyEdit(edit)) throw new Error('VS Code refused to create the test file');

@@ -22,6 +22,8 @@ export interface BrowserMenuActions {
   zoom: (direction: 'in' | 'out' | 'reset') => void;
   toggleFullscreen: () => void;
   print: () => void;
+  openPdf?: () => void;
+  savePdf?: () => void;
   find: () => void;
   copyLink: () => void;
   reviewClaudeExcerpt?: () => void;
@@ -105,8 +107,10 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
         <button type="button" role="menuitem" aria-label="Full screen" title="Full screen (F11)" onClick={() => { actions.toggleFullscreen(); onClose(); }}><Maximize2 size={15} /></button>
       </div>
       <MenuSeparator />
-      <MenuItem icon={Printer} label="Print…" shortcut="Ctrl+P" disabled={tab.isHome} onSelect={actions.print} />
-      <MenuItem icon={Search} label="Find…" shortcut="Ctrl+F" disabled={tab.isHome} onSelect={actions.find} />
+      {actions.openPdf && <MenuItem icon={Link2} label={state.pdfDocument?.mode === 'protected' ? 'Open protected preview' : 'Open PDF in new tab'} onSelect={actions.openPdf} />}
+      {actions.savePdf && <MenuItem icon={Download} label="Save PDF…" onSelect={actions.savePdf} />}
+      <MenuItem icon={Printer} label="Print…" shortcut="Ctrl+P" disabled={tab.isHome || state.pdfDocument?.mode === 'protected'} onSelect={actions.print} />
+      <MenuItem icon={Search} label="Find…" shortcut="Ctrl+F" disabled={tab.isHome || state.pdfDocument?.mode === 'protected' && !state.pdfDocument.canOpen} onSelect={actions.find} />
       <MenuItem icon={Link2} label="Copy link" disabled={tab.isHome} onSelect={actions.copyLink} />
       <SubmenuItem id="more-tools" icon={Wrench} label="More tools">
         <MenuItem icon={Code2} label="Developer tools" shortcut="F12" disabled={!tab.developerToolsAllowed} onSelect={actions.toggleDeveloperTools} />

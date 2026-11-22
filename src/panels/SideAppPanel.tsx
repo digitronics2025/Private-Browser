@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Asterisk, BookOpen, ExternalLink, LogOut, NotebookPen, Trash2, RotateCw, ShieldAlert, SquarePen } from 'lucide-react';
 import type { SideAppCommand, SideAppId, SideAppSnapshot } from '../../electron/types';
+import type { NotesPanelCommand, NotesPanelStatus } from '../../electron/notes-panel';
 import { EmptyState } from './common';
 import { SafeDiagnostics } from './SafeDiagnostics';
 import type { DiagnosticReason } from '../lib/safe-diagnostics';
@@ -34,15 +35,38 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
   onToast: (message: string, tone?: 'error') => void;
 }) {
   const slot = useRef<HTMLDivElement>(null);
+  const [notesStatus, setNotesStatus] = useState<NotesPanelStatus>();
   useSideAppSlot(app.id, protectedWorkspace ? null : slot);
 
   const run = (command: SideAppCommand) => {
     void window.privateBrowser.sideAppCommand(app.id, command).catch((error: unknown) => onToast(error instanceof Error ? error.message : String(error), 'error'));
   };
   const notes = app.id === 'easynote';
-  const clearData = () => {
+  useEffect(() => {
+    if (!notes || protectedWorkspace || app.status !== 'ready') {
+      setNotesStatus(undefined);
+      return;
+    }
+    let current = true;
+    const refresh = () => void window.privateBrowser.notesPanelCommand('status').then(
+      (status) => { if (current) setNotesStatus(status); },
+      () => { if (current) setNotesStatus(undefined); },
+    );
+    refresh();
+    const timer = window.setInterval(refresh, 15_000);
+    return () => { current = false; window.clearInterval(timer); };
+  }, [app.status, notes, protectedWorkspace]);
+  const notesControl = (kind: NotesPanelCommand) => {
+    void window.privateBrowser.notesPanelCommand(kind).catch((error: unknown) => onToast(error instanceof Error ? error.message : 'Notes could not open that view.', 'error'));
+  };
+  const clearData = async () => {
+    const current = notes ? await window.privateBrowser.notesPanelCommand('status').catch(() => undefined) : undefined;
+    const lastSync = current?.lastSuccessfulSyncAt ? new Date(current.lastSuccessfulSyncAt).toLocaleString() : 'Unavailable';
+    const pending = current ? '\nDrafts on this device: ' + current.drafts + '. Pending changes: ' + current.pending + '.' : '';
     const confirmation = notes
-      ? 'Clear local Notes data?\n\nOnly the Notes side-panel partition is cleared. Cloud records are not deleted. Unsynced local changes and drafts may be lost. You can export a backup from Library options in the notes app beforehand.'
+      ? 'Clear local Notes data?\n\nLast successful sync: ' + lastSync + '.' + pending
+        + '\n\nCloud records stay in the library. Clearing removes cached data and can lose unsynced changes or drafts. '
+        + (current ? 'Choose Cancel, then Export Notes, to save a backup.' : 'Choose Cancel, then open Backup & Restore from Library options.')
       : `Sign out of ${app.name} in the side panel?\n\nIts sign-in, settings and cached data on this computer are deleted. Your ${app.name} account and conversations are not affected.`;
     if (!window.confirm(confirmation)) return;
     void window.privateBrowser.clearSideAppData(app.id)
@@ -62,6 +86,12 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
   const ClearIcon = notes ? Trash2 : LogOut;
   const AppIcon = notes ? NotebookPen : Asterisk;
   const diagnostic = sideAppDiagnostics[app.status] ?? (app.attention === 'human-check' ? 'PB-SIDE-APP-CHECK' : undefined);
+  const notesAccess = notesStatus?.mode === 'personal' ? 'Shared Notes library'
+    : notesStatus?.mode === 'protected' ? 'Notes library · Sign-in required' : 'Notes library · Access status unavailable';
+  const notesSync = notesStatus && {
+    'local-only': 'On this device', offline: 'Offline', idle: notesStatus.pending ? 'Changes waiting' : 'Synced', syncing: 'Syncing',
+    error: 'Sync unavailable', conflict: 'Sync conflict',
+  }[notesStatus.sync];
   return (
     <div className="side-app">
       <div className="side-app-toolbar" role="toolbar" aria-label={`${app.name} controls`}>
@@ -71,9 +101,19 @@ export function SideAppPanel({ app, protectedWorkspace, onToast }: {
         <button type="button" className="toolbar-button small" aria-label={notes ? 'Library home' : 'New chat'} title={notes ? 'Library home' : 'New chat'} onClick={() => run('home')}><HomeIcon size={16} /></button>
         <span className="side-app-spacer" />
         <button type="button" className="toolbar-button small" aria-label="Open in new tab" title="Open in new tab" onClick={() => run('open-in-tab')}><ExternalLink size={16} /></button>
-        <button type="button" className="toolbar-button small" aria-label={notes ? 'Clear local Notes data' : `Sign out of ${app.name}`} title={notes ? 'Clear local Notes data' : `Sign out of ${app.name} and delete its data`} onClick={clearData}><ClearIcon size={16} /></button>
+        <button type="button" className="toolbar-button small" aria-label={notes ? 'Clear local Notes data' : `Sign out of ${app.name}`} title={notes ? 'Clear local Notes data' : `Sign out of ${app.name} and delete its data`} onClick={() => void clearData()}><ClearIcon size={16} /></button>
       </div>
-      {notes && <div className="side-app-status" role="note">Shared Notes library</div>}
+      {notes && <div className="side-app-status">
+        <div role="note">{notesAccess}</div>
+        {notesSync && <div role="status">{notesSync}{notesStatus?.drafts ? ' · ' + notesStatus.drafts + ' drafts' : ''}
+          {notesStatus?.pending ? ' · ' + notesStatus.pending + ' pending changes' : ''}</div>}
+      </div>}
+      {notesStatus && <div className="side-app-status panel-actions" role="toolbar" aria-label="Notes views">
+        <button type="button" onClick={() => notesControl('search')}>Search Notes</button>
+        <button type="button" onClick={() => notesControl('pinned')}>Favorites</button>
+        <button type="button" onClick={() => notesControl('recent')}>Recent</button>
+        <button type="button" onClick={() => notesControl('backup')}>Export Notes</button>
+      </div>}
       {status && <div className="side-app-status" role="status">{status}</div>}
       {attention && <div className="side-app-status" role="status">{attention}</div>}
       {(recovery || app.attention === 'human-check') && <div className="side-app-status panel-actions">
