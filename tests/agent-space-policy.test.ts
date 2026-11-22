@@ -122,7 +122,8 @@ describe('Agent space decisions', () => {
     expect(decide(space, 'click', listed, 200, session)).toMatchObject({ code: 'ORIGIN_READ_ONLY' });
     expect(decide(space, 'snapshot', unlisted, 200, session)).toMatchObject({ code: 'ORIGIN_DENIED' });
     expect(loadAgentState(JSON.parse(JSON.stringify(result.state)), 900)).toEqual({ state: result.state, migrated: false });
-    expect(() => loadAgentState({ ...result.state, version: 3 }, 500)).toThrow();
+    expect(() => loadAgentState({ ...result.state, version: 4 }, 500)).toThrow();
+    expect(() => loadAgentState({ ...result.state, sessionCapMs: undefined }, 500)).toThrow();
     expect(() => loadAgentState({ ...result.state, spaces: [{ ...space, clientIds: ['unknown-client'] }] }, 500)).toThrow();
     expect(normalizeSpaceSettings({ ...open(), trust: 'open-web', classes: { ...open().classes, diagnostic: true } }).classes.diagnostic).toBe(false);
   });
@@ -145,7 +146,7 @@ describe('Agent space decisions', () => {
   it('caps limits and accepts bounded defaults', () => {
     expect(clientLimits.parse(defaultClientLimits)).toEqual(defaultClientLimits);
     expect(clientLimits.parse({ actionsPerMinute: 500, tabs: 20, idleMs: 9_000_000, sessionMs: 90_000_000 }))
-      .toEqual({ actionsPerMinute: 240, tabs: 12, idleMs: 3_600_000, sessionMs: 43_200_000 });
+      .toEqual({ actionsPerMinute: 240, tabs: 12, idleMs: 3_600_000, sessionMs: 86_400_000 });
     expect(() => clientLimits.parse({ ...defaultClientLimits, tabs: 0 })).toThrow();
   });
 

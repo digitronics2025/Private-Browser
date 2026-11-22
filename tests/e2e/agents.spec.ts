@@ -20,6 +20,10 @@ for (const width of [1280, 375]) {
     await expect(allow).not.toBeChecked();
     await allow.check();
     const agentSettings = page.locator('.agents-panel');
+    const cap = agentSettings.getByRole('spinbutton', { name: 'Maximum session duration (hours)' });
+    await expect(cap).toHaveValue('12');
+    await expect(cap).toHaveAttribute('max', '24');
+    await expect(agentSettings.getByRole('button', { name: 'Save session cap' })).toBeDisabled();
     await agentSettings.getByRole('button', { name: 'Limits for Claude Code' }).click();
     const duration = agentSettings.getByRole('spinbutton', { name: 'Session duration (hours)' });
     await expect(duration).toHaveValue('8');

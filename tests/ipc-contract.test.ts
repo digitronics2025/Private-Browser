@@ -51,7 +51,7 @@ describe('Agent IPC parity', () => {
     const main = readFileSync(new URL('../electron/main.ts', import.meta.url), 'utf8');
     const commands = [...preload.matchAll(/ipcRenderer\.invoke\('(agents:[^']+)'/g)].map((match) => match[1]).sort();
     const handlers = [...main.matchAll(/handle\('(agents:[^']+)'/g)].map((match) => match[1]).sort();
-    expect(commands).toHaveLength(23);
+    expect(commands).toHaveLength(24);
     expect(commands).toEqual(handlers);
     const { validateIpcArguments } = await import('../electron/ipc-contracts');
     const uuid = '8ad413e5-a5f1-47fd-9593-5255014d6018';
@@ -64,6 +64,10 @@ describe('Agent IPC parity', () => {
       uploadRoot: 'private-path',
     }])).toThrow();
     expect(() => validateIpcArguments('agents:set-limits', [uuid, { tabs: 8 }])).toThrow();
+    expect(() => validateIpcArguments('agents:set-session-cap', [86_400_000])).not.toThrow();
+    for (const value of [59_999, 86_400_001, '86400000', NaN]) {
+      expect(() => validateIpcArguments('agents:set-session-cap', [value])).toThrow();
+    }
   });
 });
 

@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { ArrowLeft, Bot, Copy, ShieldCheck, Square } from 'lucide-react';
-import { canonicalAgentOrigin, clientLimitSettings } from '@private-browser/bridge-protocol/agent-permission-model';
+import { agentSessionCapSettings, canonicalAgentOrigin, clientLimitSettings } from '@private-browser/bridge-protocol/agent-permission-model';
 import type { AgentSpaceSettings } from '@private-browser/bridge-protocol/agent-permissions';
 import type { AgentDecision, AgentUiStatus } from '../../electron/agent-types';
 import { PanelHeader } from './common';
@@ -24,6 +24,7 @@ type Section = { page: 'overview' | 'audit' } | { page: 'space' | 'limits'; id: 
 type Space = AgentUiStatus['spaces'][number];
 type Client = AgentUiStatus['clients'][number];
 type Perform = (action: () => Promise<void>, success?: string) => Promise<boolean>;
+const hourMs = 60 * 60_000;
 
 export function AgentsPanel({ onBack, onToast }: { onBack: () => void; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const status = useAgentStatus();
@@ -60,7 +61,7 @@ export function AgentsPanel({ onBack, onToast }: { onBack: () => void; onToast: 
         <p>{status.unavailable}</p><p>Agent Mode is paused. Restart Private Browser after restoring the policy.</p>
       </section>
         : space ? <SpaceEditor key={space.id} space={space} clients={status.clients} pending={pending} onCancel={overview} perform={perform} />
-          : client ? <LimitsEditor key={client.id} client={client} pending={pending} onCancel={overview} perform={perform} />
+          : client ? <LimitsEditor key={client.id} client={client} sessionCapMs={status.sessionCapMs} pending={pending} onCancel={overview} perform={perform} />
             : section.page === 'audit' ? <AuditViewer status={status} pending={pending} perform={perform} />
               : <>
                 <section className="agent-card">
@@ -78,6 +79,7 @@ export function AgentsPanel({ onBack, onToast }: { onBack: () => void; onToast: 
                     <small>Single use. Expires at {new Date(status.pairing.expiresAt).toLocaleTimeString()}.</small></div>}
                 </section>
                 {status.enabled && <>
+                  <SessionCapEditor capMs={status.sessionCapMs} disabled={pending || status.paused} perform={perform} />
                   <section className="agent-card">
                     <h3>Agent Account Spaces</h3>
                     {status.spaces.map((item) => <div className="agent-space agent-space-summary" key={item.id}>
@@ -112,6 +114,28 @@ export function AgentsPanel({ onBack, onToast }: { onBack: () => void; onToast: 
                 <section className="agent-card"><button className="agent-audit-link" onClick={() => navigate({ page: 'audit' })}>Audit log</button></section>
               </>}
   </div>;
+}
+
+function SessionCapEditor({ capMs, disabled, perform }: { capMs: number; disabled: boolean; perform: Perform }) {
+  const [editedCap, setEditedCap] = useState<number>();
+  const draft = editedCap ?? capMs;
+  const description = useId();
+  const { min, max } = agentSessionCapSettings;
+  return <form className="agent-card" onSubmit={(event) => {
+    event.preventDefault();
+    void perform(() => window.privateBrowser.setAgentSessionCap(draft), 'Session cap saved.').then((saved) => {
+      if (saved) setEditedCap(undefined);
+    });
+  }}>
+    <h3>Session cap</h3>
+    <label className="agent-field">Maximum session duration (hours)
+      <input type="number" required min={min / hourMs} max={max / hourMs} step="any" disabled={disabled}
+        aria-describedby={description} value={Number.isFinite(draft) ? draft / hourMs : ''}
+        onChange={(event) => setEditedCap(Math.round(event.target.valueAsNumber * hourMs))} />
+    </label>
+    <p id={description}>Applies to all paired clients. A lower cap can shorten sessions. A higher cap takes effect after you save a longer client duration and renew.</p>
+    <button type="submit" disabled={disabled || !Number.isFinite(draft) || draft === capMs}>Save session cap</button>
+  </form>;
 }
 
 function SpaceEditor({ space, clients, pending, onCancel, perform }: {
@@ -237,7 +261,9 @@ function SpaceEditor({ space, clients, pending, onCancel, perform }: {
   </form>;
 }
 
-function LimitsEditor({ client, pending, onCancel, perform }: { client: Client; pending: boolean; onCancel: () => void; perform: Perform }) {
+function LimitsEditor({ client, sessionCapMs, pending, onCancel, perform }: {
+  client: Client; sessionCapMs: number; pending: boolean; onCancel: () => void; perform: Perform;
+}) {
   const [draft, setDraft] = useState(client.limits);
   const [modal, setModal] = useState<'renew' | 'revoke'>();
   const api = window.privateBrowser;
@@ -245,7 +271,7 @@ function LimitsEditor({ client, pending, onCancel, perform }: { client: Client; 
     { name: 'Actions per minute', field: 'actionsPerMinute', multiplier: 1, unit: '' },
     { name: 'Open agent tabs', field: 'tabs', multiplier: 1, unit: '' },
     { name: 'Idle time (minutes)', field: 'idleMs', multiplier: 60_000, unit: ' minutes' },
-    { name: 'Session duration (hours)', field: 'sessionMs', multiplier: 60 * 60_000, unit: ' hours' },
+    { name: 'Session duration (hours)', field: 'sessionMs', multiplier: hourMs, unit: ' hours' },
   ] as const;
   const expired = !client.expiresAt || client.expiresAt <= Date.now();
   return <form className="agent-editor" onSubmit={(event) => {
@@ -256,7 +282,8 @@ function LimitsEditor({ client, pending, onCancel, perform }: { client: Client; 
       <p>Limits apply across all of this client’s tabs.</p>
       <div className="agent-limits-grid">
         {fields.map(({ name, field, multiplier, unit }) => {
-          const { max, min } = clientLimitSettings[field];
+          const { min } = clientLimitSettings[field];
+          const max = field === 'sessionMs' ? sessionCapMs : clientLimitSettings[field].max;
           return <label className="agent-field" key={field}>{name}
             <input type="number" required min={min / multiplier} max={max / multiplier} step={field === 'sessionMs' ? 'any' : 1}
               value={Number.isFinite(draft[field]) ? draft[field] / multiplier : ''}

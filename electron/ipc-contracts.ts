@@ -1,4 +1,4 @@
-import { agentSpaceSettings, clientLimits } from '@private-browser/bridge-protocol/agent-permissions';
+import { agentSessionCap, agentSpaceSettings, clientLimits } from '@private-browser/bridge-protocol/agent-permissions';
 import {
   requireAccountColor,
   requireAccountLabel,
@@ -71,6 +71,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 2); requireUuid(args[0], 'Agent space'); agentSpaceSettings.parse(args[1]); return;
     case 'agents:set-limits':
       exact(args, 2); requireUuid(args[0], 'Agent client'); clientLimits.parse(args[1]); return;
+    case 'agents:set-session-cap':
+      exact(args, 1); agentSessionCap.parse(args[0]); return;
     case 'browser:open-bookmarks-in-background':
       exact(args, 2); requireAccountSpaceId(args[0]);
       if (!Array.isArray(args[1]) || !args[1].length || args[1].length > MAX_BOOKMARK_BATCH) throw new Error('Select between 1 and 20 bookmarks');

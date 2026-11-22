@@ -26,7 +26,7 @@ import type { ReferenceSearchInput, TabSetInput } from '../electron/types';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from '../electron/tab-organization';
 import { canUseDeveloperTools } from '../electron/developer-tools';
 import { createBookmarkFolder, editBookmarkFolder, moveTabWithinAccountSpace, nextBookmarkOrder, rememberBookmarkFolders, removeBookmark, renameBookmark, reorderBookmarkLevel } from '../electron/bookmark-tree';
-import { defaultClientLimits, newAgentSpaceSettings } from '@private-browser/bridge-protocol/agent-permission-model';
+import { agentSessionCapSettings, defaultClientLimits, newAgentSpaceSettings } from '@private-browser/bridge-protocol/agent-permission-model';
 import type { AgentUiStatus } from '../electron/agent-types';
 
 const WORKSPACES: Workspace[] = [
@@ -368,7 +368,7 @@ export function installPreviewApi(): void {
     publish();
   };
   const agentListeners = new Set<() => void>();
-  const agentState: AgentUiStatus = { enabled: false, paused: false, active: false, clients: [], spaces: [], tabs: [], audit: [],
+  const agentState: AgentUiStatus = { enabled: false, sessionCapMs: agentSessionCapSettings.default, paused: false, active: false, clients: [], spaces: [], tabs: [], audit: [],
     command: 'node', commandArgs: ['packages/agent-mcp/dist/cli.js'] };
   const agentTabId = 'aeddf71a-49cd-4ab5-b36f-2244a9258852';
   const previewOpenWebId = '33442f3e-bbd0-47bf-aea7-c6f48640e83d';
@@ -428,6 +428,7 @@ export function installPreviewApi(): void {
     renewAgent: desktopOnly,
     setAgentSpace: desktopOnly,
     setAgentLimits: desktopOnly,
+    setAgentSessionCap: desktopOnly,
     clearAgentOpenWeb: desktopOnly,
     grantAgentUploads: desktopOnly,
     revokeAgentUploads: desktopOnly,

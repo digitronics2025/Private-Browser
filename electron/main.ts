@@ -6168,6 +6168,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('agents:renew', (_event, id: string) => agentHost!.renew(id));
   handle('agents:set-space', (_event, id: string, settings: AgentSpaceSettings) => agentHost!.setSpace(id, settings));
   handle('agents:set-limits', (_event, id: string, limits: ClientLimits) => agentHost!.setLimits(id, limits));
+  handle('agents:set-session-cap', (_event, sessionCapMs: number) => agentHost!.setSessionCap(sessionCapMs));
   handle('agents:clear-open-web', (_event, id: string) => agentHost!.clearOpenWeb(id));
   handle('agents:grant-uploads', (_event, id: string) => agentHost!.grantUploadFolder(id));
   handle('agents:revoke-uploads', (_event, id: string) => agentHost!.revokeUploadFolder(id));

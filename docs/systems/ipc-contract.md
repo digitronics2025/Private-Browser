@@ -249,13 +249,14 @@ approved preview in main, never from the renderer. Behaviour:
 ### agents:
 
 Main chrome owns Agent enablement, pairing, revoke, space rules, client limits,
-folder grants, audit, and tab loans. Use `agents:set-space` for space rules and
-`agents:set-limits` for per-client caps. The trusted Agent Workspace can request
+folder grants, audit, and tab loans. Use `agents:set-space` for space rules,
+`agents:set-limits` for per-client limits, and `agents:set-session-cap` for the
+browser-wide cap in milliseconds. The trusted Agent Workspace can request
 status, Stop, tab selection, manual control, tab close, owner renewal, and
 clearing a flagged Open Web space. Only its main frame may decide a pending
 action. The `always` decision remembers navigation only for an exact origin
-already listed in the assigned Work space. Status exposes lease expiry and
-whether a folder is granted. `agents:changed` signals a status refresh. Remote
+already listed in the assigned Work space. Status exposes lease expiry, the
+session cap and whether a folder is granted. `agents:changed` signals a status refresh. Remote
 Agent tab views have no preload.
 
 ### ai: — 7 channels

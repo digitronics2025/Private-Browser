@@ -116,7 +116,10 @@ async function start(
   }, initialTime);
   if (!expired) state.clients[0].expiresAt = initialTime + state.clients[0].limits.sessionMs;
   if (files) state.spaces[0] = { ...state.spaces[0], classes: { ...state.spaces[0].classes, files: true }, uploadRoot: 'fixture-folder' };
-  fixture.stored = state;
+  fixture.stored = {
+    ...state, version: 2,
+    clients: state.clients.map(({ sessionStartedAt, ...client }) => client),
+  };
   host = new AgentHost({
     data: 'test-fixture', rendezvous: 'test-pipe', chromeUrl: '', preload: '',
     parent: () => undefined, onChange: () => undefined, command: 'node', commandArgs: [],
@@ -173,6 +176,43 @@ afterEach(() => {
 });
 
 describe('Agent Host sessions', () => {
+  it('limits leases from their original start and requires renewal after a cap increase', async () => {
+    await start({ ...ownerPolicy, session: '8h' });
+    expect(host.status().sessionCapMs).toBe(12 * AGENT_SESSION_MS);
+    const first = connect()!;
+    host.setSessionCap(24 * AGENT_SESSION_MS);
+    expect(first.abort.aborted).toBe(false);
+    host.setLimits(device.id, { ...host.status().clients[0].limits, sessionMs: 20 * AGENT_SESSION_MS });
+    expect(connect()?.expiresAt).toBe(first.expiresAt);
+    host.renew(device.id);
+    const renewed = connect()!;
+    expect(renewed.expiresAt).toBe(initialTime + 20 * AGENT_SESSION_MS);
+
+    vi.setSystemTime(initialTime + 5 * AGENT_SESSION_MS);
+    const cap = 4 * AGENT_SESSION_MS;
+    host.setSessionCap(cap);
+    expect(renewed.abort.aborted).toBe(true);
+    expect(host.status().clients[0]).toMatchObject({ limits: { sessionMs: cap }, expiresAt: initialTime + cap });
+    expect(fixture.pipe!.authorize(device)).toBe('expired');
+    host.setSessionCap(12 * AGENT_SESSION_MS);
+    expect(fixture.pipe!.authorize(device)).toBe('expired');
+    host.renew(device.id);
+    expect(connect()?.expiresAt).toBe(initialTime + 9 * AGENT_SESSION_MS);
+    const saved = loadAgentState(fixture.save.mock.lastCall![1], Date.now()).state;
+    expect(saved.sessionCapMs).toBe(12 * AGENT_SESSION_MS);
+    expect(saved.clients[0]).toMatchObject({ sessionStartedAt: Date.now(), limits: { sessionMs: cap } });
+  });
+
+  it('applies a reduced cap to newly paired clients', async () => {
+    await start();
+    host.setSessionCap(30 * 60_000);
+    host.beginPairing();
+    const code = host.status().pairing!.code;
+    const newDevice = { ...device, id: randomUUID() };
+    expect(fixture.pipe!.authorize(newDevice, code)).toMatchObject({ expiresAt: initialTime + 30 * 60_000 });
+    expect(host.status().clients.find(({ id }) => id === newDevice.id)?.limits.sessionMs).toBe(30 * 60_000);
+  });
+
   it('requires owner renewal before allowing a migrated lease', async () => {
     await start(ownerPolicy, undefined, true);
     expect(host.status().clients[0].limits.sessionMs).toBe(AGENT_SESSION_MS);

@@ -1,0 +1,1 @@
+Change the Agent Mode session cap under Settings → Agents. The default is 12 hours and the maximum is 24 hours. A longer client session still requires owner renewal.

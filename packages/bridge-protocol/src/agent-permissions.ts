@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { clientLimitSettings } from './agent-permission-model.js';
+import { agentSessionCapSettings, clientLimitSettings } from './agent-permission-model.js';
 export * from './agent-permission-model.js';
 
 export const agentClasses = z.strictObject({
@@ -8,6 +8,7 @@ export const agentClasses = z.strictObject({
 
 const boundedLimit = ({ min, max }: { min: number; max: number }) =>
   z.number().int().min(min).transform((value) => Math.min(value, max));
+export const agentSessionCap = z.number().int().min(agentSessionCapSettings.min).max(agentSessionCapSettings.max);
 export const clientLimits = z.strictObject({
   actionsPerMinute: boundedLimit(clientLimitSettings.actionsPerMinute),
   tabs: boundedLimit(clientLimitSettings.tabs),

@@ -122,12 +122,14 @@ when the policy permits an action.
 | Actions per minute | 120 | 240 |
 | Open agent tabs | 8 | 12 |
 | Idle time | 30 minutes | 60 minutes |
-| Absolute session duration | 8 hours | 12 hours |
+| Absolute session duration | 8 hours | Owner setting, 12 hours by default and up to 24 hours |
 
 Rate accounting follows the paired client across tabs and reconnects. The
 browser keeps an expiry for that client independent of the transport and
 preserves it across restart. Owner renewal issues a fresh lease through trusted
-chrome. Tool activity cannot renew it. Revocation, expiry and Stop cancel
+chrome. Editing the cap from trusted Settings can shorten existing leases.
+Longer durations require a saved client limit and owner renewal. Tool activity
+cannot renew leases or change the cap. Revocation, expiry and Stop cancel
 operations, release tabs and invalidate approvals. Idle time is per client
 and ordinary waiting cannot run past the absolute expiry.
 

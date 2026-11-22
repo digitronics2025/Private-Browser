@@ -407,6 +407,58 @@ async function addFixtureClient(chrome: Awaited<ReturnType<ElectronApplication['
   await startMcp();
 }
 
+test('lets the owner change the session cap without renewing or extending a lease', async () => {
+  const chrome = await app.firstWindow();
+  await addFixtureClient(chrome);
+  const settings = () => chrome.evaluate(() => window.privateBrowser.getAgentStatus());
+  const initial = (await settings()).clients[0];
+  const hourMs = 60 * 60_000;
+
+  await chrome.getByRole('button', { name: 'Browser menu' }).click();
+  await chrome.getByRole('menuitem', { name: 'Settings', exact: true }).click();
+  await chrome.getByRole('button', { name: 'Open Agents' }).click();
+  const cap = chrome.getByRole('spinbutton', { name: 'Maximum session duration (hours)' });
+  const saveCap = chrome.getByRole('button', { name: 'Save session cap' });
+  const limits = chrome.getByRole('button', { name: 'Limits for ' + initial.name });
+  await cap.fill('20');
+  await saveCap.click();
+  await expect.poll(async () => (await settings()).sessionCapMs).toBe(20 * hourMs);
+  expect((await settings()).clients[0].expiresAt).toBe(initial.expiresAt);
+
+  await limits.click();
+  const duration = chrome.getByRole('spinbutton', { name: 'Session duration (hours)' });
+  await expect(duration).toHaveAttribute('max', '20');
+  await duration.fill('18');
+  await chrome.getByRole('button', { name: 'Save limits' }).click();
+  await limits.click();
+  expect((await settings()).clients[0].expiresAt).toBe(initial.expiresAt);
+  await chrome.getByRole('button', { name: 'Review renewal' }).click();
+  const renewal = chrome.getByRole('dialog', { name: 'Renew ' + initial.name + ' session' });
+  await renewal.getByRole('button', { name: 'Renew for 18 hours' }).click();
+  await expect(renewal).toHaveCount(0);
+  const renewed = (await settings()).clients[0].expiresAt!;
+  expect(renewed).toBeGreaterThan(initial.expiresAt!);
+  expect(JSON.parse((await call('browser_status')).text).limits.expiresAt).toBe(renewed);
+
+  await chrome.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await cap.fill('4');
+  await saveCap.click();
+  await expect.poll(async () => (await settings()).clients[0].expiresAt).toBe(renewed - 14 * hourMs);
+  const workspaceReady = app.waitForEvent('window');
+  await chrome.getByRole('button', { name: 'Open Agent Workspace' }).click();
+  const workspace = await workspaceReady;
+  await expect(workspace.evaluate(() => window.privateBrowser.setAgentSessionCap(12 * 60 * 60_000))).rejects.toThrow('Untrusted IPC sender');
+
+  await client?.close();
+  client = undefined;
+  await app.close();
+  app = await electron.launch({ args: [join(process.cwd(), 'dist-electron/main.js')], env });
+  const restarted = await app.firstWindow();
+  const status = await restarted.evaluate(() => window.privateBrowser.getAgentStatus());
+  expect(status.sessionCapMs).toBe(4 * hourMs);
+  expect(status.clients[0]).toMatchObject({ limits: { sessionMs: 4 * hourMs }, expiresAt: renewed - 14 * hourMs });
+});
+
 test('isolates Work cookies across spaces and opens unlisted redirects in a signed-out view', async () => {
   test.setTimeout(100_000);
   let offListHits = 0;

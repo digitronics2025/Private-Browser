@@ -3,15 +3,15 @@ import {
   AGENT_ACTIONS_PER_MINUTE, AGENT_IDLE_MS, AGENT_MAX_TABS, AGENT_SESSION_MS, agentIdentity,
 } from '@private-browser/bridge-protocol/agent';
 import {
-  agentSpaceSettings, clientLimits, clientLimitSettings, defaultClientLimits, type ClientLimits,
+  agentSessionCap, agentSessionCapSettings, agentSpaceSettings, clientLimits, defaultClientLimits, type ClientLimits,
 } from '@private-browser/bridge-protocol/agent-permissions';
 import { type DeviceIdentity } from '@private-browser/bridge-protocol';
 import { exactAgentOrigin, type AgentPolicy } from './agent-policy.js';
 import { makeSpace, normalizeSpaceSettings, pruneRememberedOrigins, type SpacePolicy } from './agent-space-policy.js';
 
 type Device = ReturnType<typeof agentIdentity.parse>['device'];
-export type StoredClient = Device & { limits: ClientLimits; expiresAt?: number };
-export type StoredState = { version: 2; enabled: boolean; identity: DeviceIdentity; clients: StoredClient[]; spaces: SpacePolicy[] };
+export type StoredClient = Device & { limits: ClientLimits; sessionStartedAt?: number; expiresAt?: number };
+export type StoredState = { version: 3; enabled: boolean; sessionCapMs: number; identity: DeviceIdentity; clients: StoredClient[]; spaces: SpacePolicy[] };
 const legacyLimits = { actionsPerMinute: AGENT_ACTIONS_PER_MINUTE, tabs: AGENT_MAX_TABS, idleMs: AGENT_IDLE_MS, sessionMs: AGENT_SESSION_MS };
 const invalid = () => new Error('Invalid Agent Mode policy.');
 
@@ -39,7 +39,7 @@ function legacyPolicy(value: unknown): AgentPolicy {
 
 function previousLimits(policy: unknown): ClientLimits {
   const { session } = record(policy);
-  if (session === 'open') return { ...legacyLimits, sessionMs: clientLimitSettings.sessionMs.max };
+  if (session === 'open') return { ...legacyLimits, sessionMs: agentSessionCapSettings.default };
   if (session === '8h') return { ...legacyLimits, sessionMs: 8 * AGENT_SESSION_MS };
   if (session === undefined || session === '1h') return legacyLimits;
   throw invalid();
@@ -50,20 +50,26 @@ function rememberedRules(value: unknown): string[] {
 }
 
 export function loadAgentState(value: unknown, now: number): { state: StoredState; migrated: boolean } {
-  const { version, enabled, identity, clients, spaces } = record(value);
-  if (version !== undefined && version !== 2 || typeof enabled !== 'boolean') throw invalid();
+  const { version, enabled, identity, clients, spaces, sessionCapMs: savedCap } = record(value);
+  if (version !== undefined && version !== 2 && version !== 3 || typeof enabled !== 'boolean') throw invalid();
+  const sessionCapMs = version === 3 ? agentSessionCap.parse(savedCap) : agentSessionCapSettings.default;
   const { publicKey, privateKey } = record(identity);
   const keys = { publicKey: text(publicKey, 200), privateKey: text(privateKey, 200) };
   const migrated = version === undefined;
   // A v1 file has no absolute expiry persisted. Require the owner to renew once.
   const storedClients = list(clients, 12).map((entry): StoredClient => {
-    const { id, name, publicKey, limits, expiresAt, policy } = record(entry);
+    const { id, name, publicKey, limits, expiresAt, sessionStartedAt, policy } = record(entry);
     if (expiresAt !== undefined && (typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt) || expiresAt <= 0)) throw invalid();
-    return {
+    const parsed = migrated ? previousLimits(policy) : clientLimits.parse(limits);
+    const deadline = migrated ? now : expiresAt;
+    if (sessionStartedAt !== undefined && (typeof sessionStartedAt !== 'number' || !Number.isSafeInteger(sessionStartedAt)
+      || sessionStartedAt < 0 || deadline === undefined || sessionStartedAt > deadline)) throw invalid();
+    // Older policies recorded the deadline and saved duration, with no start of their own.
+    const start = sessionStartedAt ?? (deadline === undefined ? undefined : Math.max(0, deadline - parsed.sessionMs));
+    return applyClientLimits({
       id: uuid(id), name: text(name, 60), publicKey: text(publicKey, 200),
-      limits: migrated ? previousLimits(policy) : clientLimits.parse(limits),
-      expiresAt: migrated ? now : expiresAt,
-    };
+      limits: parsed, sessionStartedAt: start, expiresAt: deadline,
+    }, parsed, sessionCapMs);
   });
   const clientIds = storedClients.map(({ id }) => id);
   if (new Set(clientIds).size !== clientIds.length) throw invalid();
@@ -105,16 +111,26 @@ export function loadAgentState(value: unknown, now: number): { state: StoredStat
   if (new Set(storedSpaces.map(({ id }) => id)).size !== storedSpaces.length
     || storedSpaces.filter((space) => space.trust === 'open-web').length !== 1
     || !storedSpaces.some((space) => space.trust === 'work')) throw invalid();
-  return { state: { version: 2, enabled, identity: keys, clients: storedClients, spaces: storedSpaces }, migrated };
+  return { state: { version: 3, enabled, sessionCapMs, identity: keys, clients: storedClients, spaces: storedSpaces }, migrated };
 }
 
 export function newAgentState(identity: DeviceIdentity): StoredState {
   return {
-    version: 2, enabled: false, identity, clients: [],
+    version: 3, enabled: false, sessionCapMs: agentSessionCapSettings.default, identity, clients: [],
     spaces: [makeSpace(randomUUID(), 'Work', 'work'), makeSpace(randomUUID(), 'Open Web', 'open-web')],
   };
 }
 
-export function newAgentClient(device: Device, now: number): StoredClient {
-  return { ...device, limits: defaultClientLimits, expiresAt: now + defaultClientLimits.sessionMs };
+export function newAgentClient(device: Device, now: number, sessionCapMs: number): StoredClient {
+  const sessionMs = Math.min(defaultClientLimits.sessionMs, sessionCapMs);
+  return { ...device, limits: { ...defaultClientLimits, sessionMs }, sessionStartedAt: now, expiresAt: now + sessionMs };
+}
+
+export function applyClientLimits(client: StoredClient, limits: ClientLimits, sessionCapMs: number): StoredClient {
+  const sessionMs = Math.min(limits.sessionMs, sessionCapMs);
+  const { sessionStartedAt, expiresAt } = client;
+  return {
+    ...client, limits: { ...limits, sessionMs },
+    expiresAt: sessionStartedAt === undefined || expiresAt === undefined ? expiresAt : Math.min(expiresAt, sessionStartedAt + sessionMs),
+  };
 }

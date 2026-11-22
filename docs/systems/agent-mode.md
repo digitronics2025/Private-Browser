@@ -77,9 +77,13 @@ See the [setup guide](../agents/private-browser.md) and [security contract](../.
   account for concurrent reservations and remove oldest completed files first.
 - Stop and `Ctrl+Shift+.` close pipes and agent tabs, abort waits and discard
   confirmations. Default limits are eight hours, 30 idle minutes, eight tabs
-  and 120 actions per minute. Hard limits are 12 hours, 60 idle minutes, 12
-  tabs and 240 actions per minute. Absolute expiry persists across restart.
-  The owner renews in trusted chrome. Rate accounting is per paired client.
+  and 120 actions per minute. Hard limits are 60 idle minutes, 12 tabs and
+  240 actions per minute. In **Settings → Agents → Session cap**, the owner can
+  change the maximum session duration for all clients from one minute to
+  24 hours. The cap starts at 12 hours. Lowering it shortens longer client
+  limits and their existing leases from the original start. Raising it allows
+  a longer client duration on the next owner renewal. Absolute expiry persists
+  across restart. Rate accounting is per paired client.
 
 ## Lend a tab and run parallel tasks
 
@@ -126,6 +130,9 @@ to restore access.
 | Owner controls | `src/panels/AgentsPanel.tsx` |
 
 `userData/agent-mode` holds encrypted policy and retained audit segments.
+Policies without a saved cap start at 12 hours and keep their deadlines.
+Version 3 records the cap and lease start. Older browsers pause Agent Mode
+when they encounter a version 3 policy.
 A version 1 file is backed up once as `clients.enc.bak`. Existing spaces keep
 their IDs and partitions and retain per-client rules until an explicit
 owner save. Only Work persists Chromium data. Audit rows include class,

@@ -29,6 +29,7 @@ const api = {
   renewAgent: (id: string): Promise<void> => ipcRenderer.invoke('agents:renew', id),
   setAgentSpace: (id: string, settings: AgentSpaceSettings): Promise<void> => ipcRenderer.invoke('agents:set-space', id, settings),
   setAgentLimits: (id: string, limits: ClientLimits): Promise<void> => ipcRenderer.invoke('agents:set-limits', id, limits),
+  setAgentSessionCap: (sessionCapMs: number): Promise<void> => ipcRenderer.invoke('agents:set-session-cap', sessionCapMs),
   clearAgentOpenWeb: (id: string): Promise<void> => ipcRenderer.invoke('agents:clear-open-web', id),
   grantAgentUploads: (id: string): Promise<void> => ipcRenderer.invoke('agents:grant-uploads', id),
   revokeAgentUploads: (id: string): Promise<void> => ipcRenderer.invoke('agents:revoke-uploads', id),

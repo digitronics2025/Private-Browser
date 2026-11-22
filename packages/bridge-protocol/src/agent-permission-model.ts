@@ -3,11 +3,12 @@ import type { AgentSpaceSettings, ClientLimits } from './agent-permissions.js';
 
 export const actionClasses = ['read', 'view', 'interact', 'files', 'diagnostic'] as const;
 export type AgentActionClass = typeof actionClasses[number];
+export const agentSessionCapSettings = { default: 12 * 60 * 60_000, min: 60_000, max: 24 * 60 * 60_000 } as const;
 export const clientLimitSettings = {
   actionsPerMinute: { default: 120, min: 1, max: 240 },
   tabs: { default: 8, min: 1, max: 12 },
   idleMs: { default: 30 * 60_000, min: 60_000, max: 60 * 60_000 },
-  sessionMs: { default: 8 * 60 * 60_000, min: 60_000, max: 12 * 60 * 60_000 },
+  sessionMs: { ...agentSessionCapSettings, default: 8 * 60 * 60_000 },
 } as const;
 export const defaultClientLimits: ClientLimits = {
   actionsPerMinute: clientLimitSettings.actionsPerMinute.default,

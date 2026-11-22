@@ -6,9 +6,9 @@ import { generateIdentity, safeEqual } from '@private-browser/bridge-protocol';
 import {
   AGENT_PROTOCOL_VERSION, agentTools, agentIdentity, type AgentInput, type AgentMethod,
 } from '@private-browser/bridge-protocol/agent';
-import { agentSpaceSettings, clientLimits, type AgentSpaceSettings, type ClientLimits } from '@private-browser/bridge-protocol/agent-permissions';
+import { agentSessionCap, agentSessionCapSettings, agentSpaceSettings, clientLimits, type AgentSpaceSettings, type ClientLimits } from '@private-browser/bridge-protocol/agent-permissions';
 import { allowedSpaceOrigin, canRememberNavigation, decide, describeSpace, makeSpace, normalizeSpaceSettings, pruneRememberedOrigins, requireDecision, type SpacePolicy } from './agent-space-policy.js';
-import { loadAgentState, newAgentClient, newAgentState, type StoredClient, type StoredState } from './agent-state.js';
+import { applyClientLimits, loadAgentState, newAgentClient, newAgentState, type StoredClient, type StoredState } from './agent-state.js';
 import { AgentAudit, agentStorageAvailable, readAgentFile, writeAgentFile } from './agent-audit.js';
 import { AgentPipe, type AgentConnection, type AgentRequest } from './agent-pipe.js';
 import { AgentConfirmation, agentError, AgentError, AgentRateLimit, agentLoopback, agentUrl, consequentialAction } from './agent-policy.js';
@@ -118,6 +118,7 @@ export class AgentHost {
     const pairing = this.pairing && Date.now() < this.pairing.expiresAt ? { code: this.pairing.code, expiresAt: this.pairing.expiresAt } : undefined;
     return {
       enabled: state?.enabled ?? false, unavailable: this.unavailable, pairing, paused: this.paused,
+      sessionCapMs: state?.sessionCapMs ?? agentSessionCapSettings.default,
       clients: (state?.clients ?? []).map(({ id, name, limits, expiresAt }) => ({ id, name, limits, expiresAt, active: this.active.has(id) })),
       possibleSignIn: this.workspace.possibleSignIn(),
       spaces: (state?.spaces ?? []).map(({ uploadRoot, legacy, rememberedOrigins, ...space }) => ({ ...space, uploadRootPresent: Boolean(uploadRoot), migrated: Boolean(legacy) })), current, pending: this.pending?.card,
@@ -255,15 +256,28 @@ export class AgentHost {
   renew(id: string): void {
     const client = this.requireEnabled().clients.find((item) => item.id === id);
     if (!client) throw new Error('That client is no longer paired.');
-    this.replaceClient(id, { expiresAt: Date.now() + client.limits.sessionMs });
+    const sessionStartedAt = Date.now();
+    this.replaceClient(id, { sessionStartedAt, expiresAt: sessionStartedAt + client.limits.sessionMs });
   }
 
   setLimits(id: string, limits: ClientLimits): void {
-    const client = this.requireEnabled().clients.find((item) => item.id === id);
+    const state = this.requireEnabled();
+    const client = state.clients.find((item) => item.id === id);
     if (!client) throw new Error('That client is no longer paired.');
-    const validated = clientLimits.parse(limits);
-    const now = Date.now();
-    this.replaceClient(id, { limits: validated, expiresAt: Math.min(client.expiresAt ?? now, now + validated.sessionMs) });
+    const updated = applyClientLimits(client, clientLimits.parse(limits), state.sessionCapMs);
+    this.replaceClient(id, { limits: updated.limits, expiresAt: updated.expiresAt });
+  }
+
+  setSessionCap(value: number): void {
+    const state = this.requireEnabled();
+    const sessionCapMs = agentSessionCap.parse(value);
+    if (sessionCapMs === state.sessionCapMs) return;
+    const affected = state.clients.filter((client) => client.limits.sessionMs > sessionCapMs);
+    const clients = state.clients.map((client) => client.limits.sessionMs > sessionCapMs
+      ? applyClientLimits(client, client.limits, sessionCapMs) : client);
+    this.persist({ ...state, sessionCapMs, clients });
+    for (const { id } of affected) this.disconnect(id);
+    this.changed();
   }
 
   setSpace(id: string, input: AgentSpaceSettings): void {
@@ -728,7 +742,7 @@ export class AgentHost {
       pairing.attempts += 1;
       if (!safeEqual(pairing.code, code)) return undefined;
       this.pairing = undefined;
-      const client = newAgentClient(device, Date.now());
+      const client = newAgentClient(device, Date.now(), this.state.sessionCapMs);
       this.persist({ ...this.state, clients: [...this.state.clients, client] });
       return { expiresAt: client.expiresAt!, idleMs: client.limits.idleMs };
     }
@@ -760,7 +774,7 @@ export class AgentHost {
     this.changed();
   }
 
-  private replaceClient(id: string, patch: Partial<Pick<StoredClient, 'limits' | 'expiresAt'>>): void {
+  private replaceClient(id: string, patch: Partial<Pick<StoredClient, 'limits' | 'expiresAt' | 'sessionStartedAt'>>): void {
     const state = this.requireEnabled();
     this.persist({ ...state, clients: state.clients.map((client) => client.id === id ? { ...client, ...patch } : client) });
     this.disconnect(id);

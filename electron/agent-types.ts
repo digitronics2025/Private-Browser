@@ -29,6 +29,7 @@ export interface AgentAuditRow {
 
 export interface AgentUiStatus {
   enabled: boolean;
+  sessionCapMs: number;
   unavailable?: string;
   pairing?: { code: string; expiresAt: number };
   clients: { id: string; name: string; limits: ClientLimits; active: boolean; expiresAt?: number }[];
