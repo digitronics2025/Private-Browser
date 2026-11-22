@@ -570,6 +570,7 @@ export function installPreviewApi(): void {
     copyTotp: desktopOnly,
     autofill: desktopOnly,
     configureUpdateService: desktopOnly,
+    enrollUpdateDevice: desktopOnly,
     clearUpdateService: desktopOnly,
     openUpdatePage: desktopOnly,
     downloadManagedUpdate: async (version, sha256) => {

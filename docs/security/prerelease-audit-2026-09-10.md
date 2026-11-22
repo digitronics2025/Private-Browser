@@ -147,7 +147,7 @@ or any app polling the clipboard, reads it.
 
 #### F-02 — Every installer embeds a shared, non-revocable download token
 
-`Verified: code + production` · [package.json:63-72](../../package.json#L63-L72), [.github/workflows/ci.yml:33-45](../../.github/workflows/ci.yml#L33-L45), [cloudflare/scripts/write-update-bootstrap.mjs](../../cloudflare/scripts/write-update-bootstrap.mjs)
+`Verified: code + production` · [package.json:63-72](../../package.json#L63-L72), [.github/workflows/ci.yml:33-45](../../.github/workflows/ci.yml#L33-L45), [historical bootstrap script](https://github.com/digitronics2025/Private-Browser/blob/6c406d79495dd4e587cc7b9e52d2270d94837431/cloudflare/scripts/write-update-bootstrap.mjs)
 
 CI writes `build/private-browser-update.json` containing
 `{version, endpoint, accessToken}` from `secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN`,

@@ -76,6 +76,7 @@ export async function streamUpdateInstaller(
 }
 
 interface UpdateEnvironment {
+  request?: typeof fetch;
   readonly directory: string;
   readonly currentVersion: string;
   readonly check: () => Promise<UpdateCheckResult>;
@@ -155,7 +156,7 @@ export class ManagedUpdate {
         this.publish({ phase: 'downloading', version, receivedBytes, totalBytes: latest.sizeBytes });
       };
       progress(0);
-      const path = await streamUpdateInstaller(latest, directory, { signal: operation.signal, report: progress });
+      const path = await streamUpdateInstaller(latest, directory, { signal: operation.signal, report: progress, request: this.environment.request });
       this.publish({ phase: 'verifying', version });
       const stamp = downloadFileStamp(path);
       const publisher = await inspectDownloadPublisher(path);

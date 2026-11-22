@@ -3,6 +3,7 @@
 import { constantTimeEqual, futureExpiry, isLiveExpiry, signValue, verifySignedValue } from './auth';
 import { APP_ID, compareSemver, normalizeTtl, parseSingleRange, validateReleaseInput, type ReleaseManifest, type ReleaseRecord } from './protocol';
 import { DEVELOPER_PROFILE, renderDownloadPage, type DownloadPageModel } from './page';
+import { acceptDownloadDevice, distributionDevices, distributionMode, issueDownloadEnrollment, redeemDownloadEnrollment, revokeDownloadDevice, selectDistributionMode } from './device-distribution';
 
 export interface Env {
   DB: D1Database;
@@ -54,7 +55,7 @@ function bearer(request: Request): string {
 }
 
 async function isClientAuthorized(request: Request, env: Env): Promise<boolean> {
-  return secretsReady(env) && constantTimeEqual(bearer(request), env.DOWNLOAD_ACCESS_TOKEN);
+  return secretsReady(env) && env.DOWNLOAD_ACCESS_TOKEN?.length >= 32 && constantTimeEqual(bearer(request), env.DOWNLOAD_ACCESS_TOKEN);
 }
 
 async function isAdminAuthorized(request: Request, env: Env): Promise<boolean> {
@@ -62,7 +63,7 @@ async function isAdminAuthorized(request: Request, env: Env): Promise<boolean> {
 }
 
 function secretsReady(env: Env): boolean {
-  return env.DOWNLOAD_ACCESS_TOKEN?.length >= 32 && env.SIGNING_SECRET?.length >= 32 && env.ADMIN_API_KEY?.length >= 32;
+  return env.SIGNING_SECRET?.length >= 32 && env.ADMIN_API_KEY?.length >= 32;
 }
 
 async function latestRelease(env: Env, channel = 'stable'): Promise<ReleaseRecord | null> {
@@ -101,9 +102,10 @@ async function signedManifest(request: Request, env: Env, release: ReleaseRecord
   };
 }
 
-async function handleLatest(request: Request, env: Env): Promise<Response> {
+async function handleLatest(request: Request, env: Env, mode: 'public' | 'private'): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
-  if (!(await isClientAuthorized(request, env))) return notFound();
+  if (!secretsReady(env) || (!(await acceptDownloadDevice(env.DB, bearer(request), true))
+    && (mode === 'private' || !(await isClientAuthorized(request, env))))) return notFound();
   const release = await latestRelease(env);
   if (!release) return notFound();
   const manifest = await signedManifest(request, env, release);
@@ -139,7 +141,7 @@ async function handlePublicDownloadPage(request: Request, env: Env): Promise<Res
 
 async function handleStableDownloadPage(request: Request, env: Env, token: string): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
-  if (!secretsReady(env) || token.length > 1_000 || !(await constantTimeEqual(token, env.DOWNLOAD_ACCESS_TOKEN))) return notFound();
+  if (!secretsReady(env) || env.DOWNLOAD_ACCESS_TOKEN?.length < 32 || !env.DOWNLOAD_ACCESS_TOKEN || token.length > 1_000 || !(await constantTimeEqual(token, env.DOWNLOAD_ACCESS_TOKEN))) return notFound();
   const release = await latestRelease(env);
   if (!release) return notFound();
   const history = await releaseHistory(env, release.id);
@@ -177,9 +179,10 @@ function stableDownloadToken(pathname: string): string | null {
   return match?.[1] ?? null;
 }
 
-async function handleBinary(request: Request, env: Env, url: URL): Promise<Response> {
+async function handleBinary(request: Request, env: Env, url: URL, mode: 'public' | 'private'): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
   if (!secretsReady(env)) return notFound();
+  if (mode === 'private' && !(await acceptDownloadDevice(env.DB, bearer(request), false))) return notFound();
   const expires = url.searchParams.get('expires');
   const signature = url.searchParams.get('signature') ?? '';
   if (!isLiveExpiry(expires, Date.now() / 1000)) return notFound();
@@ -224,9 +227,61 @@ const MAX_ADMIN_BODY_BYTES = 32 * 1024;
 async function readAdminJson(request: Request): Promise<unknown> {
   const declared = Number(request.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > MAX_ADMIN_BODY_BYTES) throw new RangeError('Request body is too large');
-  const text = await request.text();
-  if (text.length > MAX_ADMIN_BODY_BYTES) throw new RangeError('Request body is too large');
-  return JSON.parse(text) as unknown;
+  const reader = request.body?.getReader();
+  if (!reader) throw new Error('A JSON body is required');
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let size = 0;
+  let text = '';
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > MAX_ADMIN_BODY_BYTES) throw new RangeError('Request body is too large');
+      text += decoder.decode(part.value, { stream: true });
+    }
+    return JSON.parse(text + decoder.decode()) as unknown;
+  } finally { await reader.cancel().catch(() => undefined); }
+}
+
+async function handleDeviceRoute(request: Request, env: Env, url: URL): Promise<Response | undefined> {
+  const path = url.pathname;
+  const noStore = { 'cache-control': PRIVATE_CACHE };
+  if (path === '/api/v1/distribution') {
+    if (request.method !== 'GET') return methodNotAllowed('GET');
+    return json({ mode: await distributionMode(env.DB) }, 200, noStore);
+  }
+  if (path === '/api/v1/device-enrollment/redeem') {
+    if (request.method !== 'POST') return methodNotAllowed('POST');
+    if (!secretsReady(env)) return notFound();
+    let body: { code?: unknown };
+    try { body = await readAdminJson(request) as typeof body; }
+    catch { return notFound(); }
+    if (typeof body?.code !== 'string' || !await redeemDownloadEnrollment(env.DB, body.code, bearer(request))) return notFound();
+    return json({ enrolled: true }, 200, noStore);
+  }
+  if (path !== '/api/v1/admin/distribution' && !path.startsWith('/api/v1/admin/download-devices')) return undefined;
+  if (!(await isAdminAuthorized(request, env))) return notFound();
+  if (path === '/api/v1/admin/distribution' && request.method === 'GET') return json({ mode: await distributionMode(env.DB) }, 200, noStore);
+  if (path === '/api/v1/admin/download-devices' && request.method === 'GET') return json({ devices: await distributionDevices(env.DB) }, 200, noStore);
+  if (request.method !== 'POST') return methodNotAllowed('GET, POST');
+  const match = /^\/api\/v1\/admin\/download-devices\/([a-f0-9-]{36})\/revoke$/.exec(path);
+  if (match) return await revokeDownloadDevice(env.DB, match[1]) ? json({ revoked: true }, 200, noStore) : notFound();
+  let body: { label?: unknown; mode?: unknown; confirm?: unknown };
+  try { body = await readAdminJson(request) as typeof body; }
+  catch { return json({ error: 'invalid_request' }, 400, noStore); }
+  if (path === '/api/v1/admin/distribution') {
+    if ((body?.mode !== 'private' && body?.mode !== 'public') || body.confirm !== `SWITCH_TO_${body.mode.toUpperCase()}`) {
+      return json({ error: 'exact_mode_confirmation_required' }, 400, noStore);
+    }
+    return await selectDistributionMode(env.DB, body.mode) ? json({ mode: body.mode }, 200, noStore)
+      : json({ error: 'verify_a_device_first' }, 409, noStore);
+  }
+  if (path === '/api/v1/admin/download-devices') {
+    const enrollment = await issueDownloadEnrollment(env.DB, body?.label);
+    return enrollment ? json(enrollment, 201, noStore) : json({ error: 'invalid_device_label' }, 400, noStore);
+  }
+  return notFound();
 }
 
 async function handlePublish(request: Request, env: Env): Promise<Response> {
@@ -328,14 +383,20 @@ export default {
     try {
       if (url.pathname === '/favicon.ico') return handleFavicon(request);
       if (url.pathname === '/health') return request.method === 'GET' || request.method === 'HEAD' ? handleHealth(request, env) : methodNotAllowed('GET, HEAD');
-      if (url.pathname === '/api/v1/releases/public/latest') return handlePublicLatest(request, env);
-      if (url.pathname === '/api/v1/releases/latest' || url.pathname === '/update.json') return handleLatest(request, env);
       if (url.pathname === '/api/v1/admin/releases') return handlePublish(request, env);
       if (url.pathname === '/api/v1/admin/releases/activate') return handleActivate(request, env);
-      if (url.pathname === '/' || url.pathname === '/download') return handlePublicDownloadPage(request, env);
-      if (url.pathname === '/download/latest.exe') return handleBinary(request, env, url);
+      const device = await handleDeviceRoute(request, env, url);
+      if (device) return device;
+      if (url.pathname === '/api/v1/releases/latest' || url.pathname === '/update.json') return handleLatest(request, env, await distributionMode(env.DB));
+      if (url.pathname === '/download/latest.exe') return handleBinary(request, env, url, await distributionMode(env.DB));
       const pageToken = stableDownloadToken(url.pathname);
-      if (pageToken) return handleStableDownloadPage(request, env, pageToken);
+      const isPublicFeed = url.pathname === '/api/v1/releases/public/latest';
+      if (isPublicFeed || pageToken || url.pathname === '/' || url.pathname === '/download') {
+        if (await distributionMode(env.DB) === 'private') return notFound();
+        if (isPublicFeed) return handlePublicLatest(request, env);
+        if (pageToken) return handleStableDownloadPage(request, env, pageToken);
+        return handlePublicDownloadPage(request, env);
+      }
       return notFound();
     } catch (error) {
       // Never log a private page's path: its last segment is the download token (F-51).

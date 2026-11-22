@@ -30,7 +30,7 @@ describe('release workflow', () => {
   // F-41: an app change whose run never published must still ship with the next push.
   it('decides "docs only" against the commit production runs, not the previous push', () => {
     const changes = step('Detect whether this push changes the application');
-    expect(changes).toContain('/api/v1/releases/public/latest');
+    expect(changes).toContain('cloudflare/scripts/read-active-release.mjs');
     expect(changes).toContain('merge-base --is-ancestor');
     expect(changes.indexOf('commitSha')).toBeLessThan(changes.indexOf('github.event.before'));
   });
@@ -50,7 +50,7 @@ describe('release workflow', () => {
 
   // F-50: a release that fails its live check is replaced by the one before it.
   it('restores the previous release when live verification fails', () => {
-    expect(step('Record the release being replaced')).toContain('/api/v1/releases/public/latest');
+    expect(step('Record the release being replaced')).toContain('cloudflare/scripts/read-active-release.mjs');
     const verify = step('Verify authenticated download end to end');
     expect(verify).toContain('PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.id }}');
     expect(verify).toContain('node cloudflare/scripts/activate-release.mjs "$PREVIOUS_RELEASE_ID"');
@@ -79,14 +79,14 @@ describe('release workflow', () => {
     expect(workflow.indexOf(smoke)).toBeLessThan(workflow.indexOf('name: private-browser-windows'));
   });
 
-  // F-42: distribution is public, so an installer carrying the shared token is never published.
-  it('refuses to publish an installer built with the bundled download token', () => {
+  it('excludes credential bootstrapping from the build and checks the live feed before an upload', () => {
+    const { build } = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
+    expect(JSON.stringify(build.extraResources)).not.toContain('private-browser-update.json');
+    expect(workflow).not.toContain('write-update-bootstrap');
+    expect(workflow).not.toContain('PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN');
     const configured = step('Detect publishing configuration');
-    expect(configured).toContain('PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN: ${{ vars.PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN }}');
-    const guard = configured.indexOf('"$PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN" == "true"');
-    expect(guard).toBeGreaterThan(-1);
-    expect(configured.slice(guard, configured.indexOf('fi', guard))).toContain('ready=false');
-    expect(guard).toBeLessThan(configured.indexOf('ready=true'));
+    expect(configured).toContain('PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE: ${{ secrets.PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE }}');
+    expect(configured.indexOf('read-active-release.mjs')).toBeLessThan(configured.indexOf('ready=true'));
     expect(step('Upload installer to private R2 bucket')).toContain("if: steps.configured.outputs.ready == 'true'");
   });
 

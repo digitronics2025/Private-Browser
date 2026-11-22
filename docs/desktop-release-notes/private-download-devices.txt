@@ -1,0 +1,1 @@
+Enroll a Windows device with a one-time code for private downloads and verify installers through its protected device credential.

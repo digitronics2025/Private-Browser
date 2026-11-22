@@ -604,23 +604,18 @@ undefined while **leaving the file on disk**. The Settings panel then offers to
 overwrite it rather than silently losing a configuration that a different machine
 or a repaired OS keychain might still read.
 
-### Bundled Bootstrap
+### Device enrollment and legacy bootstrap
 
-A packaged installer can arrive already knowing where its update service is.
-[update-bootstrap.ts](../../electron/update-bootstrap.ts) reads
-`private-browser-update.json` from `process.resourcesPath` — placed there by
-electron-builder's `extraResources` filter, written during CI by
-[write-update-bootstrap.mjs](../../cloudflare/scripts/write-update-bootstrap.mjs)
-from `PRIVATE_BROWSER_DOWNLOAD_URL` and `PRIVATE_BROWSER_DOWNLOAD_TOKEN`.
+New installers use the default service address with a credential-free resource
+set. The release owner chooses the distribution policy. **Enroll this device**
+uses a one-time code to register a separate credential for that Windows profile.
+The device credential is sent in an Authorization header to the verified
+service origin. CI can use its own enrolled verification device in private mode.
+[Private download distribution](../private-download-distribution.md)
 
-**Bundling is opt-in and off by default.** The script writes nothing unless
-`PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN` is exactly `true`, so the default installer
-carries no credential and the `extraResources` filter finds nothing to copy. When
-it is set, the build prints a warning: the token is shared by every client, not
-issued per device, and anyone holding the installer can extract it (F-02). Rotate
-`PRIVATE_BROWSER_DOWNLOAD_TOKEN` before such an installer leaves the machine it
-was built for. The publish job refuses such a build: it stays a private GitHub
-artifact (F-42).
+[update-bootstrap.ts](../../electron/update-bootstrap.ts) can still read
+`private-browser-update.json` from an older installed package. Its credential
+uses the legacy update compatibility path.
 
 Whatever the outcome — stored, invalid, or refused because `safeStorage` is
 unavailable — the file is deleted in a `finally`. It used to be removed only on

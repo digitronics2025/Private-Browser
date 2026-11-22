@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
+import { readActiveRelease } from './read-active-release.mjs';
 
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
@@ -36,20 +36,7 @@ function writeVersion(path, version) {
  * build still produces an installer (F-56). Any other failure stops the build —
  * guessing a version could publish one that reaches nobody.
  */
-async function activeVersion() {
-  if (!process.env.PRIVATE_BROWSER_DOWNLOAD_URL) return undefined;
-  const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
-  const response = await fetch(`${endpoint}/api/v1/releases/public/latest`, {
-    headers: { accept: 'application/json' },
-    redirect: 'error',
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (response.status === 404) return undefined;
-  if (!response.ok) throw new Error(`Cannot read the active release (${response.status})`);
-  return (await response.json()).version;
-}
-
-const activeText = await activeVersion();
+const activeText = (await readActiveRelease())?.version;
 const packagePath = resolve('package.json');
 const packageLockPath = resolve('package-lock.json');
 const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));

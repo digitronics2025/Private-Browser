@@ -27,6 +27,7 @@ class Statement {
   bind(...values: unknown[]) { this.values = values; return this; }
 
   async first<T>() {
+    if (this.sql.includes('FROM release_distribution')) return { mode: 'public' } as T;
     if (this.sql.includes('WHERE id = ?1')) {
       const [id, appId, channel] = this.values as [string, string, string];
       return (this.database.rows.find((row) => row.id === id && row.app_id === appId && row.channel === channel) ?? null) as T | null;
