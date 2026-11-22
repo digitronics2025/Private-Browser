@@ -169,7 +169,10 @@ import { GOOGLE_OVERVIEW_MAX_PAGES, googleOverviewModule } from './google-overvi
 import { healthFromGoogleConnection, observeGoogleHealth } from './google-connection-health.js';
 import type { GoogleConnectionHealth } from './types.js';
 import { AccountBackupManager, backupRestoreRevision, backupUploadRevision, planBackupRestore, type BackupWriteResult } from './account-backup.js';
-import { GoogleDriveAppDataTransport } from './google-backup-transport.js';
+import { GoogleDriveAppDataTransport, GoogleDriveBookmarkTransport } from './google-backup-transport.js';
+import { BookmarkSyncManager, type BookmarkSyncAction, type BookmarkSyncPreview, type BookmarkSyncStatus } from './bookmark-sync.js';
+import { readBookmarkPairing, writeBookmarkPairing } from './bookmark-pairing-file.js';
+import { bookmarkReplica, canSyncBookmark } from './bookmark-replica.js';
 import { validateIpcArguments } from './ipc-contracts.js';
 import { ControlCenterLink, developerEvidence } from './control-center-link.js';
 import { aiSourceRevision, classifyAiSource, maySendAiPreviewToCloud, sameAiSource } from './ai-account-spaces.js';
@@ -299,6 +302,7 @@ type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: Ex
 class BrowserController {
   private wordPressPrompt?: AbortController;
   private browsingPrivacyBusy = false;
+  private bookmarkSyncRequest?: AbortController;
   private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
   private pendingBackupRequest?: { accountSpaceId: AccountSpaceId; operationId: string };
   private backupRestoreReview?: { preview: BackupRestorePreview; items: ReturnType<typeof planBackupRestore>['items']; subject: string; revision: string; expiresAt: number };
@@ -428,6 +432,7 @@ class BrowserController {
     private readonly googleOAuth: GoogleOAuthManager,
     private readonly googleServices: GoogleServices,
     private readonly backups: AccountBackupManager,
+    private readonly bookmarkSync: BookmarkSyncManager,
     private readonly vault: VaultBroker,
     private readonly migration: VaultMigrationService,
     private readonly aiProvider: AiProviderStore,
@@ -2459,6 +2464,81 @@ class BrowserController {
       this.browsingPrivacyBusy = false;
       this.broadcast();
     }
+  }
+
+  async changeBookmarkSync(id: AccountSpaceId, action: BookmarkSyncAction, reviewId?: string, choice?: 'local' | 'remote'): Promise<BookmarkSyncStatus | BookmarkSyncPreview | undefined> {
+    const scope = this.bookmarkSyncScope(id);
+    if (action === 'status') return this.bookmarkSync.status(scope);
+    if (this.bookmarkSyncRequest) throw new Error('Finish the current bookmark sync action first.');
+    const request = new AbortController();
+    this.bookmarkSyncRequest = request;
+    const current = () => { request.signal.throwIfAborted(); this.bookmarkSyncScope(id, scope.subject); };
+    const capture = () => {
+      current();
+      const state = this.store.get();
+      const owned = state.bookmarks.filter((entry) => entry.accountSpaceId === id);
+      const syncable = owned.filter((entry) => canSyncBookmark(entry.url));
+      return { data: bookmarkReplica(scope.workspaceId, syncable, state.bookmarkFoldersByAccountSpace?.[id] ?? []), deviceOnly: owned.length - syncable.length };
+    };
+    try {
+      if (action === 'start') {
+        if (!await this.confirmBrowsingPrivacy('Pair this bookmark library?', 'A separate encrypted copy of this Account Space’s bookmarks and folders will be stored in the connected Google Drive app data.', 'Start pairing')) return undefined;
+        return await this.bookmarkSync.start(scope, capture().data, request.signal);
+      }
+      if (action === 'review') {
+        const local = capture();
+        return await this.bookmarkSync.prepare(scope, local.data, local.deviceOnly, request.signal);
+      }
+      if (action === 'apply') {
+        const result = await this.bookmarkSync.apply(scope, reviewId!, choice, () => capture().data, (replica) => {
+          current();
+          this.store.update((state) => {
+            const retained = state.bookmarks.filter((item) => item.accountSpaceId !== id || !canSyncBookmark(item.url));
+            const keptOnDevice = retained.filter((item) => item.accountSpaceId === id).length;
+            if (keptOnDevice + replica.bookmarks.length > 25_000) throw new Error('This Account Space exceeds the bookmark limit.');
+            state.bookmarks = [...retained, ...replica.bookmarks.map((item) => ({ ...item, accountSpaceId: id, workspaceId: scope.workspaceId }))];
+            const folders = state.bookmarkFoldersByAccountSpace ??= {};
+            folders[id] = replica.folders;
+          });
+          this.bookmarkUndo.delete(id);
+        }, request.signal);
+        this.broadcast();
+        return result;
+      }
+      if (action === 'unpair') {
+        if (!await this.confirmBrowsingPrivacy('Disconnect this device?', 'Local bookmarks stay on this device. Other paired devices can continue using the shared library.', 'Disconnect this device')) return undefined;
+        current();
+        this.bookmarkSync.disconnect(scope);
+        return this.bookmarkSync.status(scope);
+      }
+      const filters = [{ name: 'Encrypted bookmark pairing', extensions: ['pbpair'] }];
+      if (action === 'export-pairing') {
+        const file = await dialog.showSaveDialog(this.window, { title: 'Save bookmark pairing file', defaultPath: 'Private-Browser-Bookmarks.pbpair', filters });
+        if (file.canceled || !file.filePath) return undefined;
+        current();
+        const secret = await this.secureDialogs.open('export-bookmark-pair') as UnlockDialogValue | undefined;
+        if (!secret) return undefined;
+        current();
+        await writeBookmarkPairing(file.filePath, this.bookmarkSync.exportPair(scope), secret.password, current);
+        return this.bookmarkSync.status(scope);
+      }
+      const file = await dialog.showOpenDialog(this.window, { title: 'Open bookmark pairing file', properties: ['openFile'], filters });
+      if (file.canceled || !file.filePaths[0]) return undefined;
+      current();
+      const secret = await this.secureDialogs.open('import-bookmark-pair') as UnlockDialogValue | undefined;
+      if (!secret) return undefined;
+      const pair = await readBookmarkPairing(file.filePaths[0], secret.password);
+      current();
+      await this.bookmarkSync.importPair(scope, pair, request.signal);
+      return this.bookmarkSync.status(scope);
+    } finally { if (this.bookmarkSyncRequest === request) this.bookmarkSyncRequest = undefined; }
+  }
+
+  private bookmarkSyncScope(id: AccountSpaceId, subject?: string) {
+    const account = this.requireGoogleWriteAccount(id, 'encrypted-backup');
+    const current = account.googleIdentity!.sub;
+    if (subject !== undefined && current !== subject) throw new Error('The connected Google account changed.');
+    return { id, workspaceId: account.workspaceId, subject: current };
   }
 
   private requireBrowsingPrivacyAccount(id: AccountSpaceId) {
@@ -5627,6 +5707,8 @@ class BrowserController {
 
   private hideAllViews(): void {
     this.popupReview.cancel();
+    this.bookmarkSyncRequest?.abort();
+    this.bookmarkSync.clearReview();
     this.notesDraft = undefined;
     this.protectedPdf.close();
     this.clearWordPressCaptures();
@@ -5984,6 +6066,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   });
   const googleServices = new GoogleServices(googleTokens, actionReceipts);
   const backups = new AccountBackupManager(accountStore, safeStorage, new GoogleDriveAppDataTransport(googleTokens));
+  const bookmarkSync = new BookmarkSyncManager(join(userDataPath, 'bookmark-sync'),
+    { isEncryptionAvailable: agentStorageAvailable, encryptString: (value) => safeStorage.encryptString(value), decryptString: (value) => safeStorage.decryptString(value) },
+    new GoogleDriveBookmarkTransport(googleTokens));
   const persistedState = new AccountSpaceStateStore({
     paths: {
       legacyFilePath: join(userDataPath, 'browser-state.json'),
@@ -6033,7 +6118,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     removeUpdateBootstrap(updateBootstrapPath);
   }
   const migration = new VaultMigrationService(join(userDataPath, 'vault.enc'), join(userDataPath, 'myvault', 'migration-journal.enc'), safeStorage, vault);
-  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, vault, migration, aiProvider, updates, vscodeBridge, controlCenter, fillPreferences);
+  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, bookmarkSync, vault, migration, aiProvider, updates, vscodeBridge, controlCenter, fillPreferences);
   const agentChromeUrl = new URL(process.env.VITE_DEV_SERVER_URL ?? pathToFileURL(join(import.meta.dirname, '../dist/index.html')));
   agentChromeUrl.hash = 'agent-workspace';
   agentHost = new AgentHost({
@@ -6159,6 +6244,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:open-bookmarks-in-background', (_event, account: AccountSpaceId, ids: string[]) => controller!.openBookmarksInBackground(account, ids));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
   handle('ui:set-preferences', (_event, patch: UiPreferencesPatch, id?: AccountSpaceId) => controller!.setUiPreferences(patch, id));
+  handle('bookmarks:sync', (_event, id: AccountSpaceId, action: BookmarkSyncAction, review?: string, choice?: 'local' | 'remote') => controller!.changeBookmarkSync(id, action, review, choice));
   handle('privacy:browsing', (_event, id: AccountSpaceId, action: BrowsingPrivacyAction, value?: number | boolean) => controller!.changeBrowsingPrivacy(id, action, value));
   handle('ui:set-panel-pin', (_event, id: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean) => controller!.setSidePanelPin(id, tool, enabled));
   handle('settings:set', (_event, patch: BrowserSettingsPatch, workspace?: WorkspaceId) => controller!.setBrowserSettings(patch, workspace));

@@ -249,6 +249,15 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if ((action === 'protect' || action === 'export' || action === 'restore') && value === undefined) return;
       throw new Error('Invalid browsing privacy action');
     }
+    case 'bookmarks:sync': {
+      between(args, 2, 4); requireAccountSpaceId(args[0]);
+      if (args[1] === 'apply') {
+        requireUuid(args[2], 'bookmark sync review');
+        if (args[3] !== undefined && args[3] !== 'local' && args[3] !== 'remote') throw new Error('Invalid bookmark conflict choice');
+      } else if (typeof args[1] !== 'string' || !['status', 'start', 'export-pairing', 'import-pairing', 'review', 'unpair'].includes(args[1])
+        || args[2] !== undefined || args[3] !== undefined) throw new Error('Invalid bookmark sync action');
+      return;
+    }
     case 'ui:set-panel-pin':
       exact(args, 3); requireAccountSpaceId(args[0]);
       if (!isPinnablePanelTool(args[1]) || typeof args[2] !== 'boolean') throw new Error('Invalid tool pin');

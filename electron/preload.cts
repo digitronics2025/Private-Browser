@@ -6,6 +6,7 @@ import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantA
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, DownloadFolderMode, FindResult, PinnablePanelTool, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
 import type { BrowsingPrivacyAction } from './browsing-protection.js';
 import type { VaultEntryDecision } from './myvault/conflict-items.js';
+import type { BookmarkSyncAction, BookmarkSyncPreview, BookmarkSyncStatus } from './bookmark-sync.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
@@ -136,6 +137,7 @@ const api = {
   toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
   setUiPreferences: (patch: UiPreferencesPatch, accountId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('ui:set-preferences', patch, accountId),
   changeBrowsingPrivacy: (id: AccountSpaceId, action: BrowsingPrivacyAction, value?: number | boolean): Promise<boolean> => ipcRenderer.invoke('privacy:browsing', id, action, value),
+  changeBookmarkSync: (id: AccountSpaceId, action: BookmarkSyncAction, review?: string, choice?: 'local' | 'remote'): Promise<BookmarkSyncStatus | BookmarkSyncPreview | undefined> => ipcRenderer.invoke('bookmarks:sync', id, action, review, choice),
   setSidePanelPin: (accountId: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean): Promise<void> => ipcRenderer.invoke('ui:set-panel-pin', accountId, tool, enabled),
   setBrowserSettings: (patch: BrowserSettingsPatch, workspace?: WorkspaceId): Promise<void> => ipcRenderer.invoke('settings:set', patch, workspace),
   freezeContent: (): Promise<string | null> => ipcRenderer.invoke('browser:freeze-content'),
