@@ -510,6 +510,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); requireBoundedText(args[0], 'copied text', 2 * 1024 * 1024); return;
     case 'vault:reset-picks':
       exact(args, 1); requireAccountSpaceId(args[0]); return;
+    case 'vault:wordpress-save-setting':
+      exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 512); requireBoolean(args[2]); return;
     case 'vault:copy-generated':
       exact(args, 1); if (!['password', 'passphrase', 'pin'].includes(String(args[0]))) throw new Error('Invalid generated credential kind'); return;
     case 'vault:resolve-conflict':

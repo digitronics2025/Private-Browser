@@ -653,6 +653,9 @@ export default function App() {
             enabled: state.memorySaverSite.keptAwake,
             toggle: () => { const site = state.memorySaverSite!; void act(() => window.privateBrowser.setMemorySaverSite(activeTab.id, site.origin, !site.keptAwake)); },
           } : undefined}
+          wordPressSave={state.wordPressSaveSite ? { enabled: state.wordPressSaveSite.enabled,
+            toggle: () => { const site = state.wordPressSaveSite!; void act(() => window.privateBrowser.setWordPressSaveSite(activeTab.id, site.origin, !site.enabled)); },
+          } : undefined}
           onClose={closeMenu} onOpenPrivacy={() => openTool('privacy')} onResetZoom={() => void act(() => window.privateBrowser.zoom('reset'))} onToggleDeveloperTools={() => void act(() => window.privateBrowser.toggleDeveloperTools('right'))} />}
         {menu === 'zoom' && !activeTab.isHome && <ZoomMenu anchor={zoomButtonRef.current} zoom={activeTab.zoomPercent ?? 100} onZoom={(direction) => void act(() => window.privateBrowser.zoom(direction))} onClose={closeMenu} />}
         {menu === 'profile' && (

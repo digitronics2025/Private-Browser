@@ -100,6 +100,10 @@ export class RuntimeStateStore {
     return this.records.get(accountSpaceId)?.memorySaverExclusions?.includes(origin) === true;
   }
 
+  offersWordPressSave(accountSpaceId: AccountSpaceId, origin: string): boolean {
+    return this.records.get(accountSpaceId)?.wordPressSaveOrigins?.includes(origin) === true;
+  }
+
   addressMatches(accountSpaceId: AccountSpaceId, text: string): AddressMatch[] {
     const account = this.activeReadableAccount(accountSpaceId);
     if (!account) return [];

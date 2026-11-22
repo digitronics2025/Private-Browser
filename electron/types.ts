@@ -614,6 +614,7 @@ export interface PrivacyEvent {
 }
 
 export interface BrowserSnapshot {
+  wordPressSaveSite?: { origin: string; enabled: boolean };
   memorySaverSite?: { origin: string; keptAwake: boolean };
   sessionLock?: 'windows' | 'idle';
   workspaces: Workspace[];

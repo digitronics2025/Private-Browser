@@ -138,6 +138,7 @@ import { captureLoginInIsolatedWorld, fillLoginAutomaticallyInIsolatedWorld, fil
 import type { VaultFillReadiness } from './types.js';
 import { FillPicker } from './myvault/fill-picker.js';
 import { FillPreferenceStore } from './myvault/fill-preferences.js';
+import { MAX_WORDPRESS_SAVE_ORIGINS, WordPressLoginAttempt, wordPressLoginFlow } from './myvault/wordpress-save.js';
 import { isSameSiteFillCandidate } from './myvault/site-match.js';
 import { fillPickerBounds, type FillPickerChoice } from './myvault/fill-picker-model.js';
 import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
@@ -215,6 +216,7 @@ interface RuntimeTab {
   failedUrl?: string;
   automaticFillGeneration?: number;
   automaticFillPending: boolean;
+  wordPressAttempt?: WordPressLoginAttempt;
 }
 
 type Layout = ContentInsets;
@@ -287,6 +289,7 @@ function permissionCapability(
 type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string; retainedFileStamp?: string };
 
 class BrowserController {
+  private wordPressPrompt?: AbortController;
   private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
   private pendingBackupRequest?: { accountSpaceId: AccountSpaceId; operationId: string };
   private backupRestoreReview?: { preview: BackupRestorePreview; items: ReturnType<typeof planBackupRestore>['items']; subject: string; revision: string; expiresAt: number };
@@ -644,6 +647,7 @@ class BrowserController {
       trackerBlocking: strictTracking || persisted.trackerBlocking,
       trackerSite,
       memorySaverSite: memorySite && downloadAccount ? { origin: memorySite, keptAwake: this.store.keepsSiteAwake(downloadAccount, memorySite) } : undefined,
+      wordPressSaveSite: this.wordPressSiteStatus(activeTab),
       activeAccountSpaceId,
       accountSpaces: persisted.accountSpaces,
       accountHealth: persisted.accountHealth,
@@ -809,6 +813,8 @@ class BrowserController {
     const current = this.runtimeTabs.get(tab.id);
     if (current) Object.assign(current, { problem: undefined, failedUrl: undefined });
     if (url === 'private://home') {
+      current?.wordPressAttempt?.clear();
+      this.wordPressPrompt?.abort();
       this.endSplitForTab(tab.id, tab.accountSpaceId);
       this.store.update((next) => {
         const target = next.tabs.find((candidate) => candidate.id === tab.id);
@@ -1079,6 +1085,7 @@ class BrowserController {
       next.activeTabByAccountSpace[tab.accountSpaceId] = tab.id;
     });
     await this.showActiveTab();
+    this.armWordPressSave(tabId);
   }
 
   async setSplitView(otherTabId?: string): Promise<void> {
@@ -3685,6 +3692,7 @@ class BrowserController {
     }
     void this.vaultSync.syncNow().catch(() => undefined);
     this.addPrivacyEvent('vault', 'MyVault unlocked with Windows Hello', 'Decrypted state is held only by the trusted broker');
+    this.armWordPressSave(this.activeTab(this.store.get()).id);
     return this.listVault();
   }
 
@@ -3717,10 +3725,12 @@ class BrowserController {
     await this.vault.unlock(value.password);
     void this.vaultSync.syncNow().catch(() => undefined);
     this.addPrivacyEvent('vault', 'MyVault unlocked', 'Decrypted state is held only by the trusted broker');
+    this.armWordPressSave(this.activeTab(this.store.get()).id);
     return this.listVault();
   }
 
   async lockVault() {
+    this.clearWordPressCaptures();
     this.secureDialogs.closeAll();
     this.vaultConflictOwner = undefined;
     this.vaultSync.clearConflictReview();
@@ -4227,6 +4237,113 @@ class BrowserController {
     return { ...saved, label: saved.title, url: saved.url ?? '' };
   }
 
+  private wordPressSiteStatus(tab: BrowserTab): BrowserSnapshot['wordPressSaveSite'] {
+    const runtime = this.runtimeTabs.get(tab.id);
+    const flow = workspaceVaultPolicy(tab.workspaceId).saveCapture && !tab.isHome && !runtime?.certificateError
+      ? wordPressLoginFlow(tab.url) : undefined;
+    if (flow) return { origin: flow.origin, enabled: this.store.offersWordPressSave(tab.accountSpaceId, flow.origin) };
+    return undefined;
+  }
+
+  setWordPressSaveSite(id: string, origin: string, enabled: boolean): void {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    if (id !== tab.id || this.wordPressSiteStatus(tab)?.origin !== origin || this.activeDownloadAccount(state) !== tab.accountSpaceId) {
+      throw new Error('The site changed. Open Site information again.');
+    }
+    this.saveWordPressPreference(tab.accountSpaceId, origin, enabled);
+    this.armWordPressSave(tab.id);
+    this.broadcast();
+  }
+
+  private saveWordPressPreference(id: AccountSpaceId, origin: string, enabled: boolean): void {
+    const record = this.accounts.update(id, (entry) => {
+      const origins = new Set(entry.wordPressSaveOrigins);
+      if (enabled && origins.size >= MAX_WORDPRESS_SAVE_ORIGINS && !origins.has(origin)) throw new Error('This Account Space already has 100 sites enabled.');
+      if (enabled) origins.add(origin);
+      else origins.delete(origin);
+      entry.wordPressSaveOrigins = [...origins];
+    });
+    this.store.refreshAccount(record);
+  }
+
+  private wordPressScopeIsCurrent(tabId: string, contents: Electron.WebContents): boolean {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tabId);
+    return tab.id === tabId && this.activeDownloadAccount(state) === tab.accountSpaceId && !tab.isHome && !this.store.isReadOnly()
+      && !runtime?.certificateError && runtime?.view?.webContents === contents && !contents.isDestroyed()
+      && !agentHost?.isLentContents(contents.id) && workspaceVaultPolicy(tab.workspaceId).saveCapture && this.vault.status().lifecycle === 'unlocked';
+  }
+
+  private armWordPressSave(tabId: string): void {
+    const runtime = this.runtimeTabs.get(tabId);
+    const contents = runtime?.view?.webContents;
+    if (!runtime || !contents || contents.isDestroyed()) return;
+    runtime.wordPressAttempt?.clear();
+    const flow = wordPressLoginFlow(contents.getURL());
+    const tab = this.store.getTab(tabId);
+    if (!flow || !tab || !this.wordPressScopeIsCurrent(tabId, contents) || !this.store.offersWordPressSave(tab.accountSpaceId, flow.origin)) {
+      if (runtime.wordPressAttempt) contents.send('wordpress-save:arm', undefined);
+      runtime.wordPressAttempt = undefined;
+      return;
+    }
+    const attempt = runtime.wordPressAttempt = new WordPressLoginAttempt();
+    contents.send('wordpress-save:arm', { nonce: attempt.arm(flow), flow });
+  }
+
+  private clearWordPressCaptures(): void {
+    this.wordPressPrompt?.abort();
+    for (const runtime of this.runtimeTabs.values()) runtime.wordPressAttempt?.clear();
+  }
+
+  private observeWordPressLogin(details: Electron.OnHeadersReceivedListenerDetails): void {
+    if (details.resourceType !== 'mainFrame' || details.method !== 'POST' || details.webContentsId === undefined) return;
+    this.contentsTabs.get(details.webContentsId)?.wordPressAttempt?.response(details);
+  }
+
+  private async offerWordPressSave(tabId: string, url: string, status: number): Promise<void> {
+    const runtime = this.runtimeTabs.get(tabId);
+    const contents = runtime?.view?.webContents;
+    const candidate = runtime?.wordPressAttempt?.commit(url, status);
+    if (!candidate) return;
+    const abort = new AbortController();
+    try {
+      if (!contents || !runtime || !this.wordPressScopeIsCurrent(tabId, contents) || this.wordPressPrompt || this.pendingPermission) return;
+      const initial = this.currentFillContext();
+      if (candidate.origin !== initial.origin || !this.store.offersWordPressSave(initial.accountSpaceId, candidate.origin)) return;
+      const matches = this.vault.searchMetadata('', candidate.origin).filter((entry) => entry.url && isAutofillTarget(entry.url, candidate.origin) && entry.username === candidate.username);
+      if (matches.length > 1) return;
+      const match = matches[0];
+      if (match && this.vault.resolveSecretForTrustedOperation(match.id, 'password') === candidate.password.toString('utf8')) return;
+      this.wordPressPrompt = abort;
+      const timer = setTimeout(() => { candidate.password.fill(0); abort.abort(); }, 30_000);
+      timer.unref();
+      try {
+        const { response } = await dialog.showMessageBox(this.window, { type: 'question', title: 'MyVault',
+          message: match ? 'Update saved login?' : 'Save login?', detail: `${candidate.origin}\n${candidate.username}`,
+          buttons: [match ? 'Update login' : 'Save login', 'Not now', 'Never on this site'], defaultId: 1, cancelId: 1, signal: abort.signal });
+        if (abort.signal.aborted || !this.wordPressScopeIsCurrent(tabId, contents)
+          || JSON.stringify(this.currentFillContext()) !== JSON.stringify(initial)) return;
+        if (response === 2) {
+          this.saveWordPressPreference(initial.accountSpaceId, candidate.origin, false);
+          this.broadcast();
+        } else if (response === 0) {
+          const current = this.vault.searchMetadata('', candidate.origin).filter((entry) => entry.url && isAutofillTarget(entry.url, candidate.origin) && entry.username === candidate.username);
+          if (current.length !== matches.length || current[0]?.id !== match?.id || current[0]?.updatedAt !== match?.updatedAt) return;
+          await this.vault.saveLogin({ id: match?.id, title: match?.title ?? new URL(candidate.origin).hostname, url: candidate.origin,
+            username: candidate.username, password: candidate.password.toString('utf8') });
+          this.addPrivacyEvent('vault', match ? 'MyVault login updated' : 'MyVault login saved', candidate.origin, initial.accountSpaceId);
+        }
+      } finally { clearTimeout(timer); }
+    } catch {
+      // A lock, closed tab or expired decision invalidates the candidate.
+    } finally {
+      if (this.wordPressPrompt === abort) this.wordPressPrompt = undefined;
+      candidate.password.fill(0);
+    }
+  }
+
   async copyGeneratedCredential(kind: GeneratedCredentialKind): Promise<void> {
     const policy = this.activeVaultPolicy();
     if (!policy.vaultSurface || !policy.passwordClipboard) throw new Error('Credential clipboard is disabled in this workspace');
@@ -4657,6 +4774,7 @@ class BrowserController {
         nodeIntegration: false,
         webSecurity: true,
         allowRunningInsecureContent: false,
+        ...(workspaceVaultPolicy(tab.workspaceId).saveCapture ? { preload: join(import.meta.dirname, 'myvault/wordpress-save-preload.cjs') } : {}),
       },
     });
     runtime.view = view;
@@ -4665,7 +4783,15 @@ class BrowserController {
     runtime.memorySaver = { lastVisibleAt: Date.now() };
     const contentsId = view.webContents.id;
     this.contentsTabs.set(contentsId, runtime);
-    view.webContents.once('destroyed', () => { this.contentsTabs.delete(contentsId); });
+    view.webContents.once('destroyed', () => {
+      runtime.wordPressAttempt?.clear();
+      this.contentsTabs.delete(contentsId);
+    });
+    view.webContents.on('ipc-message', (event, channel, ...args: unknown[]) => {
+      if (channel !== 'wordpress-save:submitted' || event.senderFrame !== view.webContents.mainFrame || args.length !== 3
+        || !runtime.wordPressAttempt || !view.getVisible() || !this.wordPressScopeIsCurrent(tabId, view.webContents)) return;
+      runtime.wordPressAttempt.submit(args[0], args[1], args[2]);
+    });
     this.window.contentView.addChildView(view);
     // Every guard is attached before anything below that could throw: a view
     // that exists without them would run a hostile page with no popup,
@@ -4739,6 +4865,7 @@ class BrowserController {
     guardPageNavigation(view.webContents);
     view.webContents.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
       if (!isMainFrame) return;
+      if (this.wordPressPrompt && this.activeTab(this.store.get()).id === tabId) this.wordPressPrompt.abort();
       if (isProtectedPage(url)) this.endSplitForTab(tabId, tab.accountSpaceId);
       if (runtime.problem && !this.overlayOpen && this.activeTab(this.store.get()).id === tabId) view.setVisible(true);
       runtime.navigationGeneration += 1;
@@ -4754,6 +4881,7 @@ class BrowserController {
     });
     view.webContents.on('did-fail-load', (_event, code, _description, url, isMainFrame) => {
       if (!isMainFrame || !isAllowedRemoteUrl(url)) return;
+      runtime.wordPressAttempt?.clear();
       const problem = problemForFailedLoad(code, runtime.certificateError);
       if (problem) this.markTabProblem(tabId, problem, url);
     });
@@ -4762,10 +4890,15 @@ class BrowserController {
     view.webContents.on('did-finish-load', () => {
       void this.updateGoogleWebsiteState(tabId, view);
       this.scheduleAutomaticFill(tabId);
+      this.armWordPressSave(tabId);
     });
-    view.webContents.on('did-navigate', (_event, url) => this.commitNavigation(tabId, url));
+    view.webContents.on('did-navigate', (_event, url, status) => {
+      this.commitNavigation(tabId, url);
+      void this.offerWordPressSave(tabId, url, status);
+    });
     view.webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
       if (!isMainFrame) return;
+      runtime.wordPressAttempt?.clear();
       this.commitNavigation(tabId, url, false);
       this.scheduleAutomaticFill(tabId);
     });
@@ -4978,6 +5111,10 @@ class BrowserController {
     });
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
+    });
+    ses.webRequest.onHeadersReceived((details, callback) => {
+      this.observeWordPressLogin(details);
+      callback({});
     });
     ses.webRequest.onCompleted((details) => {
       if (details.statusCode >= 400) this.recordNetworkIssue(details);
@@ -5198,6 +5335,7 @@ class BrowserController {
 
   private hideAllViews(): void {
     this.popupReview.cancel();
+    this.clearWordPressCaptures();
     this.fillPicker.close();
     for (const runtime of this.runtimeTabs.values()) {
       if (runtime.view?.getVisible()) runtime.memorySaver.lastVisibleAt = Date.now();
@@ -5833,6 +5971,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:reset-picks', (_event, accountId: AccountSpaceId) => controller!.resetVaultPicks(accountId));
   handle('vault:fill-readiness', () => controller!.vaultFillReadiness());
   handle('vault:save-from-page', () => controller!.requestSaveFromPage());
+  handle('vault:wordpress-save-setting', (_event, tabId: string, origin: string, enabled: boolean) => controller!.setWordPressSaveSite(tabId, origin, enabled));
   handle('vault:request-delete', (_event, id: string) => controller!.requestVaultDelete(id));
   handle('vault:acknowledge-recovery', () => controller!.acknowledgeVaultRecovery());
   handle('vault:copy-password', (_event, id: string) => controller!.copyPassword(id));

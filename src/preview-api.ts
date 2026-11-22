@@ -564,6 +564,7 @@ export function installPreviewApi(): void {
     cleanupLegacyVault: desktopOnly,
     openVaultEditor: desktopOnly,
     requestSaveFromPage: desktopOnly,
+    setWordPressSaveSite: desktopOnly,
     requestVaultDelete: desktopOnly,
     acknowledgeVaultRecovery: desktopOnly,
     copyPassword: desktopOnly,
