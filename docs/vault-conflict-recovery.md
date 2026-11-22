@@ -11,6 +11,12 @@ computer. Before either choice takes effect, Private Browser writes and verifies
 encrypted `local.myvault` and `cloud.myvault` files in a dated recovery folder.
 If the reviewed versions change, reload the review and choose again.
 
+**Choose entries individually** appears when both compatible vaults agree on
+passkeys, security keys, authenticator tokens and preferences. Choose one side
+for every differing entry. Choosing an absent version removes that entry from
+the merged copy. Private Browser keeps both original encrypted files before
+writing the selection against the exact reviewed cloud version.
+
 After resolving and unlocking, use **Show conflict recovery files** to locate
 the archives. A `.myvault` archive can be opened with the original vault's
 master password. MyVault's encrypted backup import accepts this format.

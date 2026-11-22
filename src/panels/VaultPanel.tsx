@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Clock3, Cloud, Copy, Eye, Fingerprint, KeyRound, LockKeyhole, Plus, RefreshCw, Search, ShieldCheck, Trash2, Zap } from 'lucide-react';
 import type { AccountSpaceId, VaultConflictReview, VaultConflictSide, VaultFillReadiness, VaultItemMeta, VaultStatus, WorkspaceId } from '../../electron/types';
 import { EmptyState, PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
 import { VaultHealthPanel } from './VaultHealthPanel';
 import { ChromePasswordImportWizard } from './ChromePasswordImportWizard';
+import type { VaultEntryDecision } from '../../electron/myvault/conflict-items';
+
+const VaultConflictChoices = lazy(() => import('./VaultConflictChoices'));
 
 const fillReadinessText: Record<VaultFillReadiness, [string, string]> = {
   locked: ['Vault locked', 'Unlock MyVault to check for a saved login.'],
@@ -94,6 +97,17 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
       onToast(`Kept the ${choice} vault. Both encrypted recovery copies are saved.`);
     });
   };
+  const resolveEntries = (entries: VaultEntryDecision[]) => {
+    if (!conflictReview || conflictBusy) return;
+    const id = conflictReview.id;
+    setConflictReview(undefined);
+    void conflictAction(async () => {
+      const result = await window.privateBrowser.resolveVaultEntryConflict(id, entries);
+      setStatus(result);
+      setItems(result.items);
+      onToast('Entry choices saved. Both encrypted recovery copies are available.');
+    });
+  };
   const visibleItems = items.filter((item) => [item.label, item.username, item.url].some((value) => value.toLocaleLowerCase().includes(query.toLocaleLowerCase())));
   return (
     <div className="side-panel">
@@ -134,6 +148,8 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
         {conflictReview ? <>
           <ConflictSide heading="This computer" copy={conflictReview.local} />
           <ConflictSide heading={`Cloud version ${conflictReview.cloudVersion}`} copy={conflictReview.cloud} />
+          {Boolean(conflictReview.itemChoices?.length) && <Suspense fallback={null}><VaultConflictChoices key={conflictReview.id}
+            entries={conflictReview.itemChoices!} disabled={conflictBusy} onApply={resolveEntries} /></Suspense>}
           <div className="credential-actions">
             <button disabled={conflictBusy} onClick={() => resolveConflict('cloud')}>Keep cloud copy</button>
             <button disabled={conflictBusy} onClick={() => resolveConflict('local')}>Keep local copy</button>

@@ -1,19 +1,21 @@
-import { useDeferredValue, useMemo, useState } from 'react';
+import { lazy, Suspense, useDeferredValue, useMemo, useState } from 'react';
 import { FileDown, Globe2, Link2, Pencil, Search, Star, Trash2, Upload } from 'lucide-react';
 import { bookmarkFolderKey, bookmarkFolderLabel, bookmarkFolders, duplicateBookmarkIds, MAX_BOOKMARK_EDIT_BATCH } from '../../electron/bookmark-maintenance';
-import type { Bookmark, BookmarkFolder, BookmarkLevelInput, BrowserSnapshot } from '../../electron/types';
+import type { AccountSpaceSummary, Bookmark, BookmarkFolder, BookmarkLevelInput, BrowserSnapshot } from '../../electron/types';
 import { domainFromUrl } from '../lib/format';
 import { EmptyState, PanelHeader } from './common';
 import { BookmarkFolderTree } from './BookmarkFolderTree';
 
 const PAGE_SIZE = 75;
 const folderOrder = new Intl.Collator();
+const BookmarkSyncPanel = lazy(() => import('./BookmarkSyncPanel'));
 
-export function BookmarksPanel({ bookmarks, savedFolders, favicons, undo, onOpen, onRename, onEditAddress, onRemove, onImport, onExport, onBatch, onUndo, onCreateFolder, onMoveFolder, onRenameFolder, onDeleteFolder, onBookmarkPage }: {
+export function BookmarksPanel({ bookmarks, savedFolders, favicons, undo, syncAccount, onOpen, onRename, onEditAddress, onRemove, onImport, onExport, onBatch, onUndo, onCreateFolder, onMoveFolder, onRenameFolder, onDeleteFolder, onBookmarkPage }: {
   bookmarks: Bookmark[];
   savedFolders: BookmarkFolder[];
   favicons: Map<string, string>;
   undo: BrowserSnapshot['bookmarkUndo'];
+  syncAccount?: AccountSpaceSummary;
   onOpen: (id: string) => void;
   onRename: (item: Bookmark) => void;
   onEditAddress: (item: Bookmark) => void;
@@ -92,6 +94,7 @@ export function BookmarksPanel({ bookmarks, savedFolders, favicons, undo, onOpen
   return (
     <div className="side-panel">
       <PanelHeader icon={Star} eyebrow="This Account Space" title="Bookmarks" />
+      {syncAccount && <Suspense fallback={null}><BookmarkSyncPanel account={syncAccount} /></Suspense>}
       <label className="vault-search"><Search size={14} /><input aria-label="Search bookmarks" placeholder="Search bookmarks" value={query} onChange={(event) => { setQuery(event.target.value); setRequestedPage(0); }} /></label>
       <label className="vault-search"><Search size={14} /><input aria-label="Filter by bookmark folder" placeholder="Filter by folder" value={folder} onChange={(event) => { setFolder(event.target.value); setRequestedPage(0); }} /></label>
       <div className="panel-actions">

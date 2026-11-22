@@ -1,0 +1,1 @@
+Choose local or cloud entries individually in compatible MyVault conflicts, with both original encrypted copies saved first.

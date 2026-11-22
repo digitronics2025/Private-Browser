@@ -249,6 +249,15 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       if ((action === 'protect' || action === 'export' || action === 'restore') && value === undefined) return;
       throw new Error('Invalid browsing privacy action');
     }
+    case 'bookmarks:sync': {
+      between(args, 2, 4); requireAccountSpaceId(args[0]);
+      if (args[1] === 'apply') {
+        requireUuid(args[2], 'bookmark sync review');
+        if (args[3] !== undefined && args[3] !== 'local' && args[3] !== 'remote') throw new Error('Invalid bookmark conflict choice');
+      } else if (typeof args[1] !== 'string' || !['status', 'start', 'export-pairing', 'import-pairing', 'review', 'unpair'].includes(args[1])
+        || args[2] !== undefined || args[3] !== undefined) throw new Error('Invalid bookmark sync action');
+      return;
+    }
     case 'ui:set-panel-pin':
       exact(args, 3); requireAccountSpaceId(args[0]);
       if (!isPinnablePanelTool(args[1]) || typeof args[2] !== 'boolean') throw new Error('Invalid tool pin');
@@ -541,6 +550,18 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); if (!['password', 'passphrase', 'pin'].includes(String(args[0]))) throw new Error('Invalid generated credential kind'); return;
     case 'vault:resolve-conflict':
       exact(args, 2); if (args[0] !== 'cloud' && args[0] !== 'local') throw new Error('Choose the cloud or local vault explicitly'); requireUuid(args[1], 'conflict review'); return;
+    case 'vault:resolve-entry-conflict': {
+      exact(args, 2); requireUuid(args[0], 'vault review');
+      if (!Array.isArray(args[1]) || !args[1].length || args[1].length > 100) throw new Error('Invalid vault entry choices');
+      const ids = new Set<string>();
+      for (const entry of args[1]) {
+        const value = requireExactKeys(entry, ['id', 'keep']);
+        if (typeof value.id !== 'string' || !/^[a-f0-9]{64}$/.test(value.id) || ids.has(value.id)
+          || (value.keep !== 'local' && value.keep !== 'cloud')) throw new Error('Invalid vault entry choice');
+        ids.add(value.id);
+      }
+      return;
+    }
     case 'vault:open-editor':
       between(args, 0, 1); if (args[0] !== undefined) requireBoundedText(args[0], 'origin', 2048); return;
     case 'vault:import-reviewed-chrome-passwords':

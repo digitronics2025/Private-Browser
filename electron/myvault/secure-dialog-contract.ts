@@ -1,4 +1,4 @@
-export type SecureDialogKind = 'unlock' | 'enroll-hello' | 'edit-login' | 'update-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair' | 'export-browsing' | 'restore-browsing' | 'enroll-download-device';
+export type SecureDialogKind = 'unlock' | 'enroll-hello' | 'edit-login' | 'update-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair' | 'export-browsing' | 'restore-browsing' | 'export-bookmark-pair' | 'import-bookmark-pair' | 'enroll-download-device';
 
 export const SECURE_CREDENTIAL_PRESETS = {
   password: { label: 'Password, 24 characters with symbols', kind: 'password', length: 24, symbols: true },
@@ -53,9 +53,9 @@ export function parseSecureDialogValue(kind: SecureDialogKind, value: unknown): 
     if (!/^pbenr_[a-f0-9-]{36}_[A-Za-z0-9_-]{43}$/.test(code)) throw new Error('Invalid download enrollment code');
     return { code };
   }
-  if (kind === 'export-browsing' || kind === 'restore-browsing') {
+  if (kind === 'export-browsing' || kind === 'restore-browsing' || kind === 'export-bookmark-pair' || kind === 'import-bookmark-pair') {
     const password = textField(input, 'password', 1_024)!;
-    if (password.length < 16 || (kind === 'export-browsing' && input.confirmPassword !== password)) throw new Error('Invalid recovery passphrase');
+    if (password.length < 16 || ((kind === 'export-browsing' || kind === 'export-bookmark-pair') && input.confirmPassword !== password)) throw new Error('Invalid recovery passphrase');
     return { password };
   }
   if (kind === 'unlock' || kind === 'enroll-hello') return { password: textField(input, 'password', 1024)! };
