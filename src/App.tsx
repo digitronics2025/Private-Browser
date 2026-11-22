@@ -475,6 +475,7 @@ export default function App() {
         onSetupExit={() => setSettingsEntry('overview')} onManageAccounts={() => setAccountManagerOpen(true)}
         onOpenVault={() => openTool('vault')} onUiChange={setUi} onToast={showToast} />;
       case 'bookmarks': return <BookmarksPanel key={activeAccount.id} bookmarks={accountBookmarks} savedFolders={accountFolders} favicons={favicons} undo={state.bookmarkUndo}
+        syncAccount={state.browsingProtection !== undefined && !workspace.protected ? activeAccount : undefined}
         onOpen={bookmarkActions.open} onRename={bookmarkActions.rename} onRemove={bookmarkActions.remove}
         onCreateFolder={createBookmarkFolder} onMoveFolder={moveBookmarkFolder} onRenameFolder={bookmarkActions.renameFolder}
         onDeleteFolder={bookmarkActions.removeFolder} onBookmarkPage={activeTab.isHome ? undefined : bookmarkToFolder}

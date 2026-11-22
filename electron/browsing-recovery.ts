@@ -6,7 +6,7 @@ const format = 'private-browser-portable-browsing-v1';
 const maxArchiveBytes = 12 * 1024 * 1024;
 const maxPayloadBytes = 8 * 1024 * 1024;
 
-function recoveryKey(passphrase: string, salt: Buffer): Promise<Buffer> {
+export function deriveRecoveryKey(passphrase: string, salt: Buffer): Promise<Buffer> {
   if (passphrase.length < 16 || passphrase.length > 1_024) throw new Error('Use a recovery passphrase of at least 16 characters.');
   const text = Buffer.from(passphrase, 'utf8');
   return new Promise((resolve, reject) => {
@@ -21,7 +21,7 @@ function recoveryKey(passphrase: string, salt: Buffer): Promise<Buffer> {
 export async function sealBrowsingArchive(payload: AccountBackupPayload, passphrase: string): Promise<Buffer> {
   if (Buffer.byteLength(JSON.stringify(payload)) > maxPayloadBytes) throw new Error('This Account Space exceeds the recovery archive size limit.');
   const salt = randomBytes(32);
-  const key = await recoveryKey(passphrase, salt);
+  const key = await deriveRecoveryKey(passphrase, salt);
   try {
     const bytes = Buffer.from(JSON.stringify({ format, salt: salt.toString('base64url'), body: encryptBackupPayload(payload, key) }), 'utf8');
     if (bytes.length > maxArchiveBytes) throw new Error('This Account Space exceeds the recovery archive size limit.');
@@ -44,7 +44,7 @@ export async function unsealBrowsingArchive(path: string, passphrase: string): P
   if (archive?.format !== format || typeof archive.salt !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(archive.salt) || !archive.body) {
     throw new Error('This file is not a Private Browser recovery archive.');
   }
-  const key = await recoveryKey(passphrase, Buffer.from(archive.salt, 'base64url'));
+  const key = await deriveRecoveryKey(passphrase, Buffer.from(archive.salt, 'base64url'));
   try { return decryptBackupEnvelope(archive.body, key); }
   catch { throw new Error('The recovery passphrase is incorrect or the file has changed.'); }
   finally { key.fill(0); }
