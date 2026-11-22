@@ -316,7 +316,7 @@ export default function App() {
       case 'select-tab': selectTabAt(shortcut.index ?? 0); break;
       case 'last-tab': selectTabAt(workspaceTabs.length - 1); break;
       case 'toggle-bookmark-bar': void act(() => window.privateBrowser.toggleBookmarkBar()); break;
-      case 'bookmark-page': if (!activeTab.isHome) void act(() => window.privateBrowser.toggleBookmark()); break;
+      case 'bookmark-page': if (!activeTab.isHome) togglePageBookmark(); break;
       case 'bookmark-manager': openTool('bookmarks'); break;
       case 'history': openTool('history'); break;
       case 'downloads': openTool('downloads'); break;
@@ -425,20 +425,28 @@ export default function App() {
   };
 
   const chooseBookmarkFolder = (title: string, confirmLabel: string, allowed: (item: BookmarkLevelInput) => boolean,
-    submit: (folder: BookmarkLevelInput) => Promise<unknown>) => {
+    submit: (folder: BookmarkLevelInput, name?: string) => Promise<unknown>, initialName?: string) => {
     const folders = bookmarkFolders(accountBookmarks, accountFolders).filter(allowed);
-    setPrompt({ title, confirmLabel, fields: [{ name: 'folder', label: 'Destination folder', value: '',
+    const naming = initialName !== undefined;
+    setPrompt({ title, confirmLabel, description: naming ? 'Leave the name empty to show only the icon on the bookmarks bar.' : undefined,
+      fields: [...(naming ? [{ name: 'name', label: 'Name', value: initialName.slice(0, 500), maxLength: 500, optional: true }] : []),
+      { name: 'folder', label: 'Destination folder', value: naming ? bookmarkFolderKey({ location: 'bar', path: [] }) : '',
       options: folders.map((level) => ({ value: bookmarkFolderKey(level), label: bookmarkFolderLabel(level) })) }],
-    submit: ({ folder }) => {
+    submit: ({ folder, name }) => {
       const chosen = folders.find((entry) => bookmarkFolderKey(entry) === folder);
       if (!chosen) throw new Error('Choose a destination folder.');
-      return submit(chosen);
+      return submit(chosen, name);
     } });
   };
   const bookmarkToFolder = () => {
     if (activeTab.isHome) return;
     chooseBookmarkFolder('Bookmark this tab in a folder', 'Save bookmark', () => true,
-      (folder) => window.privateBrowser.saveBookmarkToFolder(activeAccount.id, activeTab.id, activeTab.url, folder));
+      (folder, name) => window.privateBrowser.saveBookmarkToFolder(activeAccount.id, activeTab.id, activeTab.url, folder, name),
+      bookmarked ? undefined : activeTab.title);
+  };
+  const togglePageBookmark = () => {
+    if (bookmarked) void act(() => window.privateBrowser.toggleBookmark());
+    else bookmarkToFolder();
   };
   const createBookmarkFolder = (parent: BookmarkLevelInput) => setPrompt({ title: 'New bookmark folder', confirmLabel: 'Create folder',
     fields: [{ name: 'name', label: 'Folder name', value: '', maxLength: 200 }],
@@ -591,7 +599,7 @@ export default function App() {
               onReloadOrStop={() => void act(() => (activeTab.loading ? window.privateBrowser.stop() : window.privateBrowser.reload()))}
               onHome={() => void act(() => window.privateBrowser.goHome())}
               onSiteInfo={() => setMenu((current) => (current === 'site-info' ? null : 'site-info'))}
-              onToggleBookmark={() => void act(() => window.privateBrowser.toggleBookmark())}
+              onToggleBookmark={togglePageBookmark}
               onBookmarkToFolder={bookmarkToFolder}
               onOpenVault={() => toggleTool('vault')}
               onZoomMenu={() => setMenu((current) => (current === 'zoom' ? null : 'zoom'))}
@@ -719,7 +727,7 @@ export default function App() {
               switchAccount: (id) => void act(() => window.privateBrowser.switchAccountSpace(id)),
               manageAccounts: () => setAccountManagerOpen(true),
               openTool,
-              toggleBookmark: () => void act(() => window.privateBrowser.toggleBookmark()),
+              toggleBookmark: togglePageBookmark,
               bookmarkToFolder,
               pinCurrentPage: canPinCurrentPage ? () => editShortcut(undefined, true) : undefined,
               setUi,

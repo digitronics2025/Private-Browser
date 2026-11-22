@@ -2241,7 +2241,7 @@ class BrowserController {
       folderPath: [...folder.path], order: orderPath[0], orderPath });
   }
 
-  saveBookmarkToFolder(accountId: AccountSpaceId, tabId: string, expectedUrl: string, folder: BookmarkLevelInput): void {
+  saveBookmarkToFolder(accountId: AccountSpaceId, tabId: string, expectedUrl: string, folder: BookmarkLevelInput, title?: string): void {
     this.requireEditableBookmarkAccount(accountId);
     const state = this.store.get();
     const tab = this.activeTab(state);
@@ -2251,7 +2251,7 @@ class BrowserController {
       this.changeBookmarks(accountId, [existing.id], folder);
       return;
     }
-    this.store.update((next) => this.addBookmark(next, tab, folder));
+    this.store.update((next) => this.addBookmark(next, { ...tab, title: title?.trim() ?? tab.title }, folder));
     const favicon = this.runtimeTabs.get(tab.id)?.favicon;
     if (favicon) this.rememberBookmarkIcon(tab.id, favicon);
     this.broadcast();
@@ -6310,7 +6310,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('bookmarks:move', (_event, level: BookmarkLevelInput, key: BookmarkEntryKeyInput, toIndex: number) => controller!.moveBookmark(level, key, toIndex));
   handle('bookmarks:add-folder', (_event, id: AccountSpaceId, parent: BookmarkLevelInput, name: string) => controller!.addBookmarkFolder(id, parent, name));
   handle('bookmarks:move-folder', (_event, id: AccountSpaceId, source: BookmarkLevelInput, parent: BookmarkLevelInput) => controller!.moveBookmarkFolder(id, source, parent));
-  handle('bookmarks:save-to-folder', (_event, id: AccountSpaceId, tabId: string, url: string, folder: BookmarkLevelInput) => controller!.saveBookmarkToFolder(id, tabId, url, folder));
+  handle('bookmarks:save-to-folder', (_event, id: AccountSpaceId, tabId: string, url: string, folder: BookmarkLevelInput, title?: string) => controller!.saveBookmarkToFolder(id, tabId, url, folder, title));
   handle('bookmarks:rename', (_event, id: string, title: string) => controller!.renameBookmark(id, title));
   handle('bookmarks:remove', (_event, id: string) => controller!.removeBookmark(id));
   handle('bookmarks:edit-address', (_event, id: string, url: string) => controller!.updateBookmarkAddress(id, url));

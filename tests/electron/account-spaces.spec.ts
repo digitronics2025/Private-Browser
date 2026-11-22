@@ -600,7 +600,11 @@ test('persists empty and moved bookmark folders in their native Account Space', 
     await api.addBookmarkFolder(id, { ...bar, path: ['Research'] }, 'Empty');
     await api.navigate(url);
     const state = await api.getState();
-    await api.saveBookmarkToFolder(id, state.activeTabId, url, { ...bar, path: ['Research'] });
+    await api.saveBookmarkToFolder(id, state.activeTabId, url, { ...bar, path: ['Research'] }, '');
+    const saved = (await api.getState()).bookmarks.find((item) => item.url === url)!;
+    if (saved.title !== '') throw new Error('Empty bookmark name was replaced on save');
+    await api.renameBookmark(saved.id, 'Reference');
+    await api.renameBookmark(saved.id, '');
     await api.moveBookmarkFolder(id, { ...bar, path: ['Research'] }, { location: 'other', path: [] });
   }, { id, url });
   await application!.close();
@@ -609,7 +613,7 @@ test('persists empty and moved bookmark folders in their native Account Space', 
   const state = await page.evaluate(() => window.privateBrowser.getState());
   expect(state.activeAccountSpaceId).toBe(id);
   expect(state.bookmarkFolders).toMatchObject([{ location: 'other', path: ['Research'] }, { location: 'other', path: ['Research', 'Empty'] }]);
-  expect(state.bookmarks).toContainEqual(expect.objectContaining({ accountSpaceId: id, location: 'other', folderPath: ['Research'], url }));
+  expect(state.bookmarks).toContainEqual(expect.objectContaining({ accountSpaceId: id, location: 'other', folderPath: ['Research'], title: '', url }));
   await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
   await expect(page.evaluate((id) => window.privateBrowser.renameBookmarkFolder({ location: 'other', path: [] }, 'Research', 'Wrong space', id), id))
     .rejects.toThrow(/Account Space changed/);

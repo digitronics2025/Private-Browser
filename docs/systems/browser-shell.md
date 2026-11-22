@@ -444,7 +444,7 @@ CSV contents and filesystem paths never enter the renderer.
 in [bookmark-tree.ts](../../electron/bookmark-tree.ts) and always scopes to the
 **active** Account Space: `moveBookmark` (reorders one bookmark or a whole folder
 among its siblings by rewriting `orderPath[depth]`), `renameBookmark` (an
-empty name is allowed: the bar then shows the bookmark as its icon alone,
+empty name is allowed when adding or editing: the bar then shows the bookmark as its icon alone,
 `.bookmark-item.icon-only`, while menus fall back to the domain),
 `removeBookmark`, `renameBookmarkFolder` (refuses a name that already exists at
 that level) and `removeBookmarkFolder`. `exportBookmarks` writes an HTML-escaped

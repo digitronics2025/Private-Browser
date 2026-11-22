@@ -1050,7 +1050,7 @@ export function installPreviewApi(): void {
       state.bookmarks = existing ? state.bookmarks.filter((item) => item !== existing) : [...state.bookmarks, { id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, title: tab.title, url: tab.url, createdAt: new Date().toISOString(), location: 'bar', folderPath: [], order: 99, orderPath: [99] }];
       publish();
     },
-    saveBookmarkToFolder: async (id, tabId, url, folder) => {
+    saveBookmarkToFolder: async (id, tabId, url, folder, title) => {
       const tab = activeTab();
       if (id !== state.activeAccountSpaceId || tab.id !== tabId || tab.url !== url || tab.isHome) throw new Error('The page changed');
       const owned = state.bookmarks.filter((item) => item.accountSpaceId === id);
@@ -1060,7 +1060,7 @@ export function installPreviewApi(): void {
         return;
       }
       const orderPath = nextBookmarkOrder(owned, getPreviewFolders(id), folder);
-      state.bookmarks.push({ id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: id, title: tab.title, url,
+      state.bookmarks.push({ id: crypto.randomUUID(), workspaceId: tab.workspaceId, accountSpaceId: id, title: title?.trim() ?? tab.title, url,
         location: folder.location, folderPath: [...folder.path], order: orderPath[0], orderPath, createdAt: new Date().toISOString() });
       publish();
     },
