@@ -28,10 +28,11 @@ const readSignature = [
   '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)',
   '$item = Get-AuthenticodeSignature -LiteralPath $env:PRIVATE_BROWSER_SIGNATURE_FILE',
   '$publisher = if ($item.SignerCertificate) { $item.SignerCertificate.GetNameInfo("SimpleName", $false) }',
-  '[pscustomobject]@{status=$item.Status.ToString();publisher=$publisher} | ConvertTo-Json -Compress',
+  '$fingerprint = if ($item.SignerCertificate) { $sha = [Security.Cryptography.SHA256]::Create(); try { [BitConverter]::ToString($sha.ComputeHash($item.SignerCertificate.RawData)).Replace("-", "").ToLowerInvariant() } finally { $sha.Dispose() } }',
+  '[pscustomobject]@{status=$item.Status.ToString();publisher=$publisher;fingerprint=$fingerprint;embedded=($item.SignatureType.ToString() -eq "Authenticode");timestamped=($null -ne $item.TimeStamperCertificate)} | ConvertTo-Json -Compress',
 ].join('\n');
 
-export async function inspectDownloadPublisher(filePath: string): Promise<NonNullable<DownloadEntry['publisher']>> {
+export async function inspectDownloadPublisher(filePath: string): Promise<NonNullable<DownloadEntry['publisher']> & { fingerprint?: string }> {
   if (process.platform !== 'win32') return { state: 'unavailable' };
   try {
     const executable = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -39,11 +40,13 @@ export async function inspectDownloadPublisher(filePath: string): Promise<NonNul
     const { stdout } = await promisify(execFile)(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', command], {
       env: { ...process.env, PRIVATE_BROWSER_SIGNATURE_FILE: filePath }, windowsHide: true, timeout: 10_000, maxBuffer: 8192,
     });
-    const result = JSON.parse(stdout) as { status?: string; publisher?: unknown };
+    const result = JSON.parse(stdout) as { status?: string; publisher?: unknown; fingerprint?: unknown; embedded?: boolean; timestamped?: boolean };
     if (result.status === 'NotSigned') return { state: 'unsigned' };
     if (result.status === 'Valid') {
       const name = typeof result.publisher === 'string' ? result.publisher.replace(/[\p{C}]/gu, '').trim().slice(0, 150) : undefined;
-      return { state: 'valid', name };
+      const fingerprint = result.embedded && result.timestamped && typeof result.fingerprint === 'string'
+        && /^[a-f0-9]{64}$/.test(result.fingerprint) ? result.fingerprint : undefined;
+      return { state: 'valid', name, fingerprint };
     }
     return { state: result.status === 'UnknownError' ? 'unavailable' : 'untrusted' };
   } catch {

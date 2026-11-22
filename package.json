@@ -14,7 +14,16 @@
   ],
   "overrides": {
     "sharp": "0.35.5",
-    "brace-expansion@^5.0.0": "5.0.12"
+    "brace-expansion@^5.0.0": "5.0.12",
+    "@electron/universal": {
+      "minimatch": "11.0.9"
+    },
+    "@vscode/vsce": {
+      "minimatch": "11.0.9"
+    },
+    "app-builder-lib": {
+      "minimatch": "11.0.9"
+    }
   },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && npm run electron:compile && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js\"",
@@ -50,7 +59,7 @@
     "docs:find": "node scripts/docs-find.mjs",
     "docs:stale": "node scripts/docs-guard.mjs stale",
     "check": "npm run secrets:check && npm run docs:check && npm run bridge:build && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run extension:package && npm run extension:validate && npm run build && npm run test:e2e:only && npm run test:electron:ci && npm run worker:build",
-    "dist": "npm run extension:package && npm run build && npm run agent:stage && electron-builder --win nsis --x64 --publish never && npm run extension:stage && node scripts/verify-windows-registration.mjs",
+    "dist": "npm run extension:package && npm run build && npm run agent:stage && node scripts/stage-windows-publishers.mjs && electron-builder --win nsis --x64 --publish never && npm run extension:stage && node scripts/verify-windows-registration.mjs",
     "start": "electron dist-electron/main.js"
   },
   "dependencies": {
@@ -74,7 +83,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "electron": "44.10.2",
+    "electron": "44.11.5",
     "electron-builder": "^26.15.3",
     "esbuild": "0.25.12",
     "pdfjs-dist": "6.4.299",

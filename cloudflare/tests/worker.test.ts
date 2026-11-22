@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import worker, { type Env } from '../src/index';
 import { signValue } from '../src/auth';
@@ -12,7 +13,7 @@ const release: ReleaseRecord = {
   id: 'stable-0.3.0-3', app_id: 'private-browser', version: '0.3.0', build_number: 3, channel: 'stable',
   object_key: 'releases/0.3.0/setup.exe', filename: 'Private-Browser-0.3.0-Setup.exe',
   content_type: 'application/vnd.microsoft.portable-executable', size_bytes: bytes.byteLength,
-  sha256: 'a'.repeat(64), commit_sha: 'abcdef1234567890', release_notes: 'Stable release',
+  sha256: createHash('sha256').update(bytes).digest('hex'), commit_sha: 'abcdef1234567890', release_notes: 'Stable release',
   published_at: '2026-09-10T00:00:00.000Z', is_active: 1,
 };
 
@@ -54,16 +55,21 @@ class Statement {
   /** Interpret the two statements handlePublish batches, honouring bound values. */
   apply(): void {
     if (this.sql.includes('INSERT INTO releases')) {
-      const [id, appId, version, buildNumber, channel, objectKey, filename, contentType, sizeBytes, sha256, commitSha, releaseNotes, publishedAt] =
-        this.values as [string, string, string, number, 'stable' | 'beta', string, string, string, number, string, string, string, string];
+      const [id, appId, version, buildNumber, channel, objectKey, filename, contentType, sizeBytes, sha256, commitSha, releaseNotes, publishedAt, objectEtag] =
+        this.values as [string, string, string, number, 'stable' | 'beta', string, string, string, number, string, string, string, string, string];
       const row: ReleaseRecord = {
         id, app_id: appId, version, build_number: buildNumber, channel, object_key: objectKey,
         filename, content_type: contentType, size_bytes: sizeBytes, sha256, commit_sha: commitSha,
-        release_notes: releaseNotes, published_at: publishedAt, is_active: 1,
+        release_notes: releaseNotes, published_at: publishedAt, is_active: 1, object_etag: objectEtag,
       };
       const existing = this.database.rows.findIndex((candidate) => candidate.id === id);
       if (existing >= 0) this.database.rows[existing] = row;
       else this.database.rows.push(row);
+      return;
+    }
+    if (this.sql.startsWith('UPDATE releases SET is_active = 0 WHERE id <>')) {
+      const [keep, appId, channel] = this.values;
+      for (const row of this.database.rows) if (row.app_id === appId && row.channel === channel && row.id !== keep) row.is_active = 0;
       return;
     }
     if (this.sql.startsWith('UPDATE releases SET is_active = 0 WHERE')) {
@@ -91,7 +97,7 @@ class Statement {
 }
 
 class FakeDatabase {
-  rows: ReleaseRecord[] = [{ ...release }];
+  rows: ReleaseRecord[] = [{ ...release, object_etag: 'test-etag' }];
   batches = 0;
 
   prepare(sql: string) { return new Statement(this, sql); }
@@ -107,7 +113,7 @@ class FakeDatabase {
   async batch(statements: Statement[]) {
     this.batches += 1;
     for (const statement of statements) statement.apply();
-    return statements.map(() => ({ success: true }));
+    return statements.map(() => ({ success: true, meta: { changes: 1 } }));
   }
 }
 
@@ -116,13 +122,18 @@ class FakeBucket {
   keys = new Set([release.object_key]);
   async head(key: string) {
     if (!this.keys.has(key)) return null;
-    return { size: this.object.byteLength, httpEtag: '"test-etag"' };
+    return { etag: 'test-etag', size: this.object.byteLength, httpEtag: '"test-etag"' };
   }
   async get(key: string, options?: { range?: { offset: number; length: number } }) {
+    if (key.endsWith('.publisher.json') && this.keys.has(key.slice(0, -'.publisher.json'.length))) {
+      const receipt = { schemaVersion: 1, status: 'verified', sha256: release.sha256, publisher: 'Fixture Publisher', signerSha256: 'e'.repeat(64), timestamped: true };
+      const body = new Blob([JSON.stringify(receipt)]);
+      return { size: body.size, body: body.stream(), json: async () => receipt };
+    }
     if (!this.keys.has(key)) return null;
     const range = options?.range;
     const body = range ? this.object.slice(range.offset, range.offset + range.length) : this.object;
-    return { size: this.object.byteLength, httpEtag: '"test-etag"', body: new Blob([body]).stream() };
+    return { etag: 'test-etag', size: this.object.byteLength, httpEtag: '"test-etag"', body: new Blob([body]).stream() };
   }
 }
 
@@ -162,7 +173,7 @@ describe('download Worker', () => {
 
   it('returns a private signed manifest whose page URL opens the public branded page', async () => {
     const item = await manifest();
-    expect(item.sha256).toBe('a'.repeat(64));
+    expect(item.sha256).toBe(release.sha256);
     const page = await fetchSigned(item.downloadPageUrl);
     expect(page.status).toBe(200);
     expect(page.headers.get('x-robots-tag')).toBe('index, follow');
@@ -200,21 +211,19 @@ describe('download Worker', () => {
     expect(response.headers.get('allow')).toBe('GET, HEAD');
   });
 
-  it('serves a stable tokenized install page without exposing the token', async () => {
-    const page = await request(`/download/${accessToken}`);
-    expect(page.status).toBe(200);
-    expect(page.headers.get('cache-control')).toContain('no-store');
-    expect(page.headers.get('x-robots-tag')).toContain('noindex');
-    const html = await page.text();
-    expect(html).toContain('Download for Windows');
-    expect(html).toContain(`Build ${release.build_number}`);
-    expect(html).toContain('Stable release');
-    expect(html).toMatch(/\/download\/latest\.exe\?expires=\d+&amp;signature=/);
-    expect(html).not.toContain(accessToken);
+  it('retires the reusable URL token while leaving the authenticated feed available', async () => {
+    expect((await request(`/download/${accessToken}`)).status).toBe(404);
+    expect((await request(`/download/${accessToken}`, { method: 'HEAD' })).status).toBe(404);
+    await manifest();
+  });
 
-    const head = await request(`/download/${accessToken}`, { method: 'HEAD' });
-    expect(head.status).toBe(200);
-    expect(await head.text()).toBe('');
+  it('fails readiness when the stable object is missing or the size differs', async () => {
+    expect((await request('/health')).status).toBe(200);
+    bucket.object = new Uint8Array(2);
+    expect((await request('/health', { method: 'HEAD' })).status).toBe(503);
+    database.rows[0].channel = 'beta';
+    expect((await request('/health')).status).toBe(503);
+    expect((await request('/live')).status).toBe(200);
   });
 
   it('serves public root and download routes with fresh signed installer links', async () => {
@@ -385,27 +394,23 @@ ${expires}`));
     expect((await request(`${url.pathname}${url.search}`)).status).toBe(404);
   });
 
-  it('publishes metadata only after the R2 object is present and sized correctly', async () => {
+  it('binds publication to verified object bytes and makes retries immutable', async () => {
     const input = {
-      version: '0.3.0', buildNumber: 3, channel: 'stable', objectKey: release.object_key,
+      version: '0.3.1', buildNumber: 4, channel: 'stable', objectKey: 'releases/test/new.exe',
       filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
     };
-    const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
-    expect(response.status).toBe(201);
-    expect(database.batches).toBe(1);
-    // Inspect the row that was actually written, not merely that a batch ran.
-    const written = database.active('private-browser', 'stable');
-    expect(written).toMatchObject({
-      id: 'stable-0.3.0-3', version: '0.3.0', build_number: 3, channel: 'stable',
-      object_key: release.object_key, filename: release.filename, sha256: release.sha256,
-      commit_sha: release.commit_sha, size_bytes: bytes.byteLength, is_active: 1,
+    const publish = (body: typeof input) => request('/api/v1/admin/releases', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(body),
     });
-    // Exactly one active release per channel.
-    expect(database.rows.filter((row) => row.channel === 'stable' && row.is_active === 1)).toHaveLength(1);
-
-    bucket.object = new Uint8Array(2);
-    const mismatch = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
-    expect(mismatch.status).toBe(409);
+    bucket.keys.add(input.objectKey);
+    bucket.object = new Uint8Array(bytes.length);
+    expect((await publish(input)).status).toBe(409);
+    expect(database.active()?.id).toBe(release.id);
+    bucket.object = bytes;
+    expect((await publish(input)).status).toBe(201);
+    expect(database.active()).toMatchObject({ id: 'stable-0.3.1-4', sha256: release.sha256, object_etag: 'test-etag' });
+    expect((await publish(input)).status).toBe(200);
+    expect((await publish({ ...input, commitSha: 'c'.repeat(40) })).status).toBe(409);
     expect(database.batches).toBe(1);
   });
 
@@ -496,7 +501,7 @@ ${expires}`));
     // Stable is untouched, and /update.json still serves it.
     expect(database.active('private-browser', 'stable')).toMatchObject({ version: '0.3.0', is_active: 1 });
     const item = await manifest();
-    expect(item.sha256).toBe('a'.repeat(64));
+    expect(item.sha256).toBe(release.sha256);
   });
 
   // F-52: re-posting the active id with a smaller version used to pass.
@@ -507,7 +512,7 @@ ${expires}`));
     };
     const response = await request('/api/v1/admin/releases', { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': adminKey }, body: JSON.stringify(input) });
     expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: 'release_downgrade_rejected' });
+    expect(await response.json()).toMatchObject({ error: 'release_identity_conflict' });
     expect(database.batches).toBe(0);
   });
 

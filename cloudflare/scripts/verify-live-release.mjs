@@ -1,22 +1,23 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
+import { requireProductionReleaseEndpoint } from './require-https-endpoint.mjs';
 import { readDistributionMode, releaseVerifyDevice } from './read-active-release.mjs';
 import { parsePublisherReceipt } from '../src/publisher-receipt.mjs';
 
 const [installerPath] = process.argv.slice(2);
-const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
+const endpoint = requireProductionReleaseEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
 const mode = await readDistributionMode(endpoint);
-const legacyToken = process.env.PRIVATE_BROWSER_DOWNLOAD_TOKEN;
-const accessToken = mode === 'private' ? releaseVerifyDevice() : legacyToken || releaseVerifyDevice();
+const health = await fetch(endpoint + '/health', { redirect: 'error', signal: AbortSignal.timeout(20_000) });
+assert(health.ok && (await health.json()).releaseReady === true, 'The stable installer is not ready');
+const accessToken = releaseVerifyDevice();
 if (!installerPath || !endpoint || !accessToken) throw new Error('Live release verification is not configured');
 
 const expectedSize = statSync(installerPath).size;
 const expectedHash = await hashFile(installerPath);
 const expectedFilename = basename(installerPath);
 const publisher = parsePublisherReceipt(JSON.parse(readFileSync(join(dirname(installerPath), 'PUBLISHER.json'), 'utf8').replace(/^\uFEFF/, '')), expectedHash);
-assert(publisher, 'Windows publisher evidence does not match the installer');
+assert(publisher?.status === 'verified', 'Approved Windows publisher evidence is required for the installer');
 const publisherStatus = `data-publisher-status="${publisher.status}"`;
 
 await expectStatus(`${endpoint}/update.json`, 404);
@@ -42,7 +43,6 @@ const binaryAuthorization = mode === 'private' ? { authorization: `Bearer ${acce
 if (mode === 'private') {
   for (const route of ['/', '/download', '/api/v1/releases/public/latest']) await expectStatus(`${endpoint}${route}`, 404);
   await expectStatus(manifest.downloadUrl, 404);
-  if (legacyToken) await expectStatus(`${endpoint}/update.json`, 404, { authorization: `Bearer ${legacyToken}` });
 } else {
   const pageResponse = await fetch(manifest.downloadPageUrl, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
   assert(pageResponse.status === 200, `Signed download page returned ${pageResponse.status}`);
@@ -64,15 +64,7 @@ if (mode === 'private') {
     assert(!publicPage.includes(accessToken), `Public download page ${publicPath} exposed its access token`);
   }
 
-  if (legacyToken) {
-    const stablePageResponse = await fetch(`${endpoint}/download/${encodeURIComponent(legacyToken)}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
-    assert(stablePageResponse.status === 200, `Stable install page returned ${stablePageResponse.status}`);
-    const stablePage = await stablePageResponse.text();
-    assert(stablePage.includes('Download for Windows') && stablePage.includes(expectedHash), 'Stable install page metadata is incomplete');
-    assert(stablePage.includes(publisherStatus), 'Stable download page omitted the verified Windows publisher status');
-    assert(!stablePage.includes(legacyToken), 'Stable install page exposed its access token');
-    await expectStatus(`${endpoint}/download/invalid-private-browser-token-000000`, 404);
-  }
+
 }
 
 const head = await fetch(manifest.downloadUrl, { method: 'HEAD', headers: binaryAuthorization, redirect: 'error', signal: AbortSignal.timeout(30_000) });

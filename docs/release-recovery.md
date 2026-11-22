@@ -9,7 +9,7 @@ The usual download and update routes serve the current build.
 
 ## Maintainer recovery
 
-1. Use the release registry and its CI receipts to identify the exact known-good
+1. Use the release registry and its signed CI receipts to identify an eligible, known-good
    stable release ID, build, source revision, file size and SHA-256. Verify its
    retained installer against that checksum. Record the currently active ID as
    well, so it can be reinstated if necessary.
@@ -30,5 +30,5 @@ The usual download and update routes serve the current build.
    deliberate manual install after reviewing profile compatibility.
 
 The automated release pipeline uses the same activation route when its live
-verification fails. Public downloads continue to offer the current stable
-build. The history keeps direct links to retained installer objects private.
+verification fails. If no eligible signed release can be restored, it suspends
+the exact failed build. Prepare a higher-version signed forward fix in that case. The history keeps direct links to retained installer objects private.

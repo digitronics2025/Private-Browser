@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { downloadRisk, inspectWebAddress, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
+import { downloadRisk, inspectWebAddress, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, isSafeAiEndpoint, isSafeUpdateEndpoint, navigationWarning, normalizeNavigationInput, parseWebAddress, redactSensitiveText, retainedTabUrl, sensitiveNavigationUrl, stripTrackingParameters, urlOriginForSharing } from '../electron/security';
 import { isSameSiteFillCandidate, registrableSite } from '../electron/myvault/site-match';
 import { createDefaultState, sanitizeState } from '../electron/state-store';
 import { generateTotp } from '../electron/vault';
 
 describe('navigation security', () => {
+  it('keeps ordinary deep links and minimizes credential-bearing restored addresses', () => {
+    const root = 'https://example.test';
+    for (const path of ['/invite/fixture', '/reset-password/fixture', '/callback?code=fixture',
+      '/member?access_token=fixture', '/account#session=fixture', '/page#/login?refreshToken=fixture']) {
+      expect(sensitiveNavigationUrl(root + path)).toBe(true);
+      expect(retainedTabUrl(root + path)).toBe(root + '/');
+    }
+    const deep = root + '/docs?q=setup#examples';
+    expect(sensitiveNavigationUrl(deep)).toBe(false);
+    expect(retainedTabUrl(deep)).toBe(deep);
+  });
+
   it('adds HTTPS to domains', () => {
     expect(normalizeNavigationInput('digitronics.ma')).toBe('https://digitronics.ma/');
   });

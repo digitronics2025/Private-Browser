@@ -2,8 +2,11 @@
 
 In a regular Account Space, open **Settings → Browsing privacy**. **Enable browsing
 encryption** protects browser-managed tabs, bookmarks, history, and account display
-settings on this device. Existing profiles keep their defaults until you turn
-encryption on. After a successful conversion, new writes use authenticated
+settings on this device. New Windows profiles use browsing encryption when OS key storage is available.
+Existing profiles can enable it in Settings. Recognized sign-in, reset and
+invitation URLs are excluded from automatic history. Restored tabs fall back to
+their site origin for those URLs. Existing browser-managed files are minimized
+on load and rewritten atomically when possible. After a successful conversion, new writes use authenticated
 encryption with a key wrapped by Windows. If a write is interrupted, restart or
 choose **Retry encryption** to finish converting the current files.
 

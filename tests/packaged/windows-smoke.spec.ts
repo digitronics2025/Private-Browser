@@ -100,7 +100,7 @@ test('runs the operator journey on the packaged Windows binary', async () => {
       const address = server.address();
       if (!address || typeof address === 'string') throw new Error('The fixture did not bind to loopback');
       origin = 'http://127.0.0.1:' + address.port;
-      const env: NodeJS.ProcessEnv = { ...process.env, LOCALAPPDATA: local, APPDATA: roaming };
+      const env: NodeJS.ProcessEnv = { ...process.env, LOCALAPPDATA: local, APPDATA: roaming, VITE_DEV_SERVER_URL: 'https://example.invalid/' };
       for (const key of ['NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE', 'VITE_DEV_SERVER_URL', 'PRIVATE_BROWSER_E2E_USER_DATA'] as const) delete env[key];
       child = spawn(binary, [
         '--user-data-dir=' + profile, '--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', '--no-proxy-server',

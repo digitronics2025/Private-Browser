@@ -1,5 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { createHash } from 'node:crypto';
 import { constantTimeEqual, futureExpiry, isLiveExpiry, signValue, verifySignedValue } from './auth';
 import { APP_ID, compareSemver, normalizeTtl, parseSingleRange, validateReleaseInput, type ReleaseManifest, type ReleaseRecord } from './protocol';
 import { DEVELOPER_PROFILE, renderDownloadPage, type DownloadPageModel } from './page';
@@ -68,13 +69,13 @@ function secretsReady(env: Env): boolean {
 }
 
 async function latestRelease(env: Env, channel = 'stable'): Promise<ReleaseRecord | null> {
-  return env.DB.prepare(`SELECT id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, last_restored_at, is_active
+  return env.DB.prepare(`SELECT *
     FROM releases WHERE app_id = ?1 AND channel = ?2 AND is_active = 1
     ORDER BY build_number DESC, published_at DESC LIMIT 1`).bind(APP_ID, channel).first<ReleaseRecord>();
 }
 
 async function releaseHistory(env: Env, activeReleaseId: string, channel = 'stable'): Promise<ReleaseRecord[]> {
-  const result = await env.DB.prepare(`SELECT id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, last_restored_at, is_active
+  const result = await env.DB.prepare(`SELECT *
     FROM releases WHERE app_id = ?1 AND channel = ?2 AND id <> ?3
     ORDER BY published_at DESC, build_number DESC LIMIT 5`).bind(APP_ID, channel, activeReleaseId).all<ReleaseRecord>();
   return result.results;
@@ -140,19 +141,7 @@ async function handlePublicDownloadPage(request: Request, env: Env): Promise<Res
   return downloadPageResponse(request, createDownloadPageModel(request, release, history, downloadUrl, publisher), true);
 }
 
-async function handleStableDownloadPage(request: Request, env: Env, token: string): Promise<Response> {
-  if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
-  if (!secretsReady(env) || env.DOWNLOAD_ACCESS_TOKEN?.length < 32 || !env.DOWNLOAD_ACCESS_TOKEN || token.length > 1_000 || !(await constantTimeEqual(token, env.DOWNLOAD_ACCESS_TOKEN))) return notFound();
-  const release = await latestRelease(env);
-  if (!release) return notFound();
-  const [history, publisher] = await Promise.all([releaseHistory(env, release.id), releasePublisher(env, release)]);
-  const expires = futureExpiry(Date.now() / 1000, normalizeTtl(env.LINK_TTL_SECONDS));
-  const downloadSignature = await signValue(env.SIGNING_SECRET, `binary\n${release.id}\n${expires}`);
-  const downloadUrl = `/download/latest.exe?expires=${expires}&signature=${downloadSignature}`;
-  return downloadPageResponse(request, createDownloadPageModel(request, release, history, downloadUrl, publisher), false);
-}
-
-async function releasePublisher(env: Env, release: ReleaseRecord): Promise<PublisherStatus | undefined> {
+async function releasePublisher(env: Env, release: Pick<ReleaseRecord, 'object_key' | 'sha256'>): Promise<PublisherStatus | undefined> {
   try {
     const receipt = await env.RELEASES.get(release.object_key + '.publisher.json');
     if (!receipt || receipt.size > MAX_PUBLISHER_RECEIPT_BYTES) {
@@ -190,11 +179,6 @@ function downloadPageResponse(request: Request, model: DownloadPageModel, isPubl
   return new Response(request.method === 'HEAD' ? null : html, { headers });
 }
 
-function stableDownloadToken(pathname: string): string | null {
-  const match = /^\/download\/([A-Za-z0-9_-]{32,1000})$/.exec(pathname);
-  return match?.[1] ?? null;
-}
-
 async function handleBinary(request: Request, env: Env, url: URL, mode: 'public' | 'private'): Promise<Response> {
   if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
   if (!secretsReady(env)) return notFound();
@@ -206,7 +190,7 @@ async function handleBinary(request: Request, env: Env, url: URL, mode: 'public'
   if (!release || !(await verifySignedValue(env.SIGNING_SECRET, `binary\n${release.id}\n${expires}`, signature))) return notFound();
 
   const objectHead = await env.RELEASES.head(release.object_key);
-  if (!objectHead || objectHead.size !== release.size_bytes) return notFound();
+  if (!objectHead || objectHead.size !== release.size_bytes || (release.object_etag && objectHead.etag !== release.object_etag)) return notFound();
   const range = parseSingleRange(request.headers.get('range'), objectHead.size);
   if (range === null) {
     return new Response(null, { status: 416, headers: responseHeaders({
@@ -232,7 +216,10 @@ async function handleBinary(request: Request, env: Env, url: URL, mode: 'public'
   }
   if (request.method === 'HEAD') return new Response(null, { status: range ? 206 : 200, headers });
 
-  const object = await env.RELEASES.get(release.object_key, range ? { range: { offset: range.offset, length: range.length } } : undefined);
+  const object = await env.RELEASES.get(release.object_key, {
+    onlyIf: { etagMatches: objectHead.etag },
+    range: range ? { offset: range.offset, length: range.length } : undefined,
+  });
   if (!object || !('body' in object)) return notFound();
   return new Response(object.body, { status: range ? 206 : 200, headers });
 }
@@ -300,6 +287,34 @@ async function handleDeviceRoute(request: Request, env: Env, url: URL): Promise<
   return notFound();
 }
 
+async function verifyArtifact(bucket: R2Bucket, key: string, size: number, expectedDigest: string): Promise<string | undefined> {
+  const object = await bucket.get(key);
+  if (!object || object.size !== size || !object.etag) {
+    await object?.body.cancel();
+    return undefined;
+  }
+  const stored = object.checksums?.sha256;
+  if (stored) {
+    await object.body.cancel();
+    return Buffer.from(stored).toString('hex') === expectedDigest ? object.etag : undefined;
+  }
+  const hash = createHash('sha256');
+  const reader = object.body.getReader();
+  let received = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      received += chunk.value.byteLength;
+      if (received > size) return undefined;
+      hash.update(chunk.value);
+    }
+    return received === size && hash.digest('hex') === expectedDigest ? object.etag : undefined;
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+}
+
 async function handlePublish(request: Request, env: Env): Promise<Response> {
   if (request.method !== 'POST') return methodNotAllowed('POST');
   if (!(await isAdminAuthorized(request, env))) return notFound();
@@ -312,36 +327,57 @@ async function handlePublish(request: Request, env: Env): Promise<Response> {
     if (error instanceof RangeError) return json({ error: 'payload_too_large' }, 413, { 'cache-control': PRIVATE_CACHE });
     return json({ error: 'invalid_release', detail: error instanceof Error ? error.message : 'Invalid JSON' }, 400, { 'cache-control': PRIVATE_CACHE });
   }
-  const object = await env.RELEASES.head(input.objectKey);
-  if (!object || object.size !== input.sizeBytes) return json({ error: 'r2_object_missing_or_size_mismatch' }, 409, { 'cache-control': PRIVATE_CACHE });
   const id = input.id ?? `${input.channel}-${input.version}-${input.buildNumber}`;
   const publishedAt = input.publishedAt ? new Date(input.publishedAt).toISOString() : new Date().toISOString();
-  const current = await env.DB.prepare('SELECT id, version, build_number FROM releases WHERE app_id = ?1 AND channel = ?2 AND is_active = 1 ORDER BY build_number DESC LIMIT 1').bind(APP_ID, input.channel).first<{ id: string; version: string; build_number: number }>();
-  // Re-posting the active id with a smaller version is a downgrade too; it
-  // used to slip past the new-id version check below (F-52).
-  if (current && (current.build_number > input.buildNumber || (current.id === id && compareSemver(input.version, current.version) < 0)
-    || (current.build_number === input.buildNumber && (current.id !== id || current.version !== input.version)))) {
+  const current = await latestRelease(env, input.channel);
+  const existing = await env.DB.prepare('SELECT * FROM releases WHERE id = ?1 AND app_id = ?2 AND channel = ?3')
+    .bind(id, APP_ID, input.channel).first<ReleaseRecord>();
+  if (existing) {
+    if (existing.version !== input.version || existing.build_number !== input.buildNumber || existing.object_key !== input.objectKey
+      || existing.filename !== input.filename || existing.content_type !== input.contentType || existing.size_bytes !== input.sizeBytes
+      || existing.sha256 !== input.sha256 || existing.commit_sha !== input.commitSha) {
+      return json({ error: 'release_identity_conflict' }, 409, { 'cache-control': PRIVATE_CACHE });
+    }
+    return json({ ok: true, id, version: existing.version, buildNumber: existing.build_number }, 200, { 'cache-control': PRIVATE_CACHE });
+  }
+  if (current && current.build_number >= input.buildNumber) {
     return json({ error: 'release_downgrade_rejected' }, 409, { 'cache-control': PRIVATE_CACHE });
   }
   // The desktop client decides whether an update exists on the version alone, so
   // a new release at an equal or lower version would sit in R2 and D1 and be
   // offered to nobody. Refuse it here rather than publish something unreachable.
-  if (current && current.id !== id && compareSemver(input.version, current.version) <= 0) {
+  if (current && compareSemver(input.version, current.version) <= 0) {
     return json({
       error: 'release_version_not_bumped',
       detail: `active release is ${current.version}; bump the version before publishing`,
     }, 409, { 'cache-control': PRIVATE_CACHE });
   }
-  await env.DB.batch([
-    env.DB.prepare(`INSERT INTO releases (id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, is_active)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1)
-      ON CONFLICT(id) DO UPDATE SET version = excluded.version, build_number = excluded.build_number, channel = excluded.channel,
-        object_key = excluded.object_key, filename = excluded.filename, content_type = excluded.content_type, size_bytes = excluded.size_bytes,
-        sha256 = excluded.sha256, commit_sha = excluded.commit_sha, release_notes = excluded.release_notes,
-        published_at = excluded.published_at, is_active = 1`)
-      .bind(id, APP_ID, input.version, input.buildNumber, input.channel, input.objectKey, input.filename, input.contentType, input.sizeBytes, input.sha256, input.commitSha, input.releaseNotes, publishedAt),
-    env.DB.prepare('UPDATE releases SET is_active = CASE WHEN id = ?1 THEN 1 ELSE 0 END WHERE app_id = ?2 AND channel = ?3').bind(id, APP_ID, input.channel),
-  ]);
+  const publisher = await releasePublisher(env, { object_key: input.objectKey, sha256: input.sha256 });
+  if (publisher?.status !== 'verified' || !publisher.signerSha256) return json({ error: 'verified_publisher_required' }, 409, { 'cache-control': PRIVATE_CACHE });
+  const etag = await verifyArtifact(env.RELEASES, input.objectKey, input.sizeBytes, input.sha256);
+  if (!etag) return json({ error: 'release_artifact_verification_failed' }, 409, { 'cache-control': PRIVATE_CACHE });
+  try {
+    const [registration] = await env.DB.batch([
+      env.DB.prepare(`INSERT INTO releases (id, app_id, version, build_number, channel, object_key, filename, content_type, size_bytes, sha256, commit_sha, release_notes, published_at, is_active, object_etag)
+        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14
+        WHERE ?15 IS (SELECT id FROM releases WHERE app_id = ?2 AND channel = ?5 AND is_active = 1 ORDER BY build_number DESC LIMIT 1)
+          OR EXISTS (SELECT 1 FROM releases WHERE id = ?1)
+        ON CONFLICT(id) DO UPDATE SET version = excluded.version, build_number = excluded.build_number,
+          channel = excluded.channel, object_key = excluded.object_key, filename = excluded.filename,
+          content_type = excluded.content_type, size_bytes = excluded.size_bytes, sha256 = excluded.sha256,
+          commit_sha = excluded.commit_sha, object_etag = excluded.object_etag`)
+        .bind(id, APP_ID, input.version, input.buildNumber, input.channel, input.objectKey, input.filename, input.contentType,
+          input.sizeBytes, input.sha256, input.commitSha, input.releaseNotes, publishedAt, etag, current?.id ?? null),
+      env.DB.prepare(`UPDATE releases SET is_active = 0 WHERE id <> ?1 AND app_id = ?2 AND channel = ?3
+        AND EXISTS (SELECT 1 FROM releases WHERE id = ?1 AND is_active = 1)`).bind(id, APP_ID, input.channel),
+    ]);
+    if (registration.meta.changes === 0) return json({ error: 'active_release_changed' }, 409, { 'cache-control': PRIVATE_CACHE });
+  } catch (error) {
+    if (error instanceof Error && /release identity conflict|release downgrade rejected|UNIQUE constraint failed/.test(error.message)) {
+      return json({ error: 'release_identity_conflict' }, 409, { 'cache-control': PRIVATE_CACHE });
+    }
+    throw error;
+  }
   return json({ ok: true, id, version: input.version, buildNumber: input.buildNumber }, 201, { 'cache-control': PRIVATE_CACHE });
 }
 
@@ -357,42 +393,77 @@ async function handleActivate(request: Request, env: Env): Promise<Response> {
   if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) return json({ error: 'unsupported_media_type' }, 415);
   let id: string;
   let channel: 'stable' | 'beta';
+  let expectedActiveId: string | undefined;
   try {
-    const body = await readAdminJson(request) as { id?: unknown; channel?: unknown } | null;
+    const body = await readAdminJson(request) as { id?: unknown; channel?: unknown; expectedActiveId?: unknown } | null;
     if (!body || typeof body !== 'object' || typeof body.id !== 'string' || !/^[a-z]+-[0-9A-Za-z.+-]{1,120}$/.test(body.id) || (body.channel !== 'stable' && body.channel !== 'beta')) throw new Error('An exact release id and channel are required');
     id = body.id;
     channel = body.channel;
+    if (body.expectedActiveId !== undefined) {
+      if (typeof body.expectedActiveId !== 'string' || !/^[a-z]+-[0-9A-Za-z.+-]{1,120}$/.test(body.expectedActiveId)) throw new Error('Invalid active release id');
+      expectedActiveId = body.expectedActiveId;
+    }
   } catch (error) {
     if (error instanceof RangeError) return json({ error: 'payload_too_large' }, 413, { 'cache-control': PRIVATE_CACHE });
     return json({ error: 'invalid_activation', detail: error instanceof Error ? error.message : 'Invalid JSON' }, 400, { 'cache-control': PRIVATE_CACHE });
   }
-  const row = await env.DB.prepare('SELECT id, object_key, size_bytes, version, build_number FROM releases WHERE id = ?1 AND app_id = ?2 AND channel = ?3').bind(id, APP_ID, channel).first<{ id: string; object_key: string; size_bytes: number; version: string; build_number: number }>();
+  const row = await env.DB.prepare('SELECT * FROM releases WHERE id = ?1 AND app_id = ?2 AND channel = ?3').bind(id, APP_ID, channel).first<Pick<ReleaseRecord, 'id' | 'object_key' | 'size_bytes' | 'version' | 'build_number' | 'sha256' | 'object_etag'>>();
   if (!row) return json({ error: 'release_not_found' }, 404, { 'cache-control': PRIVATE_CACHE });
-  const object = await env.RELEASES.head(row.object_key);
-  if (!object || object.size !== row.size_bytes) return json({ error: 'r2_object_missing_or_size_mismatch' }, 409, { 'cache-control': PRIVATE_CACHE });
+  const publisher = await releasePublisher(env, row);
+  const etag = publisher?.status === 'verified' && publisher.signerSha256 && await verifyArtifact(env.RELEASES, row.object_key, row.size_bytes, row.sha256);
+  if (!etag || !row.object_etag || etag !== row.object_etag) {
+    return json({ error: 'verified_restore_artifact_required' }, 409, { 'cache-control': PRIVATE_CACHE });
+  }
+  if (expectedActiveId && (await latestRelease(env, channel))?.id !== expectedActiveId) {
+    return json({ error: 'active_release_changed' }, 409, { 'cache-control': PRIVATE_CACHE });
+  }
   // Deactivate first, then activate: the downgrade trigger refuses to activate a
   // lower build while a higher one is still active.
-  await env.DB.batch([
-    env.DB.prepare('UPDATE releases SET is_active = 0 WHERE app_id = ?1 AND channel = ?2 AND id <> ?3').bind(APP_ID, channel, id),
+  const [, activated] = await env.DB.batch([
+    env.DB.prepare('UPDATE releases SET is_active = 0 WHERE app_id = ?1 AND channel = ?2 AND id <> ?3 AND (?4 IS NULL OR id = ?4)')
+      .bind(APP_ID, channel, id, expectedActiveId ?? null),
     env.DB.prepare(`UPDATE releases SET is_active = 1,
       last_restored_at = CASE WHEN is_active = 0 THEN ?4 ELSE last_restored_at END
-      WHERE id = ?1 AND app_id = ?2 AND channel = ?3`).bind(id, APP_ID, channel, new Date().toISOString()),
+      WHERE id = ?1 AND app_id = ?2 AND channel = ?3
+      AND NOT EXISTS (SELECT 1 FROM releases WHERE app_id = ?2 AND channel = ?3 AND id <> ?1 AND is_active = 1)`)
+      .bind(id, APP_ID, channel, new Date().toISOString()),
   ]);
+  if (activated.meta.changes === 0) return json({ error: 'active_release_changed' }, 409, { 'cache-control': PRIVATE_CACHE });
   return json({ ok: true, id, version: row.version, buildNumber: row.build_number }, 200, { 'cache-control': PRIVATE_CACHE });
 }
 
+async function handleSuspend(request: Request, env: Env): Promise<Response> {
+  if (request.method !== 'POST') return methodNotAllowed('POST');
+  if (!(await isAdminAuthorized(request, env))) return notFound();
+  let id: unknown;
+  try { id = (await readAdminJson(request) as { id?: unknown })?.id; } catch { return json({ error: 'invalid_release' }, 400); }
+  if (typeof id !== 'string' || !/^stable-\d+\.\d+\.\d+-\d+$/.test(id)) return json({ error: 'invalid_release' }, 400);
+  const result = await env.DB.prepare("UPDATE releases SET is_active = 0 WHERE id = ?1 AND app_id = ?2 AND channel = 'stable' AND is_active = 1")
+    .bind(id, APP_ID).run();
+  return json({ ok: true, suspended: result.meta.changes === 1 }, 200, { 'cache-control': PRIVATE_CACHE });
+}
+
 async function handleHealth(request: Request, env: Env): Promise<Response> {
-  if (!secretsReady(env)) return json({ status: 'degraded', service: 'private-browser-downloads' }, 503, { 'cache-control': 'no-store' });
-  try {
-    const row = await env.DB.prepare('SELECT object_key FROM releases WHERE app_id = ?1 AND is_active = 1 ORDER BY build_number DESC LIMIT 1').bind(APP_ID).first<{ object_key: string }>();
-    const objectReady = row ? Boolean(await env.RELEASES.head(row.object_key)) : false;
-    const body = { status: 'ok', service: 'private-browser-downloads', database: 'ok', releaseReady: objectReady };
-    return request.method === 'HEAD'
-      ? new Response(null, { status: 200, headers: responseHeaders({ ...JSON_HEADERS, 'cache-control': 'no-store' }) })
-      : json(body, 200, { 'cache-control': 'no-store' });
-  } catch {
-    return json({ status: 'degraded', service: 'private-browser-downloads' }, 503, { 'cache-control': 'no-store' });
+  let databaseReady = false;
+  let releaseReady = false;
+  if (secretsReady(env)) {
+    try {
+      await distributionMode(env.DB);
+      const release = await latestRelease(env);
+      databaseReady = true;
+      const object = release && await env.RELEASES.head(release.object_key);
+      releaseReady = Boolean(object && release && object.size === release.size_bytes
+        && (!release.object_etag || (object.etag === release.object_etag && (await releasePublisher(env, release))?.status === 'verified')));
+    } catch {
+      // Return the public readiness status without provider details.
+    }
   }
+  const status = releaseReady ? 200 : 503;
+  const headers = { ...JSON_HEADERS, 'cache-control': 'no-store' };
+  return request.method === 'HEAD'
+    ? new Response(null, { status, headers: responseHeaders(headers) })
+    : json({ status: releaseReady ? 'ok' : 'degraded', service: 'private-browser-downloads',
+      database: databaseReady ? 'ok' : 'unavailable', releaseReady }, status, headers);
 }
 
 export default {
@@ -400,25 +471,29 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === '/favicon.ico') return handleFavicon(request);
+      if (url.pathname === '/live') {
+        if (request.method !== 'GET' && request.method !== 'HEAD') return methodNotAllowed('GET, HEAD');
+        const headers = { 'cache-control': 'no-store' };
+        return request.method === 'HEAD' ? new Response(null, { headers: responseHeaders(headers) }) : json({ status: 'ok' }, 200, headers);
+      }
       if (url.pathname === '/health') return request.method === 'GET' || request.method === 'HEAD' ? handleHealth(request, env) : methodNotAllowed('GET, HEAD');
-      if (url.pathname === '/api/v1/admin/releases') return handlePublish(request, env);
-      if (url.pathname === '/api/v1/admin/releases/activate') return handleActivate(request, env);
+      if (url.pathname === '/api/v1/admin/releases') return await handlePublish(request, env);
+      if (url.pathname === '/api/v1/admin/releases/suspend') return await handleSuspend(request, env);
+      if (url.pathname === '/api/v1/admin/releases/activate') return await handleActivate(request, env);
       const device = await handleDeviceRoute(request, env, url);
       if (device) return device;
       if (url.pathname === '/api/v1/releases/latest' || url.pathname === '/update.json') return handleLatest(request, env, await distributionMode(env.DB));
       if (url.pathname === '/download/latest.exe') return handleBinary(request, env, url, await distributionMode(env.DB));
-      const pageToken = stableDownloadToken(url.pathname);
       const isPublicFeed = url.pathname === '/api/v1/releases/public/latest';
-      if (isPublicFeed || pageToken || url.pathname === '/' || url.pathname === '/download') {
+      if (isPublicFeed || url.pathname === '/' || url.pathname === '/download') {
         if (await distributionMode(env.DB) === 'private') return notFound();
         if (isPublicFeed) return handlePublicLatest(request, env);
-        if (pageToken) return handleStableDownloadPage(request, env, pageToken);
         return handlePublicDownloadPage(request, env);
       }
       return notFound();
     } catch (error) {
       // Never log a private page's path: its last segment is the download token (F-51).
-      const path = stableDownloadToken(url.pathname) ? '/download/[token]' : url.pathname;
+      const path = url.pathname.startsWith('/download/') ? '/download/[resource]' : url.pathname;
       console.error('request_failed', { path, message: error instanceof Error ? error.message : 'unknown' });
       return json({ error: 'internal_error' }, 500, { 'cache-control': PRIVATE_CACHE });
     }

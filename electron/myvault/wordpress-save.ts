@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-
 export interface WordPressLoginFlow {
   kind: 'signin' | 'password-change';
   origin: string;
@@ -75,7 +73,8 @@ export function verifiedWordPressRedirect(flow: WordPressLoginFlow, details: Res
 }
 
 interface LoginAttempt {
-  nonce: string;
+  requestId?: number;
+  gestureUntil?: number;
   flow: WordPressLoginFlow;
   username?: string;
   password?: Buffer;
@@ -88,18 +87,34 @@ interface LoginAttempt {
 export class WordPressLoginAttempt {
   private current?: LoginAttempt;
 
-  arm(flow: WordPressLoginFlow): string {
+  arm(flow: WordPressLoginFlow): void {
     this.clear();
-    const nonce = randomUUID();
-    this.current = { nonce, flow, expires: Date.now() + 30 * 60_000 };
-    return nonce;
+    this.current = { flow, expires: Date.now() + 30 * 60_000 };
   }
 
-  submit(nonce: unknown, username: unknown, password: unknown): boolean {
+  noteGesture(): void {
+    if (this.current && this.current.expires > Date.now() && !this.current.password) {
+      this.current.gestureUntil = Date.now() + 1500;
+    }
+  }
+
+  submit(request: { id: number; url: string; initiatorOrigin?: string; bytes: Uint8Array }): boolean {
     const attempt = this.current;
-    if (!attempt || attempt.nonce !== nonce || attempt.expires <= Date.now() || attempt.password
+    if (!attempt || !attempt.gestureUntil || attempt.gestureUntil < Date.now() || attempt.expires <= Date.now()
+      || attempt.password || request.bytes.byteLength > 16_384 || request.initiatorOrigin !== attempt.flow.origin) return false;
+    const flow = wordPressLoginFlow(request.url);
+    if (!flow || flow.origin !== attempt.flow.origin || flow.formPath !== attempt.flow.formPath || flow.kind !== attempt.flow.kind) return false;
+    attempt.gestureUntil = undefined;
+    const form = new URLSearchParams(Buffer.from(request.bytes).toString('utf8'));
+    const signin = flow.kind === 'signin';
+    const names = form.getAll(signin ? 'log' : 'user_login');
+    const secrets = form.getAll(signin ? 'pwd' : 'pass1');
+    const [username] = names;
+    const [password] = secrets;
+    if (names.length !== 1 || secrets.length !== 1 || (!signin && (form.getAll('pass2').length !== 1 || form.get('pass2') !== password))
       || typeof username !== 'string' || !username.trim() || username.length > 500 || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(username)
       || typeof password !== 'string' || !password || password.length > 5000) return false;
+    attempt.requestId = request.id;
     attempt.username = username.trim();
     attempt.password = Buffer.from(password, 'utf8');
     attempt.expires = Date.now() + 15_000;
@@ -108,9 +123,9 @@ export class WordPressLoginAttempt {
     return true;
   }
 
-  response(details: ResponseProof): void {
+  response(details: ResponseProof & { id: number }): void {
     const attempt = this.current;
-    if (!attempt?.password || attempt.expires <= Date.now() || attempt.redirect) return;
+    if (!attempt?.password || attempt.requestId !== details.id || attempt.expires <= Date.now() || attempt.redirect) return;
     attempt.redirect = verifiedWordPressRedirect(attempt.flow, details);
   }
 

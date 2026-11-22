@@ -37,7 +37,7 @@ describe('browser chrome geometry', () => {
 
   it('shows the window even when ready-to-show fires before the chrome finishes loading', () => {
     const listen = main.indexOf("this.window.once('ready-to-show'");
-    const load = main.indexOf('await this.window.loadURL(devUrl ?? productionUrl)');
+    const load = main.indexOf('await this.window.loadURL(browserChromeUrl)');
     expect(listen).toBeGreaterThan(-1);
     expect(listen).toBeLessThan(load);
     expect(main).toContain('if (!this.window.isDestroyed() && !this.window.isVisible()) this.window.show();');
@@ -46,7 +46,7 @@ describe('browser chrome geometry', () => {
   it('opens the window maximised before the chrome loads', () => {
     const maximize = main.indexOf('this.window.maximize();');
     expect(maximize).toBeGreaterThan(-1);
-    expect(maximize).toBeLessThan(main.indexOf('await this.window.loadURL(devUrl ?? productionUrl)'));
+    expect(maximize).toBeLessThan(main.indexOf('await this.window.loadURL(browserChromeUrl)'));
   });
 
   it('moves workspace switching into the profile menu', () => {

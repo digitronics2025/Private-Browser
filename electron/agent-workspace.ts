@@ -76,6 +76,7 @@ export class AgentWorkspace {
     chrome.on('will-attach-webview', (event) => event.preventDefault());
     chrome.on('will-navigate', (event) => event.preventDefault());
     chrome.on('will-frame-navigate', (event) => event.preventDefault());
+    chrome.on('will-redirect', (event) => event.preventDefault());
     chrome.on('before-input-event', (event, input) => this.handleShortcut(event, input));
     window.on('resize', () => this.layout());
     window.on('closed', () => {

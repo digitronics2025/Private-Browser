@@ -1,10 +1,10 @@
 import { readFileSync } from 'node:fs';
-import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
+import { requireProductionReleaseEndpoint } from './require-https-endpoint.mjs';
 import { desktopReleaseNotes } from './desktop-release-notes.mjs';
 import { verifyReleaseCandidate } from './verify-release-candidate.mjs';
 
 const [installerPath, objectKey] = process.argv.slice(2);
-const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
+const endpoint = requireProductionReleaseEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
 const adminKey = process.env.PRIVATE_BROWSER_ADMIN_API_KEY;
 const commitSha = process.env.GITHUB_SHA;
 const buildNumber = Number(process.env.GITHUB_RUN_NUMBER);

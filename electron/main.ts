@@ -31,10 +31,12 @@ import {
   type Session,
   type WindowOpenHandlerResponse,
 } from 'electron';
-import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, parseWebAddress, redactSensitiveText, stripTrackingParameters, urlOriginForSharing } from './security.js';
+import { downloadRisk, isAllowedRemoteUrl, isAllowedSitePermission, isAutofillTarget, isProtectedPage, navigationWarning, parseWebAddress, redactSensitiveText, sensitiveNavigationUrl, stripTrackingParameters, urlOriginForSharing } from './security.js';
 import { externalLinkAccounts, isAvailableRegularAccount, preferredExternalLinkAccount } from './external-link-routing.js';
 import { ClipboardGuard } from './clipboard-guard.js';
 import { downloadFileStamp, inspectDownloadPublisher, verifyDownload, type ExpectedInstaller } from './download-verify.js';
+import { loadApprovedPublishers } from './windows-publishers.js';
+import { resolveChromeUrl } from './trusted-chrome.js';
 import { downloadExtension, downloadOpenBlock } from './download-safety.js';
 import { DownloadHistoryStore } from './download-history.js';
 import { availableDownloadFolder, discardDownloadStage, DownloadFolderStore, finishStagedDownload, safeDownloadFilename, stageDownload } from './download-folder.js';
@@ -364,9 +366,11 @@ class BrowserController {
   private expectedInstaller?: ExpectedInstaller;
   private readonly sessionLock = new BrowserSessionLock(join(app.getPath('userData'), 'browser-session.lock'));
   private sessionLockWork = Promise.resolve();
+  private readonly approvedPublishers = loadApprovedPublishers(join(import.meta.dirname, 'windows-publishers.json'));
   private readonly managedUpdate = new ManagedUpdate({
     directory: join(app.getPath('userData'), 'update-installers'),
     currentVersion: app.getVersion(),
+    approvedPublishers: this.approvedPublishers,
     check: () => this.checkForUpdates(),
     request: (input, init) => this.updates.fetchInstaller(input, init),
     canUse: () => process.platform === 'win32' && Boolean(this.activeDownloadAccount()) && !this.store.isReadOnly(),
@@ -539,23 +543,17 @@ class BrowserController {
       this.sideApps.closeAll();
     });
 
-    const devUrl = process.env.VITE_DEV_SERVER_URL;
-    const productionUrl = pathToFileURL(join(import.meta.dirname, '../dist/index.html')).toString();
-    const trustedDevelopmentOrigin = devUrl ? new URL(devUrl).origin : undefined;
     this.window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     this.window.webContents.on('will-attach-webview', (event) => event.preventDefault());
-    this.window.webContents.on('will-navigate', (event, url) => {
-      let allowed = url === productionUrl;
-      try { allowed ||= Boolean(trustedDevelopmentOrigin && new URL(url).origin === trustedDevelopmentOrigin); } catch { allowed = false; }
-      if (!allowed) event.preventDefault();
-    });
+    this.window.webContents.on('will-frame-navigate', (event) => event.preventDefault());
+    this.window.webContents.on('will-redirect', (event) => event.preventDefault());
     // Listen before loading: `ready-to-show` can fire before `loadURL` resolves,
     // and a listener attached afterwards would leave the window hidden for good.
     this.window.once('ready-to-show', () => { if (!this.window.isDestroyed()) this.window.show(); });
     // The window always opens maximised. Maximising before the chrome loads lets the
     // resize settle before any page exists; a later resize would close an open login picker.
     this.window.maximize();
-    await this.window.loadURL(devUrl ?? productionUrl);
+    await this.window.loadURL(browserChromeUrl);
     if (!this.window.isDestroyed() && !this.window.isVisible()) this.window.show();
     this.startingWindow = false;
     await this.restoreStartupTab();
@@ -738,7 +736,8 @@ class BrowserController {
   isTrustedSender(event: IpcMainInvokeEvent): boolean {
     return Boolean(this.window) && !this.window.isDestroyed()
       && event.sender === this.window.webContents
-      && event.senderFrame === this.window.webContents.mainFrame;
+      && event.senderFrame === this.window.webContents.mainFrame
+      && event.senderFrame?.url === browserChromeUrl;
   }
 
   agentParent(): BrowserWindow | undefined {
@@ -2429,7 +2428,7 @@ class BrowserController {
         const state = this.store.get();
         const bytes = await sealBrowsingArchive({ version: 1, createdAt: new Date().toISOString(), workspaceId: account.workspaceId,
           bookmarks: state.bookmarks.filter((item) => item.accountSpaceId === id), bookmarkFolders: [], folderTree: state.bookmarkFoldersByAccountSpace?.[id],
-          history: state.history.filter((item) => item.accountSpaceId === id), settings: { trackerBlocking: state.trackerBlocking } }, secret.password);
+          history: state.history.filter((item) => item.accountSpaceId === id && !sensitiveNavigationUrl(item.url)), settings: { trackerBlocking: state.trackerBlocking } }, secret.password);
         this.requireBrowsingPrivacyAccount(id);
         try { await writeFile(selected.filePath, bytes, { flag: 'wx', mode: 0o600 }); }
         catch (error) {
@@ -2449,7 +2448,7 @@ class BrowserController {
       const before = this.store.get();
       const revision = backupRestoreRevision(id, before);
       const cutoff = before.ui.historyRetentionDays ? Date.now() - before.ui.historyRetentionDays * 86_400_000 : 0;
-      const history = payload.history?.filter((entry) => Date.parse(entry.visitedAt) >= cutoff);
+      const history = payload.history?.filter((entry) => Date.parse(entry.visitedAt) >= cutoff && !sensitiveNavigationUrl(entry.url));
       const { items, counts } = planBackupRestore({ ...payload, history, openTabs: undefined }, { accountSpaceId: id, workspaceId: account.workspaceId }, before);
       const message = `Add ${counts.bookmarks.added} bookmarks, ${counts.folders?.added ?? 0} folders and ${counts.history.added} history entries to ${account.label}?`;
       const detail = 'Duplicates and entries outside your retention or storage limits are skipped.';
@@ -4650,12 +4649,11 @@ class BrowserController {
     const flow = wordPressLoginFlow(contents.getURL());
     const tab = this.store.getTab(tabId);
     if (!flow || !tab || !this.wordPressScopeIsCurrent(tabId, contents) || !this.store.offersWordPressSave(tab.accountSpaceId, flow.origin)) {
-      if (runtime.wordPressAttempt) contents.send('wordpress-save:arm', undefined);
       runtime.wordPressAttempt = undefined;
       return;
     }
     const attempt = runtime.wordPressAttempt = new WordPressLoginAttempt();
-    contents.send('wordpress-save:arm', { nonce: attempt.arm(flow), flow });
+    attempt.arm(flow);
   }
 
   private clearWordPressCaptures(): void {
@@ -4891,9 +4889,10 @@ class BrowserController {
     if (blocked) throw new Error(blocked);
     if (item.expectedInstaller) {
       const entry = this.downloads.get(id)!;
-      await this.verifyInstallerDownload(entry, item.savePath);
+      await this.verifyInstallerDownload(entry, item.savePath, true);
       const checked = this.requireActiveDownload(id);
-      if (checked.checksum !== 'verified' || checked.verifiedStamp !== downloadFileStamp(checked.savePath)) {
+      if (checked.checksum !== 'verified' || !checked.publisher?.approved || checked.savePath !== item.savePath
+        || checked.verifiedStamp !== downloadFileStamp(checked.savePath)) {
         throw new Error('The installer changed or could not be verified. Download a fresh copy.');
       }
     }
@@ -4901,15 +4900,18 @@ class BrowserController {
     if (error) throw new Error('Windows could not open the file. Use Show folder to check it or choose another app.');
   }
 
-  private async verifyInstallerDownload(entry: LocalDownload, filePath: string): Promise<void> {
+  private async verifyInstallerDownload(entry: LocalDownload, filePath: string, recheckPublisher = false): Promise<void> {
     const previous = entry.checksum;
     entry.checksum = 'checking';
     this.broadcast();
     const stamp = downloadFileStamp(filePath);
     const checksum = stamp ? await verifyDownload(filePath, entry.filename, entry.expectedInstaller) : 'unchecked';
-    entry.publisher = checksum === 'verified'
-      ? stamp === entry.verifiedStamp && entry.publisher ? entry.publisher : await inspectDownloadPublisher(filePath)
-      : undefined;
+    if (checksum === 'verified') {
+      if (recheckPublisher || stamp !== entry.verifiedStamp || !entry.publisher) {
+        const { state, name, fingerprint } = await inspectDownloadPublisher(filePath);
+        entry.publisher = { state, name, approved: state === 'valid' && !!fingerprint && this.approvedPublishers.includes(fingerprint) };
+      }
+    } else entry.publisher = undefined;
     const unchanged = stamp && stamp === downloadFileStamp(filePath);
     entry.checksum = unchanged ? checksum : 'unchecked';
     entry.verifiedStamp = unchanged && entry.checksum === 'verified' ? stamp : undefined;
@@ -5160,7 +5162,6 @@ class BrowserController {
         nodeIntegration: false,
         webSecurity: true,
         allowRunningInsecureContent: false,
-        ...(workspaceVaultPolicy(tab.workspaceId).saveCapture ? { preload: join(import.meta.dirname, 'myvault/wordpress-save-preload.cjs') } : {}),
       },
     });
     runtime.view = view;
@@ -5172,11 +5173,6 @@ class BrowserController {
     view.webContents.once('destroyed', () => {
       runtime.wordPressAttempt?.clear();
       this.contentsTabs.delete(contentsId);
-    });
-    view.webContents.on('ipc-message', (event, channel, ...args: unknown[]) => {
-      if (channel !== 'wordpress-save:submitted' || event.senderFrame !== view.webContents.mainFrame || args.length !== 3
-        || !runtime.wordPressAttempt || !view.getVisible() || !this.wordPressScopeIsCurrent(tabId, view.webContents)) return;
-      runtime.wordPressAttempt.submit(args[0], args[1], args[2]);
     });
     this.window.contentView.addChildView(view);
     // Every guard is attached before anything below that could throw: a view
@@ -5327,6 +5323,8 @@ class BrowserController {
         this.notesSourceCurrent(tabId, generation) ? (selection) => this.prepareNotesDraft(tabId, generation, selection) : undefined);
     });
     view.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.key === 'Enter' && view.getVisible()
+        && this.wordPressScopeIsCurrent(tabId, view.webContents)) runtime.wordPressAttempt?.noteGesture();
       if (input.type === 'keyDown') {
         runtime.memorySaver.interacted = true;
         this.focusSplitTab(tabId, view);
@@ -5335,7 +5333,9 @@ class BrowserController {
       this.handleShortcut(event, input);
     });
     view.webContents.on('before-mouse-event', (_event, input) => {
-      if (input.type === 'mouseDown') this.focusSplitTab(tabId, view);
+      if (input.type !== 'mouseDown') return;
+      this.focusSplitTab(tabId, view);
+      if (view.getVisible() && this.wordPressScopeIsCurrent(tabId, view.webContents)) runtime.wordPressAttempt?.noteGesture();
     });
     // Only genuine user input opens the login picker; nothing the page does can.
     view.webContents.on('input-event', (_event, input) => {
@@ -5508,6 +5508,17 @@ class BrowserController {
       })) checkRequest(details, callback);
     });
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
+      if (details.method === 'POST' && details.resourceType === 'mainFrame' && details.webContentsId !== undefined) {
+        const runtime = this.contentsTabs.get(details.webContentsId);
+        const view = runtime?.view;
+        const type = Object.entries(details.requestHeaders).find(([key]) => key.toLowerCase() === 'content-type')?.[1];
+        const data = details.uploadData;
+        if (runtime?.wordPressAttempt && view?.getVisible() && this.wordPressScopeIsCurrent(this.activeTab(this.store.get()).id, view.webContents)
+          && details.frame === view.webContents.mainFrame && type?.split(';', 1)[0].trim() === 'application/x-www-form-urlencoded'
+          && data?.length === 1 && !data[0].file && !data[0].blobUUID && data[0].bytes) {
+          runtime.wordPressAttempt.submit({ ...details, bytes: data[0].bytes });
+        }
+      }
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
     });
     ses.webRequest.onHeadersReceived((details, callback) => {
@@ -5957,7 +5968,7 @@ class BrowserController {
       // commit arriving while it is set is stale and must not leave Home.
       if (!tab || tab.isHome) return;
       tab.url = sanitizedUrl;
-      if (addHistory && tab.workspaceId !== 'banking') {
+      if (addHistory && tab.workspaceId !== 'banking' && !sensitiveNavigationUrl(sanitizedUrl)) {
         state.history.unshift({ id: randomUUID(), title: tab.title, url: sanitizedUrl, workspaceId: tab.workspaceId, accountSpaceId: tab.accountSpaceId, visitedAt: new Date().toISOString() });
         for (const removed of state.history.splice(2500)) {
           (state.historyTrimmedByAccountSpace ??= {})[removed.accountSpaceId] = true;
@@ -6054,6 +6065,8 @@ async function openPendingSystemLinks(): Promise<void> {
   }
 }
 
+const browserChromeUrl = resolveChromeUrl(app.isPackaged,
+  pathToFileURL(join(import.meta.dirname, '../dist/index.html')).href, process.env.VITE_DEV_SERVER_URL);
 const initialUrl = process.argv.find(isAllowedRemoteUrl);
 if (initialUrl) queueSystemLink(initialUrl);
 app.enableSandbox();
@@ -6126,6 +6139,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
       migrationJournalPath: join(userDataPath, 'browser-state-v2.migration.json'),
     },
     accountStore,
+    encryptNewProfiles: process.platform === 'win32',
     browsingEncryption: { isEncryptionAvailable: agentStorageAvailable, encryptString: (value) => safeStorage.encryptString(value), decryptString: (value) => safeStorage.decryptString(value) },
   });
   const store = new RuntimeStateStore(persistedState, accountStore, persistedState.initialize());
@@ -6168,7 +6182,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   }
   const migration = new VaultMigrationService(join(userDataPath, 'vault.enc'), join(userDataPath, 'myvault', 'migration-journal.enc'), safeStorage, vault);
   controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, bookmarkSync, vault, migration, aiProvider, updates, vscodeBridge, controlCenter, fillPreferences);
-  const agentChromeUrl = new URL(process.env.VITE_DEV_SERVER_URL ?? pathToFileURL(join(import.meta.dirname, '../dist/index.html')));
+  const agentChromeUrl = new URL(browserChromeUrl);
   agentChromeUrl.hash = 'agent-workspace';
   agentHost = new AgentHost({
     data: join(userDataPath, 'agent-mode'),

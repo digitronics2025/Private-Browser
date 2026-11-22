@@ -9,6 +9,13 @@ verified_at: dcd6823a
 
 # MyVault broker
 
+WordPress save requests are handled in main from a bounded form submission in
+the foreground tab after recent native input. The session must be unlocked and
+the exact site enabled. The same request must receive the expected secure
+sign-in response before the native Save dialog opens. Remote pages have no
+credential preload.
+
+
 The Vault panel has a local setup and recovery guide. It explains which action
 to try for an expired enrollment code, unavailable Windows Hello, a forgotten
 master password, an offline connection or revoked device access. Opening the
