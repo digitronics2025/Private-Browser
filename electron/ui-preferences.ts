@@ -22,6 +22,8 @@ export interface UiPreferences {
   idleLockMinutes?: number;
   maskTodayIdentity?: boolean;
   memorySaverMinutes?: number;
+  historyRetentionDays?: number;
+  minimalPrivacyLog?: boolean;
 }
 
 export type UiPreferencesPatch = Partial<UiPreferences>;
@@ -32,6 +34,7 @@ export const SIDE_PANEL_TOOLS: readonly SidePanelTool[] = ['claude', 'easynote',
 export const NEW_TAB_BACKGROUNDS: readonly NewTabBackground[] = ['plain', 'lagoon', 'dusk', 'mist', 'graphite'];
 export const IDLE_LOCK_MINUTES: readonly number[] = [0, 5, 15, 30, 60];
 export const MEMORY_SAVER_MINUTES: readonly number[] = [0, 5, 15, 30];
+export const HISTORY_RETENTION_DAYS: readonly number[] = [0, 30, 90, 365];
 
 export const DEFAULT_UI_PREFERENCES: UiPreferences = {
   theme: 'system',
@@ -88,6 +91,8 @@ export function sanitizeUiPreferences(value: unknown, legacyBookmarkBarVisible =
     idleLockMinutes: typeof input.idleLockMinutes === 'number' && IDLE_LOCK_MINUTES.includes(input.idleLockMinutes) ? input.idleLockMinutes : 0,
     maskTodayIdentity: input.maskTodayIdentity === true,
     memorySaverMinutes: typeof input.memorySaverMinutes === 'number' && MEMORY_SAVER_MINUTES.includes(input.memorySaverMinutes) ? input.memorySaverMinutes : 0,
+    ...(typeof input.historyRetentionDays === 'number' && HISTORY_RETENTION_DAYS.includes(input.historyRetentionDays) ? { historyRetentionDays: input.historyRetentionDays } : {}),
+    ...(input.minimalPrivacyLog === true ? { minimalPrivacyLog: true } : {}),
   };
 }
 

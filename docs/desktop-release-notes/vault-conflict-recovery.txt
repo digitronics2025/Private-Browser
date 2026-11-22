@@ -1,0 +1,1 @@
+Review both MyVault copies and their update times before resolving a sync conflict. Private Browser keeps encrypted recovery files for both copies.

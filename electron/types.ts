@@ -1,5 +1,6 @@
 import type { BrowserSettings, BrowserSettingsPatch, SpellcheckLanguage } from './browser-settings.js';
 import type { AccountPanelPreferences, PinnablePanelTool, UiPreferences } from './ui-preferences.js';
+import type { BrowsingProtectionStatus } from './browsing-protection.js';
 
 export type { SideAppCommand, SideAppId, SideAppRect, SideAppSnapshot, SideAppStatus } from './side-app-registry.js';
 import type { SideAppSnapshot } from './side-app-registry.js';
@@ -614,6 +615,7 @@ export interface PrivacyEvent {
 }
 
 export interface BrowserSnapshot {
+  browsingProtection?: BrowsingProtectionStatus | 'pending';
   memorySaverSite?: { origin: string; keptAwake: boolean };
   sessionLock?: 'windows' | 'idle';
   workspaces: Workspace[];
@@ -939,6 +941,20 @@ export interface VaultStatus {
   /** 'enrolled' offers Windows Hello unlock; 'available' offers turning it on. */
   platformUnlock?: 'unavailable' | 'available' | 'enrolled';
   generation?: number;
+  conflictRecoveryAvailable?: boolean;
+}
+
+export interface VaultConflictSide {
+  updatedAt: string;
+  entries: number;
+  changes: { id: string; label: string; username: string; kind: 'only-copy' | 'changed' }[];
+}
+
+export interface VaultConflictReview {
+  id: string;
+  cloudVersion: number;
+  local: VaultConflictSide;
+  cloud: VaultConflictSide;
 }
 
 export type VaultFillReadiness = 'ready' | 'locked' | 'connect' | 'no-match' | 'unsupported' | 'manual' | 'choose-login' | 'unavailable';

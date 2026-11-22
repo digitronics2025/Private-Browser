@@ -47,6 +47,9 @@ import { AI_SYSTEM_PROMPT, MAX_ASSISTANT_CONTEXT, MAX_ASSISTANT_SOURCE_TEXT, ass
 import { WORKSPACES } from './state-store.js';
 import { AccountStore, MAX_ASSISTANT_RECEIPTS } from './account-store.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
+import { sealBrowsingArchive, unsealBrowsingArchive } from './browsing-recovery.js';
+import type { BrowsingPrivacyAction } from './browsing-protection.js';
+import { agentStorageAvailable } from './agent-audit.js';
 import { RuntimeStateStore } from './runtime-state-store.js';
 import { problemForFailedLoad, StartupRestoreJournal } from './startup-restore.js';
 import { keepTabBlockIndex, orderAccountTabs, organizeTabs, replaceAccountTabOrder, tabBatchTargets } from './tab-organization.js';
@@ -67,6 +70,7 @@ import type {
   AccountSpaceId,
   ExternalBrowserId,
   GoogleModule,
+  VaultConflictSide,
   GmailReplyDraft,
   GoogleOperationResult,
   GoogleOverviewPage,
@@ -173,7 +177,7 @@ import { chromeProfileKey, MAX_CHROME_PROFILE_RECEIPTS } from './chrome-profile-
 import { chromeImportBookmarkStamp, chromeImportKey, planChromeImport } from './chrome-import-review.js';
 import type { ChromeImportReview } from './types.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
-import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
+import { adoptPopupWindow, guardPageNavigation, PopupReview, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 import { TemporaryBrowsing } from './temporary-browsing.js';
 import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
@@ -286,6 +290,7 @@ function permissionCapability(
 type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: ExpectedInstaller; verifiedStamp?: string; retainedFileStamp?: string };
 
 class BrowserController {
+  private browsingPrivacyBusy = false;
   private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
   private pendingBackupRequest?: { accountSpaceId: AccountSpaceId; operationId: string };
   private backupRestoreReview?: { preview: BackupRestorePreview; items: ReturnType<typeof planBackupRestore>['items']; subject: string; revision: string; expiresAt: number };
@@ -387,6 +392,8 @@ class BrowserController {
   private readonly temporaryBrowsing = new TemporaryBrowsing((id, url, title) => this.keepTemporaryBookmark(id, url, title));
   private readonly fillPicker: FillPicker = new FillPicker(() => this.window, { choose: (choice) => void this.handleFillPickerChoice(choice) });
   private readonly vaultSync: VaultSyncController;
+  private readonly popupReview = new PopupReview();
+  private vaultConflictOwner?: { id: string; account: AccountSpaceId };
   private dirtySyncTimer?: NodeJS.Timeout;
   private readonly passkeyController = new InternalPasskeyController();
   private readonly passkeyOptIns: PasskeyOptIns = { global: false, workspaces: {}, sites: {} };
@@ -638,6 +645,7 @@ class BrowserController {
       downloadFolder: downloadAccount ? this.downloadFolder.status(downloadAccount) : undefined,
       managedUpdate: downloadAccount && process.platform === 'win32' && !this.store.isReadOnly() ? this.managedUpdate.snapshot() : undefined,
       privacyLog: persisted.privacyLog,
+      browsingProtection: this.persistedState.protectionStatus(),
       trackerBlocking: strictTracking || persisted.trackerBlocking,
       trackerSite,
       memorySaverSite: memorySite && downloadAccount ? { origin: memorySite, keptAwake: this.store.keepsSiteAwake(downloadAccount, memorySite) } : undefined,
@@ -1527,6 +1535,10 @@ class BrowserController {
       }
     } finally {
       pending.respond(allowed, displaySourceId);
+      if (!allowed) {
+        const reason = Date.parse(pending.prompt.expiresAt) <= Date.now() ? 'The permission request expired.' : 'The permission was declined or the source was unavailable.';
+        this.logBlockedPermission(pending.prompt.accountSpaceId, pending.prompt.capability, reason + ' Request it again from the page.');
+      }
       this.broadcast();
       await this.showActiveTab();
       this.activeContents()?.focus();
@@ -2027,6 +2039,7 @@ class BrowserController {
   private queuePermissionPrompt(prompt: PermissionPrompt, respond: (allowed: boolean, displaySourceId?: string) => void, retainAllowOnce = false): void {
     if (this.pendingPermission) {
       respond(false);
+      this.logBlockedPermission(prompt.accountSpaceId, prompt.capability, 'Finish the open permission request, then try again.');
       return;
     }
     this.pendingPermission = { prompt, respond, retainAllowOnce };
@@ -2034,6 +2047,15 @@ class BrowserController {
     this.runtimeTabs.get(active.id)?.view?.setVisible(false);
     if (this.visibleSplitTabId) this.applyLayout();
     this.broadcast();
+  }
+
+  private logBlockedPermission(accountId: AccountSpaceId, capability: PermissionCapability, detail: string): void {
+    const title = 'Permission blocked · ' + capability.replaceAll('-', ' ');
+    const state = this.store.get();
+    if (this.activeAccountSpaceId(state) !== accountId) return;
+    if (state.privacyLog.some((event) => event.accountSpaceId === accountId && event.title === title
+      && event.detail === detail && Date.now() - Date.parse(event.at) < 15_000)) return;
+    this.addPrivacyEvent('blocked', title, detail, accountId);
   }
 
   goBack(): void {
@@ -2250,6 +2272,103 @@ class BrowserController {
     if (!isPinnablePanelTool(state.ui.sidePanelTool)) return state.ui.sidePanelTool;
     return regularAccount ? state.sidePanelsByAccountSpace?.[regularAccount]?.tool ?? state.ui.sidePanelTool
       : this.temporaryPanelTools.get(this.activeAccountSpaceId(state)) ?? 'privacy';
+  }
+
+  async changeBrowsingPrivacy(id: AccountSpaceId, action: BrowsingPrivacyAction, value?: number | boolean): Promise<boolean> {
+    const account = this.requireBrowsingPrivacyAccount(id);
+    if (this.browsingPrivacyBusy) throw new Error('Finish the current browsing privacy action first.');
+    this.browsingPrivacyBusy = true;
+    try {
+      if (action === 'protect') {
+        const confirmed = await this.confirmBrowsingPrivacy('Encrypt local browsing data',
+          'This protects tabs, bookmarks and history for all Account Spaces using this device. Export a recovery file for each space you need to move to another Windows profile. Existing backups and website cache files are outside this setting.', 'Enable encryption');
+        if (!confirmed) return false;
+        this.requireBrowsingPrivacyAccount(id);
+        this.store.enableBrowsingProtection();
+        return true;
+      }
+      if (action === 'retention' || action === 'log') {
+        const retention = action === 'retention';
+        if ((retention ? value !== 0 : value === true) && !await this.confirmBrowsingPrivacy(
+          retention ? `Keep ${value} days of history` : 'Use a minimal privacy log',
+          retention ? 'Older Private Browser history will be removed from every Account Space, including history imported later.'
+            : 'Remove site names and detail text from existing and future privacy events. The log shows event type and time.',
+          retention ? 'Change retention' : 'Use minimal log')) return false;
+        this.requireBrowsingPrivacyAccount(id);
+        this.store.update((state) => {
+          if (retention) state.ui.historyRetentionDays = value as number;
+          else state.ui.minimalPrivacyLog = value === true;
+        });
+        return true;
+      }
+      const filters = [{ name: 'Private Browser recovery file', extensions: ['pbbr'] }];
+      if (action === 'export') {
+        const selected = await dialog.showSaveDialog(this.window, { title: 'Save encrypted browsing recovery file', defaultPath: 'Private-Browser-Recovery.pbbr', filters });
+        if (selected.canceled || !selected.filePath) return false;
+        this.requireBrowsingPrivacyAccount(id);
+        const secret = await this.secureDialogs.open('export-browsing') as UnlockDialogValue | undefined;
+        if (!secret) return false;
+        this.requireBrowsingPrivacyAccount(id);
+        const state = this.store.get();
+        const bytes = await sealBrowsingArchive({ version: 1, createdAt: new Date().toISOString(), workspaceId: account.workspaceId,
+          bookmarks: state.bookmarks.filter((item) => item.accountSpaceId === id), bookmarkFolders: [], folderTree: state.bookmarkFoldersByAccountSpace?.[id],
+          history: state.history.filter((item) => item.accountSpaceId === id), settings: { trackerBlocking: state.trackerBlocking } }, secret.password);
+        this.requireBrowsingPrivacyAccount(id);
+        try { await writeFile(selected.filePath, bytes, { flag: 'wx', mode: 0o600 }); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('That file already exists. Choose a new name to keep the existing copy.');
+          throw new Error('The recovery file could not be saved.');
+        }
+        return true;
+      }
+      const selected = await dialog.showOpenDialog(this.window, { title: 'Open encrypted browsing recovery file', properties: ['openFile'], filters });
+      if (selected.canceled || !selected.filePaths[0]) return false;
+      this.requireBrowsingPrivacyAccount(id);
+      const secret = await this.secureDialogs.open('restore-browsing') as UnlockDialogValue | undefined;
+      if (!secret) return false;
+      this.requireBrowsingPrivacyAccount(id);
+      const payload = await unsealBrowsingArchive(selected.filePaths[0], secret.password);
+      this.requireBrowsingPrivacyAccount(id);
+      const before = this.store.get();
+      const revision = backupRestoreRevision(id, before);
+      const cutoff = before.ui.historyRetentionDays ? Date.now() - before.ui.historyRetentionDays * 86_400_000 : 0;
+      const history = payload.history?.filter((entry) => Date.parse(entry.visitedAt) >= cutoff);
+      const { items, counts } = planBackupRestore({ ...payload, history, openTabs: undefined }, { accountSpaceId: id, workspaceId: account.workspaceId }, before);
+      const message = `Add ${counts.bookmarks.added} bookmarks, ${counts.folders?.added ?? 0} folders and ${counts.history.added} history entries to ${account.label}?`;
+      const detail = 'Duplicates and entries outside your retention or storage limits are skipped.';
+      if (!await this.confirmBrowsingPrivacy(message, detail, 'Merge browsing data')) return false;
+      this.requireBrowsingPrivacyAccount(id);
+      const current = this.store.get();
+      if (current.ui.historyRetentionDays !== before.ui.historyRetentionDays || backupRestoreRevision(id, current) !== revision) {
+        throw new Error('Browsing data changed during review. Open the recovery file again.');
+      }
+      this.store.update((state) => {
+        state.bookmarks.push(...items.bookmarks);
+        state.history = [...state.history, ...items.history].sort((left, right) => right.visitedAt.localeCompare(left.visitedAt));
+        if (items.folders.length) {
+          const folders = state.bookmarkFoldersByAccountSpace ??= {};
+          folders[id] = appendBookmarkFolders(folders[id] ?? [], items.folders);
+        }
+      });
+      return true;
+    } finally {
+      this.browsingPrivacyBusy = false;
+      this.broadcast();
+    }
+  }
+
+  private requireBrowsingPrivacyAccount(id: AccountSpaceId) {
+    const state = this.store.get();
+    const account = state.accountSpaces.find((candidate) => candidate.id === id);
+    if (id !== this.activeDownloadAccount(state) || !account || account.locked || this.store.isReadOnly() || this.sessionIsLocked) {
+      throw new Error('Open the original unlocked Account Space to use browsing privacy settings.');
+    }
+    return account;
+  }
+
+  private async confirmBrowsingPrivacy(message: string, detail: string, action: string): Promise<boolean> {
+    const choice = await dialog.showMessageBox(this.window, { type: 'warning', message, detail, buttons: ['Cancel', action], cancelId: 0, defaultId: 0 });
+    return choice.response === 1;
   }
 
   setUiPreferences(patch: UiPreferencesPatch, expectedAccount?: AccountSpaceId): void {
@@ -3668,6 +3787,7 @@ class BrowserController {
       dirty: status.dirty,
       platformUnlock: status.platformUnlockEnrolled ? 'enrolled' as const : this.probeWindowsHello() ? 'available' as const : 'unavailable' as const,
       generation: status.generation,
+      conflictRecoveryAvailable: status.lifecycle === 'unlocked' && this.activeVaultPolicy().vaultSurface && Boolean(this.vault.conflictRecoveryFolder()),
     };
   }
 
@@ -3729,6 +3849,8 @@ class BrowserController {
 
   async lockVault() {
     this.secureDialogs.closeAll();
+    this.vaultConflictOwner = undefined;
+    this.vaultSync.clearConflictReview();
     this.fillPicker.close();
     this.fillCapabilities.invalidateAll();
     if (this.dirtySyncTimer) clearTimeout(this.dirtySyncTimer);
@@ -3760,17 +3882,47 @@ class BrowserController {
 
   async getVaultConflictReview() {
     this.assertVaultSurface();
-    const review = await this.vault.conflictReview();
-    const project = (item: (typeof review.local)[number]) => ({ ...item, label: item.title, url: item.url ?? '' });
-    return { local: review.local.map(project), cloud: review.cloud.map(project) };
+    const account = this.activeAccountSpaceId(this.store.get());
+    const review = await this.vaultSync.reviewConflict();
+    this.assertVaultSurface();
+    if (account !== this.activeAccountSpaceId(this.store.get())) throw new Error('The Account Space changed. Review the conflict again.');
+    this.vaultConflictOwner = { id: review.id, account };
+    const describe = (entries: typeof review.local, other: typeof review.local, updatedAt: string): VaultConflictSide => {
+      const counterpart = new Map(other.map((item) => [item.id, item]));
+      const changes: VaultConflictSide['changes'] = [];
+      for (const item of entries) {
+        const prior = counterpart.get(item.id);
+        if (prior && prior.updatedAt === item.updatedAt && prior.title === item.title && prior.username === item.username
+          && prior.type === item.type && prior.url === item.url && prior.favorite === item.favorite) continue;
+        changes.push({ id: item.id, label: item.title, username: item.username, kind: prior ? 'changed' : 'only-copy' });
+      }
+      return { updatedAt, entries: entries.length, changes };
+    };
+    return { id: review.id, cloudVersion: review.cloudVersion, local: describe(review.local, review.cloud, review.localUpdatedAt),
+      cloud: describe(review.cloud, review.local, review.cloudUpdatedAt) };
   }
 
-  async resolveVaultConflict(choice: 'cloud' | 'local') {
+  async resolveVaultConflict(choice: 'cloud' | 'local', reviewId: string) {
     this.assertVaultSurface();
-    if (choice === 'cloud') await this.vaultSync.chooseCloud();
-    else if (choice === 'local') await this.vaultSync.chooseLocal();
-    else throw new Error('Choose the cloud or local vault explicitly');
+    const owner = this.vaultConflictOwner;
+    if (!owner || owner.id !== reviewId || owner.account !== this.activeAccountSpaceId(this.store.get())) {
+      throw new Error('Review the current MyVault conflict in this Account Space first.');
+    }
+    this.vaultConflictOwner = undefined;
+    const assertOwner = () => {
+      this.assertVaultSurface();
+      if (owner.account !== this.activeAccountSpaceId(this.store.get())) throw new Error('The Account Space changed. Review the conflict again.');
+    };
+    await this.vaultSync.resolveConflict(choice, reviewId, assertOwner);
     return this.listVault();
+  }
+
+  async showVaultConflictRecovery(): Promise<void> {
+    this.assertVaultSurface();
+    if (this.vault.status().lifecycle !== 'unlocked') throw new Error('Unlock MyVault to open its recovery folder.');
+    const path = this.vault.conflictRecoveryFolder();
+    if (!path) throw new Error('No conflict recovery files are present.');
+    if (await shell.openPath(path)) throw new Error('Windows could not open the recovery folder.');
   }
 
   migrationStatus() {
@@ -4647,17 +4799,20 @@ class BrowserController {
     // navigation or tab-tracking control for its whole life (F-28).
     const popupTimes: number[] = [];
     // `popup` is set when the request comes from a popup window this tab opened.
-    const openFromPage = ({ url, disposition }: HandlerDetails, popup?: BrowserWindow): WindowOpenHandlerResponse => {
+    const openFromPage = ({ url, disposition, postBody }: HandlerDetails, popup?: BrowserWindow): WindowOpenHandlerResponse => {
       if (agentHost?.isLentContents(view.webContents.id)) return { action: 'deny' };
       if (tab.workspaceId === 'banking') {
-        this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking pages cannot open new tabs', tab.accountSpaceId);
+        this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking blocks site-opened windows. Open a link yourself from the original tab if you trust the address.', tab.accountSpaceId);
         return { action: 'deny' };
       }
-      if (!isAllowedRemoteUrl(url)) return { action: 'deny' };
+      if (!isAllowedRemoteUrl(url)) {
+        this.addPrivacyEvent('blocked', 'Popup address blocked', 'Site-opened windows require an HTTP or HTTPS address. Check the link on the original page.', tab.accountSpaceId);
+        return { action: 'deny' };
+      }
       const now = Date.now();
       while (popupTimes.length && now - popupTimes[0]! > POPUP_WINDOW_MS) popupTimes.shift();
       if (popupTimes.length >= MAX_POPUPS_PER_WINDOW) {
-        this.addPrivacyEvent('blocked', 'Popups blocked', `${urlOriginForSharing(url)} opened too many windows`, tab.accountSpaceId);
+        this.addPrivacyEvent('blocked', 'Popups blocked', `${urlOriginForSharing(url)} opened too many windows. Wait a few seconds, then reopen the page.`, tab.accountSpaceId);
         return { action: 'deny' };
       }
       popupTimes.push(now);
@@ -4667,13 +4822,47 @@ class BrowserController {
       const inForeground = popup
         ? !popup.isDestroyed() && popup.isFocused()
         : opener.id === tabId && view.getVisible() && !this.window.isDestroyed() && this.window.isFocused();
-      if (inForeground && wantsPopupWindow(disposition)) return popupWindowResponse(this.window);
+      if (inForeground && wantsPopupWindow(disposition)) {
+        if (this.popupReview.pending || this.pendingPermission) {
+          this.addPrivacyEvent('blocked', 'Popup waiting for an earlier decision', 'Finish the open permission or window review, then try again from the page.', tab.accountSpaceId);
+          return { action: 'deny' };
+        }
+        const from = popup?.webContents ?? view.webContents;
+        const requestOrigin = safeOrigin(from.getURL());
+        const destination = safeOrigin(url);
+        const generation = runtime.navigationGeneration;
+        const requestPage = from.getURL();
+        const account = this.accounts.require(tab.accountSpaceId);
+        const accountLabel = account.label.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 100);
+        return popupWindowResponse(this.window, (options) => {
+          const child = new BrowserWindow({ ...options, show: false });
+          adoptPopupWindow(child, (window) => (details) => openFromPage(details, window));
+          this.popupReview.start(child, {
+            url, method: postBody ? 'POST' : 'GET',
+            current: () => !this.sessionIsLocked && !from.isDestroyed() && from.getURL() === requestPage
+              && runtime.navigationGeneration === generation && this.activeTab(this.store.get()).id === tabId
+              && !agentHost?.isLentContents(view.webContents.id),
+            ask: (signal) => dialog.showMessageBox(this.window, {
+              type: 'question', title: 'Review site-opened window', message: 'Open this window?',
+              detail: ['Requesting site: ' + requestOrigin, 'Destination: ' + destination, 'Account Space: ' + accountLabel,
+                'Continue only if you expected this sign-in or payment. This request expires after 30 seconds.'].join('\n'),
+              buttons: ['Continue', 'Cancel'], defaultId: 1, cancelId: 1, signal,
+            }).then(({ response }) => response === 0),
+            finish: (outcome) => {
+              if (outcome === 'continued' || this.window.isDestroyed()) return;
+              const reason = outcome === 'expired' ? 'The window review expired.'
+                : outcome === 'changed' ? 'The original page or Account Space changed.' : 'You cancelled the window.';
+              this.addPrivacyEvent('blocked', 'Site-opened window stopped', reason + ' Try again from the original page.', tab.accountSpaceId);
+            },
+          });
+          return child.webContents;
+        });
+      }
       if (inForeground) void this.newTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
       else this.addBackgroundTab(tab.workspaceId, stripTrackingParameters(url), tab.accountSpaceId);
       return { action: 'deny' };
     };
     view.webContents.setWindowOpenHandler((details) => openFromPage(details));
-    view.webContents.on('did-create-window', (child) => adoptPopupWindow(child, (window) => (details) => openFromPage(details, window)));
     guardPageNavigation(view.webContents);
     view.webContents.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
       if (!isMainFrame) return;
@@ -4810,11 +4999,12 @@ class BrowserController {
     if (spelling) this.applySpellcheck(ses, spelling);
     const protectedWorkspace = WORKSPACES.find((workspace) => workspace.id === workspaceId)!.protected;
     ses.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+      const capability = permissionCapability(permission, details);
       if (protectedWorkspace || !details.isMainFrame || agentHost?.isLentContents(_webContents?.id)) {
         callback(false);
+        if (capability && protectedWorkspace) this.logBlockedPermission(accountSpaceId, capability, 'Banking blocks site permissions. Use a regular Account Space for a call or notifications.');
         return;
       }
-      const capability = permissionCapability(permission, details);
       if (!capability) {
         callback(isAllowedSitePermission(permission, details.requestingUrl, false, details.isMainFrame));
         return;
@@ -4823,6 +5013,12 @@ class BrowserController {
       const evaluation = this.permissions.evaluate(accountSpaceId, workspaceId, origin, capability);
       if (evaluation !== 'prompt') {
         callback(evaluation === 'granted');
+        if (evaluation === 'denied') {
+          const guidance = capability === 'geolocation' ? 'This browser blocks location access from websites.'
+            : capability === 'notifications' ? 'Notifications require an allowed Google service origin.'
+              : 'Camera, microphone and screen sharing require the Google Meet site.';
+          this.logBlockedPermission(accountSpaceId, capability, guidance + ' Review Site permissions from the address bar.');
+        }
         return;
       }
       try {
@@ -4855,6 +5051,11 @@ class BrowserController {
         || !activeView?.getVisible()
         || request.frame !== activeView.webContents.mainFrame) {
         deny();
+        if (active.accountSpaceId === accountSpaceId) {
+          this.logBlockedPermission(accountSpaceId, 'display-capture', protectedWorkspace
+            ? 'Banking blocks screen sharing. Use Google Meet in a regular Account Space.'
+            : 'Open Google Meet in front, then start screen sharing from that page.');
+        }
         return;
       }
       if (this.permissions.evaluate(accountSpaceId, workspaceId, origin, 'display-capture', false) === 'denied') {
@@ -4877,7 +5078,7 @@ class BrowserController {
         deny();
       }
     }, { useSystemPicker: false });
-    ses.webRequest.onBeforeRequest((details, callback) => {
+    const checkRequest = (details: Electron.OnBeforeRequestListenerDetails, callback: (result: Electron.CallbackResponse) => void) => {
       if (agentHost?.allowLentRequest(details) === false) { callback({ cancel: true }); return; }
       if (details.resourceType === 'mainFrame' && details.webContentsId !== undefined) {
         const tab = this.contentsTabs.get(details.webContentsId);
@@ -4895,6 +5096,12 @@ class BrowserController {
       const blocked = this.trackerProtection.shouldBlock(accountSpaceId, category, { origin, strict, enabled });
       if (blocked && origin) this.scheduleTrackerBroadcast();
       callback({ cancel: blocked });
+    };
+    ses.webRequest.onBeforeRequest((details, callback) => {
+      if (!this.popupReview.hold(details, (allowed) => {
+        if (allowed) checkRequest(details, callback);
+        else callback({ cancel: true });
+      })) checkRequest(details, callback);
     });
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
@@ -5117,6 +5324,7 @@ class BrowserController {
   }
 
   private hideAllViews(): void {
+    this.popupReview.cancel();
     this.fillPicker.close();
     for (const runtime of this.runtimeTabs.values()) {
       if (runtime.view?.getVisible()) runtime.memorySaver.lastVisibleAt = Date.now();
@@ -5478,6 +5686,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
       migrationJournalPath: join(userDataPath, 'browser-state-v2.migration.json'),
     },
     accountStore,
+    browsingEncryption: { isEncryptionAvailable: agentStorageAvailable, encryptString: (value) => safeStorage.encryptString(value), decryptString: (value) => safeStorage.decryptString(value) },
   });
   const store = new RuntimeStateStore(persistedState, accountStore, persistedState.initialize());
   // Cookies left in a legacy partition no Account Space owns any more (after a
@@ -5641,6 +5850,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:open-bookmarks-in-background', (_event, account: AccountSpaceId, ids: string[]) => controller!.openBookmarksInBackground(account, ids));
   handle('browser:toggle-bookmark-bar', () => controller!.toggleBookmarkBar());
   handle('ui:set-preferences', (_event, patch: UiPreferencesPatch, id?: AccountSpaceId) => controller!.setUiPreferences(patch, id));
+  handle('privacy:browsing', (_event, id: AccountSpaceId, action: BrowsingPrivacyAction, value?: number | boolean) => controller!.changeBrowsingPrivacy(id, action, value));
   handle('ui:set-panel-pin', (_event, id: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean) => controller!.setSidePanelPin(id, tool, enabled));
   handle('settings:set', (_event, patch: BrowserSettingsPatch, workspace?: WorkspaceId) => controller!.setBrowserSettings(patch, workspace));
   handle('browser:freeze-content', () => controller!.freezeContent());
@@ -5740,7 +5950,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('vault:sync', () => controller!.syncVaultNow());
   handle('vault:reconnect', () => controller!.listVault().lifecycle === 'unlocked' ? controller!.syncVaultNow() : undefined);
   handle('vault:conflict-review', () => controller!.getVaultConflictReview());
-  handle('vault:resolve-conflict', (_event, choice: 'cloud' | 'local') => controller!.resolveVaultConflict(choice));
+  handle('vault:resolve-conflict', (_event, choice: 'cloud' | 'local', reviewId: string) => controller!.resolveVaultConflict(choice, reviewId));
+  handle('vault:show-conflict-recovery', () => controller!.showVaultConflictRecovery());
   handle('vault:migration-status', () => controller!.migrationStatus());
   handle('vault:migrate-legacy', () => controller!.migrateLegacyVault());
   handle('vault:cleanup-legacy', () => controller!.cleanupLegacyVault());

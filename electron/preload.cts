@@ -4,12 +4,13 @@ import type { AddressMatch, BrowsingDataInput, BrowsingDataReview, HistoryPage, 
 import type { PermissionCapability, PermissionGrantSummary, SitePermissionStatus } from './types.js';
 import type { AiPreviewScope, AiProviderCheckResult, AiRequestReview, AssistantAnswer, AssistantSelectionEdit, AssistantSelectionSource, ChromeImportReview, GoogleConnectionHealth, PageExcerptReview } from './types.js';
 import type { BookmarkEntryKeyInput, BookmarkLevelInput, DownloadAction, DownloadFolderMode, FindResult, PinnablePanelTool, Shortcut, ShortcutTile, SideAppCommand, SideAppId, SideAppRect, UiPreferencesPatch, BrowserSettingsPatch } from './types.js';
+import type { BrowsingPrivacyAction } from './browsing-protection.js';
 import type { AccountSpaceColor, AccountSpaceId, AiApproval, AiPagePreview, AiProviderInput, AiProviderStatus, BridgeStatus, BrowserSnapshot, ControlCenterRecheckInput, ControlCenterRepository, ControlCenterSendInput, ControlCenterStatus, ControlCenterTask, CalendarEventSummary, ChromeImportOptions, ChromeImportResult, ChromeProfileSource, ContactSummary, DeveloperAiPreviewOptions, DeveloperBridgeAction, DeveloperDiagnosticReport, DeveloperPageInfo, DevToolsMode, DriveFileSummary, ExternalBrowserId, GmailMessageHeader, GmailOverview, GoogleModule, GoogleMutationConfirmation, GoogleOperationProgress, GoogleOperationResult, PermissionDecision, ProjectInfo, ProjectSummary, StateRecoveryAction, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, VaultItemInput, VaultItemMeta, VaultStatus, WorkspaceId } from './types.js';
 import type { CalendarWriteInput, DriveCreateInput, GmailSendInput } from './google-services.js';
 import type { ChromePasswordImportResult, ChromePasswordImportReview, VaultFillReadiness, VaultHealthReport } from './types.js';
 import type { BackupWriteResult } from './account-backup.js';
 import type { BackupReminderDays, BackupRestorePreview, BackupUploadPreview, GoogleOverviewPage, GoogleOverviewService } from './types.js';
-import type { GmailReplyDraft } from './types.js';
+import type { GmailReplyDraft, VaultConflictReview } from './types.js';
 import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentPolicy } from './agent-policy.js';
 import type { DownloadByteProgress } from './types.js';
@@ -132,6 +133,7 @@ const api = {
     ipcRenderer.invoke('browser:open-bookmarks-in-background', accountSpaceId, ids),
   toggleBookmarkBar: (): Promise<void> => ipcRenderer.invoke('browser:toggle-bookmark-bar'),
   setUiPreferences: (patch: UiPreferencesPatch, accountId?: AccountSpaceId): Promise<void> => ipcRenderer.invoke('ui:set-preferences', patch, accountId),
+  changeBrowsingPrivacy: (id: AccountSpaceId, action: BrowsingPrivacyAction, value?: number | boolean): Promise<boolean> => ipcRenderer.invoke('privacy:browsing', id, action, value),
   setSidePanelPin: (accountId: AccountSpaceId, tool: PinnablePanelTool, enabled: boolean): Promise<void> => ipcRenderer.invoke('ui:set-panel-pin', accountId, tool, enabled),
   setBrowserSettings: (patch: BrowserSettingsPatch, workspace?: WorkspaceId): Promise<void> => ipcRenderer.invoke('settings:set', patch, workspace),
   freezeContent: (): Promise<string | null> => ipcRenderer.invoke('browser:freeze-content'),
@@ -230,8 +232,9 @@ const api = {
   requestVaultPairing: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:request-pairing'),
   lockVault: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:lock'),
   syncVaultNow: (): Promise<VaultStatus> => ipcRenderer.invoke('vault:sync'),
-  getVaultConflictReview: (): Promise<{ local: VaultItemMeta[]; cloud: VaultItemMeta[] }> => ipcRenderer.invoke('vault:conflict-review'),
-  resolveVaultConflict: (choice: 'cloud' | 'local'): Promise<VaultStatus> => ipcRenderer.invoke('vault:resolve-conflict', choice),
+  getVaultConflictReview: (): Promise<VaultConflictReview> => ipcRenderer.invoke('vault:conflict-review'),
+  resolveVaultConflict: (choice: 'cloud' | 'local', reviewId: string): Promise<VaultStatus> => ipcRenderer.invoke('vault:resolve-conflict', choice, reviewId),
+  showVaultConflictRecovery: (): Promise<void> => ipcRenderer.invoke('vault:show-conflict-recovery'),
   getVaultMigrationStatus: (): Promise<{ legacyAvailable: boolean }> => ipcRenderer.invoke('vault:migration-status'),
   migrateLegacyVault: (): Promise<{ sourceCount: number; importedCount: number; skippedCount: number; validatedCount: number; phase: string }> => ipcRenderer.invoke('vault:migrate-legacy'),
   cleanupLegacyVault: (): Promise<boolean> => ipcRenderer.invoke('vault:cleanup-legacy'),

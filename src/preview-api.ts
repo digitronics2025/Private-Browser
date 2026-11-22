@@ -75,6 +75,9 @@ export function installPreviewApi(): void {
   const fixtureReply = crypto.randomUUID();
   const vaultHealthFixture = { id: 'preview-vault-health', label: 'Sample login', username: 'sample@example.test',
     url: 'https://shop.example.test', hasTotp: false, updatedAt: '2026-11-21T10:00:00Z' };
+  const conflictFixture = params.get('vaultConflict') === 'sample';
+  let conflictResolved = false;
+  const conflictId = crypto.randomUUID();
   const state: BrowserSnapshot = {
     settings: { ...DEFAULT_BROWSER_SETTINGS },
     availableSpellcheckLanguages: ['en', 'fr'],
@@ -545,8 +548,18 @@ export function installPreviewApi(): void {
     requestVaultPairing: desktopOnly,
     lockVault: desktopOnly,
     syncVaultNow: desktopOnly,
-    getVaultConflictReview: async () => ({ local: [], cloud: [] }),
-    resolveVaultConflict: desktopOnly,
+    getVaultConflictReview: async () => {
+      if (!conflictFixture || conflictResolved) return desktopOnly();
+      return { id: conflictId, cloudVersion: 3,
+        local: { entries: 2, updatedAt: '2026-11-20T08:00:00Z', changes: [{ id: 'l1', label: 'Local reference', username: '', kind: 'only-copy' }] },
+        cloud: { entries: 2, updatedAt: '2026-11-21T12:00:00Z', changes: [{ id: 'c1', label: 'Cloud reference', username: '', kind: 'changed' }] } };
+    },
+    resolveVaultConflict: async (_choice, id) => {
+      if (!conflictFixture || conflictResolved || id !== conflictId) return desktopOnly();
+      conflictResolved = true;
+      return handlers.listVault();
+    },
+    showVaultConflictRecovery: async () => { if (!conflictFixture || !conflictResolved) return desktopOnly(); },
     migrateLegacyVault: desktopOnly,
     cleanupLegacyVault: desktopOnly,
     openVaultEditor: desktopOnly,
@@ -832,6 +845,7 @@ export function installPreviewApi(): void {
       }
       publish();
     },
+    changeBrowsingPrivacy: async () => { throw new Error('Browsing privacy settings are available in the Windows app.'); },
     setUiPreferences: async (patch, expectedAccount) => {
       if (expectedAccount !== undefined && expectedAccount !== state.activeAccountSpaceId) throw new Error('The Account Space changed. Open the tool again.');
       const { sidePanelTool, ...globalPreferences } = patch as UiPreferencesPatch;
@@ -1405,7 +1419,8 @@ export function installPreviewApi(): void {
     openReleaseHistory: async () => handlers.navigate('https://private-browser-downloads.digitronics-electro.workers.dev/#release-history'),
     listVault: async () => ({ available: true,
       items: params.has('vaultHealth') && !params.has('vaultGuide') ? [vaultHealthFixture] : [],
-      lifecycle: params.get('vaultGuide') ? 'locked' : 'unlocked',
+      lifecycle: params.get('vaultGuide') ? 'locked' : conflictFixture && !conflictResolved ? 'conflict' : 'unlocked',
+      conflictRecoveryAvailable: conflictResolved,
       platformUnlock: params.get('vaultGuide') === 'enrolled' ? 'enrolled' : undefined, sync: 'idle', dirty: false, generation: 1 }),
     checkVaultHealth: async (id): Promise<VaultHealthReport> => {
       if (id !== state.activeAccountSpaceId || state.activeWorkspaceId === 'banking' || state.activeWorkspaceId === 'development' || params.has('vaultGuide')) {

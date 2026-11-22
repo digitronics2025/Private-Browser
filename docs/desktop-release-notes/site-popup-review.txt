@@ -1,0 +1,1 @@
+Review the requesting site, original destination and Account Space before a site opens a sign-in or payment window. The Privacy log explains common blocks and how to try again.
