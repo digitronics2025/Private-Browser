@@ -63,6 +63,10 @@ passwords can be exported as CSV and selected in the same panel; delete that
 unencrypted CSV after checking the Vault. Cookies, live sessions, payment cards,
 extensions and account tokens are not copied.
 
+In **Settings → Passwords**, select **Open Google Password Manager** and choose your intended profile in Chrome. **Import Google passwords into MyVault** opens a local review of an exported password CSV. It creates a one-time copy. Verify the imported logins before deleting the readable CSV and emptying the Recycle Bin.
+
+**Settings → Extensions** shows the stock checker’s compatibility status. Version 0.5.2 stays in Chrome because its site access and Accounting token storage do not meet the dedicated-space pilot requirements.
+
 Open a webpage in the **Development** workspace, then select **Dev** in the right sidebar or press **F12** / **Ctrl+Shift+I**. Right-click a page element for exact inspection. The diagnostic report deliberately excludes page text, form values, cookies, storage, headers, request bodies, query strings and fragments, and developer access is blocked for Banking and detected payment pages.
 
 Open **Development → Dev**. The Project, Inspect, Test, and AI Fix tabs guide you through installing the bundled VSIX, entering the browser's single-use pairing code in VS Code, granting one local workspace, and approving exact commands. See the [ten-step walkthrough](docs/systems/vscode-bridge.md#ten-step-non-developer-walkthrough).

@@ -2992,6 +2992,15 @@ class BrowserController {
     this.broadcast();
   }
 
+  async openGooglePasswordManager(): Promise<void> {
+    const state = this.store.get();
+    const account = state.accountSpaces.find(item => item.id === this.activeAccountSpaceId(state));
+    if (!account || !isAvailableRegularAccount(state, account) || state.activeWorkspaceId === 'banking' || this.store.isReadOnly()) {
+      throw new Error('Open Passwords in an unlocked regular Account Space.');
+    }
+    await this.externalBrowsers.openGooglePasswordManager();
+  }
+
   listChromeProfiles(): ChromeProfileSource[] {
     const state = this.store.get();
     if (state.activeWorkspaceId === 'banking' || this.store.isReadOnly()) return [];
@@ -6302,6 +6311,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('bookmarks:import-html', (_event, accountSpaceId: AccountSpaceId) => controller!.importBookmarkHtml(accountSpaceId));
   handle('shortcuts:set', (_event, accountSpaceId: AccountSpaceId, tiles: ShortcutTile[] | null) => controller!.setShortcutTiles(accountSpaceId, tiles));
   handle('app:quit', () => { app.quit(); });
+  handle('browser:open-google-password-manager', () => controller!.openGooglePasswordManager());
   handle('browser:list-chrome-profiles', () => controller!.listChromeProfiles());
   handle('browser:import-chrome', (_event, options: ChromeImportOptions) => controller!.importChrome(options));
   handle('browser:preview-chrome-import', (_event, options: ChromeImportOptions) => controller!.previewChromeImport(options));

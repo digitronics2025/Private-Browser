@@ -34,7 +34,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
   onToast: (message: string, kind?: 'ok' | 'error') => void;
 }) {
   const [isDefault, setIsDefault] = useState<boolean | null>(null);
-  const [settingsPage, setSettingsPage] = useState<'overview' | 'updates' | 'setup' | 'agents'>(entry);
+  const [settingsPage, setSettingsPage] = useState<'overview' | 'updates' | 'setup' | 'agents' | 'passwords' | 'extensions'>(entry);
   const [reviewPrivacy, setReviewPrivacy] = useState(false);
   useEffect(() => { if (entry === 'setup') setSettingsPage('setup'); }, [entry]);
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
@@ -283,6 +283,20 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       }}
       onExit={exitSetup} onFinish={() => { onUiChange({ offerSetupGuide: false }); exitSetup(); }} />;
   }
+  if (settingsPage === 'extensions' || settingsPage === 'passwords') {
+    const passwords = settingsPage === 'passwords';
+    const account = state.accountSpaces.find(item => item.id === state.activeAccountSpaceId);
+    return <div className="side-panel">
+      <button type="button" className="text-button" onClick={() => setSettingsPage('overview')}><ArrowLeft size={16} /> Settings</button>
+      <PanelHeader icon={passwords ? LockKeyhole : Shield} eyebrow={account?.label ?? workspace.name} title={passwords ? 'Passwords' : 'Extensions'} />
+      {passwords && state.activeWorkspaceId !== 'banking' ? <>
+        <PasswordSettings key={state.activeAccountSpaceId} canImport={state.activeWorkspaceId !== 'development' && Boolean(account && !account.locked)} onOpenVault={onOpenVault} />
+      </> : passwords ? <p>Choose an eligible Account Space to open Passwords.</p> : <section className="settings-card">
+        <h3>Jumia + MarjaneMall Stock Checker</h3><strong>Version 0.5.2 · Blocked before activation</strong>
+        <p>This version requests access across seller sites and saves an Accounting token in extension storage. Continue using the stock checker in Chrome.</p>
+      </section>}
+    </div>;
+  }
   if (settingsPage === 'agents') return <AgentsPanel onBack={() => setSettingsPage('overview')} onToast={onToast} />;
   if (settingsPage === 'updates') {
     const runInstaller = (action: () => Promise<void>) => void action().catch((error: unknown) => {
@@ -326,6 +340,10 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
         <button type="button" onClick={() => void runDefaultBrowserAction(window.privateBrowser.testDefaultBrowser)}>Test with a link</button>
       </div>
     </div>
+    <div className="settings-card"><div className="panel-actions">
+      {state.activeWorkspaceId !== 'banking' && <button type="button" onClick={() => setSettingsPage('passwords')}><LockKeyhole size={16} /> Passwords</button>}
+      <button type="button" onClick={() => setSettingsPage('extensions')}><Shield size={16} /> Extensions</button>
+    </div></div>
     <div ref={searchSection} className="workspace-behavior">
       <SearchHomeSettings key={workspace.id} workspace={workspace} settings={settings} onToast={onToast} />
     </div>
@@ -709,5 +727,47 @@ function SearchHomeSettings({ workspace, settings, onToast }: { workspace: Works
       </form>
     </div>
     </>}
+  </>;
+}
+
+
+function PasswordSettings({ canImport, onOpenVault }: { canImport: boolean; onOpenVault: () => void }) {
+  const [vault, setVault] = useState<'checking' | 'ready' | 'locked' | 'unavailable'>('checking');
+  const [launch, setLaunch] = useState<'idle' | 'opening' | 'requested' | 'failed'>('idle');
+  const [error, setError] = useState('');
+  useEffect(() => {
+    if (!canImport) return;
+    let current = true;
+    void window.privateBrowser.listVault().then(status => {
+      if (current) setVault(status.lifecycle === 'unlocked' ? 'ready' : 'locked');
+    }).catch(() => { if (current) setVault('unavailable'); });
+    return () => { current = false; };
+  }, [canImport]);
+  async function openChrome() {
+    setLaunch('opening');
+    try {
+      await window.privateBrowser.openGooglePasswordManager();
+      setLaunch('requested');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Chrome could not open.');
+      setLaunch('failed');
+    }
+  }
+  return <>
+    <section className="settings-card">
+      <h3>Google Password Manager</h3><p>Open your live Google vault in Chrome. Choose Work in Chrome’s profile menu if needed.</p>
+      <button type="button" disabled={launch === 'opening'} onClick={() => void openChrome()}>Open Google Password Manager</button>
+      <p role="status">{launch === 'opening' ? 'Opening Chrome…' : launch === 'requested' ? 'Chrome launch requested. Complete sign-in in Chrome.' : ''}</p>
+      {launch === 'failed' && <p role="alert">{error}</p>}
+    </section>
+    <section className="settings-card"><h3>MyVault</h3>
+      <p>Import a one-time copy. Later changes in Google stay in Google.</p>
+      {canImport ? <>
+        <p>If your organization disables password export, continue using the live vault in Chrome.</p>
+        {vault === 'ready' ? <ChromePasswordImportWizard buttonLabel="Import Google passwords into MyVault" />
+          : <p role="status">{vault === 'checking' ? 'Checking MyVault…' : vault === 'locked' ? 'Open and unlock MyVault to import passwords.' : 'MyVault status is unavailable.'}</p>}
+        <button type="button" className="text-button" onClick={onOpenVault}>Open MyVault</button>
+      </> : <p>Choose an unlocked Personal, Digitronics or TenTen Account Space to import passwords.</p>}
+    </section>
   </>;
 }

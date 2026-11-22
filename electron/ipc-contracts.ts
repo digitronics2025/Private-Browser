@@ -582,7 +582,7 @@ const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'ai:check-provider', 'ai:clear-provider', 'ai:local-models', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
   'side-app:prepare-claude-excerpt',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',
-  'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
+  'browser:open-google-password-manager', 'browser:list-chrome-profiles', 'browser:print', 'browser:reload',
   'browser:reopen-closed-tab', 'browser:stop', 'browser:stop-find', 'browser:toggle-bookmark', 'browser:toggle-bookmark-bar',
   'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-cancel-pairing', 'developer:bridge-pair', 'developer:bridge-projects',
   'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',

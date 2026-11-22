@@ -176,6 +176,7 @@ const api = {
     ipcRenderer.invoke('bookmarks:import-html', accountSpaceId),
   setShortcutTiles: (accountSpaceId: AccountSpaceId, tiles: ShortcutTile[] | null): Promise<void> => ipcRenderer.invoke('shortcuts:set', accountSpaceId, tiles),
   quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
+  openGooglePasswordManager: (): Promise<void> => ipcRenderer.invoke('browser:open-google-password-manager'),
   listChromeProfiles: (): Promise<ChromeProfileSource[]> => ipcRenderer.invoke('browser:list-chrome-profiles'),
   importChrome: (options: ChromeImportOptions): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome', options),
   previewChromeImport: (options: ChromeImportOptions): Promise<ChromeImportReview> => ipcRenderer.invoke('browser:preview-chrome-import', options),

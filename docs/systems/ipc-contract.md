@@ -153,6 +153,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:open-bookmark` | `openBookmark(id)` | `id: string` | `void` |
 | `browser:open-bookmarks-in-background` | `openBookmarksInBackground(account, ids)` | active Account Space, 1–20 bookmark IDs | opened, reused, skipped counts |
 | `browser:toggle-bookmark-bar` | `toggleBookmarkBar()` | — | `void` |
+| `browser:open-google-password-manager` | `openGooglePasswordManager()` | No arguments | `void` after Chrome starts. Trusted shell only, fixed Google vault URL. |
 | `browser:list-chrome-profiles` | `listChromeProfiles()` | — | `ChromeProfileSource[]` |
 | `browser:import-chrome` | `importChrome(options)` | `ChromeImportOptions` | `ChromeImportResult` |
 | `browser:toggle-tracker-blocking` | `toggleTrackerBlocking()` | — | `void` |
