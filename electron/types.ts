@@ -941,6 +941,20 @@ export interface VaultStatus {
   /** 'enrolled' offers Windows Hello unlock; 'available' offers turning it on. */
   platformUnlock?: 'unavailable' | 'available' | 'enrolled';
   generation?: number;
+  conflictRecoveryAvailable?: boolean;
+}
+
+export interface VaultConflictSide {
+  updatedAt: string;
+  entries: number;
+  changes: { id: string; label: string; username: string; kind: 'only-copy' | 'changed' }[];
+}
+
+export interface VaultConflictReview {
+  id: string;
+  cloudVersion: number;
+  local: VaultConflictSide;
+  cloud: VaultConflictSide;
 }
 
 export type VaultFillReadiness = 'ready' | 'locked' | 'connect' | 'no-match' | 'unsupported' | 'manual' | 'choose-login' | 'unavailable';

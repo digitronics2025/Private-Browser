@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Clock3, Cloud, Copy, Eye, Fingerprint, KeyRound, LockKeyhole, Plus, RefreshCw, Search, ShieldCheck, Trash2, Zap } from 'lucide-react';
-import type { AccountSpaceId, VaultFillReadiness, VaultItemMeta, VaultStatus, WorkspaceId } from '../../electron/types';
+import type { AccountSpaceId, VaultConflictReview, VaultConflictSide, VaultFillReadiness, VaultItemMeta, VaultStatus, WorkspaceId } from '../../electron/types';
 import { EmptyState, PanelHeader } from './common';
 import { domainFromUrl } from '../lib/format';
 import { VaultHealthPanel } from './VaultHealthPanel';
@@ -27,13 +27,15 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
   const [formShape, setFormShape] = useState({ hasUsername: false, hasPassword: false });
   const [fillReadiness, setFillReadiness] = useState<VaultFillReadiness>();
   const [fillCheck, setFillCheck] = useState(0);
-  const [conflictReview, setConflictReview] = useState<{ local: VaultItemMeta[]; cloud: VaultItemMeta[] }>();
+  const [conflictReview, setConflictReview] = useState<VaultConflictReview>();
+  const [conflictBusy, setConflictBusy] = useState(false);
   const [legacyAvailable, setLegacyAvailable] = useState(false);
   const load = async () => {
     try { const result = await window.privateBrowser.listVault(); setItems(result.items); setStatus(result); }
     catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
   useEffect(() => { void load(); return window.privateBrowser.onVaultState(() => void load()); }, []);
+  useEffect(() => { setConflictReview(undefined); }, [accountId, status.lifecycle, status.generation]);
   useEffect(() => { const timer = window.setInterval(() => setSecondsRemaining(30 - (Math.floor(Date.now() / 1000) % 30)), 1000); return () => window.clearInterval(timer); }, []);
   useEffect(() => {
     let current = true;
@@ -75,7 +77,23 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
   const add = async () => { try { const result = await window.privateBrowser.openVaultEditor(activeOrigin); if (result) { await load(); onToast('Login encrypted in MyVault'); } } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
   const saveFromPage = async () => { try { const result = await window.privateBrowser.requestSaveFromPage(); if (result) { await load(); onToast('Captured login encrypted in MyVault'); } } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
   const sync = async () => { try { const result = await window.privateBrowser.syncVaultNow(); setStatus(result); setItems(result.items); onToast('MyVault synchronized'); } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
-  const resolveConflict = async (choice: 'cloud' | 'local') => { try { const result = await window.privateBrowser.resolveVaultConflict(choice); setConflictReview(undefined); setStatus(result); setItems(result.items); onToast(`Kept the ${choice} vault`); } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); } };
+  const conflictAction = async (action: () => Promise<void>) => {
+    setConflictBusy(true);
+    try { await action(); }
+    catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+    finally { setConflictBusy(false); }
+  };
+  const resolveConflict = (choice: 'cloud' | 'local') => {
+    if (!conflictReview || conflictBusy) return;
+    const id = conflictReview.id;
+    setConflictReview(undefined);
+    void conflictAction(async () => {
+      const result = await window.privateBrowser.resolveVaultConflict(choice, id);
+      setStatus(result);
+      setItems(result.items);
+      onToast(`Kept the ${choice} vault. Both encrypted recovery copies are saved.`);
+    });
+  };
   const visibleItems = items.filter((item) => [item.label, item.username, item.url].some((value) => value.toLocaleLowerCase().includes(query.toLocaleLowerCase())));
   return (
     <div className="side-panel">
@@ -110,8 +128,22 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
       {status.lifecycle === 'unlocked' && <div className="credential-actions"><button className="primary-button" onClick={() => void add()}><Plus size={16} /> Add login</button><button onClick={() => void sync()}><RefreshCw size={14} /> Sync</button><button onClick={() => void lock()}><LockKeyhole size={14} /> Lock</button></div>}
       {status.lifecycle === 'unlocked' && status.platformUnlock === 'available' && <button className="text-button vault-hello-toggle" onClick={() => void hello(() => window.privateBrowser.enableVaultHello(), { message: 'Windows Hello can now unlock MyVault', when: 'enrolled' })}><Fingerprint size={14} /> Turn on Windows Hello unlock</button>}
       {status.lifecycle === 'unlocked' && status.platformUnlock === 'enrolled' && <button className="text-button vault-hello-toggle" onClick={() => void hello(() => window.privateBrowser.disableVaultHello(), { message: 'Windows Hello unlock turned off', when: 'available' })}><Fingerprint size={14} /> Turn off Windows Hello unlock</button>}
-      {status.lifecycle === 'conflict' && <div className="permission-card"><strong>Choose which encrypted vault wins</strong><p>MyVault never merges or overwrites a conflict automatically.</p><div className="credential-actions"><button onClick={() => void window.privateBrowser.getVaultConflictReview().then(setConflictReview)}>Review metadata</button><button onClick={() => void resolveConflict('cloud')}>Keep cloud</button><button onClick={() => void resolveConflict('local')}>Keep local</button></div></div>}
-      {conflictReview && <div className="context-card"><strong>Local ({conflictReview.local.length}) / Cloud ({conflictReview.cloud.length})</strong><p>{[...new Set([...conflictReview.local, ...conflictReview.cloud].map((item) => `${item.label} — ${item.username}`))].join('\n')}</p></div>}
+      {status.lifecycle === 'conflict' && <section className="permission-card vault-conflict" aria-label="MyVault sync conflict" aria-busy={conflictBusy}>
+        <strong>Review both vault copies</strong>
+        <p>Private Browser saves both encrypted copies before applying your choice.</p>
+        {conflictReview ? <>
+          <ConflictSide heading="This computer" copy={conflictReview.local} />
+          <ConflictSide heading={`Cloud version ${conflictReview.cloudVersion}`} copy={conflictReview.cloud} />
+          <div className="credential-actions">
+            <button disabled={conflictBusy} onClick={() => resolveConflict('cloud')}>Keep cloud copy</button>
+            <button disabled={conflictBusy} onClick={() => resolveConflict('local')}>Keep local copy</button>
+            <button disabled={conflictBusy} onClick={() => setConflictReview(undefined)}>Cancel review</button>
+          </div>
+        </> : <button disabled={conflictBusy} onClick={() => void conflictAction(async () => {
+          setConflictReview(await window.privateBrowser.getVaultConflictReview());
+        })}>Review versions</button>}
+      </section>}
+      {status.conflictRecoveryAvailable && <button className="text-button" onClick={() => void conflictAction(() => window.privateBrowser.showVaultConflictRecovery())}>Show conflict recovery files</button>}
       {status.lifecycle === 'unlocked' && formShape.hasPassword && <button className="primary-button full" onClick={() => void saveFromPage()}><ShieldCheck size={15} /> {formShape.hasUsername ? 'Save or update this login' : 'Save password from this page'}</button>}
       {status.lifecycle === 'unlocked' && legacyAvailable && <div className="permission-card"><strong>Old Private Browser vault found</strong><p>Migration makes and verifies an encrypted backup first. The old ciphertext remains until you separately remove it.</p><button className="primary-button full" onClick={() => void window.privateBrowser.migrateLegacyVault().then((report) => { onToast(`${report.validatedCount} legacy records validated`); void load(); }).catch((error) => onToast(error.message, 'error'))}>Migrate into MyVault</button><button className="text-button danger-text" onClick={() => void window.privateBrowser.cleanupLegacyVault().then((removed) => { if (removed) { setLegacyAvailable(false); onToast('Old ciphertext removed; backup retained'); } }).catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}>Remove old ciphertext after verification</button></div>}
       {status.lifecycle === 'unlocked' && workspaceId !== 'banking' && workspaceId !== 'development'
@@ -138,4 +170,17 @@ export function VaultPanel({ accountId, workspaceId, activeOrigin, onOpenFull, o
       }}>Reset remembered picks</button>}
     </div>
   );
+}
+
+function ConflictSide({ heading, copy }: { heading: string; copy: VaultConflictSide }) {
+  const [visible, setVisible] = useState(20);
+  return <div className="context-card">
+    <strong>{heading}</strong>
+    <p>{copy.entries} entries · Updated <time dateTime={copy.updatedAt}>{new Date(copy.updatedAt).toLocaleString()}</time></p>
+    {copy.changes.length ? <ul>{copy.changes.slice(0, visible).map((item) => <li key={item.id}>
+      <span>{item.label}{item.username ? ` · ${item.username}` : ''}</span>
+      <small>{item.kind === 'only-copy' ? 'Only in this copy' : 'Different entry metadata'}</small>
+    </li>)}</ul> : <p>Entry metadata matches the other copy.</p>}
+    {copy.changes.length > visible && <button type="button" className="text-button" onClick={() => setVisible((count) => count + 20)}>Show 20 more</button>}
+  </div>;
 }
