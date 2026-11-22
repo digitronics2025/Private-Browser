@@ -11,10 +11,10 @@ test('Notes is discoverable, keyboard accessible and has deliberate local data c
   await expect(page.getByRole('note')).toHaveText('Shared Notes library');
   await expect(page.getByRole('button', { name: /Sign out of Notes/ })).toHaveCount(0);
   page.once('dialog', async dialog => {
-    expect(dialog.message()).toContain('Only the Notes side-panel partition is cleared');
-    expect(dialog.message()).toContain('Cloud records are not deleted');
-    expect(dialog.message()).toContain('Unsynced local changes and drafts may be lost');
-    expect(dialog.message()).toContain('export a backup');
+    expect(dialog.message()).toContain('Last successful sync:');
+    expect(dialog.message()).toContain('Cloud records stay in the library');
+    expect(dialog.message()).toContain('can lose unsynced changes or drafts');
+    expect(dialog.message()).toContain('then Export Notes');
     await dialog.dismiss();
   });
   await page.getByRole('button', { name: 'Clear local Notes data', exact: true }).click();
@@ -27,6 +27,24 @@ test('Notes is discoverable, keyboard accessible and has deliberate local data c
   await expect(page.getByRole('button', { name: 'New chat', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sign out of Claude', exact: true })).toBeVisible();
   await expect(page.getByText('Shared Notes library')).toHaveCount(0);
+});
+
+test('reviews editable web text before opening a Notes draft', async ({ page }) => {
+  await page.setViewportSize({ width: 430, height: 820 });
+  await page.goto('/?notesDraft=sample&notes=protected');
+  const draft = page.getByRole('dialog', { name: 'Review text for Notes' });
+  await expect(draft.getByRole('textbox', { name: 'Selected text' })).toHaveValue('Selected browser excerpt.');
+  await draft.getByRole('textbox', { name: 'Selected text' }).fill('Edited reference text.');
+  await draft.getByRole('checkbox', { name: /Include source site/ }).uncheck();
+  expect(await page.locator('html').getAttribute('data-preview-notes-draft')).toBeNull();
+  await draft.getByRole('button', { name: 'Open Notes draft' }).click();
+  await expect(draft).toHaveCount(0);
+  await expect(page.getByRole('note')).toHaveText('Notes library · Sign-in required');
+  await expect(page.locator('html')).toHaveAttribute('data-preview-notes-draft', /Edited reference text.*false/);
+  await page.getByRole('button', { name: 'Favorites', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-preview-notes-action', 'pinned');
+  await page.getByRole('button', { name: 'Export Notes', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-preview-notes-action', 'backup');
 });
 
 

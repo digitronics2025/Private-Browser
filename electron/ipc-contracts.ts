@@ -16,6 +16,7 @@ import { MAX_REFERENCE_LENGTH, requireBrowserSettingsPatch } from './browser-set
 import { requireBrowsingDataInput } from './browsing-data.js';
 import { isPinnablePanelTool, requireUiPreferencesPatch } from './ui-preferences.js';
 import { isSideAppCommand, isSideAppId } from './side-app-registry.js';
+import { notesPanelCommands, type NotesPanelCommand } from './notes-panel.js';
 import { MAX_ROUTINE_ITEMS, requireBrowserRoutine } from './browser-routines.js';
 import { MAX_BOOKMARK_BATCH } from './bookmark-batch.js';
 import { MAX_BOOKMARK_EDIT_BATCH } from './bookmark-maintenance.js';
@@ -222,6 +223,21 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 2); requireSideAppId(args[0]); if (!isSideAppCommand(args[1])) throw new Error('Invalid side app command'); return;
     case 'side-app:clear-data':
       exact(args, 1); requireSideAppId(args[0]); return;
+    case 'notes:command':
+      exact(args, 1);
+      if (typeof args[0] !== 'string' || !notesPanelCommands.includes(args[0] as NotesPanelCommand)) throw new Error('Invalid Notes command');
+      return;
+    case 'notes:cancel-draft':
+      exact(args, 1); requireNonEmptyText(args[0], 'draft identifier', 64); return;
+    case 'notes:deliver-draft': {
+      exact(args, 2);
+      const draft = requireExactKeys(args[0], ['id', 'title', 'text', 'includeSource']);
+      requireNonEmptyText(draft.id, 'draft identifier', 64);
+      requireNonEmptyText(draft.title, 'draft title', 160);
+      requireNonEmptyText(draft.text, 'draft text', 8_000);
+      if (typeof draft.includeSource !== 'boolean' || typeof args[1] !== 'boolean') throw new Error('Invalid Notes draft choice');
+      return;
+    }
     case 'ui:set-preferences':
       between(args, 1, 2); requireUiPreferencesPatch(args[0]); if (args[1] !== undefined) requireAccountSpaceId(args[1]); return;
     case 'ui:set-panel-pin':
