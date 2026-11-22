@@ -533,7 +533,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
 
 /** Channels that carry no arguments at all. */
 const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
-  'browser:undo-tab-batch',
+  'browser:undo-tab-batch', 'pdf:open', 'pdf:save',
   'ai:check-provider', 'ai:clear-provider', 'ai:local-models', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
   'side-app:prepare-claude-excerpt',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',

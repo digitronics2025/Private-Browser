@@ -428,6 +428,8 @@ export function installPreviewApi(): void {
     forward: desktopOnly,
     stop: async () => undefined,
     print: desktopOnly,
+    openPdfInTab: desktopOnly,
+    savePdf: desktopOnly,
     findInPage: desktopOnly,
     stopFindInPage: async () => undefined,
     setTabMuted: desktopOnly,

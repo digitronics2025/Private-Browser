@@ -175,6 +175,7 @@ import type { ChromeImportReview } from './types.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
 import { adoptPopupWindow, guardPageNavigation, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 import { TemporaryBrowsing } from './temporary-browsing.js';
+import { blockInlinePdf, pdfResponse, ProtectedPdfPreview, type PdfDocumentStatus } from './pdf-preview.js';
 import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
@@ -197,6 +198,8 @@ interface AssistantCapture {
 }
 
 interface RuntimeTab {
+  pdf?: PdfDocumentStatus & { url: string };
+  inlinePdfUrl?: string;
   view?: WebContentsView;
   memorySaver: MemorySaverPage;
   sleeping?: boolean;
@@ -385,6 +388,7 @@ class BrowserController {
   private windowsHelloProbe?: Promise<boolean>;
   private readonly fillCapabilities = new FillCapabilityStore();
   private readonly temporaryBrowsing = new TemporaryBrowsing((id, url, title) => this.keepTemporaryBookmark(id, url, title));
+  private readonly protectedPdf = new ProtectedPdfPreview();
   private readonly fillPicker: FillPicker = new FillPicker(() => this.window, { choose: (choice) => void this.handleFillPickerChoice(choice) });
   private readonly vaultSync: VaultSyncController;
   private dirtySyncTimer?: NodeJS.Timeout;
@@ -612,6 +616,7 @@ class BrowserController {
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
     const downloadAccount = this.activeDownloadAccount(persisted);
     const activeTab = this.activeTab(persisted);
+    const pdfDocument = this.runtimeTabs.get(activeTab.id)?.pdf;
     const pair = this.splitPair(persisted, activeTab);
     const memorySite = downloadAccount && !activeTab.isHome ? memorySaverOrigin(activeTab.url) : undefined;
     const strictTracking = activeTab.workspaceId === 'banking';
@@ -626,6 +631,7 @@ class BrowserController {
       workspaces: WORKSPACES,
       activeWorkspaceId: persisted.activeWorkspaceId,
       activeTabId: activeTab.id,
+      pdfDocument: pdfDocument && { mode: pdfDocument.mode, canOpen: pdfDocument.canOpen },
       splitView: pair && windowReady ? { ...pair, suspended: this.window.isFullScreen() || !splitBounds(this.currentContentBounds()) } : undefined,
       tabs,
       bookmarks: persisted.bookmarks,
@@ -828,7 +834,9 @@ class BrowserController {
     const view = this.ensureView(tab.id);
     view.setVisible(true);
     this.applyLayout();
-    await view.webContents.loadURL(url);
+    await view.webContents.loadURL(url).catch((error: unknown) => {
+      if (this.runtimeTabs.get(tab.id)?.pdf?.mode !== 'protected') throw error;
+    });
     this.broadcast();
   }
 
@@ -2049,6 +2057,10 @@ class BrowserController {
   async reload(): Promise<void> {
     const tab = this.activeTab(this.store.get());
     const runtime = this.runtimeTabs.get(tab.id);
+    if (runtime?.pdf?.mode === 'protected') {
+      if (runtime.pdf.canOpen) await this.navigate(runtime.pdf.url);
+      return;
+    }
     if (runtime?.problem || tab.restorePaused) {
       try {
         await this.navigate(runtime?.failedUrl ?? tab.url);
@@ -2453,8 +2465,42 @@ class BrowserController {
   }
 
   print(): void {
+    const tab = this.activeTab(this.store.get());
+    if (this.runtimeTabs.get(tab.id)?.pdf?.mode === 'protected') throw new Error('Printing is blocked for this protected PDF.');
     const contents = this.activeContents();
-    if (contents && !this.activeTab(this.store.get()).isHome) contents.print({}, () => undefined);
+    if (contents && !tab.isHome) contents.print({}, () => undefined);
+  }
+
+  async openPdfInTab(): Promise<void> {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tab.id);
+    const document = runtime?.pdf;
+    const contents = runtime?.view?.webContents;
+    const account = state.accountSpaces.find(({ id }) => id === tab.accountSpaceId);
+    if (!document?.canOpen || !contents || contents.isDestroyed() || !account || account.locked || this.sessionIsLocked
+      || this.store.isReadOnly() || agentHost?.isLentContents(contents.id)) throw new Error('This PDF cannot be reopened from the current page.');
+    if (document.mode === 'protected') {
+      await this.protectedPdf.open(this.window, contents.session, document.url, () => !this.sessionIsLocked
+        && !contents.isDestroyed() && this.activeTab(this.store.get()).id === tab.id && runtime?.pdf === document);
+      return;
+    }
+    const id = this.addBackgroundTab(tab.workspaceId, document.url, tab.accountSpaceId, 'PDF document');
+    if (!id) throw new Error('The PDF tab could not be created.');
+    this.runtimeTabs.get(id)!.inlinePdfUrl = document.url;
+    await this.activateTab(id);
+  }
+
+  savePdf(): void {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tab.id);
+    const contents = this.activeContents();
+    if (this.sessionIsLocked || this.store.isReadOnly() || !contents || runtime?.pdf?.mode !== 'native' || !runtime.pdf.canOpen
+      || tab.workspaceId === 'banking' || agentHost?.isLentContents(contents.id)) {
+      throw new Error('Saving is unavailable for this PDF in the current workspace.');
+    }
+    contents.downloadURL(runtime.pdf.url);
   }
 
   findInPage(text: string, forward: boolean, findNext: boolean): void {
@@ -4650,8 +4696,18 @@ class BrowserController {
     view.webContents.setWindowOpenHandler((details) => openFromPage(details));
     view.webContents.on('did-create-window', (child) => adoptPopupWindow(child, (window) => (details) => openFromPage(details, window)));
     guardPageNavigation(view.webContents);
+    view.webContents.on('will-frame-navigate', (event) => {
+      if (event.url.startsWith('chrome-extension:') && tab.workspaceId === 'banking') {
+        event.preventDefault();
+      }
+    });
     view.webContents.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
       if (!isMainFrame) return;
+      if (!_isInPlace) {
+        if (runtime.pdf?.mode === 'protected') this.protectedPdf.close();
+        runtime.pdf = undefined;
+        if (runtime.inlinePdfUrl !== url) runtime.inlinePdfUrl = undefined;
+      }
       if (isProtectedPage(url)) this.endSplitForTab(tabId, tab.accountSpaceId);
       if (runtime.problem && !this.overlayOpen && this.activeTab(this.store.get()).id === tabId) view.setVisible(true);
       runtime.navigationGeneration += 1;
@@ -4667,6 +4723,7 @@ class BrowserController {
     });
     view.webContents.on('did-fail-load', (_event, code, _description, url, isMainFrame) => {
       if (!isMainFrame || !isAllowedRemoteUrl(url)) return;
+      if (runtime.pdf?.mode === 'protected' && runtime.pdf.url === url) return;
       const problem = problemForFailedLoad(code, runtime.certificateError);
       if (problem) this.markTabProblem(tabId, problem, url);
     });
@@ -4874,6 +4931,30 @@ class BrowserController {
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
     });
+    ses.webRequest.onHeadersReceived((details, callback) => {
+      if (details.resourceType !== 'mainFrame' && details.resourceType !== 'subFrame') { callback({}); return; }
+      const runtime = details.webContentsId === undefined ? undefined : this.contentsTabs.get(details.webContentsId);
+      const protectedDocument = protectedWorkspace;
+      if (!pdfResponse(details.responseHeaders)) {
+        callback(protectedDocument ? { responseHeaders: blockInlinePdf(details.responseHeaders) } : {});
+        return;
+      }
+      if (details.resourceType === 'mainFrame' && runtime && isAllowedRemoteUrl(details.url)) {
+        runtime.pdf = { url: details.url, mode: protectedDocument ? 'protected' : 'native', canOpen: details.method === 'GET' };
+        if (protectedDocument) {
+          runtime.view?.setVisible(false);
+          callback({ cancel: true });
+        } else if (runtime.inlinePdfUrl === details.url) {
+          const responseHeaders = { ...details.responseHeaders };
+          const disposition = Object.keys(responseHeaders).find((key) => key.toLowerCase() === 'content-disposition') ?? 'Content-Disposition';
+          responseHeaders[disposition] = ['inline'];
+          callback({ responseHeaders });
+        } else callback({});
+        queueMicrotask(() => { if (!this.window.isDestroyed()) { this.applyLayout(); this.broadcast(); } });
+        return;
+      }
+      callback({ cancel: protectedDocument });
+    });
     ses.webRequest.onCompleted((details) => {
       if (details.statusCode >= 400) this.recordNetworkIssue(details);
     });
@@ -4976,7 +5057,8 @@ class BrowserController {
     if (state.activeWorkspaceId === 'banking') this.temporaryBrowsing.close();
     const tab = this.activeTab(state);
     const locked = state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked;
-    if (!locked && !tab.isHome && !tab.restorePaused && !this.runtimeTabs.get(tab.id)?.problem && this.startupTabRecovery?.accountSpaceId !== tab.accountSpaceId && isAllowedRemoteUrl(tab.url)) {
+    if (!locked && !tab.isHome && !tab.restorePaused && !this.runtimeTabs.get(tab.id)?.problem
+      && this.runtimeTabs.get(tab.id)?.pdf?.mode !== 'protected' && this.startupTabRecovery?.accountSpaceId !== tab.accountSpaceId && isAllowedRemoteUrl(tab.url)) {
       const view = this.ensureView(tab.id);
       const runtime = this.runtimeTabs.get(tab.id);
       if (runtime) runtime.memorySaver.lastVisibleAt = Date.now();
@@ -5092,6 +5174,7 @@ class BrowserController {
   }
 
   private hideAllViews(): void {
+    this.protectedPdf.close();
     this.fillPicker.close();
     for (const runtime of this.runtimeTabs.values()) {
       if (runtime.view?.getVisible()) runtime.memorySaver.lastVisibleAt = Date.now();
@@ -5159,6 +5242,7 @@ class BrowserController {
       this.settleBroadcast = true;
     }
     if (!runtime?.view || active.isHome) return;
+    if (runtime.pdf?.mode === 'protected') { runtime.view.setVisible(false); return; }
     runtime.view.setBounds(panes && pair ? (pair.leftTabId === active.id ? panes.left : panes.right) : bounds);
     if (!otherId || !panes || !pair) return;
     const other = state.tabs.find((item) => item.id === otherId)!;
@@ -5628,6 +5712,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:reopen-recent-tab', (_event, id: string) => controller!.reopenClosedTab(id));
   handle('browser:zoom', (_event, direction: 'in' | 'out' | 'reset') => controller!.zoom(direction));
   handle('browser:print', () => controller!.print());
+  handle('pdf:open', () => controller!.openPdfInTab());
+  handle('pdf:save', () => controller!.savePdf());
   handle('browser:find', (_event, text: string, forward: boolean, findNext: boolean) => controller!.findInPage(text, forward, findNext));
   handle('browser:stop-find', () => controller!.stopFindInPage());
   handle('browser:set-tab-muted', (_event, tabId: string, muted: boolean) => controller!.setTabMuted(tabId, muted));
