@@ -29,10 +29,22 @@ export const bridgeMethodSchema = z.enum([
   'server.discover', 'server.status', 'server.start', 'server.stop', 'server.restart',
   'inspect.page', 'inspect.open-source',
   'test.configuration', 'test.run', 'test.cancel', 'test.rerun', 'test.save-artifact',
-  'ai.handoff', 'ai.apply-edits',
+  'ai.handoff', 'ai.apply-edits', 'ai.review-patch', 'ai.apply-patch', 'ai.undo-patch', 'ai.rerun-patch',
   'reports.list', 'reports.search', 'reports.get', 'reports.delete', 'reports.clear', 'reports.open', 'reports.retention',
 ]);
 export type BridgeMethod = z.infer<typeof bridgeMethodSchema>;
+
+const patchPathSchema = z.string().min(1).max(500).refine((path) => path.split('/').every((segment) =>
+  /^[^.:\\\u0000-\u001f][^:\\\u0000-\u001f]*$/.test(segment) && !/[. ]$/.test(segment) && !/^(?:node_modules|dist|build)$/i.test(segment)));
+export const reviewedPatchInputSchema = z.object({
+  edits: z.array(z.object({ path: patchPathSchema, newText: z.string().max(100_000).refine((value) => !value.includes('\0')) }).strict()).min(1).max(12),
+  reportId: z.string().uuid().optional(),
+}).strict().refine(({ edits }) => new Set(edits.map(({ path }) => path.toLowerCase())).size === edits.length
+  && new TextEncoder().encode(JSON.stringify(edits)).byteLength <= 100_000, 'Use distinct workspace files and a patch under 100 kB');
+export const reviewedPatchResultSchema = z.object({
+  id: z.string().uuid(), files: z.array(patchPathSchema).min(1).max(12), reportId: z.string().uuid().optional(),
+}).strict();
+export type ReviewedPatchResult = z.infer<typeof reviewedPatchResultSchema>;
 
 export const projectSummarySchema = z.object({
   id: z.string().min(8).max(128), name: z.string().min(1).max(200), path: z.string().min(1).max(2_000),

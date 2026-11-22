@@ -82,12 +82,13 @@ function siteConnectionStatus(tab: BrowserTab, host: string) {
     detail: `${host} is served from this computer without encryption. Use it only for your own development work.` };
 }
 
-export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, keepSiteAwake, onClose, onOpenPrivacy, onResetZoom, onToggleDeveloperTools }: {
+export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, keepSiteAwake, wordPressSave, onClose, onOpenPrivacy, onResetZoom, onToggleDeveloperTools }: {
   anchor: HTMLElement | null;
   tab: BrowserTab;
   account: AccountSpaceSummary;
   trackerBlocking: boolean;
   keepSiteAwake?: { enabled: boolean; toggle: () => void };
+  wordPressSave?: { enabled: boolean; toggle: () => void };
   onClose: () => void;
   onOpenPrivacy: () => void;
   onResetZoom: () => void;
@@ -116,6 +117,8 @@ export function SiteInfoMenu({ anchor, tab, account, trackerBlocking, keepSiteAw
       <MenuSeparator />
       {keepSiteAwake && <MenuItem icon={Moon} role="menuitemcheckbox" checked={keepSiteAwake.enabled} keepOpen
         label="Keep this site awake" onSelect={keepSiteAwake.toggle} />}
+      {wordPressSave && <MenuItem icon={LockKeyhole} role="menuitemcheckbox" checked={wordPressSave.enabled} keepOpen
+        label="Offer to save WordPress logins" onSelect={wordPressSave.toggle} />}
       {zoom !== 100 && <MenuItem icon={Globe2} label={`Reset view (${zoom}%)`} onSelect={onResetZoom} />}
       {!tab.isHome && <MenuItem icon={Code2} label="Developer tools" shortcut="F12" disabled={!tab.developerToolsAllowed} onSelect={onToggleDeveloperTools} />}
       <MenuItem icon={ScrollText} label="Privacy log" onSelect={onOpenPrivacy} />

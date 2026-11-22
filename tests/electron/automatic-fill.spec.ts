@@ -19,6 +19,8 @@ let server: Server;
 let targetOrigin: string;
 let serviceOrigin: string;
 let fixtureEnvelope: VaultEnvelope;
+let acceptWordPress = false;
+let wordPressPosts = 0;
 const fixtureId = '00000000-0000-4000-8000-000000000001';
 const fixtureDeviceToken = ['mvd', fixtureId, 'a'.repeat(43)].join('_');
 
@@ -51,6 +53,8 @@ async function settledForm(target: string): Promise<{ username: string; password
 }
 
 test.beforeEach(async () => {
+  acceptWordPress = false;
+  wordPressPosts = 0;
   userDataPath = mkdtempSync(join(tmpdir(), 'private-browser-autofill-'));
   const keyPath = join(userDataPath, 'fixture-key.pem');
   const certPath = join(userDataPath, 'fixture-cert.pem');
@@ -76,6 +80,39 @@ test.beforeEach(async () => {
     }
     const sharedHead = '<!doctype html><meta charset="utf-8"><title>Autofill fixture</title>';
     response.setHeader('Content-Type', 'text/html');
+    if (request.url === '/wp-login.php') {
+      if (request.method === 'POST') wordPressPosts++;
+      if (request.method === 'POST' && acceptWordPress) {
+        request.resume();
+        response.writeHead(302, { Location: '/wp-admin/', 'Set-Cookie': [
+          'wordpress_logged_in_' + '0'.repeat(32) + '=fixture; Path=/; Secure; HttpOnly',
+          'wordpress_sec_' + '0'.repeat(32) + '=fixture; Path=/wp-admin; Secure; HttpOnly',
+        ] });
+        response.end();
+        return;
+      }
+      if (request.method === 'POST') request.resume();
+      response.end(`${sharedHead}<form id="loginform" method="post" action="/wp-login.php"><input name="log" autocomplete="username"><input name="pwd" type="password" autocomplete="current-password"><button type="submit">Sign in</button></form>`);
+      return;
+    }
+    if (request.url === '/wp-admin/') {
+      response.end('<title>Signed in fixture</title><p>Local account page</p>');
+      return;
+    }
+    if (request.url === '/wp-admin/profile.php' && request.method === 'POST') {
+      request.resume();
+      wordPressPosts++;
+      response.writeHead(302, { Location: '/wp-admin/profile.php?updated=true', 'Set-Cookie': [
+        'wordpress_logged_in_' + '0'.repeat(32) + '=updated-fixture; Path=/; Secure; HttpOnly',
+        'wordpress_sec_' + '0'.repeat(32) + '=updated-fixture; Path=/wp-admin; Secure; HttpOnly',
+      ] });
+      response.end();
+      return;
+    }
+    if (request.url?.startsWith('/wp-admin/profile.php')) {
+      response.end(`${sharedHead}<form id="your-profile" method="post" action="/wp-admin/profile.php"><input name="user_login" value="wordpress-user" readonly><input name="pass1" type="password" autocomplete="new-password"><input name="pass2" type="password" autocomplete="new-password"><button type="submit">Update profile</button></form>`);
+      return;
+    }
     if (request.url === '/login') {
       response.end(`${sharedHead}<main id="root"></main><script>
         window.__submitted = false;
@@ -129,6 +166,73 @@ test.beforeEach(async () => {
     ],
     env,
   });
+});
+
+test('offers to save only a verified WordPress sign-in and remembers the site opt-out', async () => {
+  application = await launchFixture();
+  const page = await application.firstWindow();
+  await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
+  const pairingWindowPromise = application.waitForEvent('window');
+  const paired = page.evaluate(() => window.privateBrowser.requestVaultPairing());
+  const pairing = await pairingWindowPromise;
+  await pairing.getByLabel('MyVault address').fill(serviceOrigin);
+  await pairing.getByLabel('One-time enrollment code').fill(['mve', fixtureId, 'b'.repeat(43)].join('_'));
+  await pairing.getByLabel('Master password').fill(MASTER_PASSWORD);
+  await pairing.getByRole('button', { name: 'Connect securely' }).click();
+  await expect(paired).resolves.toMatchObject({ lifecycle: 'unlocked' });
+  await application.evaluate(({ dialog }) => {
+    const fixture = { prompts: [] as string[] };
+    Reflect.set(globalThis, 'wordPressPromptFixture', fixture);
+    dialog.showMessageBox = (async (_owner: unknown, options: { message: string }) => {
+      fixture.prompts.push(options.message);
+      return { response: fixture.prompts.length === 1 ? 0 : 2, checkboxChecked: false };
+    }) as typeof dialog.showMessageBox;
+  });
+  const prompts = () => application!.evaluate(() => (Reflect.get(globalThis, 'wordPressPromptFixture') as { prompts: string[] }).prompts);
+  const url = targetOrigin + '/wp-login.php';
+  const profileUrl = targetOrigin + '/wp-admin/profile.php';
+  const openLogin = () => page.evaluate((address) => window.privateBrowser.navigate(address), url);
+  const submit = (value: string, changing = false) => application!.evaluate(async ({ webContents }, { address, value, changing }) => {
+    const contents = webContents.getAllWebContents().find((candidate) => candidate.getURL() === address)!;
+    const point = await contents.executeJavaScript(`(() => {
+      const changing = ${changing};
+      if (changing) {
+        document.querySelector('[name="pass1"]').value = ${JSON.stringify(value)};
+        document.querySelector('[name="pass2"]').value = ${JSON.stringify(value)};
+      } else {
+        document.querySelector('[name="log"]').value = 'wordpress-user';
+        document.querySelector('[name="pwd"]').value = ${JSON.stringify(value)};
+      }
+      const button = document.querySelector('button').getBoundingClientRect();
+      return { x: Math.round(button.x + button.width / 2), y: Math.round(button.y + button.height / 2) };
+    })()`);
+    contents.focus();
+    contents.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, ...point });
+    contents.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, ...point });
+  }, { address: changing ? profileUrl : url, value, changing });
+  await openLogin();
+  await page.evaluate(async () => {
+    const state = await window.privateBrowser.getState();
+    await window.privateBrowser.setWordPressSaveSite(state.activeTabId, state.wordPressSaveSite!.origin, true);
+  });
+  await submit('fixture-first-password');
+  await expect.poll(() => wordPressPosts).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then(({ tabs }) => tabs[0]?.loading))).toBe(false);
+  expect(await prompts()).toEqual([]);
+  await openLogin();
+  acceptWordPress = true;
+  await submit('fixture-first-password');
+  await expect.poll(prompts).toEqual(['Save login?']);
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.listVault().then(({ items }) => items.some((item) => item.username === 'wordpress-user')))).toBe(true);
+  await page.evaluate((address) => window.privateBrowser.navigate(address), profileUrl);
+  await submit('fixture-rotated-password', true);
+  await expect.poll(() => wordPressPosts).toBe(3);
+  await expect.poll(prompts).toEqual(['Save login?', 'Update saved login?']);
+  await openLogin();
+  await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then(({ wordPressSaveSite }) => wordPressSaveSite?.enabled))).toBe(false);
+  await page.evaluate(() => window.privateBrowser.switchWorkspace('development'));
+  await openLogin();
+  expect((await page.evaluate(() => window.privateBrowser.getState())).wordPressSaveSite).toBeUndefined();
 });
 
 test.afterEach(async () => {

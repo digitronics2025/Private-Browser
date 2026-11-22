@@ -616,6 +616,7 @@ export interface PrivacyEvent {
 
 export interface BrowserSnapshot {
   pdfDocument?: import('./pdf-preview.js').PdfDocumentStatus;
+  wordPressSaveSite?: { origin: string; enabled: boolean };
   browsingProtection?: BrowsingProtectionStatus | 'pending';
   memorySaverSite?: { origin: string; keptAwake: boolean };
   sessionLock?: 'windows' | 'idle';
@@ -900,7 +901,7 @@ export type DeveloperBridgeAction =
   | 'server.discover' | 'server.status' | 'server.start' | 'server.stop' | 'server.restart'
   | 'inspect.page' | 'inspect.open-source'
   | 'test.configuration' | 'test.run' | 'test.cancel' | 'test.rerun' | 'test.save-artifact'
-  | 'ai.handoff' | 'ai.apply-edits'
+  | 'ai.handoff' | 'ai.apply-edits' | 'ai.review-patch' | 'ai.apply-patch' | 'ai.undo-patch' | 'ai.rerun-patch'
   | 'reports.list' | 'reports.search' | 'reports.get' | 'reports.delete' | 'reports.clear' | 'reports.open' | 'reports.retention';
 
 export interface DeveloperPageInfo {
