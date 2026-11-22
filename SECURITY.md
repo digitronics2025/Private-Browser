@@ -269,15 +269,11 @@ credentials return a generic `404`. Responses disable caching and referrers and
 carry a restrictive Content Security Policy; the private token pages
 (`/download/<token>`) are `noindex`.
 
-Installers ship **without** an embedded download credential. The repository
-variable `PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN=true` builds a private
-single-user installer that bundles the shared client token; because
-distribution is public, **CI refuses to publish such a build** — it stays a
-GitHub artifact for the one machine it was made for, and the token must be
-rotated before that file goes anywhere else. The app copies the bundled token
-into OS-encrypted storage and removes the bootstrap file, even when OS
-encryption is unavailable. Production enrollment should issue revocable
-device-specific credentials instead.
+Installers use a credential-free bootstrap. The release owner selects Public
+or Private and can enroll or revoke individual devices. Each enrolled device
+stores its generated credential through Windows and sends it only to the
+configured update service. The Worker checks device access on the private feed
+and each private installer request. [Private download distribution](docs/private-download-distribution.md)
 
 The Worker checks R2 object size against D1 before publication and again before
 serving. The release workflow calculates SHA-256 from the exact installer

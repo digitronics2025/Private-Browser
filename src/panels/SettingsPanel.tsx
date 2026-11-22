@@ -170,6 +170,18 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       await checkUpdates(false);
     } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
   };
+  const enrollThisDevice = async () => {
+    try {
+      const status = await window.privateBrowser.enrollUpdateDevice();
+      if (!status) return;
+      setUpdateStatus(status);
+      setUpdateResult(null);
+      setUpdateForm({ endpoint: status.endpoint, accessToken: '' });
+      setEditingUpdates(false);
+      onToast('This device is enrolled for private downloads.');
+      await checkUpdates(false);
+    } catch (error) { onToast(error instanceof Error ? error.message : String(error), 'error'); }
+  };
   const openChromeImport = () => {
     setChromeResult(null);
     setChromeImportOpen(true);
@@ -292,6 +304,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       onOpenDownload={() => void window.privateBrowser.openUpdatePage().catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}
       onOpenHistory={() => void window.privateBrowser.openReleaseHistory().catch((error) => onToast(error instanceof Error ? error.message : String(error), 'error'))}
       onOpenDeveloper={() => void window.privateBrowser.newTab('development', 'https://dr-badawi-abdalsalam.com/')}
+      onEnroll={() => void enrollThisDevice()}
       onTogglePrivate={() => { setEditingUpdates((value) => !value); setUpdateForm((value) => ({ ...value, accessToken: '' })); }}
       onConfigure={configureUpdates}
       onFormChange={setUpdateForm}
@@ -446,12 +459,13 @@ interface UpdatesPageProps {
   onOpenHistory: () => void;
   onOpenDeveloper: () => void;
   onTogglePrivate: () => void;
+  onEnroll: () => void;
   onConfigure: (event: FormEvent) => void;
   onFormChange: (value: UpdateServiceInput) => void;
   onDisconnect: () => void;
 }
 
-function UpdatesPage({ status, result, error, checking, managed, editingPrivate, form, onBack, onCheck, onDownload, onCancel, onInstall, onOpenDownload, onOpenHistory, onOpenDeveloper, onTogglePrivate, onConfigure, onFormChange, onDisconnect }: UpdatesPageProps) {
+function UpdatesPage({ status, result, error, checking, managed, editingPrivate, form, onBack, onCheck, onDownload, onCancel, onInstall, onOpenDownload, onOpenHistory, onOpenDeveloper, onTogglePrivate, onEnroll, onConfigure, onFormChange, onDisconnect }: UpdatesPageProps) {
   const latest = result?.latest;
   const available = result?.state === 'available';
   const state = checking ? 'checking' : error ? 'error' : available ? 'available' : result ? 'current' : 'checking';
@@ -483,7 +497,7 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
       {managed && <ManagedInstallerStatus status={managed} />}
       {updateDiagnostic && <SafeDiagnostics reason={updateDiagnostic} />}
       <div className="updates-primary-actions">
-        {state === 'available' && !managed && <button className="updates-primary" onClick={onOpenDownload}><Download size={15} /> Open verified download</button>}
+        {state === 'available' && !managed && !status?.deviceEnrolled && <button className="updates-primary" onClick={onOpenDownload}><Download size={15} /> Open verified download</button>}
         {state === 'available' && managed && latest && <>
           {managed.phase === 'ready' && managed.version === latest.version
             ? <button className="updates-primary" onClick={onInstall}>Install when ready</button>
@@ -492,11 +506,11 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
               : null}
           {['preparing', 'downloading'].includes(managed.phase) && <button className="updates-secondary" onClick={onCancel}>Cancel download</button>}
           {managed.phase === 'failed' && <button className="updates-secondary" onClick={onCheck}><RefreshCw size={15} /> Check again</button>}
-          <button className="updates-secondary" onClick={onOpenDownload}><ExternalLink size={14} /> Release page</button>
+          {!status?.deviceEnrolled && <button className="updates-secondary" onClick={onOpenDownload}><ExternalLink size={14} /> Release page</button>}
         </>}
         {state === 'current' && <button className="updates-primary" onClick={onCheck}><RefreshCw size={15} /> Check again</button>}
         {state === 'error' && <button className="updates-primary" onClick={onCheck}><RefreshCw size={15} /> Try again</button>}
-        {state !== 'available' && state !== 'checking' && <button className="updates-secondary" onClick={onOpenDownload}><ExternalLink size={14} /> Release page</button>}
+        {state !== 'available' && state !== 'checking' && !status?.deviceEnrolled && <button className="updates-secondary" onClick={onOpenDownload}><ExternalLink size={14} /> Release page</button>}
       </div>
     </section>
 
@@ -511,7 +525,7 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
         <small>{state === 'available' ? 'WHAT CHANGED SINCE YOUR VERSION' : 'LATEST RELEASE HIGHLIGHTS'}</small>
         {state === 'available' && <p>Highlights from version {latest.version}. See release history for earlier versions.</p>}
         <p>{latest.releaseNotes || 'No highlights were published for this release.'}</p>
-        <button className="text-button" type="button" onClick={onOpenHistory}><ExternalLink size={14} /> Release history</button>
+        {!status?.deviceEnrolled && <button className="text-button" type="button" onClick={onOpenHistory}><ExternalLink size={14} /> Release history</button>}
       </div>
       <div className="release-checksum"><ShieldCheck size={14} /><div><small>SHA-256 CHECKSUM</small><code>{latest.sha256}</code></div></div>
       <p className="updates-verified-note">Private Browser remembers this checksum and verifies the downloaded installer before it can be opened.</p>
@@ -523,7 +537,7 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
     </section>
 
     <section className="updates-private-card">
-      <div className="updates-private-heading"><div><small>ADVANCED</small><strong>Private update service</strong><p>{status?.configured ? 'Using an encrypted access token for the private manifest.' : 'Public stable checks are active. A private service is optional.'}</p></div><span className={status?.configured ? 'connected' : ''}>{status?.configured ? 'Connected' : 'Public'}</span></div>
+      <div className="updates-private-heading"><div><strong>Private downloads</strong><p>{status?.deviceEnrolled ? 'Windows protects this device’s credential.' : status?.configured ? 'Using the configured access token.' : 'Use a one-time code from the release owner to enroll this device.'}</p></div><span className={status?.configured ? 'connected' : ''}>{status?.deviceEnrolled ? 'Device enrolled' : status?.configured ? 'Connected' : 'Public'}</span></div>
       {status?.error && <p className="updates-private-error">{status.error === 'configuration-corrupt' ? 'The saved private configuration is unreadable. Public checks remain available.' : 'Windows encryption is unavailable, so private credentials cannot be stored.'}</p>}
       {editingPrivate && <form className="update-form" onSubmit={onConfigure}>
         <input aria-label="Private update service URL" type="url" required placeholder="https://private-browser-downloads.example.workers.dev" value={form.endpoint} onChange={(event) => onFormChange({ ...form, endpoint: event.target.value })} />
@@ -531,6 +545,7 @@ function UpdatesPage({ status, result, error, checking, managed, editingPrivate,
         <button className="primary-button" type="submit"><LockKeyhole size={14} /> Encrypt and connect</button>
       </form>}
       <div className="update-actions">
+        {!status?.deviceEnrolled && <button type="button" onClick={onEnroll}>Enroll this device</button>}
         <button onClick={onTogglePrivate}>{editingPrivate ? 'Cancel' : status?.configured ? 'Change service' : 'Connect private service'}</button>
         {status?.configured && <button className="danger" onClick={onDisconnect}>Disconnect</button>}
       </div>

@@ -113,7 +113,6 @@
         "from": "build",
         "to": ".",
         "filter": [
-          "private-browser-update.json",
           "private-browser-bridge.vsix"
         ]
       },

@@ -277,6 +277,7 @@ const api = {
   testDefaultBrowser: (): Promise<void> => ipcRenderer.invoke('system:test-default-browser'),
   getUpdateService: (): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:status'),
   configureUpdateService: (input: UpdateServiceInput): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:configure', input),
+  enrollUpdateDevice: (): Promise<UpdateServiceStatus | undefined> => ipcRenderer.invoke('updates:enroll-device'),
   clearUpdateService: (): Promise<UpdateServiceStatus> => ipcRenderer.invoke('updates:clear'),
   checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check'),
   openUpdatePage: (): Promise<void> => ipcRenderer.invoke('updates:open-page'),

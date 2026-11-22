@@ -585,7 +585,7 @@ const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
   'browser:toggle-fullscreen', 'browser:toggle-tracker-blocking', 'developer:bridge-cancel-pairing', 'developer:bridge-pair', 'developer:bridge-projects',
   'developer:bridge-status', 'developer:capture-diagnostics', 'developer:clear-diagnostics', 'developer:install-extension',
   'google:clear-configuration', 'system:is-default-browser', 'system:open-default-browser-settings', 'system:test-default-browser', 'updates:check', 'updates:clear',
-  'updates:open-history', 'updates:open-page', 'updates:status', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review', 'vault:show-conflict-recovery',
+  'updates:open-history', 'updates:open-page', 'updates:status', 'updates:enroll-device', 'vault:acknowledge-recovery', 'vault:cleanup-legacy', 'vault:conflict-review', 'vault:show-conflict-recovery',
   'vault:clipboard-clear', 'vault:clipboard-deadline', 'vault:fill-readiness', 'vault:form-shape', 'vault:hello-disable', 'vault:hello-enable', 'vault:hello-unlock', 'vault:list', 'vault:lock',
   'vault:review-chrome-passwords',
   'vault:migrate-legacy', 'vault:migration-status', 'vault:reconnect', 'vault:request-pairing', 'vault:request-unlock',

@@ -985,6 +985,7 @@ export interface UpdateServiceInput {
 
 export interface UpdateServiceStatus {
   configured: boolean;
+  deviceEnrolled?: boolean;
   currentVersion: string;
   source: 'public' | 'private';
   endpoint: string;

@@ -50,10 +50,11 @@ jobs:
         shell: bash
         env:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
+          PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE: ${{ secrets.PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE }}
         run: |
           before=""
           if [[ -n "$PRIVATE_BROWSER_DOWNLOAD_URL" ]]; then
-            active="$(curl -fsS --max-time 20 --proto '=https' "${PRIVATE_BROWSER_DOWNLOAD_URL%/}/api/v1/releases/public/latest" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s).commitSha;if(/^[0-9a-f]{40}$/.test(v))process.stdout.write(v)}catch{}})' || true)"
+            active="$(node cloudflare/scripts/read-active-release.mjs | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=JSON.parse(s).commitSha;if(/^[0-9a-f]{40}$/.test(v))process.stdout.write(v)}catch{}})' || true)"
             if [[ -n "$active" ]] && git cat-file -e "${active}^{commit}" 2>/dev/null && git merge-base --is-ancestor "$active" "${{ github.sha }}"; then
               before="$active"
               echo "Comparing with the active release commit $active"
@@ -203,6 +204,7 @@ jobs:
         shell: pwsh
         env:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
+          PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE: ${{ secrets.PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE }}
         run: |
           $version = (node cloudflare/scripts/prepare-release-version.mjs).Trim()
           "Selected release version $version"
@@ -212,15 +214,6 @@ jobs:
         run: |
           $version = (node -p "require('./package.json').version").Trim()
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-      - name: Prepare private update bootstrap
-        env:
-          PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
-          PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
-          # Opt-in only. Unset (the default) builds an installer with no embedded
-          # credential; set the repository variable to "true" for a private
-          # single-user build, and rotate the token before distributing it.
-          PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN: ${{ vars.PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN }}
-        run: node cloudflare/scripts/write-update-bootstrap.mjs
       - name: Build hardened Windows installer
         env:
           # Optional repository secrets. electron-builder signs when both are
@@ -285,10 +278,17 @@ jobs:
           if ($installed -notcontains 'digitronics.private-browser-bridge') { throw 'Private Browser Bridge VSIX smoke install failed' }
       - name: Generate release metadata
         shell: pwsh
+        env:
+          CERTIFICATE_CONFIGURED: ${{ secrets.WINDOWS_CODE_SIGNING_CERTIFICATE != '' }}
+          PASSWORD_CONFIGURED: ${{ secrets.WINDOWS_CODE_SIGNING_PASSWORD != '' }}
+          EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256 }}
         run: |
           $installer = Get-ChildItem release\*.exe | Select-Object -First 1
           $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
           "$hash  $($installer.Name)" | Set-Content release\SHA256SUMS.txt
+          if ($env:CERTIFICATE_CONFIGURED -ne $env:PASSWORD_CONFIGURED) { throw 'Windows code signing is only partly configured.' }
+          $signing = $env:CERTIFICATE_CONFIGURED -eq 'true'
+          ./cloudflare/scripts/record-windows-publisher.ps1 -Installer $installer.FullName -Sha256 $hash -Destination release/PUBLISHER.json -SigningConfigured:$signing -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256
           "${{ steps.packaged-version.outputs.version }}" | Set-Content release\VERSION.txt -NoNewline
           npm sbom --sbom-format cyclonedx | Out-File -Encoding utf8 release\SBOM.cdx.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -298,6 +298,7 @@ jobs:
           path: |
             release/*.exe
             release/SHA256SUMS.txt
+            release/PUBLISHER.json
             release/VERSION.txt
             release/SBOM.cdx.json
           if-no-files-found: error
@@ -365,16 +366,10 @@ jobs:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
           PRIVATE_BROWSER_ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
           PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
-          PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN: ${{ vars.PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN }}
+          PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE: ${{ secrets.PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE }}
         run: |
-          # An installer carrying the shared download token is a private build.
-          # Distribution is public, so it must never become the active release.
-          if [[ "$PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN" == "true" ]]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::This installer embeds the shared download token (PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN=true); it is kept as a private artifact and not published."
-            exit 0
-          fi
-          if [[ "${{ needs.changes.outputs.app }}" == "true" && -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" && ${#PRIVATE_BROWSER_DOWNLOAD_TOKEN} -ge 32 ]]; then
+          if [[ "${{ needs.changes.outputs.app }}" == "true" && -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$PRIVATE_BROWSER_DOWNLOAD_URL" && -n "$PRIVATE_BROWSER_ADMIN_API_KEY" && ( ${#PRIVATE_BROWSER_DOWNLOAD_TOKEN} -ge 32 || -n "$PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE" ) ]]; then
+            node cloudflare/scripts/read-active-release.mjs >/dev/null
             echo "ready=true" >> "$GITHUB_OUTPUT"
           elif [[ "${{ needs.changes.outputs.app }}" != "true" ]]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
@@ -388,8 +383,9 @@ jobs:
         shell: bash
         env:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
+          PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE: ${{ secrets.PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE }}
         run: |
-          curl -fsS --max-time 20 --proto '=https' "${PRIVATE_BROWSER_DOWNLOAD_URL%/}/api/v1/releases/public/latest" |
+          node cloudflare/scripts/read-active-release.mjs |
           node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{
             const v=JSON.parse(s);
             if(/^\d+\.\d+\.\d+$/.test(v.version)&&Number.isSafeInteger(v.buildNumber))console.log(`id=stable-${v.version}-${v.buildNumber}`);
@@ -423,9 +419,13 @@ jobs:
         run: |
           candidate_dir="$(mktemp -d "$RUNNER_TEMP/private-browser-candidate.XXXXXXXX")"
           candidate_file="$candidate_dir/candidate.exe"
-          trap 'rm -f -- "$candidate_file"; rmdir -- "$candidate_dir"' EXIT
+          trap 'rm -f -- "$candidate_file" "$candidate_dir/publisher.json"; rmdir -- "$candidate_dir"' EXIT
           npx wrangler r2 object get "private-browser-releases/$OBJECT_KEY" --file "$candidate_file" --remote
           receipt="$(node cloudflare/scripts/verify-release-candidate.mjs "$INSTALLER_PATH" "$candidate_file")"
+          node --input-type=module -e 'import { readFileSync } from "node:fs"; import { parsePublisherReceipt } from "./cloudflare/src/publisher-receipt.mjs"; const receipt = JSON.parse(process.argv[1]); const publisher = JSON.parse(readFileSync("release/PUBLISHER.json", "utf8").replace(/^\uFEFF/, "")); if (!parsePublisherReceipt(publisher, receipt.sha256)) throw new Error("Windows publisher evidence does not match the installer");' "$receipt"
+          npx wrangler r2 object put "private-browser-releases/${OBJECT_KEY}.publisher.json" --file release/PUBLISHER.json --content-type application/json --remote
+          npx wrangler r2 object get "private-browser-releases/${OBJECT_KEY}.publisher.json" --file "$candidate_dir/publisher.json" --remote
+          cmp --silent release/PUBLISHER.json "$candidate_dir/publisher.json"
           printf '### Private installer candidate verified\n\n```json\n%s\n```\n' "$receipt" >> "$GITHUB_STEP_SUMMARY"
           echo "verified=true" >> "$GITHUB_OUTPUT"
       - name: Publish D1 release metadata
@@ -442,6 +442,7 @@ jobs:
         env:
           PRIVATE_BROWSER_DOWNLOAD_URL: ${{ vars.PRIVATE_BROWSER_DOWNLOAD_URL }}
           PRIVATE_BROWSER_DOWNLOAD_TOKEN: ${{ secrets.PRIVATE_BROWSER_DOWNLOAD_TOKEN }}
+          PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE: ${{ secrets.PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE }}
           PRIVATE_BROWSER_ADMIN_API_KEY: ${{ secrets.PRIVATE_BROWSER_ADMIN_API_KEY }}
           PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.id }}
           INSTALLER_PATH: ${{ steps.upload.outputs.installer }}

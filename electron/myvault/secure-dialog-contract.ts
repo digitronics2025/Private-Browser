@@ -1,4 +1,4 @@
-export type SecureDialogKind = 'unlock' | 'enroll-hello' | 'edit-login' | 'update-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair' | 'export-browsing' | 'restore-browsing' | 'export-bookmark-pair' | 'import-bookmark-pair';
+export type SecureDialogKind = 'unlock' | 'enroll-hello' | 'edit-login' | 'update-login' | 'confirm-delete' | 'confirm-fill' | 'confirm-capture' | 'confirm-replace' | 'confirm-cleanup' | 'pair' | 'export-browsing' | 'restore-browsing' | 'export-bookmark-pair' | 'import-bookmark-pair' | 'enroll-download-device';
 
 export const SECURE_CREDENTIAL_PRESETS = {
   password: { label: 'Password, 24 characters with symbols', kind: 'password', length: 24, symbols: true },
@@ -14,7 +14,8 @@ export interface UnlockDialogValue { password: string }
 export interface EditLoginDialogValue { title: string; url: string; username: string; password?: string; totpSecret?: string }
 export interface ConfirmDeleteDialogValue { confirmed: true }
 export interface PairDialogValue { endpoint: string; enrollmentCode: string; password: string }
-export type SecureDialogValue = UnlockDialogValue | EditLoginDialogValue | ConfirmDeleteDialogValue | PairDialogValue;
+export interface DownloadEnrollmentValue { code: string }
+export type SecureDialogValue = UnlockDialogValue | EditLoginDialogValue | ConfirmDeleteDialogValue | PairDialogValue | DownloadEnrollmentValue;
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid secure dialog submission');
@@ -47,6 +48,11 @@ export function normalizeAuthenticatorSecret(value: string | undefined): string 
 
 export function parseSecureDialogValue(kind: SecureDialogKind, value: unknown): SecureDialogValue {
   const input = record(value);
+  if (kind === 'enroll-download-device') {
+    const code = textField(input, 'code', 128)!.trim();
+    if (!/^pbenr_[a-f0-9-]{36}_[A-Za-z0-9_-]{43}$/.test(code)) throw new Error('Invalid download enrollment code');
+    return { code };
+  }
   if (kind === 'export-browsing' || kind === 'restore-browsing' || kind === 'export-bookmark-pair' || kind === 'import-bookmark-pair') {
     const password = textField(input, 'password', 1_024)!;
     if (password.length < 16 || ((kind === 'export-browsing' || kind === 'export-bookmark-pair') && input.confirmPassword !== password)) throw new Error('Invalid recovery passphrase');

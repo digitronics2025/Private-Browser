@@ -303,6 +303,7 @@ type LocalDownload = DownloadEntry & { savePath?: string; expectedInstaller?: Ex
 class BrowserController {
   private wordPressPrompt?: AbortController;
   private browsingPrivacyBusy = false;
+  private downloadEnrollment?: AbortController;
   private bookmarkSyncRequest?: AbortController;
   private browsingDataReview?: { review: BrowsingDataReview; initiator: AccountSpaceId; visits: Set<string>; expiresAt: number };
   private pendingBackupRequest?: { accountSpaceId: AccountSpaceId; operationId: string };
@@ -367,6 +368,7 @@ class BrowserController {
     directory: join(app.getPath('userData'), 'update-installers'),
     currentVersion: app.getVersion(),
     check: () => this.checkForUpdates(),
+    request: (input, init) => this.updates.fetchInstaller(input, init),
     canUse: () => process.platform === 'win32' && Boolean(this.activeDownloadAccount()) && !this.store.isReadOnly(),
     openInstaller: (path) => shell.openPath(path),
     notify: () => this.broadcast(),
@@ -2115,6 +2117,7 @@ class BrowserController {
   }
 
   private enforceSessionLock(): void {
+    this.downloadEnrollment?.abort();
     // Hide first. Subsequent IPC cannot reopen content while the lock marker is set.
     this.hideAllViews();
     this.temporaryBrowsing.close();
@@ -4923,13 +4926,32 @@ class BrowserController {
     return this.updates.status(app.getVersion());
   }
 
+  async requestDownloadEnrollment() {
+    const account = this.activeDownloadAccount();
+    if (!account || this.store.isReadOnly()) throw new Error('Use an unlocked regular Account Space to enroll this device.');
+    if (this.downloadEnrollment) throw new Error('Finish the current download enrollment first.');
+    const operation = new AbortController();
+    this.downloadEnrollment = operation;
+    try {
+      const value = await this.secureDialogs.open('enroll-download-device');
+      if (!value || !('code' in value)) return undefined;
+      operation.signal.throwIfAborted();
+      if (this.activeDownloadAccount() !== account) throw new Error('The Account Space changed. Start enrollment again.');
+      const result = await this.updates.enrollDevice(value.code, app.getVersion(), operation.signal);
+      this.addPrivacyEvent('vault', 'Private download device enrolled', 'Windows protects this device’s update credential', account);
+      return result;
+    } finally { if (this.downloadEnrollment === operation) this.downloadEnrollment = undefined; }
+  }
+
   configureUpdateService(input: UpdateServiceInput) {
+    if (this.downloadEnrollment) throw new Error('Finish the current download enrollment first.');
     const status = this.updates.configure(input, app.getVersion());
     this.addPrivacyEvent('vault', 'Download service connected', status.endpoint ?? 'Encrypted update service');
     return status;
   }
 
   clearUpdateService() {
+    if (this.downloadEnrollment) throw new Error('Finish the current download enrollment first.');
     const status = this.updates.clear(app.getVersion());
     this.addPrivacyEvent('vault', 'Download service disconnected', 'Encrypted access token removed');
     return status;
@@ -4942,6 +4964,7 @@ class BrowserController {
   }
 
   async openUpdatePage(): Promise<void> {
+    if (this.getUpdateService().deviceEnrolled) throw new Error('Download the verified private installer from App updates.');
     const result = await this.checkForUpdates();
     await this.newTab('development', result.latest.downloadPageUrl);
   }
@@ -5708,6 +5731,7 @@ class BrowserController {
 
   private hideAllViews(): void {
     this.popupReview.cancel();
+    this.downloadEnrollment?.abort();
     this.bookmarkSyncRequest?.abort();
     this.bookmarkSync.clearReview();
     this.notesDraft = undefined;
@@ -6372,6 +6396,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('system:test-default-browser', () => controller!.testDefaultBrowser());
   handle('updates:status', () => controller!.getUpdateService());
   handle('updates:configure', (_event, input: UpdateServiceInput) => controller!.configureUpdateService(input));
+  handle('updates:enroll-device', () => controller!.requestDownloadEnrollment());
   handle('updates:clear', () => controller!.clearUpdateService());
   handle('updates:check', () => controller!.checkForUpdates());
   handle('updates:open-page', () => controller!.openUpdatePage());

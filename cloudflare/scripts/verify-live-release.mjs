@@ -1,16 +1,23 @@
 import { createHash } from 'node:crypto';
-import { createReadStream, statSync } from 'node:fs';
-import { basename } from 'node:path';
+import { createReadStream, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
+import { readDistributionMode, releaseVerifyDevice } from './read-active-release.mjs';
+import { parsePublisherReceipt } from '../src/publisher-receipt.mjs';
 
 const [installerPath] = process.argv.slice(2);
 const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
-const accessToken = process.env.PRIVATE_BROWSER_DOWNLOAD_TOKEN;
+const mode = await readDistributionMode(endpoint);
+const legacyToken = process.env.PRIVATE_BROWSER_DOWNLOAD_TOKEN;
+const accessToken = mode === 'private' ? releaseVerifyDevice() : legacyToken || releaseVerifyDevice();
 if (!installerPath || !endpoint || !accessToken) throw new Error('Live release verification is not configured');
 
 const expectedSize = statSync(installerPath).size;
 const expectedHash = await hashFile(installerPath);
 const expectedFilename = basename(installerPath);
+const publisher = parsePublisherReceipt(JSON.parse(readFileSync(join(dirname(installerPath), 'PUBLISHER.json'), 'utf8').replace(/^\uFEFF/, '')), expectedHash);
+assert(publisher, 'Windows publisher evidence does not match the installer');
+const publisherStatus = `data-publisher-status="${publisher.status}"`;
 
 await expectStatus(`${endpoint}/update.json`, 404);
 await expectStatus(`${endpoint}/update.json`, 404, { authorization: 'Bearer invalid-test-token' });
@@ -21,37 +28,54 @@ const manifestResponse = await fetch(`${endpoint}/update.json`, {
 });
 assert(manifestResponse.status === 200, `Authenticated manifest returned ${manifestResponse.status}`);
 const manifest = await manifestResponse.json();
+const binaryUrl = new URL(manifest.downloadUrl);
+const pageUrl = new URL(manifest.downloadPageUrl);
+assert(binaryUrl.origin === endpoint && binaryUrl.pathname === '/download/latest.exe' && !binaryUrl.username && !binaryUrl.password && !binaryUrl.hash, 'The installer URL does not match the release service');
+assert(pageUrl.origin === endpoint && pageUrl.pathname === '/download' && !pageUrl.username && !pageUrl.password && !pageUrl.hash, 'The page URL does not match the release service');
 if (process.env.GITHUB_SHA) assert(manifest.commitSha === process.env.GITHUB_SHA, 'Manifest revision does not match the published commit');
 assert(manifest.filename === expectedFilename, 'Manifest filename does not match the installer');
 assert(manifest.sizeBytes === expectedSize, 'Manifest size does not match the installer');
 assert(manifest.sha256 === expectedHash, 'Manifest checksum does not match the installer');
 
-const pageResponse = await fetch(manifest.downloadPageUrl, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
-assert(pageResponse.status === 200, `Signed download page returned ${pageResponse.status}`);
-const page = await pageResponse.text();
-assert(page.includes(manifest.version) && page.includes(expectedHash), 'Download page metadata is incomplete');
+/** @type {Record<string, string>} */
+const binaryAuthorization = mode === 'private' ? { authorization: `Bearer ${accessToken}` } : {};
+if (mode === 'private') {
+  for (const route of ['/', '/download', '/api/v1/releases/public/latest']) await expectStatus(`${endpoint}${route}`, 404);
+  await expectStatus(manifest.downloadUrl, 404);
+  if (legacyToken) await expectStatus(`${endpoint}/update.json`, 404, { authorization: `Bearer ${legacyToken}` });
+} else {
+  const pageResponse = await fetch(manifest.downloadPageUrl, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+  assert(pageResponse.status === 200, `Signed download page returned ${pageResponse.status}`);
+  const page = await pageResponse.text();
+  assert(page.includes(manifest.version) && page.includes(expectedHash), 'Download page metadata is incomplete');
+  assert(page.includes(publisherStatus), 'Download page omitted the verified Windows publisher status');
 
-for (const publicPath of ['/', '/download']) {
-  const publicPageResponse = await fetch(`${endpoint}${publicPath}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
-  assert(publicPageResponse.status === 200, `Public download page ${publicPath} returned ${publicPageResponse.status}`);
-  const cacheDirectives = (publicPageResponse.headers.get('cache-control') ?? '').split(',').map((value) => value.trim().toLowerCase());
-  assert(cacheDirectives.includes('no-store'), `Public download page ${publicPath} is cacheable`);
-  assert(publicPageResponse.headers.get('x-robots-tag') === 'index, follow', `Public download page ${publicPath} is not indexable`);
-  const publicPage = await publicPageResponse.text();
-  assert(publicPage.includes('Download for Windows'), `Public download page ${publicPath} is missing its primary action`);
-  assert(publicPage.includes(manifest.version) && publicPage.includes(expectedHash), `Public download page ${publicPath} metadata is incomplete`);
-  assert(/href="\/download\/latest\.exe\?expires=\d+&amp;signature=[A-Za-z0-9_-]+"/.test(publicPage), `Public download page ${publicPath} is missing its signed installer link`);
-  assert(!publicPage.includes(accessToken), `Public download page ${publicPath} exposed its access token`);
+  for (const publicPath of ['/', '/download']) {
+    const publicPageResponse = await fetch(`${endpoint}${publicPath}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    assert(publicPageResponse.status === 200, `Public download page ${publicPath} returned ${publicPageResponse.status}`);
+    const cacheDirectives = (publicPageResponse.headers.get('cache-control') ?? '').split(',').map((value) => value.trim().toLowerCase());
+    assert(cacheDirectives.includes('no-store'), `Public download page ${publicPath} is cacheable`);
+    assert(publicPageResponse.headers.get('x-robots-tag') === 'index, follow', `Public download page ${publicPath} is not indexable`);
+    const publicPage = await publicPageResponse.text();
+    assert(publicPage.includes('Download for Windows'), `Public download page ${publicPath} is missing its primary action`);
+    assert(publicPage.includes(manifest.version) && publicPage.includes(expectedHash), `Public download page ${publicPath} metadata is incomplete`);
+    assert(/href="\/download\/latest\.exe\?expires=\d+&amp;signature=[A-Za-z0-9_-]+"/.test(publicPage), `Public download page ${publicPath} is missing its signed installer link`);
+    assert(publicPage.includes(publisherStatus), "Public download page omitted the Windows publisher status");
+    assert(!publicPage.includes(accessToken), `Public download page ${publicPath} exposed its access token`);
+  }
+
+  if (legacyToken) {
+    const stablePageResponse = await fetch(`${endpoint}/download/${encodeURIComponent(legacyToken)}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+    assert(stablePageResponse.status === 200, `Stable install page returned ${stablePageResponse.status}`);
+    const stablePage = await stablePageResponse.text();
+    assert(stablePage.includes('Download for Windows') && stablePage.includes(expectedHash), 'Stable install page metadata is incomplete');
+    assert(stablePage.includes(publisherStatus), 'Stable download page omitted the verified Windows publisher status');
+    assert(!stablePage.includes(legacyToken), 'Stable install page exposed its access token');
+    await expectStatus(`${endpoint}/download/invalid-private-browser-token-000000`, 404);
+  }
 }
 
-const stablePageResponse = await fetch(`${endpoint}/download/${encodeURIComponent(accessToken)}`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
-assert(stablePageResponse.status === 200, `Stable install page returned ${stablePageResponse.status}`);
-const stablePage = await stablePageResponse.text();
-assert(stablePage.includes('Download for Windows') && stablePage.includes(expectedHash), 'Stable install page metadata is incomplete');
-assert(!stablePage.includes(accessToken), 'Stable install page exposed its access token');
-await expectStatus(`${endpoint}/download/invalid-private-browser-token-000000`, 404);
-
-const head = await fetch(manifest.downloadUrl, { method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(30_000) });
+const head = await fetch(manifest.downloadUrl, { method: 'HEAD', headers: binaryAuthorization, redirect: 'error', signal: AbortSignal.timeout(30_000) });
 assert(head.status === 200, `Installer HEAD returned ${head.status}`);
 assert(Number(head.headers.get('content-length')) === expectedSize, 'Installer HEAD size is incorrect');
 assert(head.headers.get('accept-ranges') === 'bytes', 'Installer does not advertise byte ranges');
@@ -61,10 +85,10 @@ assert(head.headers.get('x-checksum-sha256') === expectedHash, 'Installer checks
 await expectRange(manifest.downloadUrl, 'bytes=0-99', 0, 99, expectedSize);
 await expectRange(manifest.downloadUrl, `bytes=${expectedSize - 128}-`, expectedSize - 128, expectedSize - 1, expectedSize);
 await expectRange(manifest.downloadUrl, 'bytes=-128', expectedSize - 128, expectedSize - 1, expectedSize);
-const unsatisfied = await fetch(manifest.downloadUrl, { headers: { range: `bytes=${expectedSize}-` }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
+const unsatisfied = await fetch(manifest.downloadUrl, { headers: { ...binaryAuthorization, range: `bytes=${expectedSize}-` }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
 assert(unsatisfied.status === 416 && unsatisfied.headers.get('content-range') === `bytes */${expectedSize}`, 'Unsatisfied range response is incorrect');
 
-const fullResponse = await fetch(manifest.downloadUrl, { redirect: 'error', signal: AbortSignal.timeout(180_000) });
+const fullResponse = await fetch(manifest.downloadUrl, { headers: binaryAuthorization, redirect: 'error', signal: AbortSignal.timeout(180_000) });
 assert(fullResponse.status === 200, `Full installer download returned ${fullResponse.status}`);
 const full = await hashBody(fullResponse);
 assert(full.size === expectedSize && full.sha256 === expectedHash, 'Full installer download checksum failed');
@@ -73,7 +97,7 @@ const midpoint = Math.floor(expectedSize / 2);
 const resumedHash = createHash('sha256');
 let resumedSize = 0;
 for (const [start, end] of [[0, midpoint - 1], [midpoint, expectedSize - 1]]) {
-  const response = await fetch(manifest.downloadUrl, { headers: { range: `bytes=${start}-${end}` }, redirect: 'error', signal: AbortSignal.timeout(180_000) });
+  const response = await fetch(manifest.downloadUrl, { headers: { ...binaryAuthorization, range: `bytes=${start}-${end}` }, redirect: 'error', signal: AbortSignal.timeout(180_000) });
   assert(response.status === 206, `Resumed download range returned ${response.status}`);
   assert(response.body, 'Resumed download response has no body');
   for await (const chunk of response.body) {
@@ -86,14 +110,14 @@ assert(resumedSize === expectedSize && resumedHash.digest('hex') === expectedHas
 const tampered = new URL(manifest.downloadUrl);
 const signature = tampered.searchParams.get('signature') ?? '';
 tampered.searchParams.set('signature', `${signature.slice(0, -1)}${signature.endsWith('A') ? 'B' : 'A'}`);
-await expectStatus(tampered, 404);
+await expectStatus(tampered, 404, binaryAuthorization);
 // A link whose expiry was edited no longer matches its signature. This probe
 // cannot sign, so it proves only that a changed expiry is refused; the rule
 // that a correctly signed but expired link is refused is tested in
 // cloudflare/tests/worker.test.ts, which holds a signing key.
 const editedExpiry = new URL(manifest.downloadUrl);
 editedExpiry.searchParams.set('expires', '1000000000');
-await expectStatus(editedExpiry, 404);
+await expectStatus(editedExpiry, 404, binaryAuthorization);
 
 process.stdout.write(`${JSON.stringify({ ok: true, version: manifest.version, buildNumber: manifest.buildNumber, commitSha: manifest.commitSha, filename: expectedFilename, sizeBytes: expectedSize, sha256: expectedHash })}\n`);
 
@@ -115,7 +139,7 @@ async function hashBody(response) {
 }
 
 async function expectRange(url, range, start, end, size) {
-  const response = await fetch(url, { headers: { range }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(url, { headers: { ...binaryAuthorization, range }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
   assert(response.status === 206, `${range} returned ${response.status}`);
   assert(response.headers.get('content-range') === `bytes ${start}-${end}/${size}`, `${range} returned the wrong content range`);
   const body = await response.arrayBuffer();
