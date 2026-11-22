@@ -427,6 +427,8 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
       exact(args, 1); requireWorkspaceId(args[0]); return;
     case 'browser:navigate':
       exact(args, 1); requireBoundedText(args[0], 'address', 4096); return;
+    case 'browser:open-temporary-browsing':
+      exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'browser:new-tab':
       between(args, 0, 3);
       if (args[0] !== undefined) requireWorkspaceId(args[0]);

@@ -6,6 +6,7 @@ import { SIDE_PANEL_NAMES } from './side-panel-tools';
 
 export interface BrowserMenuActions {
   newTab: () => void;
+  openTemporaryBrowsing?: () => void;
   reopenClosedTab: () => void;
   reopenRecentTab: (id: string) => void;
   undoTabBatch: () => void;
@@ -59,6 +60,7 @@ export function BrowserMenu({ anchor, state, tab, ui, bookmarked, onClose, actio
   return (
     <MenuSurface anchor={anchor} placement="bottom-end" label="Browser menu" className="browser-menu" onClose={onClose}>
       <MenuItem icon={SquarePlus} label="New tab" shortcut="Ctrl+T" onSelect={actions.newTab} />
+      {actions.openTemporaryBrowsing && <MenuItem icon={Shield} label="New temporary browsing window" onSelect={actions.openTemporaryBrowsing} />}
       <MenuItem icon={RotateCcw} label="Reopen closed tab" shortcut="Ctrl+Shift+T" disabled={!state.canReopenClosedTab} onSelect={actions.reopenClosedTab} />
       {state.closedTabBatch && <MenuItem icon={RotateCcw} label={state.closedTabBatch.groupName ? 'Reopen group ' + state.closedTabBatch.groupName : 'Undo tab close'}
         hint={state.closedTabBatch.count + (state.closedTabBatch.count === 1 ? ' tab' : ' tabs')} onSelect={actions.undoTabBatch} />}

@@ -134,6 +134,7 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:activate-tab` | `activateTab(tabId)` | `tabId: string` | `void` |
 | `browser:switch-workspace` | `switchWorkspace(workspaceId)` | `workspaceId: WorkspaceId` | `void` |
 | `browser:set-layout` | `setLayout(layout)` | `{ top; left; right; bottom }` (`ContentInsets`) — finite 0–4000 | `void` |
+| `browser:open-temporary-browsing` | `openTemporaryBrowsing(accountSpaceId)` | Active regular Account Space UUID | `void` |
 | `browser:set-split-view` | `setSplitView(tabId?)` | Optional second tab ID in the active Account Space | `void` |
 | `side-app:set-bounds` | `setSideAppBounds(id, rect)` | `'claude' \| 'easynote'`, `{ x; y; width; height }` finite 0–16000 (no other keys) or `null` | `void` |
 | `side-app:command` | `sideAppCommand(id, command)` | `'claude' \| 'easynote'`, `'back' \| 'forward' \| 'reload' \| 'home' \| 'open-in-tab'` | `void` |

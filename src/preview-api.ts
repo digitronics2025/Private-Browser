@@ -867,6 +867,7 @@ export function installPreviewApi(): void {
       publish();
     },
     newTab: async () => { const id = `preview-${crypto.randomUUID()}`; state.tabs.push(homeTab(id, state.activeWorkspaceId, state.activeAccountSpaceId)); state.activeTabId = id; publish(); },
+    openTemporaryBrowsing: desktopOnly,
     closeTab: async (value) => {
       const tab = state.tabs.find((item) => item.id === value);
       if (!tab) return;

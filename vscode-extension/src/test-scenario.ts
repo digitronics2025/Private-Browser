@@ -12,6 +12,18 @@ export interface FixtureResponse {
   json: unknown;
 }
 
+const SMOKE_KEYS = ['Tab', 'Shift+Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Space', 'Escape'] as const;
+const SMOKE_ROLES = ['button', 'link', 'textbox', 'checkbox', 'radio', 'combobox', 'tab', 'menuitem', 'option', 'dialog', 'heading', 'status'] as const;
+
+export interface KeyboardSmokeCheck {
+  repeats: number;
+  budgetMs: number;
+  steps: {
+    key: typeof SMOKE_KEYS[number];
+    expect: { role: typeof SMOKE_ROLES[number]; name: string; state: 'focused' | 'visible' };
+  }[];
+}
+
 export const SCENARIO_VIEWPORTS: Record<TestViewport, { width: number; height: number }> = {
   desktop: { width: 1440, height: 900 },
   tablet: { width: 768, height: 1024 },
@@ -34,7 +46,7 @@ export async function listTestFixtures(root: string): Promise<string[]> {
     .map((item) => item.name).sort().slice(0, 25);
 }
 
-export async function loadTestFixture(root: string, name: string): Promise<{ digest: string; responses: FixtureResponse[] }> {
+export async function loadTestFixture(root: string, name: string): Promise<{ digest: string; responses: FixtureResponse[]; smoke?: KeyboardSmokeCheck }> {
   const path = await resolveInsideWorkspace(root, FIXTURE_DIRECTORY + '/' + testFixtureSchema.parse(name));
   const file = await open(path, 'r');
   try {
@@ -44,17 +56,17 @@ export async function loadTestFixture(root: string, name: string): Promise<{ dig
     const read = await file.read(source);
     if (read.bytesRead !== stat.size) throw new Error('The fixture changed while it was being read.');
     const bytes = source.subarray(0, read.bytesRead);
-    return { digest: createHash('sha256').update(bytes).digest('hex'), responses: parseFixture(JSON.parse(bytes.toString('utf8'))) };
+    return { digest: createHash('sha256').update(bytes).digest('hex'), ...parseFixture(JSON.parse(bytes.toString('utf8'))) };
   } finally {
     await file.close();
   }
 }
 
-function parseFixture(value: unknown): FixtureResponse[] {
-  const raw = value as { version?: unknown; responses?: unknown };
+function parseFixture(value: unknown): { responses: FixtureResponse[]; smoke?: KeyboardSmokeCheck } {
+  const raw = value as { version?: unknown; responses?: unknown; smoke?: unknown };
   if (!raw || raw.version !== 1 || !Array.isArray(raw.responses) || raw.responses.length > 20) throw new Error('Invalid version 1 fixture.');
   const paths = new Set<string>();
-  return raw.responses.map((entry) => {
+  const responses = raw.responses.map((entry) => {
     const item = entry as Partial<FixtureResponse>;
     if (!item || typeof item.path !== 'string' || !/^\/(?!\/)[A-Za-z0-9_.~%/-]{1,240}$/.test(item.path)
       || new URL(item.path, 'http://fixture.test').pathname !== item.path || paths.has(item.path)
@@ -64,4 +76,25 @@ function parseFixture(value: unknown): FixtureResponse[] {
     paths.add(item.path);
     return { path: item.path, status: item.status!, json: item.json };
   });
+  return { responses, smoke: raw.smoke === undefined ? undefined : parseKeyboardSmoke(raw.smoke) };
+}
+
+function parseKeyboardSmoke(value: unknown): KeyboardSmokeCheck {
+  if (!value || typeof value !== 'object') throw new Error('Choose a bounded keyboard smoke check.');
+  const check = value as Partial<KeyboardSmokeCheck>;
+  if (!Number.isInteger(check.repeats) || check.repeats! < 2 || check.repeats! > 5
+    || !Number.isInteger(check.budgetMs) || check.budgetMs! < 100 || check.budgetMs! > 10_000
+    || !Array.isArray(check.steps) || !check.steps.length || check.steps.length > 16) {
+    throw new Error('A keyboard smoke check needs 2–5 repeats, a 100–10,000 ms budget and 1–16 steps.');
+  }
+  const steps = check.steps.map((step) => {
+    const expected = step?.expect;
+    if (!step || !SMOKE_KEYS.includes(step.key) || !expected || !SMOKE_ROLES.includes(expected.role)
+      || typeof expected.name !== 'string' || !expected.name.trim() || expected.name.length > 120
+      || /[\u0000-\u001f\u007f]/.test(expected.name) || (expected.state !== 'focused' && expected.state !== 'visible')) {
+      throw new Error('Each keyboard step needs an allowed key, exact accessible name and a focus or visibility check.');
+    }
+    return { key: step.key, expect: { role: expected.role, name: expected.name, state: expected.state } };
+  });
+  return { repeats: check.repeats!, budgetMs: check.budgetMs!, steps };
 }

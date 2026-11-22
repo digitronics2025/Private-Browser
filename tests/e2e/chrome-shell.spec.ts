@@ -139,6 +139,8 @@ test('browser menu is keyboard navigable, closes cleanly and lists only working 
   await expect(menu).toBeVisible();
   await expect(menu.getByRole('menuitem', { name: /New tab/ })).toBeFocused();
   await page.keyboard.press('ArrowDown');
+  await expect(menu.getByRole('menuitem', { name: 'New temporary browsing window', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
   await expect(menu.getByRole('menuitem', { name: 'Account Spaces', exact: true })).toBeFocused();
   await page.keyboard.press('ArrowRight');
   const submenu = page.getByRole('menu', { name: 'Account Spaces' });

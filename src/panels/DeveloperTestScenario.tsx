@@ -20,12 +20,13 @@ export function DeveloperTestScenario({ projectId, projectUrl, activeUrl, disabl
   projectUrl?: string;
   activeUrl: string;
   disabled: boolean;
-  run: (data: { kind: 'current-page' | 'baseline' | 'baseline-compare'; url: string; viewports: TestViewport[]; fixture?: string }) => void;
+  run: (data: { kind: 'current-page' | 'baseline' | 'baseline-compare' | 'performance'; url: string; viewports: TestViewport[]; fixture?: string }) => void;
 }) {
   const active = localOrigin(activeUrl);
   const base = localOrigin(projectUrl) ?? active;
   const [route, setRoute] = useState(() => active?.origin === base?.origin ? active?.pathname ?? '/' : '/');
   const [fixtures, setFixtures] = useState<string[]>([]);
+  const [keyboardFixtures, setKeyboardFixtures] = useState<string[]>([]);
   const [fixture, setFixture] = useState('');
   const [selected, setSelected] = useState<TestViewport[]>(['desktop']);
   const [error, setError] = useState('');
@@ -35,9 +36,10 @@ export function DeveloperTestScenario({ projectId, projectUrl, activeUrl, disabl
     setError('');
     void window.privateBrowser.runBridgeAction('test.configuration', {}).then((value) => {
       if (current) {
-        const choices = (value as { fixtures: string[] }).fixtures;
-        setFixtures(choices);
-        setFixture((selected) => choices.includes(selected) ? selected : '');
+        const { fixtures, keyboardFixtures } = value as { fixtures: string[]; keyboardFixtures?: string[] };
+        setFixtures(fixtures);
+        setKeyboardFixtures(keyboardFixtures ?? []);
+        setFixture((selected) => fixtures.includes(selected) ? selected : '');
       }
     }, (reason: unknown) => {
       if (current) setError(reason instanceof Error ? reason.message : 'Could not list the project fixtures.');
@@ -46,7 +48,7 @@ export function DeveloperTestScenario({ projectId, projectUrl, activeUrl, disabl
   }, [projectId, revision]);
   const candidate = base && /^\/(?!\/)[^?#\\\u0000-\u001f]{0,1000}$/.test(route) ? new URL(route, base.origin) : undefined;
   const target = candidate?.pathname === route ? candidate : undefined;
-  const send = (kind: 'current-page' | 'baseline' | 'baseline-compare') => {
+  const send = (kind: 'current-page' | 'baseline' | 'baseline-compare' | 'performance') => {
     if (target && target.origin === base?.origin && selected.length) run({ kind, url: target.href,
       viewports: selected, ...(fixture ? { fixture } : {}) });
   };
@@ -69,6 +71,7 @@ export function DeveloperTestScenario({ projectId, projectUrl, activeUrl, disabl
       <button type="button" disabled={!target || !selected.length} onClick={() => send('current-page')}>Run scenario</button>
       <button type="button" disabled={!target || !selected.length} onClick={() => send('baseline')}>Save local baseline</button>
       <button type="button" disabled={!target || !selected.length} onClick={() => send('baseline-compare')}>Compare with baseline</button>
+      {keyboardFixtures.includes(fixture) && <button type="button" disabled={!target || !selected.length} onClick={() => send('performance')}>Run keyboard smoke check</button>}
     </div>
   </fieldset>;
 }
