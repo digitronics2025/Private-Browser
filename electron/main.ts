@@ -179,6 +179,7 @@ import type { ChromeImportReview } from './types.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
 import { adoptPopupWindow, guardPageNavigation, PopupReview, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 import { TemporaryBrowsing } from './temporary-browsing.js';
+import { blockInlinePdf, pdfResponse, ProtectedPdfPreview, type PdfDocumentStatus } from './pdf-preview.js';
 import { SideAppHost } from './side-apps.js';
 import { isSideAppId, type SideAppCommand, type SideAppId, type SideAppRect } from './side-app-registry.js';
 import { canonicalRoutineUrl, defaultBrowserRoutines, MAX_ROUTINES, requireBrowserRoutine } from './browser-routines.js';
@@ -192,6 +193,7 @@ import type {
   TabSetInput,
 } from './types.js';
 import { showPageContextMenu } from './page-context-menu.js';
+import { notesStatus, type NotesDraftChoice, type NotesDraftReview, type NotesPanelCommand } from './notes-panel.js';
 import { planBookmarkBatch } from './bookmark-batch.js';
 import { changeBookmarkBatch, editBookmarkAddress, restoreBookmarkBatch, type BookmarkUndo } from './bookmark-maintenance.js';
 
@@ -201,6 +203,8 @@ interface AssistantCapture {
 }
 
 interface RuntimeTab {
+  pdf?: PdfDocumentStatus & { url: string };
+  inlinePdfUrl?: string;
   view?: WebContentsView;
   memorySaver: MemorySaverPage;
   sleeping?: boolean;
@@ -318,6 +322,7 @@ class BrowserController {
   private readonly pendingAiPreviews = new Map<string, { preview: AiPagePreview; expiresAt: number; navigationGeneration?: number; parentId?: string }>();
   private claudeExcerpt?: AssistantCapture & { expiresAt: number };
   private assistantReview?: AssistantCapture & { review: AiRequestReview; question: string; withEvidence: boolean; expiresAt: number; additional: AssistantCapture[]; excerpts: string[] };
+  private notesDraft?: { review: NotesDraftReview; generation: number; url: string; delivering: boolean };
   private activeAssistant?: { id: string; mode: 'local' | 'cloud'; controller: AbortController };
   private readonly aiApprovals = new Map<string, { preview: AiPagePreview; mode: 'cloud' | 'local'; expiresAt: number }>();
   /** Previews the Developer panel built from diagnostics: the only ones the Control Center may receive. */
@@ -390,6 +395,7 @@ class BrowserController {
   private windowsHelloProbe?: Promise<boolean>;
   private readonly fillCapabilities = new FillCapabilityStore();
   private readonly temporaryBrowsing = new TemporaryBrowsing((id, url, title) => this.keepTemporaryBookmark(id, url, title));
+  private readonly protectedPdf = new ProtectedPdfPreview();
   private readonly fillPicker: FillPicker = new FillPicker(() => this.window, { choose: (choice) => void this.handleFillPickerChoice(choice) });
   private readonly vaultSync: VaultSyncController;
   private readonly popupReview = new PopupReview();
@@ -619,6 +625,7 @@ class BrowserController {
     const windowReady = Boolean(this.window && !this.window.isDestroyed());
     const downloadAccount = this.activeDownloadAccount(persisted);
     const activeTab = this.activeTab(persisted);
+    const pdfDocument = this.runtimeTabs.get(activeTab.id)?.pdf;
     const pair = this.splitPair(persisted, activeTab);
     const memorySite = downloadAccount && !activeTab.isHome ? memorySaverOrigin(activeTab.url) : undefined;
     const strictTracking = activeTab.workspaceId === 'banking';
@@ -633,6 +640,7 @@ class BrowserController {
       workspaces: WORKSPACES,
       activeWorkspaceId: persisted.activeWorkspaceId,
       activeTabId: activeTab.id,
+      pdfDocument: pdfDocument && { mode: pdfDocument.mode, canOpen: pdfDocument.canOpen },
       splitView: pair && windowReady ? { ...pair, suspended: this.window.isFullScreen() || !splitBounds(this.currentContentBounds()) } : undefined,
       tabs,
       bookmarks: persisted.bookmarks,
@@ -836,7 +844,9 @@ class BrowserController {
     const view = this.ensureView(tab.id);
     view.setVisible(true);
     this.applyLayout();
-    await view.webContents.loadURL(url);
+    await view.webContents.loadURL(url).catch((error: unknown) => {
+      if (this.runtimeTabs.get(tab.id)?.pdf?.mode !== 'protected') throw error;
+    });
     this.broadcast();
   }
 
@@ -1163,7 +1173,89 @@ class BrowserController {
   }
 
   clearSideAppData(id: SideAppId): Promise<void> {
+    if (this.store.get().activeWorkspaceId === 'banking') return Promise.reject(new Error('Side apps are unavailable in Banking'));
     return this.sideApps.clearData(id);
+  }
+
+  private notesAccount(): AccountSpaceId {
+    const state = this.store.get();
+    const active = this.activeAccountSpaceId(state);
+    const account = state.accountSpaces.find(({ id }) => id === active);
+    if (this.sessionIsLocked || this.store.isReadOnly() || !account || account.locked || state.activeWorkspaceId === 'banking') {
+      throw new Error('Notes is unavailable in this Account Space.');
+    }
+    return active;
+  }
+
+  async runNotesPanelCommand(kind: NotesPanelCommand) {
+    const account = this.notesAccount();
+    const result = await this.sideApps.notesCommand({ kind }, () => {
+      try { return this.notesAccount() === account; } catch { return false; }
+    });
+    if (kind === 'status') return notesStatus(result);
+    if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) {
+      throw new Error('Open the Notes library, close any editor, and try again.');
+    }
+  }
+
+  private prepareNotesDraft(tabId: string, generation: number, selection: string): void {
+    if (!this.notesSourceCurrent(tabId, generation)) return;
+    const tab = this.activeTab(this.store.get());
+    const source = new URL(tab.url).origin;
+    const result = redactSensitiveText(selection.slice(0, 8_000));
+    if (!result.text.trim()) return;
+    const lifetime = 2 * 60_000;
+    const id = randomUUID();
+    const review = { id, accountSpaceId: tab.accountSpaceId, tabId, source, title: 'Excerpt from ' + new URL(tab.url).host.slice(0, 140),
+      text: result.text.slice(0, 8_000), redactions: result.redactions, expiresAt: Date.now() + lifetime };
+    this.notesDraft = { review, generation, url: tab.url, delivering: false };
+    setTimeout(() => this.cancelNotesDraft(id), lifetime).unref();
+    this.window.webContents.send('notes:draft-review', review);
+  }
+
+  private notesSourceCurrent(tabId: string, generation: number): boolean {
+    try {
+      const account = this.notesAccount();
+      const tab = this.activeTab(this.store.get());
+      const runtime = this.runtimeTabs.get(tabId);
+      const contents = runtime?.view?.webContents;
+      return tab.accountSpaceId === account && tab.id === tabId && !tab.isHome && !isProtectedPage(tab.url) && classifyAiSource(tab.url) === 'browser'
+        && !!contents && !contents.isDestroyed() && !runtime.certificateError && !runtime.problem && !agentHost?.isLentContents(contents.id)
+        && runtime.navigationGeneration === generation && contents.getURL() === tab.url;
+    } catch { return false; }
+  }
+
+  cancelNotesDraft(id: string): void {
+    if (this.notesDraft?.review.id === id) this.notesDraft = undefined;
+  }
+
+  async deliverNotesDraft(choice: NotesDraftChoice, copyOnly: boolean): Promise<void> {
+    const draft = this.notesDraft;
+    const isCurrent = () => draft && this.notesDraft === draft && this.notesSourceCurrent(draft.review.tabId, draft.generation)
+      && this.activeTab(this.store.get()).url === draft.url && draft.review.expiresAt > Date.now();
+    if (!draft || draft.review.id !== choice.id || draft.delivering || !isCurrent()) throw new Error('Select the text again to review a new Notes draft.');
+    const title = choice.title.trim();
+    const text = choice.text;
+    if (!title || !text.trim()) throw new Error('Add a title and text first.');
+    if (redactSensitiveText(title).redactions || redactSensitiveText(text).redactions) {
+      throw new Error('Remove or redact sensitive details before continuing.');
+    }
+    const source = choice.includeSource ? draft.review.source : undefined;
+    draft.delivering = true;
+    try {
+      if (copyOnly) {
+        await this.clipboardGuard.copy(text + (source ? '\n\nSource: ' + source : ''), () => {
+          if (!isCurrent() || clipboardQuit !== 'not-started') throw new Error('The selected page changed.');
+        });
+      } else {
+        this.setUiPreferences({ sidePanelOpen: true, sidePanelTool: 'easynote' }, this.notesAccount());
+        const result = await this.sideApps.notesCommand({ kind: 'draft', title, text, source }, () => Boolean(isCurrent()));
+        if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) {
+          throw new Error('Notes could not open the draft. Close any open or recovered Notes draft, or copy the excerpt.');
+        }
+      }
+      this.cancelNotesDraft(choice.id);
+    } finally { draft.delivering = false; }
   }
 
   /**
@@ -2071,6 +2163,10 @@ class BrowserController {
   async reload(): Promise<void> {
     const tab = this.activeTab(this.store.get());
     const runtime = this.runtimeTabs.get(tab.id);
+    if (runtime?.pdf?.mode === 'protected') {
+      if (runtime.pdf.canOpen) await this.navigate(runtime.pdf.url);
+      return;
+    }
     if (runtime?.problem || tab.restorePaused) {
       try {
         await this.navigate(runtime?.failedUrl ?? tab.url);
@@ -2572,8 +2668,42 @@ class BrowserController {
   }
 
   print(): void {
+    const tab = this.activeTab(this.store.get());
+    if (this.runtimeTabs.get(tab.id)?.pdf?.mode === 'protected') throw new Error('Printing is blocked for this protected PDF.');
     const contents = this.activeContents();
-    if (contents && !this.activeTab(this.store.get()).isHome) contents.print({}, () => undefined);
+    if (contents && !tab.isHome) contents.print({}, () => undefined);
+  }
+
+  async openPdfInTab(): Promise<void> {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tab.id);
+    const document = runtime?.pdf;
+    const contents = runtime?.view?.webContents;
+    const account = state.accountSpaces.find(({ id }) => id === tab.accountSpaceId);
+    if (!document?.canOpen || !contents || contents.isDestroyed() || !account || account.locked || this.sessionIsLocked
+      || this.store.isReadOnly() || agentHost?.isLentContents(contents.id)) throw new Error('This PDF cannot be reopened from the current page.');
+    if (document.mode === 'protected') {
+      await this.protectedPdf.open(this.window, contents.session, document.url, () => !this.sessionIsLocked
+        && !contents.isDestroyed() && this.activeTab(this.store.get()).id === tab.id && runtime?.pdf === document);
+      return;
+    }
+    const id = this.addBackgroundTab(tab.workspaceId, document.url, tab.accountSpaceId, 'PDF document');
+    if (!id) throw new Error('The PDF tab could not be created.');
+    this.runtimeTabs.get(id)!.inlinePdfUrl = document.url;
+    await this.activateTab(id);
+  }
+
+  savePdf(): void {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const runtime = this.runtimeTabs.get(tab.id);
+    const contents = this.activeContents();
+    if (this.sessionIsLocked || this.store.isReadOnly() || !contents || runtime?.pdf?.mode !== 'native' || !runtime.pdf.canOpen
+      || tab.workspaceId === 'banking' || agentHost?.isLentContents(contents.id)) {
+      throw new Error('Saving is unavailable for this PDF in the current workspace.');
+    }
+    contents.downloadURL(runtime.pdf.url);
   }
 
   findInPage(text: string, forward: boolean, findNext: boolean): void {
@@ -3101,6 +3231,17 @@ class BrowserController {
       return this.vscodeBridge.request(action, { projectId, reference: source.reference });
     }
     if ((action.startsWith('test.') || action.startsWith('reports.')) && !projectId) throw new Error('Choose an approved workspace first.');
+    if (action === 'test.run' && payload.kind === 'record-flow') {
+      const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+      if (!(major > 0 || minor > 4 || (minor === 4 && patch >= 7))) throw new Error('Install Private Browser Bridge 0.4.7 or later to record a fixture.');
+      const active = this.requireDeveloperTarget().tab;
+      const url = typeof payload.url === 'string' ? localDevelopmentAddress(payload.url) : undefined;
+      if (!url || active.url !== url.href || url.search || url.hash || payload.liveUrl) {
+        throw new Error('Open the local fixture in front and use its plain URL to record.');
+      }
+      const discovered = localDevelopmentAddress(bridge.project?.devServerUrl ?? '');
+      if (discovered && discovered.origin !== url.origin) throw new Error('Open the selected project’s local fixture first.');
+    }
     if (action === 'test.configuration' || (action === 'test.run' && (payload.viewports || payload.fixture
       || payload.kind === 'baseline' || payload.kind === 'baseline-compare'))) {
       const [major, minor, patch] = (bridge.extensionVersion ?? '').split('.').map(Number);
@@ -4839,8 +4980,18 @@ class BrowserController {
     };
     view.webContents.setWindowOpenHandler((details) => openFromPage(details));
     guardPageNavigation(view.webContents);
+    view.webContents.on('will-frame-navigate', (event) => {
+      if (event.url.startsWith('chrome-extension:') && tab.workspaceId === 'banking') {
+        event.preventDefault();
+      }
+    });
     view.webContents.on('did-start-navigation', (_event, url, _isInPlace, isMainFrame) => {
       if (!isMainFrame) return;
+      if (!_isInPlace) {
+        if (runtime.pdf?.mode === 'protected') this.protectedPdf.close();
+        runtime.pdf = undefined;
+        if (runtime.inlinePdfUrl !== url) runtime.inlinePdfUrl = undefined;
+      }
       if (isProtectedPage(url)) this.endSplitForTab(tabId, tab.accountSpaceId);
       if (runtime.problem && !this.overlayOpen && this.activeTab(this.store.get()).id === tabId) view.setVisible(true);
       runtime.navigationGeneration += 1;
@@ -4856,6 +5007,7 @@ class BrowserController {
     });
     view.webContents.on('did-fail-load', (_event, code, _description, url, isMainFrame) => {
       if (!isMainFrame || !isAllowedRemoteUrl(url)) return;
+      if (runtime.pdf?.mode === 'protected' && runtime.pdf.url === url) return;
       const problem = problemForFailedLoad(code, runtime.certificateError);
       if (problem) this.markTabProblem(tabId, problem, url);
     });
@@ -4895,7 +5047,8 @@ class BrowserController {
         () => !this.window.isDestroyed() && !contents.isDestroyed() && view.getVisible()
           && runtime.navigationGeneration === generation && this.activeTab(this.store.get()).id === tabId,
         (url) => this.addBackgroundTab(tab.workspaceId, url, tab.accountSpaceId),
-        () => Boolean(this.developerTarget(tabId)));
+        () => Boolean(this.developerTarget(tabId)),
+        this.notesSourceCurrent(tabId, generation) ? (selection) => this.prepareNotesDraft(tabId, generation, selection) : undefined);
     });
     view.webContents.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown') {
@@ -5081,6 +5234,30 @@ class BrowserController {
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
       callback({ requestHeaders: { ...details.requestHeaders, DNT: '1', 'Sec-GPC': '1' } });
     });
+    ses.webRequest.onHeadersReceived((details, callback) => {
+      if (details.resourceType !== 'mainFrame' && details.resourceType !== 'subFrame') { callback({}); return; }
+      const runtime = details.webContentsId === undefined ? undefined : this.contentsTabs.get(details.webContentsId);
+      const protectedDocument = protectedWorkspace;
+      if (!pdfResponse(details.responseHeaders)) {
+        callback(protectedDocument ? { responseHeaders: blockInlinePdf(details.responseHeaders) } : {});
+        return;
+      }
+      if (details.resourceType === 'mainFrame' && runtime && isAllowedRemoteUrl(details.url)) {
+        runtime.pdf = { url: details.url, mode: protectedDocument ? 'protected' : 'native', canOpen: details.method === 'GET' };
+        if (protectedDocument) {
+          runtime.view?.setVisible(false);
+          callback({ cancel: true });
+        } else if (runtime.inlinePdfUrl === details.url) {
+          const responseHeaders = { ...details.responseHeaders };
+          const disposition = Object.keys(responseHeaders).find((key) => key.toLowerCase() === 'content-disposition') ?? 'Content-Disposition';
+          responseHeaders[disposition] = ['inline'];
+          callback({ responseHeaders });
+        } else callback({});
+        queueMicrotask(() => { if (!this.window.isDestroyed()) { this.applyLayout(); this.broadcast(); } });
+        return;
+      }
+      callback({ cancel: protectedDocument });
+    });
     ses.webRequest.onCompleted((details) => {
       if (details.statusCode >= 400) this.recordNetworkIssue(details);
     });
@@ -5183,7 +5360,8 @@ class BrowserController {
     if (state.activeWorkspaceId === 'banking') this.temporaryBrowsing.close();
     const tab = this.activeTab(state);
     const locked = state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked;
-    if (!locked && !tab.isHome && !tab.restorePaused && !this.runtimeTabs.get(tab.id)?.problem && this.startupTabRecovery?.accountSpaceId !== tab.accountSpaceId && isAllowedRemoteUrl(tab.url)) {
+    if (!locked && !tab.isHome && !tab.restorePaused && !this.runtimeTabs.get(tab.id)?.problem
+      && this.runtimeTabs.get(tab.id)?.pdf?.mode !== 'protected' && this.startupTabRecovery?.accountSpaceId !== tab.accountSpaceId && isAllowedRemoteUrl(tab.url)) {
       const view = this.ensureView(tab.id);
       const runtime = this.runtimeTabs.get(tab.id);
       if (runtime) runtime.memorySaver.lastVisibleAt = Date.now();
@@ -5300,6 +5478,8 @@ class BrowserController {
 
   private hideAllViews(): void {
     this.popupReview.cancel();
+    this.notesDraft = undefined;
+    this.protectedPdf.close();
     this.fillPicker.close();
     for (const runtime of this.runtimeTabs.values()) {
       if (runtime.view?.getVisible()) runtime.memorySaver.lastVisibleAt = Date.now();
@@ -5367,6 +5547,7 @@ class BrowserController {
       this.settleBroadcast = true;
     }
     if (!runtime?.view || active.isHome) return;
+    if (runtime.pdf?.mode === 'protected') { runtime.view.setVisible(false); return; }
     runtime.view.setBounds(panes && pair ? (pair.leftTabId === active.id ? panes.left : panes.right) : bounds);
     if (!otherId || !panes || !pair) return;
     const other = state.tabs.find((item) => item.id === otherId)!;
@@ -5819,6 +6000,9 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:set-overlay-open', (_event, open: boolean) => controller!.setOverlayOpen(open));
   handle('side-app:set-bounds', (_event, id: SideAppId, rect: SideAppRect | null) => controller!.setSideAppBounds(id, rect));
   handle('side-app:command', (_event, id: SideAppId, command: SideAppCommand) => controller!.sideAppCommand(id, command));
+  handle('notes:command', (_event, kind: NotesPanelCommand) => controller!.runNotesPanelCommand(kind));
+  handle('notes:cancel-draft', (_event, id: string) => controller!.cancelNotesDraft(id));
+  handle('notes:deliver-draft', (_event, choice: NotesDraftChoice, copyOnly: boolean) => controller!.deliverNotesDraft(choice, copyOnly));
   handle('side-app:clear-data', (_event, id: SideAppId) => controller!.clearSideAppData(id));
   handle('browser:toggle-bookmark', () => controller!.toggleBookmark());
   handle('browser:open-bookmark', (_event, id: string) => controller!.openBookmark(id));
@@ -5838,6 +6022,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:reopen-recent-tab', (_event, id: string) => controller!.reopenClosedTab(id));
   handle('browser:zoom', (_event, direction: 'in' | 'out' | 'reset') => controller!.zoom(direction));
   handle('browser:print', () => controller!.print());
+  handle('pdf:open', () => controller!.openPdfInTab());
+  handle('pdf:save', () => controller!.savePdf());
   handle('browser:find', (_event, text: string, forward: boolean, findNext: boolean) => controller!.findInPage(text, forward, findNext));
   handle('browser:stop-find', () => controller!.stopFindInPage());
   handle('browser:set-tab-muted', (_event, tabId: string, muted: boolean) => controller!.setTabMuted(tabId, muted));

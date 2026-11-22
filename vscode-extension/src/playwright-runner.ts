@@ -8,6 +8,7 @@ import { PNG } from 'pngjs';
 import type { TestViewport } from '@private-browser/bridge-protocol';
 import { loadTestFixture, SCENARIO_VIEWPORTS } from './test-scenario.js';
 import { runKeyboardSmoke, smokeLatency } from './keyboard-smoke.js';
+import { recordedFlowPreview, recordedFlowScript, recordingTarget, replayRecordedFlow, restrictRecording, startFlowRecorder } from './recorded-flow.js';
 
 interface Input {
   reportId: string; projectId: string; startedAt: string; kind: string; url: string; liveUrl?: string; root: string; artifactRoot: string;
@@ -24,6 +25,10 @@ async function main(): Promise<void> {
   if (fixture && fixture.digest !== input.fixtureDigest) throw new Error('The approved fixture changed before the test started.');
   const mockResponses = new Map(fixture?.responses.map((item) => [item.path, item]));
   const target = new URL(input.url);
+  const recording = input.kind === 'record-flow';
+  if (recording && (!input.confineScenario || !recordingTarget(target) || fixture)) {
+    throw new Error('Flow recording requires one approved loopback route without credentials or URL parameters.');
+  }
   const smoke = input.kind === 'performance' || input.kind === 'accessibility' ? fixture?.smoke : undefined;
   if (smoke && (!input.confineScenario || !['localhost', '127.0.0.1', '[::1]'].includes(target.hostname))) {
     throw new Error('Keyboard smoke checks require an approved loopback fixture.');
@@ -40,7 +45,8 @@ async function main(): Promise<void> {
       if (smoke) await context.routeWebSocket('**/*', (route) => { void route.close(); });
       let redirected = false;
       let blockedRequests = 0;
-      if (input.confineScenario || fixture) {
+      if (recording) await restrictRecording(context, target);
+      else if (input.confineScenario || fixture) {
         await context.route('**/*', async (route) => {
           const request = route.request();
           const url = new URL(request.url());
@@ -77,8 +83,8 @@ async function main(): Promise<void> {
         if (requestCounts.has(key) || requestCounts.size < 100) requestCounts.set(key, (requestCounts.get(key) ?? 0) + 1);
       });
       page.on('requestfinished', (request) => background.delete(request));
-      page.on('console', (message) => { if (message.type() === 'error' && consoleErrors.length < 100) consoleErrors.push(message.text().slice(0, 500)); });
-      page.on('requestfailed', (request) => {
+      if (!recording) page.on('console', (message) => { if (message.type() === 'error' && consoleErrors.length < 100) consoleErrors.push(message.text().slice(0, 500)); });
+      if (!recording) page.on('requestfailed', (request) => {
         background.delete(request);
         if (networkErrors.length < 100) networkErrors.push(`${request.method()} ${new URL(request.url()).origin}${new URL(request.url()).pathname} — ${request.failure()?.errorText ?? 'failed'}`);
       });
@@ -168,13 +174,30 @@ async function main(): Promise<void> {
           cause: `${blockedRequests} requests were outside the read-only fixture scope.`, evidence: platform,
           recommendation: 'Keep the fixture on its selected route and provide synthetic responses for required data.' });
       }
-      if (input.kind === 'record-flow') {
-        await page.pause();
+      if (recording) {
         const testName = 'recorded-flow.spec.ts';
         const testPath = join(input.artifactRoot, testName);
-        await writeFile(testPath, `import { test, expect } from '@playwright/test';\n\ntest('recorded Private Browser flow', async ({ page }) => {\n  await page.goto(${JSON.stringify(input.url)});\n  await expect(page).toHaveURL(${JSON.stringify(input.url)});\n});\n`);
-        artifacts.push({ id: randomUUID(), name: testName, kind: 'test', size: (await stat(testPath)).size });
-        findings.push({ status: 'passed', title: 'Flow recording', cause: 'The isolated Playwright recorder completed.', evidence: 'No browser profile state was imported.', recommendation: 'Review generated steps before saving them into the workspace.' });
+        const recorder = await startFlowRecorder(page, target);
+        const flow = await recorder.result;
+        if (!flow) {
+          findings.push({ status: 'failed', title: 'Recorded flow', cause: 'Recording closed or expired before confirmation.',
+            evidence: 'No test was generated.', recommendation: 'Record at least one action and pick a labelled visible result before finishing.' });
+        } else {
+          const replay = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height },
+            acceptDownloads: false, serviceWorkers: 'block' });
+          try {
+            await restrictRecording(replay, target);
+            await replayRecordedFlow(await replay.newPage(), target, flow);
+            await writeFile(testPath, recordedFlowScript(target, flow), { flag: 'wx' });
+            artifacts.push({ id: randomUUID(), name: testName, kind: 'test', size: (await stat(testPath)).size });
+            findings.push({ status: flow.skipped ? 'attention' : 'passed', title: 'Recorded flow',
+              cause: flow.actions.length + ' actions replayed. ' + flow.skipped + ' skipped.',
+              evidence: recordedFlowPreview(flow), recommendation: 'Review the replayed actions before saving the generated test in VS Code.' });
+          } catch {
+            findings.push({ status: 'failed', title: 'Recorded flow', cause: 'The recorded actions did not reach the selected result.',
+              evidence: recordedFlowPreview(flow), recommendation: 'Use labelled synthetic controls in the fixture and try recording again.' });
+          } finally { await replay.close(); }
+        }
       }
       if (input.kind !== 'record-flow') {
         const tracePath = join(input.artifactRoot, `${viewport.name}-trace.zip`);

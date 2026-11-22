@@ -1,4 +1,5 @@
 import type { PrivateBrowserApi } from '../electron/preload.cjs';
+import type { NotesDraftReview } from '../electron/notes-panel';
 import { chromeCollections } from '../electron/chrome-collections';
 import type { ChromeImportOptions, ChromePasswordImportReview, GoogleActionReceipt, GoogleMutationConfirmation } from '../electron/types';
 import type { VaultHealthReport } from '../electron/types';
@@ -431,6 +432,8 @@ export function installPreviewApi(): void {
     forward: desktopOnly,
     stop: async () => undefined,
     print: desktopOnly,
+    openPdfInTab: desktopOnly,
+    savePdf: desktopOnly,
     findInPage: desktopOnly,
     stopFindInPage: async () => undefined,
     setTabMuted: desktopOnly,
@@ -772,6 +775,34 @@ export function installPreviewApi(): void {
     // A normal browser has no native view to place; record the slot for browser tests instead.
     setSideAppBounds: async (_id, rect) => { document.documentElement.dataset.previewSideApp = JSON.stringify(rect); },
     sideAppCommand: async () => undefined,
+    notesPanelCommand: async (kind) => {
+      if (kind !== 'status') {
+        document.documentElement.dataset.previewNotesAction = kind;
+        return undefined;
+      }
+      return params.get('notes') === 'offline' ? undefined : {
+        mode: params.get('notes') === 'protected' ? 'protected' : 'personal', sync: 'idle',
+        drafts: 1, pending: 0, lastSuccessfulSyncAt: '2026-11-21T20:00:00.000Z',
+      };
+    },
+    onNotesDraft: (callback) => {
+      if (params.get('notesDraft') !== 'sample') return () => undefined;
+      const timer = window.setTimeout(() => {
+        const review: NotesDraftReview = { id: 'notes-draft-preview', accountSpaceId: state.activeAccountSpaceId, tabId: state.activeTabId,
+          title: 'Study notes', text: 'Selected browser excerpt.', source: 'https://example.test', redactions: 0, expiresAt: Date.now() + 120_000 };
+        callback(review);
+      }, 100);
+      return () => window.clearTimeout(timer);
+    },
+    deliverNotesDraft: async (draft, copyOnly) => {
+      document.documentElement.dataset.previewNotesDraft = JSON.stringify(draft);
+      if (copyOnly) return;
+      state.ui = { ...state.ui, sidePanelOpen: true };
+      if (!isPinnablePanelTool(commonPanelTool)) commonPanelTool = 'assistant';
+      previewPanelTools.set(state.activeAccountSpaceId, 'easynote');
+      publish();
+    },
+    cancelNotesDraft: async () => undefined,
     openDownload: async () => { throw new Error('This preview cannot open files. Use the desktop Downloads panel.'); },
     showDownload: async () => { throw new Error('This preview cannot open folders. Use the desktop Downloads panel.'); },
     setDownloadHistory: async (id, enabled) => {

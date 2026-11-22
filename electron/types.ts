@@ -615,6 +615,7 @@ export interface PrivacyEvent {
 }
 
 export interface BrowserSnapshot {
+  pdfDocument?: import('./pdf-preview.js').PdfDocumentStatus;
   browsingProtection?: BrowsingProtectionStatus | 'pending';
   memorySaverSite?: { origin: string; keptAwake: boolean };
   sessionLock?: 'windows' | 'idle';

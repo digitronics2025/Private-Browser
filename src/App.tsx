@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Check, KeyRound, LoaderCircle, ShieldCheck, X } from 'lucide-react';
 import type { AccountSpaceId, Bookmark, BookmarkFolder, BookmarkLevelInput, BrowserSnapshot, PageExcerptReview, Shortcut, ShortcutTile, SidePanelTool, UiPreferences, UiPreferencesPatch, WindowState } from '../electron/types';
 import { bookmarkFolderKey, bookmarkFolderLabel, bookmarkFolders } from '../electron/bookmark-maintenance';
@@ -21,11 +21,11 @@ import { ShieldStatusMenu, SiteInfoMenu, TabSearchMenu, ZoomMenu } from './shell
 import { PromptDialog, type PromptRequest } from './shell/PromptDialog';
 import { ClearBrowsingDataDialog } from './shell/ClearBrowsingDataDialog';
 import { ClaudeExcerptDialog } from './shell/ClaudeExcerptDialog';
+import type { NotesDraftReview } from '../electron/notes-panel';
 import { AccountManager } from './panels/AccountManager';
 import { PermissionOverlay, RecoveryOverlay } from './panels/Overlays';
 import { useModalFocus } from './lib/dialog';
 import { AssistantPanel } from './panels/AssistantPanel';
-import { SideAppPanel } from './panels/SideAppPanel';
 import { DeveloperPanel } from './panels/DeveloperPanel';
 import { VaultPanel } from './panels/VaultPanel';
 import { AutomationPanel } from './panels/AutomationPanel';
@@ -42,6 +42,9 @@ import { disposer } from './lib/subscribe';
 import { DEFAULT_BROWSER_SETTINGS, searchEngineLabel, type BrowserSettings } from '../electron/browser-settings';
 import { isAllowedRemoteUrl, isProtectedPage, stripTrackingParameters } from '../electron/security';
 import { useAgentStatus } from './panels/AgentsPanel';
+
+const SideAppPanel = lazy(() => import('./panels/SideAppPanel').then((module) => ({ default: module.SideAppPanel })));
+const NotesDraftDialog = lazy(() => import('./shell/NotesDraftDialog').then((module) => ({ default: module.NotesDraftDialog })));
 
 type MenuKind = 'browser' | 'profile' | 'shield' | 'tab-search' | 'site-info' | 'zoom';
 
@@ -68,6 +71,7 @@ export default function App() {
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
   const [accountManagerOpen, setAccountManagerOpen] = useState(false);
   const [claudeExcerpt, setClaudeExcerpt] = useState<PageExcerptReview>();
+  const [notesDraft, setNotesDraft] = useState<NotesDraftReview>();
   const [settingsEntry, setSettingsEntry] = useState<'overview' | 'setup'>('overview');
   const [vaultFullOpen, setVaultFullOpen] = useState(false);
   const [menu, setMenu] = useState<MenuKind | null>(null);
@@ -124,6 +128,18 @@ export default function App() {
   useEffect(() => disposer(window.privateBrowser.onUpdateAvailable((result) => {
     showToast(`Private Browser ${result.latest.version} is ready to download`);
   })), []);
+  useEffect(() => disposer(window.privateBrowser.onNotesDraft(setNotesDraft)), []);
+  useEffect(() => {
+    if (state && (state.sessionLock || (notesDraft && (notesDraft.accountSpaceId !== state.activeAccountSpaceId || notesDraft.tabId !== state.activeTabId)))) {
+      setNotesDraft(undefined);
+    }
+  }, [state?.sessionLock, state?.activeAccountSpaceId, state?.activeTabId, notesDraft]);
+  useEffect(() => {
+    if (!notesDraft) return;
+    const timer = window.setTimeout(() => setNotesDraft(undefined), Math.max(0, notesDraft.expiresAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [notesDraft]);
+  useEffect(() => { setNotesDraft(undefined); }, [activeTab?.url]);
 
   useEffect(() => {
     const onResize = () => setWindowWidth(window.innerWidth);
@@ -304,7 +320,10 @@ export default function App() {
       case 'bookmark-manager': openTool('bookmarks'); break;
       case 'history': openTool('history'); break;
       case 'downloads': openTool('downloads'); break;
-      case 'find': if (!activeTab.isHome) { setFindOpen(true); setFindFocus((value) => value + 1); } break;
+      case 'find':
+        if (state.pdfDocument?.mode === 'protected') void act(() => window.privateBrowser.openPdfInTab());
+        else if (!activeTab.isHome) { setFindOpen(true); setFindFocus((value) => value + 1); }
+        break;
       case 'print': void act(() => window.privateBrowser.print()); break;
       case 'zoom-in': void act(() => window.privateBrowser.zoom('in')); break;
       case 'zoom-out': void act(() => window.privateBrowser.zoom('out')); break;
@@ -460,7 +479,7 @@ export default function App() {
       case 'claude':
       case 'easynote': {
         const app = state.sideApps.find((app) => app.id === ui.sidePanelTool);
-        return app ? <SideAppPanel key={app.id} app={app} protectedWorkspace={workspace.protected} onToast={showToast} /> : null;
+        return app ? <Suspense fallback={null}><SideAppPanel key={app.id} app={app} protectedWorkspace={workspace.protected} onToast={showToast} /></Suspense> : null;
       }
       case 'assistant': return <AssistantPanel key={JSON.stringify([state.activeAccountSpaceId, activeTab.id, activeTab.url])} accountId={state.activeAccountSpaceId} workspace={state.activeWorkspaceId} policy={state.assistantPolicy ?? { cloud: 'unavailable', receipts: [] }} presets={browserSettings.assistantPrompts} tabs={state.tabs.filter((item) => item.accountSpaceId === state.activeAccountSpaceId && item.id !== activeTab.id && !item.isHome)} onToast={showToast} />;
       case 'developer': return <DeveloperPanel activeTab={activeTab} onToast={showToast} />;
@@ -582,7 +601,7 @@ export default function App() {
               onMenu={() => setMenu((current) => (current === 'browser' ? null : 'browser'))}
             />
             {liveLayout.bookmarkBar > 0 && <BookmarkBar key={activeAccount.id} bookmarks={accountBookmarks} savedFolders={accountFolders} mode={ui.bookmarkBarMode} favicons={favicons} actions={bookmarkActions} />}
-            {findOpen && !activeTab.isHome && <FindBar tabId={activeTab.id} focusSignal={findFocus} onClose={() => setFindOpen(false)} />}
+            {findOpen && !activeTab.isHome && state.pdfDocument?.mode !== 'protected' && <FindBar tabId={activeTab.id} focusSignal={findFocus} onClose={() => setFindOpen(false)} />}
           </>
         )}
 
@@ -590,6 +609,18 @@ export default function App() {
         {state.startupTabRecovery ? (
           <StartupRecovery key={state.startupTabRecovery.failedTabId} tabs={workspaceTabs} failedTabId={state.startupTabRecovery.failedTabId}
             onRestore={(ids) => act(() => window.privateBrowser.restoreSelectedTabs(ids))} />
+        ) : state.pdfDocument?.mode === 'protected' ? (
+          <div className="page-surface page-recovery">
+            <section className="recovery-card" aria-labelledby="protected-pdf-title">
+              <h2 id="protected-pdf-title">Protected PDF</h2>
+              <p>{state.pdfDocument.canOpen ? 'Read or find text in a protected preview. Saving and printing are blocked.'
+                : 'This document uses a one-time request. Reopen it from the original site if the site provides a link.'}</p>
+              <div className="recovery-actions">
+                {state.pdfDocument.canOpen && <button type="button" className="primary-button" onClick={() => void act(() => window.privateBrowser.openPdfInTab())}>Open protected preview</button>}
+                <button type="button" className="secondary-button" disabled={!activeTab.canGoBack} onClick={() => void act(() => window.privateBrowser.back())}>Back</button>
+              </div>
+            </section>
+          </div>
         ) : activeTab.restorePaused || activeTab.problem ? (
           <PageRecovery tab={activeTab} onReload={() => void act(() => window.privateBrowser.reload())} onBack={() => void act(() => window.privateBrowser.back())} />
         ) : activeTab.isHome ? (
@@ -693,7 +724,12 @@ export default function App() {
               zoom: (direction) => void act(() => window.privateBrowser.zoom(direction)),
               toggleFullscreen: () => void act(() => window.privateBrowser.toggleFullscreen()),
               print: () => void act(() => window.privateBrowser.print()),
-              find: () => { setFindOpen(true); setFindFocus((value) => value + 1); },
+              openPdf: state.pdfDocument?.canOpen ? () => void act(() => window.privateBrowser.openPdfInTab()) : undefined,
+              savePdf: state.pdfDocument?.mode === 'native' && state.pdfDocument.canOpen ? () => void act(() => window.privateBrowser.savePdf()) : undefined,
+              find: () => {
+                if (state.pdfDocument?.mode === 'protected') void act(() => window.privateBrowser.openPdfInTab());
+                else { setFindOpen(true); setFindFocus((value) => value + 1); }
+              },
               copyLink: () => void act(() => window.privateBrowser.copyText(activeTab.url), 'Link copied'),
               reviewClaudeExcerpt: !activeTab.isHome && !workspace.protected && !isProtectedPage(activeTab.url)
                 ? () => void act(async () => setClaudeExcerpt(await window.privateBrowser.prepareClaudeExcerpt()))
@@ -714,6 +750,10 @@ export default function App() {
           setClaudeExcerpt(undefined);
           showToast('Excerpt copied. Paste it in Claude when ready.');
         }} />}
+        {notesDraft && <Suspense fallback={null}><NotesDraftDialog key={notesDraft.id} review={notesDraft} onClose={() => setNotesDraft(undefined)} onDone={(copied) => {
+          setNotesDraft(undefined);
+          showToast(copied ? 'Excerpt copied' : 'Draft opened in Notes');
+        }} /></Suspense>}
         {clearDataFor === activeAccount.id && <ClearBrowsingDataDialog activeId={activeAccount.id} protectedWorkspace={workspace.protected}
           accounts={state.accountSpaces.filter((account) => account.workspaceId === workspace.id)}
           onDone={() => setClearDataFor(undefined)} onCleared={(visits) => {

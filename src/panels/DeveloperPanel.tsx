@@ -70,6 +70,9 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
   const [retentionDays, setRetentionDays] = useState(30);
   const [retentionMax, setRetentionMax] = useState(100);
   const [loading, setLoading] = useState(false);
+  const [bridgeMajor, bridgeMinor, bridgePatch] = (bridge.extensionVersion ?? '').split('.').map(Number);
+  const canRecord = bridgeMajor > 0 || bridgeMinor > 4 || (bridgeMinor === 4 && bridgePatch >= 7);
+  const recordedFlow = report?.kind === 'record-flow' ? report.findings.find(({ title }) => title === 'Recorded flow') : undefined;
 
   const refresh = async () => {
     const next = await window.privateBrowser.getBridgeStatus();
@@ -205,15 +208,27 @@ export function DeveloperPanel({ activeTab, onToast }: { activeTab: BrowserTab; 
         })()}
         <label className="bridge-label">Optional approved live URL<input value={liveUrl} onChange={(event) => setLiveUrl(event.target.value)} placeholder="https://staging.example.com" /></label>
         <div className="bridge-action-grid test-grid">
-          {tests.map((item) => <button key={item.kind} disabled={!connected || !project || loading || Boolean(testProject) || ((item.kind === 'live-site' || item.kind === 'compare') && !liveUrl)}
-            onClick={() => void runTest('test.run', { kind: item.kind, url: item.kind === 'live-site' ? liveUrl : activeTab.url, ...(liveUrl ? { liveUrl } : {}) })}><Play size={14} />{item.label}</button>)}
+          {tests.map((item) => <button key={item.kind}
+            disabled={!connected || !project || loading || Boolean(testProject) || (item.kind === 'record-flow' && !canRecord)
+              || ((item.kind === 'live-site' || item.kind === 'compare') && !liveUrl)}
+            title={item.kind === 'record-flow' ? canRecord ? 'Record a local synthetic fixture' : 'Requires Private Browser Bridge 0.4.7' : undefined}
+            onClick={() => void runTest('test.run', { kind: item.kind, url: item.kind === 'live-site' ? liveUrl : activeTab.url,
+              ...(liveUrl && (item.kind === 'live-site' || item.kind === 'compare') ? { liveUrl } : {}) })}><Play size={14} />{item.label}</button>)}
         </div>
         <div className="bridge-action-row">
           <button disabled={!report || Boolean(testProject)} onClick={() => report && void runTest('test.rerun', { reportId: report.id })}>Rerun latest</button>
           <button disabled={!project} onClick={() => setShowReportHistory((value) => !value)}>{showReportHistory ? 'Hide report history' : 'Report history'}</button>
           <button disabled={!testProject || testProject !== project?.project.id} onClick={stopTest}>Stop test</button>
         </div>
-        {report && <div className={`test-result ${report.status}`}><small>{report.status === 'attention' ? 'Needs attention' : report.status}</small><strong>{report.title}</strong><p>{report.summary}</p><span>{report.findings.length} findings · {report.artifacts.length} artifacts</span><button onClick={() => void bridgeAction('reports.open', { reportId: report.id })}>Open in VS Code</button>{report.artifacts.filter((item) => item.kind === 'test').map((item) => <button key={item.id} onClick={() => void bridgeAction('test.save-artifact', { reportId: report.id, name: item.name, path: 'tests/e2e/private-browser-recorded.spec.ts' }, 'Generated test saved after VS Code approval')}>Save generated test…</button>)}</div>}
+        {report && <div className={`test-result ${report.status}`}>
+          <small>{report.status === 'attention' ? 'Needs attention' : report.status}</small><strong>{report.title}</strong>
+          <p>{report.summary}</p><span>{report.findings.length} findings · {report.artifacts.length} artifacts</span>
+          {recordedFlow && <details><summary>{recordedFlow.cause}</summary><pre>{recordedFlow.evidence}</pre></details>}
+          <button onClick={() => void bridgeAction('reports.open', { reportId: report.id })}>Open in VS Code</button>
+          {report.artifacts.filter((item) => item.kind === 'test').map((item) => <button key={item.id}
+            onClick={() => void bridgeAction('test.save-artifact', { reportId: report.id, name: item.name, path: 'tests/e2e/private-browser-recorded.spec.ts' },
+              'Generated test saved after VS Code approval')}>Review and save generated test…</button>)}
+        </div>}
         {showReportHistory && project && <>
           <DeveloperReportHistory key={project.project.id} projectId={project.project.id} revision={reportHistoryRevision}
             busy={Boolean(testProject)} onReplay={(reportId) => void runTest('test.rerun', { reportId })} onToast={onToast} />
