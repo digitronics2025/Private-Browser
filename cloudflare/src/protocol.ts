@@ -16,6 +16,7 @@ export interface ReleaseRecord {
   commit_sha: string;
   release_notes: string;
   published_at: string;
+  last_restored_at?: string | null;
   is_active: number;
 }
 

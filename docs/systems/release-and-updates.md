@@ -133,12 +133,10 @@ five records. The query is sequential after `latestRelease`; the Worker does not
 run dependent D1 reads in parallel. History is informational and does not expose
 download URLs for old installers.
 
-[page.ts](../../cloudflare/src/page.ts) receives a typed page model: active
-release, history, signed download URL, canonical origin, render timestamp and the
-fixed public developer profile. It emits one script-free responsive document
-with semantic headings, UTC-backed `<time>` values, release notes, source commit,
-checksum, install steps and the developer profile link. Every D1 value is escaped
-before interpolation.
+[page.ts](../../cloudflare/src/page.ts) renders the active release, source commit,
+history, timestamp and install steps as escaped, script-free HTML. The
+[publisher receipt](../reference/windows-publisher-verification.md) is tied to
+the installer checksum. It appears separately from the signed download link.
 
 `handlePublish` in order: 405 unless POST → 404 unless admin-authorised → 415
 unless `content-type` starts with `application/json` → 400 `invalid_release` if
@@ -604,23 +602,18 @@ undefined while **leaving the file on disk**. The Settings panel then offers to
 overwrite it rather than silently losing a configuration that a different machine
 or a repaired OS keychain might still read.
 
-### Bundled Bootstrap
+### Device enrollment and legacy bootstrap
 
-A packaged installer can arrive already knowing where its update service is.
-[update-bootstrap.ts](../../electron/update-bootstrap.ts) reads
-`private-browser-update.json` from `process.resourcesPath` — placed there by
-electron-builder's `extraResources` filter, written during CI by
-[write-update-bootstrap.mjs](../../cloudflare/scripts/write-update-bootstrap.mjs)
-from `PRIVATE_BROWSER_DOWNLOAD_URL` and `PRIVATE_BROWSER_DOWNLOAD_TOKEN`.
+New installers use the default service address with a credential-free resource
+set. The release owner chooses the distribution policy. **Enroll this device**
+uses a one-time code to register a separate credential for that Windows profile.
+The device credential is sent in an Authorization header to the verified
+service origin. CI can use its own enrolled verification device in private mode.
+[Private download distribution](../private-download-distribution.md)
 
-**Bundling is opt-in and off by default.** The script writes nothing unless
-`PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN` is exactly `true`, so the default installer
-carries no credential and the `extraResources` filter finds nothing to copy. When
-it is set, the build prints a warning: the token is shared by every client, not
-issued per device, and anyone holding the installer can extract it (F-02). Rotate
-`PRIVATE_BROWSER_DOWNLOAD_TOKEN` before such an installer leaves the machine it
-was built for. The publish job refuses such a build: it stays a private GitHub
-artifact (F-42).
+[update-bootstrap.ts](../../electron/update-bootstrap.ts) can still read
+`private-browser-update.json` from an older installed package. Its credential
+uses the legacy update compatibility path.
 
 Whatever the outcome — stored, invalid, or refused because `safeStorage` is
 unavailable — the file is deleted in a `finally`. It used to be removed only on

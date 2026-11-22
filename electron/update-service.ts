@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { safeStorage } from 'electron';
 import { isSafeUpdateEndpoint } from './security.js';
+import { atomicWrite } from './myvault/vault-store.js';
 import type { ReleaseManifest, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus } from './types.js';
 
 interface StoredUpdateService extends UpdateServiceInput {
@@ -9,14 +11,20 @@ interface StoredUpdateService extends UpdateServiceInput {
 }
 
 export const PUBLIC_UPDATE_ENDPOINT = 'https://private-browser-downloads.digitronics-electro.workers.dev';
+const enrollmentPattern = /^pbenr_([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})_[A-Za-z0-9_-]{43}$/;
+const devicePattern = /^pbdev_[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}_[A-Za-z0-9_-]{43}$/;
+
+interface PendingEnrollment { endpoint: string; codeHash: string; credential: string }
 
 export class UpdateServiceStore {
   private config?: StoredUpdateService;
   private corrupt = false;
   private readonly disabledPath: string;
+  private readonly enrollmentPath: string;
 
   constructor(private readonly filePath: string) {
     this.disabledPath = `${filePath}.disabled`;
+    this.enrollmentPath = `${filePath}.enrollment`;
     this.config = this.load();
   }
 
@@ -24,20 +32,27 @@ export class UpdateServiceStore {
     if (this.corrupt) return { configured: false, currentVersion, source: 'public', endpoint: PUBLIC_UPDATE_ENDPOINT, error: 'configuration-corrupt' };
     if (!safeStorage.isEncryptionAvailable()) return { configured: false, currentVersion, source: 'public', endpoint: PUBLIC_UPDATE_ENDPOINT, error: 'os-encryption-unavailable' };
     return this.config
-      ? { configured: true, currentVersion, source: 'private', endpoint: this.config.endpoint }
+      ? { configured: true, currentVersion, source: 'private', endpoint: this.config.endpoint, deviceEnrolled: devicePattern.test(this.config.accessToken) }
       : { configured: false, currentVersion, source: 'public', endpoint: PUBLIC_UPDATE_ENDPOINT };
   }
 
   configure(input: UpdateServiceInput, currentVersion: string): UpdateServiceStatus {
+    if (devicePattern.test(input.accessToken.trim())) throw new Error('Use Enroll this device for private download credentials.');
+    return this.saveConfiguration(input, currentVersion);
+  }
+
+  private saveConfiguration(input: UpdateServiceInput, currentVersion: string): UpdateServiceStatus {
     if (!safeStorage.isEncryptionAvailable()) throw new Error('OS encryption is unavailable');
     const endpoint = normalizeEndpoint(input.endpoint);
     const accessToken = input.accessToken.trim();
     if (!isSafeUpdateEndpoint(endpoint)) throw new Error('Use a public HTTPS Cloudflare Worker URL');
     if (accessToken.length < 32 || accessToken.length > 1000) throw new Error('The download access token must be at least 32 characters');
-    this.config = { version: 1, endpoint, accessToken };
+    const config: StoredUpdateService = { version: 1, endpoint, accessToken };
+    const encrypted = safeStorage.encryptString(JSON.stringify(config));
+    atomicWrite(this.filePath, encrypted.toString('base64'));
+    this.config = config;
     this.corrupt = false;
     if (existsSync(this.disabledPath)) unlinkSync(this.disabledPath);
-    this.save();
     return this.status(currentVersion);
   }
 
@@ -52,6 +67,7 @@ export class UpdateServiceStore {
     this.config = undefined;
     this.corrupt = false;
     if (existsSync(this.filePath)) unlinkSync(this.filePath);
+    if (existsSync(this.enrollmentPath)) unlinkSync(this.enrollmentPath);
     mkdirSync(dirname(this.disabledPath), { recursive: true });
     writeFileSync(this.disabledPath, 'disabled\n', { mode: 0o600 });
     return this.status(currentVersion);
@@ -59,6 +75,56 @@ export class UpdateServiceStore {
 
   async check(currentVersion: string): Promise<UpdateCheckResult> {
     return checkUpdateEndpoint(currentVersion, this.config?.endpoint, this.config?.accessToken);
+  }
+
+  async enrollDevice(code: string, currentVersion: string, signal: AbortSignal): Promise<UpdateServiceStatus> {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('OS encryption is unavailable');
+    const id = enrollmentPattern.exec(code)?.[1];
+    if (!id) throw new Error('Enter a valid download enrollment code.');
+    const endpoint = this.config?.endpoint ?? PUBLIC_UPDATE_ENDPOINT;
+    if (!isSafeUpdateEndpoint(endpoint)) throw new Error('Use an approved HTTPS download service.');
+    const codeHash = createHash('sha256').update(code).digest('hex');
+    const old = this.readPendingEnrollment();
+    const pending = old?.endpoint === endpoint && old.codeHash === codeHash ? old : {
+      endpoint, codeHash, credential: `pbdev_${id}_${randomBytes(32).toString('base64url')}`,
+    };
+    // Save the same device credential before redeeming. A lost response then retries with the same proof.
+    signal.throwIfAborted();
+    atomicWrite(this.enrollmentPath, safeStorage.encryptString(JSON.stringify(pending)).toString('base64'));
+    const response = await fetch(endpoint + '/api/v1/device-enrollment/redeem', {
+      method: 'POST', redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+      headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${pending.credential}` },
+      body: JSON.stringify({ code }),
+    });
+    if (!response.ok) throw new Error('Enrollment was refused. Check the service address or ask for a fresh code.');
+    const state = await response.json() as { enrolled?: unknown };
+    if (state.enrolled !== true) throw new Error('The download service did not confirm this device.');
+    signal.throwIfAborted();
+    const result = this.saveConfiguration({ endpoint, accessToken: pending.credential }, currentVersion);
+    if (existsSync(this.enrollmentPath)) unlinkSync(this.enrollmentPath);
+    return result;
+  }
+
+  fetchInstaller(input: Parameters<typeof fetch>[0], init?: RequestInit): Promise<Response> {
+    const config = this.config;
+    if (!config || !devicePattern.test(config.accessToken)) return fetch(input, init);
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.protocol !== 'https:' || url.origin !== new URL(config.endpoint).origin || url.pathname !== '/download/latest.exe'
+      || url.username || url.password || url.hash) throw new Error('The installer location does not match the enrolled service.');
+    const headers = new Headers(init?.headers);
+    headers.set('authorization', `Bearer ${config.accessToken}`);
+    return fetch(url, { ...init, headers, redirect: 'error' });
+  }
+
+  private readPendingEnrollment(): PendingEnrollment | undefined {
+    if (!existsSync(this.enrollmentPath)) return undefined;
+    if (statSync(this.enrollmentPath).size > 8_192) throw new Error('The previous enrollment cannot be read.');
+    const bytes = Buffer.from(readFileSync(this.enrollmentPath, 'utf8'), 'base64');
+    const pending = JSON.parse(safeStorage.decryptString(bytes)) as PendingEnrollment;
+    if (!isSafeUpdateEndpoint(pending.endpoint) || !/^[a-f0-9]{64}$/.test(pending.codeHash) || !devicePattern.test(pending.credential)) {
+      throw new Error('The previous enrollment cannot be read.');
+    }
+    return pending;
   }
 
   private load(): StoredUpdateService | undefined {
@@ -74,14 +140,6 @@ export class UpdateServiceStore {
     }
   }
 
-  private save(): void {
-    if (!this.config) return;
-    mkdirSync(dirname(this.filePath), { recursive: true });
-    const encrypted = safeStorage.encryptString(JSON.stringify(this.config));
-    const temporaryPath = `${this.filePath}.tmp`;
-    writeFileSync(temporaryPath, encrypted.toString('base64'), { mode: 0o600 });
-    renameSync(temporaryPath, this.filePath);
-  }
 }
 
 export async function checkUpdateEndpoint(currentVersion: string, endpointValue = PUBLIC_UPDATE_ENDPOINT, accessToken?: string): Promise<UpdateCheckResult> {
