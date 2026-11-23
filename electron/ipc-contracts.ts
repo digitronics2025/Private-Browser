@@ -27,6 +27,18 @@ const EXTERNAL_BROWSERS = new Set<ExternalBrowserId>(['edge', 'chrome', 'firefox
 
 export function validateIpcArguments(channel: string, args: unknown[]): void {
   switch (channel) {
+    case 'browser:extension-install': {
+      exact(args, 2); requireUuid(args[0], 'extension review');
+      if (!Array.isArray(args[1]) || args[1].length > 40 || args[1].some((origin) => typeof origin !== 'string' || origin.length > 512)) throw new Error('Invalid extension site selection');
+      return;
+    }
+    case 'browser:extension-sites': {
+      exact(args, 2); requireDigest(args[0]);
+      if (!Array.isArray(args[1]) || args[1].length > 40 || args[1].some((origin) => typeof origin !== 'string' || origin.length > 512)) throw new Error('Invalid extension site selection');
+      return;
+    }
+    case 'browser:extension-remove':
+      exact(args, 1); requireDigest(args[0]); return;
     case 'browser:set-memory-saver-site':
       exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 300); requireBoolean(args[2]); return;
     case 'google:overview-page':
@@ -583,6 +595,7 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
 
 /** Channels that carry no arguments at all. */
 const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
+  'browser:extensions-list', 'browser:extensions-inspect',
   'browser:undo-tab-batch',
   'browser:restore-deferred-session', 'browser:dismiss-deferred-session-offer',
   'pdf:open', 'pdf:save',
@@ -630,6 +643,7 @@ function between(args: unknown[], minimum: number, maximum: number): void { if (
 function requireBoolean(value: unknown): asserts value is boolean { if (typeof value !== 'boolean') throw new Error('Expected a boolean'); }
 function requireObject(value: unknown): Record<string, unknown> { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Expected an object'); return value as Record<string, unknown>; }
 function requireUuid(value: unknown, field: string): string { const text = requireBoundedText(value, field, 64); if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) throw new Error(`Invalid ${field} identifier`); return text; }
+function requireDigest(value: unknown): string { if (typeof value !== 'string' || !/^[a-f\d]{64}$/.test(value)) throw new Error('Invalid extension identifier'); return value; }
 function requireRemoteOrHomeUrl(value: unknown): void { const text = requireBoundedText(value, 'URL', 4096); if (text !== 'private://home' && !isAllowedRemoteUrl(text)) throw new Error('Only HTTP and HTTPS pages are allowed'); }
 function requireExternalBrowser(value: unknown): void { if (typeof value !== 'string' || !EXTERNAL_BROWSERS.has(value as ExternalBrowserId)) throw new Error('Invalid external browser'); }
 function requireIdentifier(value: unknown): void { const text = requireBoundedText(value, 'Google resource identifier', 512); if (!/^[a-zA-Z0-9_@.=-]+$/.test(text)) throw new Error('Invalid Google resource identifier'); }

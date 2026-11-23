@@ -173,10 +173,10 @@ node scripts/docs-find.mjs --history "<term from the entry>"
   *(2026-09-24)*
 ## Browser chrome (Chrome Precision redesign)
 
-- **No second window, private window, extensions, tab groups or pinned tabs.** The
-  controller owns exactly one `BrowserWindow` and has no extension runtime, group
-  model or pin state, so the browser menu deliberately omits those entries rather
-  than showing actions that do nothing. Each is a main-process feature, not a
+- **No second window, private window, tab groups or pinned tabs.** The
+  controller owns exactly one `BrowserWindow` and has no group model or pin
+  state, so the browser menu deliberately omits those entries rather than
+  showing actions that do nothing. Each is a main-process feature, not a
   styling task. Symbol: `BrowserController.createWindow`. *(2026-09-14)*
 - **Claude in the side panel cannot see or act on the page.** Chrome's Claude
   extension needs `chrome.sidePanel` and `chrome.debugger`, which Electron does

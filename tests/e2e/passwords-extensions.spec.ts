@@ -7,7 +7,8 @@ for (const width of [1280, 390]) {
     await page.getByRole('button', { name: 'Browser menu' }).click();
     await page.getByRole('menuitem', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Extensions', exact: true }).click();
-    await expect(page.getByText('Version 0.5.2 · Blocked before activation')).toBeVisible();
+    await expect(page.getByText('Jumia + MarjaneMall Stock Checker · Version 0.5.2 remains blocked')).toBeVisible();
+    await expect(page.getByText(/stores an Accounting token in extension storage/)).toBeVisible();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Passwords', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Open Google Password Manager' })).toBeVisible();

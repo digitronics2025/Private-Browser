@@ -49,6 +49,8 @@ import { AiProviderStore } from './ai-provider.js';
 import { AI_SYSTEM_PROMPT, assistantContextLimit, validateAssistantExcerpts, MAX_ASSISTANT_SOURCE_TEXT, assistantQuestion, aiUserPrompt, recentAssistantTurns, type AssistantTurn, readAssistantAnswer } from './ai-prompt.js';
 import { WORKSPACES } from './state-store.js';
 import { AccountStore, MAX_ASSISTANT_RECEIPTS } from './account-store.js';
+import { BrowserExtensionStore, type BrowserExtensionReviewTicket, type BrowserExtensionSummary } from './browser-extension-store.js';
+import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
 import { AccountSpaceStateStore } from './account-space-state.js';
 import { sealBrowsingArchive, unsealBrowsingArchive } from './browsing-recovery.js';
 import type { BrowsingPrivacyAction } from './browsing-protection.js';
@@ -147,7 +149,6 @@ import { FillPreferenceStore } from './myvault/fill-preferences.js';
 import { MAX_WORDPRESS_SAVE_ORIGINS, WordPressLoginAttempt, wordPressLoginFlow } from './myvault/wordpress-save.js';
 import { isSameSiteFillCandidate } from './myvault/site-match.js';
 import { fillPickerBounds, type FillPickerChoice } from './myvault/fill-picker-model.js';
-import { workspaceVaultPolicy } from './myvault/workspace-policy.js';
 import { FILL_PICKER_MAX_ROWS, isAutomaticFillPageUrl, orderFillCandidates, selectAutomaticFillEntry } from './myvault/automatic-fill.js';
 import { MyVaultSyncClient } from './myvault/vault-sync.js';
 import { VaultSyncController, type VaultConflictResolution } from './myvault/sync-controller.js';
@@ -214,6 +215,7 @@ interface RuntimeTab {
   pdf?: PdfDocumentStatus & { url: string };
   inlinePdfUrl?: string;
   view?: WebContentsView;
+  extensionsReady?: Promise<void>;
   memorySaver: MemorySaverPage;
   sleeping?: boolean;
   sleepPending?: boolean;
@@ -328,6 +330,8 @@ class BrowserController {
   private readonly trackerExpiry = new Map<AccountSpaceId, Map<string, ReturnType<typeof setTimeout>>>();
   private trackerBroadcast?: ReturnType<typeof setTimeout>;
   private readonly downloadFolder = new DownloadFolderStore(join(app.getPath('userData'), 'download-folders'), safeStorage);
+  private readonly browserExtensions: BrowserExtensionStore;
+  private readonly extensionLoadFailures = new Set<string>();
   private downloadFolderPickerOpen = false;
   private readonly temporaryPanelTools = new Map<AccountSpaceId, SidePanelTool>();
   private readonly configuredSessions = new Set<string>();
@@ -450,7 +454,9 @@ class BrowserController {
     private readonly vscodeBridge: VscodeBridgeServer,
     private readonly controlCenter: ControlCenterLink,
     private readonly fillPreferences: FillPreferenceStore,
+    browserExtensions: BrowserExtensionStore,
   ) {
+    this.browserExtensions = browserExtensions;
     this.permissions = new AccountPermissionManager(accounts);
     const state = this.store.get();
     const active = this.activeTab(state);
@@ -927,6 +933,7 @@ class BrowserController {
       if (target) Object.assign(target, { url, isHome: false, restorePaused: undefined });
     });
     const view = this.ensureView(tab.id);
+    await this.runtimeTabs.get(tab.id)?.extensionsReady;
     view.setVisible(true);
     this.applyLayout();
     await view.webContents.loadURL(url).catch((error: unknown) => {
@@ -1770,6 +1777,76 @@ class BrowserController {
   listAccountPermissionGrants(accountSpaceId: AccountSpaceId) {
     const account = this.requireAccountMembership(accountSpaceId);
     return account.locked || account.workspaceId === 'banking' ? [] : this.permissions.listGrants(accountSpaceId);
+  }
+
+  private activeBrowserExtensionAccount() {
+    const state = this.store.get();
+    const tab = this.activeTab(state);
+    const account = state.accountSpaces.find((item) => item.id === tab.accountSpaceId);
+    if (!account || account.locked || this.store.isReadOnly() || !workspaceVaultPolicy(tab.workspaceId).extensions) {
+      throw new Error('Browser extensions are unavailable in this workspace or Account Space.');
+    }
+    return { account, tab, partition: this.store.partitionFor(account.id), ses: session.fromPartition(this.store.partitionFor(account.id)) };
+  }
+
+  async inspectBrowserExtension(): Promise<BrowserExtensionReviewTicket | undefined> {
+    const { account, tab, partition, ses } = this.activeBrowserExtensionAccount();
+    this.configureSession(ses, partition, tab.workspaceId, account.id);
+    const result = await dialog.showOpenDialog(this.window, { title: `Choose an unpacked extension for ${account.label}`, properties: ['openDirectory'] });
+    if (result.canceled || !result.filePaths[0]) return undefined;
+    return this.browserExtensions.inspect(result.filePaths[0]);
+  }
+
+  async listBrowserExtensions(): Promise<BrowserExtensionSummary[]> {
+    const { account } = this.activeBrowserExtensionAccount();
+    return this.browserExtensions.list(account.id);
+  }
+
+  async installBrowserExtension(reviewId: string, allowedOrigins: string[]): Promise<BrowserExtensionSummary> {
+    const { account, tab, partition, ses } = this.activeBrowserExtensionAccount();
+    this.configureSession(ses, partition, tab.workspaceId, account.id);
+    const packageId = this.browserExtensions.reviewPackageId(reviewId);
+    if ((await this.browserExtensions.list(account.id)).some((item) => item.id === packageId)) {
+      throw new Error('This extension is already installed in this Account Space. Change its site access or remove it first.');
+    }
+    const item = await this.browserExtensions.install(account.id, reviewId, allowedOrigins);
+    if (this.configuredSessions.has(partition)) {
+      const failed = await this.browserExtensions.loadForSession(account.id, ses);
+      if (failed.includes(item.id)) {
+        await this.browserExtensions.unloadFromSession(account.id, item.id, ses);
+        await this.browserExtensions.remove(account.id, item.id);
+        throw new Error('Electron could not load this extension. Its folder was removed from Private Browser.');
+      }
+    }
+    return item;
+  }
+
+  async setBrowserExtensionSites(id: string, origins: string[]): Promise<BrowserExtensionSummary> {
+    const { account, tab, partition, ses } = this.activeBrowserExtensionAccount();
+    this.configureSession(ses, partition, tab.workspaceId, account.id);
+    const before = (await this.browserExtensions.list(account.id)).find((item) => item.id === id);
+    if (!before) throw new Error('The extension is no longer installed in this Account Space.');
+    await this.browserExtensions.unloadFromSession(account.id, id, ses);
+    const updated = await this.browserExtensions.setAllowedOrigins(account.id, id, origins);
+    if (updated.enabled) {
+      const failed = await this.browserExtensions.loadForSession(account.id, ses);
+      if (failed.includes(updated.id)) {
+        await this.browserExtensions.unloadFromSession(account.id, id, ses);
+        await this.browserExtensions.setAllowedOrigins(account.id, id, before.allowedOrigins);
+        await this.browserExtensions.loadForSession(account.id, ses);
+        throw new Error('Electron could not apply the new extension site access. The previous access was restored.');
+      }
+    }
+    this.broadcast();
+    return updated;
+  }
+
+  async removeBrowserExtension(id: string): Promise<void> {
+    const { account, tab, partition, ses } = this.activeBrowserExtensionAccount();
+    this.configureSession(ses, partition, tab.workspaceId, account.id);
+    await this.browserExtensions.unloadFromSession(account.id, id, ses);
+    await this.browserExtensions.remove(account.id, id);
+    this.extensionLoadFailures.delete(`${account.id}|${id}`);
   }
 
   prepareGmailSend(accountSpaceId: AccountSpaceId, input: GmailSendInput, sourceRevision?: string) {
@@ -5248,6 +5325,7 @@ class BrowserController {
     const partition = this.store.partitionFor(tab.accountSpaceId);
     const ses = session.fromPartition(partition);
     this.configureSession(ses, partition, tab.workspaceId, tab.accountSpaceId);
+    if (!runtime.extensionsReady) runtime.extensionsReady = this.prepareSessionExtensions(ses, tab.accountSpaceId, tab.workspaceId);
     const view = new WebContentsView({
       webPreferences: {
         session: ses,
@@ -5455,6 +5533,10 @@ class BrowserController {
         () => !this.window.isDestroyed() && !contents.isDestroyed() && view.getVisible()
           && runtime.navigationGeneration === generation && this.activeTab(this.store.get()).id === tabId,
         (url) => this.addBackgroundTab(tab.workspaceId, url, tab.accountSpaceId),
+        (url) => {
+          const newTabId = this.addBackgroundTab(tab.workspaceId, url, tab.accountSpaceId);
+          if (newTabId) void this.activateTab(newTabId);
+        },
         () => Boolean(this.developerTarget(tabId)),
         this.notesSourceCurrent(tabId, generation) ? (selection) => this.prepareNotesDraft(tabId, generation, selection) : undefined);
     });
@@ -5778,6 +5860,22 @@ class BrowserController {
     });
   }
 
+  private async prepareSessionExtensions(ses: Session, accountSpaceId: AccountSpaceId, workspaceId: WorkspaceId): Promise<void> {
+    if (!workspaceVaultPolicy(workspaceId).extensions) return;
+    try {
+      const failed = await this.browserExtensions.loadForSession(accountSpaceId, ses);
+      const failedKeys = new Set(failed.map((id) => `${accountSpaceId}|${id}`));
+      for (const key of [...this.extensionLoadFailures]) if (key.startsWith(`${accountSpaceId}|`) && !failedKeys.has(key)) this.extensionLoadFailures.delete(key);
+      for (const key of failedKeys) {
+        if (this.extensionLoadFailures.has(key)) continue;
+        this.extensionLoadFailures.add(key);
+        this.addPrivacyEvent('blocked', 'Browser extension could not load', 'Review or remove the extension in Settings → Extensions.', accountSpaceId);
+      }
+    } catch {
+      this.addPrivacyEvent('blocked', 'Browser extension settings unavailable', 'Extension permissions could not be checked. No extensions were loaded.', accountSpaceId);
+    }
+  }
+
   private async showActiveTab(): Promise<void> {
     if (this.startingWindow || this.sessionIsLocked) return;
     const state = this.store.get();
@@ -5787,6 +5885,7 @@ class BrowserController {
     if (!locked && !tab.isHome && !tab.restorePaused && !this.runtimeTabs.get(tab.id)?.problem
       && this.runtimeTabs.get(tab.id)?.pdf?.mode !== 'protected' && this.startupTabRecovery?.accountSpaceId !== tab.accountSpaceId && isAllowedRemoteUrl(tab.url)) {
       const view = this.ensureView(tab.id);
+      await this.runtimeTabs.get(tab.id)?.extensionsReady;
       const runtime = this.runtimeTabs.get(tab.id);
       if (runtime) runtime.memorySaver.lastVisibleAt = Date.now();
       view.setVisible(!this.overlayOpen && !this.pendingPermission);
@@ -5983,11 +6082,12 @@ class BrowserController {
     view.setBounds(pair.leftTabId === otherId ? panes.left : panes.right);
     view.setVisible(!this.overlayOpen && !this.pendingPermission && !this.sessionIsLocked);
     const contents = view.webContents;
-    if (!contents.getURL() && !contents.isLoading()) {
+    void this.runtimeTabs.get(otherId)?.extensionsReady?.then(() => {
+      if (view.webContents.isDestroyed() || contents.getURL() || contents.isLoading()) return;
       void contents.loadURL(other.url).catch(() => {
         // The existing failed-load event records a recoverable tab problem.
       });
-    }
+    });
   }
 
   /**
@@ -6292,6 +6392,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   vault.initialize();
   const aiProvider = new AiProviderStore(join(userDataPath, 'ai-provider.enc'));
   const updates = new UpdateServiceStore(join(userDataPath, 'update-service.enc'));
+  const browserExtensions = new BrowserExtensionStore(userDataPath, safeStorage);
   const controlCenter = new ControlCenterLink({ filePath: join(userDataPath, 'control-center-link.enc'), storage: safeStorage });
   const bridgeDataRoot = join(process.env.LOCALAPPDATA ?? userDataPath, 'Private Browser Bridge');
   vscodeBridge = new VscodeBridgeServer(join(userDataPath, 'vscode-bridge.enc'), join(bridgeDataRoot, 'rendezvous.json'), app.getVersion(), () => controller?.broadcast());
@@ -6317,7 +6418,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
     removeUpdateBootstrap(updateBootstrapPath);
   }
   const migration = new VaultMigrationService(join(userDataPath, 'vault.enc'), join(userDataPath, 'myvault', 'migration-journal.enc'), safeStorage, vault);
-  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, bookmarkSync, vault, migration, aiProvider, updates, vscodeBridge, controlCenter, fillPreferences);
+  controller = new BrowserController(store, persistedState, accountStore, googleConfiguration, externalBrowsers, googleOAuth, googleServices, backups, bookmarkSync, vault, migration, aiProvider, updates, vscodeBridge, controlCenter, fillPreferences, browserExtensions);
   const agentChromeUrl = new URL(browserChromeUrl);
   agentChromeUrl.hash = 'agent-workspace';
   agentHost = new AgentHost({
@@ -6481,6 +6582,11 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('app:quit', () => { app.quit(); });
   handle('browser:open-google-password-manager', () => controller!.openGooglePasswordManager());
   handle('browser:list-chrome-profiles', () => controller!.listChromeProfiles());
+  handle('browser:extensions-list', () => controller!.listBrowserExtensions());
+  handle('browser:extensions-inspect', () => controller!.inspectBrowserExtension());
+  handle('browser:extension-install', (_event, id: string, origins: string[]) => controller!.installBrowserExtension(id, origins));
+  handle('browser:extension-sites', (_event, id: string, origins: string[]) => controller!.setBrowserExtensionSites(id, origins));
+  handle('browser:extension-remove', (_event, id: string) => controller!.removeBrowserExtension(id));
   handle('browser:import-chrome', (_event, options: ChromeImportOptions) => controller!.importChrome(options));
   handle('browser:preview-chrome-import', (_event, options: ChromeImportOptions) => controller!.previewChromeImport(options));
   handle('browser:confirm-chrome-import', (_event, id: string) => controller!.confirmChromeImport(id));

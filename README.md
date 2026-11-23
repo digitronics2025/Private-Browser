@@ -113,8 +113,12 @@ The AI panel first extracts visible page text locally. It removes common credent
 This is a functional desktop browser, not a Chromium fork. It is optimized for a
 private single-user Windows workflow. Chrome import, bookmark folders and the
 bookmark bar are Account-Space-aware; Chrome Sync is not implemented or
-advertised. Android, general Chrome-extension compatibility and a passkey-management UI remain future modules; Chromium's ordinary website
-WebAuthn/passkey flow remains available where supported by the host OS.
+advertised. Private Browser supports a restricted extension subset: locally
+selected unpacked Manifest V3 content-script extensions with exact HTTPS site
+grants scoped to one Account Space. It does not support general Chrome Web Store
+compatibility. Android and a passkey-management UI remain future modules;
+Chromium's ordinary website WebAuthn/passkey flow remains available where
+supported by the host OS.
 
 Google API access requires a privately configured Desktop OAuth client ID. See
 [Google Account Spaces](docs/systems/google-account-spaces.md#operator-setup-and-verification)

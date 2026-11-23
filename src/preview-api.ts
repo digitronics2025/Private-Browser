@@ -1542,6 +1542,11 @@ export function installPreviewApi(): void {
       return (['connect', 'locked', 'no-match', 'unsupported', 'ready', 'choose-login'] as const)
         .find((candidate) => candidate === value) ?? 'unsupported';
     },
+    listBrowserExtensions: async () => [],
+    inspectBrowserExtension: async () => { throw new Error('Extension installation is available in the desktop app.'); },
+    installBrowserExtension: async () => { throw new Error('Extension installation is available in the desktop app.'); },
+    setBrowserExtensionSites: async () => { throw new Error('Extension permissions are available in the desktop app.'); },
+    removeBrowserExtension: async () => { throw new Error('Extension management is available in the desktop app.'); },
   };
   Object.defineProperty(window, 'privateBrowser', { value: handlers, configurable: true });
   document.documentElement.dataset.browserPreview = 'synthetic';

@@ -7,6 +7,7 @@ export function showPageContextMenu(
   params: ContextMenuParams,
   sourceStillActive: () => boolean,
   openInBackground: (url: string) => void,
+  openInForeground: (url: string) => void,
   canInspect: () => boolean,
   saveSelectionToNotes?: (selection: string) => void,
 ): void {
@@ -24,6 +25,7 @@ export function showPageContextMenu(
   const links: MenuItemConstructorOptions[] = [];
   if (params.linkURL.length <= 4096 && isAllowedRemoteUrl(params.linkURL)) {
     const url = stripTrackingParameters(params.linkURL);
+    links.push(item('Open link in new tab', () => openInForeground(url)));
     links.push(item('Open link in background tab', () => openInBackground(url)));
     links.push(item('Copy link address', () => clipboard.writeText(url)));
   }
