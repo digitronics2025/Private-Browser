@@ -56,6 +56,11 @@ export interface PersistedPermissionGrant {
   capability: PermissionCapability;
 }
 
+export interface PersistedPopupPreference {
+  origin: string;
+  decision: 'allow' | 'block';
+}
+
 export interface AccountBackupConfiguration {
   enabled: boolean;
   wrappedRecoveryKey?: string;
@@ -99,6 +104,7 @@ export interface AccountSpaceRecord {
   enabledModules: GoogleModule[];
   grantedScopes: string[];
   permissionGrants: PersistedPermissionGrant[];
+  popupPreferences?: PersistedPopupPreference[];
   memorySaverExclusions?: string[];
   wordPressSaveOrigins?: string[];
   backup: AccountBackupConfiguration;
@@ -161,6 +167,7 @@ export class AccountStore {
       enabledModules: [],
       grantedScopes: [],
       permissionGrants: [],
+      popupPreferences: [],
       backup: { enabled: false, includeOpenTabs: false, includeHistory: false },
     };
     this.write(record);
@@ -350,6 +357,7 @@ function validateRecord(value: unknown, expectedId: AccountSpaceId): AccountSpac
   const googleConnection = requireGoogleConnection(input.googleConnection);
   const websiteStatus = requireWebsiteStatus(input.websiteStatus);
   const permissionGrants = validatePermissionGrants(input.permissionGrants);
+  const popupPreferences = validatePopupPreferences(input.popupPreferences);
   const backup = validateBackup(input.backup);
   const record: AccountSpaceRecord = {
     schemaVersion: ACCOUNT_RECORD_VERSION,
@@ -375,6 +383,7 @@ function validateRecord(value: unknown, expectedId: AccountSpaceId): AccountSpac
     enabledModules: requireGoogleModules(input.enabledModules ?? []),
     grantedScopes: validateScopes(input.grantedScopes ?? []),
     permissionGrants,
+    popupPreferences,
     memorySaverExclusions: workspaceId !== 'banking' ? memorySaverExclusions(input.memorySaverExclusions) : undefined,
     wordPressSaveOrigins: workspaceId !== 'banking' && workspaceId !== 'development' ? wordPressSaveOrigins(input.wordPressSaveOrigins) : undefined,
     backup,
@@ -420,6 +429,20 @@ function validatePermissionGrants(value: unknown): PersistedPermissionGrant[] {
     const candidate = grant as Partial<PersistedPermissionGrant>;
     return { origin: requireExactWebOrigin(candidate.origin), capability: requirePermissionCapability(candidate.capability) };
   });
+}
+
+function validatePopupPreferences(value: unknown): PersistedPopupPreference[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 100) throw new Error('Invalid pop-up preferences');
+  const result: PersistedPopupPreference[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const candidate = item as Partial<PersistedPopupPreference>;
+    if (candidate.decision !== 'allow' && candidate.decision !== 'block') continue;
+    const origin = requireExactWebOrigin(candidate.origin);
+    if (!result.some((entry) => entry.origin === origin)) result.push({ origin, decision: candidate.decision });
+  }
+  return result;
 }
 
 function validateBackup(value: unknown): AccountBackupConfiguration {

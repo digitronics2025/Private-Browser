@@ -6,7 +6,9 @@ import type { WorkspaceId } from './types.js';
 export type SearchEngineId = 'duckduckgo' | 'google' | 'bing' | 'brave' | 'startpage' | 'ecosia' | 'custom';
 export type PresetSearchEngineId = Exclude<SearchEngineId, 'custom'>;
 export type HomePageMode = 'new-tab' | 'url';
-export type StartupMode = 'continue' | 'home' | 'new-tab' | 'pages';
+export type NewTabMode = 'start' | 'blank' | 'url';
+export type StartupMode = 'fresh' | 'ask' | 'automatic';
+type LegacyStartupMode = 'continue' | 'home' | 'new-tab' | 'pages';
 export interface SiteKeyword { keyword: string; template: string }
 export const SPELLCHECK_LANGUAGES = { en: 'English', fr: 'French', ar: 'Arabic' } as const;
 export type SpellcheckLanguage = keyof typeof SPELLCHECK_LANGUAGES;
@@ -39,8 +41,14 @@ export interface BrowserSettings {
   homePage: HomePageMode;
   /** Present only when `homePage` is `url`. */
   homePageUrl?: string;
+  newTab: NewTabMode;
+  /** Present only when `newTab` is `url`. */
+  newTabUrl?: string;
   startup: StartupMode;
+  /** Optional pages opened after the startup decision. */
   startupPages?: string[];
+  startupHome?: boolean;
+  startupNewTab?: boolean;
   siteKeywords?: SiteKeyword[];
   spellcheck?: SpellcheckSettings;
   assistantPrompts?: AssistantPresetOverrides;
@@ -59,7 +67,7 @@ export const SEARCH_ENGINES: Record<PresetSearchEngineId, { label: string; templ
 
 export const SEARCH_ENGINE_IDS: readonly SearchEngineId[] = [...Object.keys(SEARCH_ENGINES) as PresetSearchEngineId[], 'custom'];
 export const HOME_PAGE_MODES: readonly HomePageMode[] = ['new-tab', 'url'];
-export const STARTUP_MODES: readonly StartupMode[] = ['continue', 'home', 'new-tab', 'pages'];
+export const STARTUP_MODES: readonly StartupMode[] = ['fresh', 'ask', 'automatic'];
 export const MAX_SETTING_URL_LENGTH = 2048;
 export const MAX_STARTUP_PAGES = 8;
 export const MAX_SITE_KEYWORDS = 8;
@@ -68,10 +76,11 @@ export const MAX_REFERENCE_LENGTH = 120;
 export const DEFAULT_BROWSER_SETTINGS: BrowserSettings = {
   searchEngine: 'duckduckgo',
   homePage: 'new-tab',
-  startup: 'continue',
+  newTab: 'start',
+  startup: 'automatic',
 };
 
-const PATCH_KEYS = new Set(['searchEngine', 'customSearchTemplate', 'homePage', 'homePageUrl', 'startup', 'startupPages', 'siteKeywords', 'spellcheck', 'assistantPrompts']);
+const PATCH_KEYS = new Set(['searchEngine', 'customSearchTemplate', 'homePage', 'homePageUrl', 'newTab', 'newTabUrl', 'startup', 'startupPages', 'startupHome', 'startupNewTab', 'siteKeywords', 'spellcheck', 'assistantPrompts']);
 
 function member<T extends string>(values: readonly T[], value: unknown): value is T {
   return typeof value === 'string' && (values as readonly string[]).includes(value);
@@ -161,10 +170,16 @@ function requireSiteKeywords(value: unknown): SiteKeyword[] {
  */
 export function sanitizeBrowserSettings(value: unknown): BrowserSettings {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const legacyStartup = input.startup as LegacyStartupMode;
+  const startup = member(['fresh', 'ask', 'automatic'] as const, input.startup) ? input.startup
+    : member(['continue', 'home', 'new-tab', 'pages'] as const, input.startup) ? 'automatic' : DEFAULT_BROWSER_SETTINGS.startup;
   const settings: BrowserSettings = {
     searchEngine: member(SEARCH_ENGINE_IDS, input.searchEngine) ? input.searchEngine : DEFAULT_BROWSER_SETTINGS.searchEngine,
     homePage: member(HOME_PAGE_MODES, input.homePage) ? input.homePage : DEFAULT_BROWSER_SETTINGS.homePage,
-    startup: member(STARTUP_MODES, input.startup) ? input.startup : DEFAULT_BROWSER_SETTINGS.startup,
+    newTab: member(['start', 'blank', 'url'] as const, input.newTab) ? input.newTab : DEFAULT_BROWSER_SETTINGS.newTab,
+    startup,
+    ...(input.startupHome === true || legacyStartup === 'home' ? { startupHome: true } : {}),
+    ...(input.startupNewTab === true || legacyStartup === 'new-tab' ? { startupNewTab: true } : {}),
   };
   if (settings.searchEngine === 'custom') {
     if (isSearchTemplate(input.customSearchTemplate)) settings.customSearchTemplate = input.customSearchTemplate.trim();
@@ -174,13 +189,16 @@ export function sanitizeBrowserSettings(value: unknown): BrowserSettings {
     if (isHomePageUrl(input.homePageUrl)) settings.homePageUrl = input.homePageUrl;
     else settings.homePage = DEFAULT_BROWSER_SETTINGS.homePage;
   }
+  if (settings.newTab === 'url') {
+    if (isHomePageUrl(input.newTabUrl)) settings.newTabUrl = input.newTabUrl;
+    else settings.newTab = DEFAULT_BROWSER_SETTINGS.newTab;
+  }
   if (input.startupPages !== undefined) {
     try {
       const pages = requireStartupPages(input.startupPages);
       if (pages.length) settings.startupPages = pages;
     } catch { /* Ignore invalid stored startup pages. */ }
   }
-  if (settings.startup === 'pages' && !settings.startupPages?.length) settings.startup = 'continue';
   if (input.siteKeywords !== undefined) {
     try {
       const keywords = requireSiteKeywords(input.siteKeywords);
@@ -225,14 +243,28 @@ export function requireBrowserSettingsPatch(value: unknown): BrowserSettingsPatc
     if (typeof input.homePageUrl !== 'string' || !input.homePageUrl.trim() || input.homePageUrl.length > MAX_SETTING_URL_LENGTH) throw new Error('Enter a web address');
     patch.homePageUrl = input.homePageUrl.trim();
   }
-  if ('startup' in input) { if (!member(STARTUP_MODES, input.startup)) throw new Error('Invalid startup choice'); patch.startup = input.startup; }
+  if ('newTab' in input) { if (!member(['start', 'blank', 'url'] as const, input.newTab)) throw new Error('Invalid New Tab choice'); patch.newTab = input.newTab; }
+  if ('newTabUrl' in input) {
+    if (typeof input.newTabUrl !== 'string' || !input.newTabUrl.trim() || input.newTabUrl.length > MAX_SETTING_URL_LENGTH) throw new Error('Enter a web address');
+    patch.newTabUrl = input.newTabUrl.trim();
+  }
+  if ('startup' in input) {
+    if (member(STARTUP_MODES, input.startup)) patch.startup = input.startup;
+    else if (member(['continue', 'home', 'new-tab', 'pages'] as const, input.startup)) {
+      patch.startup = 'automatic';
+      if (input.startup === 'home') patch.startupHome = true;
+      if (input.startup === 'new-tab') patch.startupNewTab = true;
+    } else throw new Error('Invalid startup choice');
+  }
+  if ('startupHome' in input) { if (typeof input.startupHome !== 'boolean') throw new Error('Invalid startup add-on'); patch.startupHome = input.startupHome; }
+  if ('startupNewTab' in input) { if (typeof input.startupNewTab !== 'boolean') throw new Error('Invalid startup add-on'); patch.startupNewTab = input.startupNewTab; }
   if ('startupPages' in input) patch.startupPages = requireStartupPages(input.startupPages);
   if ('siteKeywords' in input) patch.siteKeywords = requireSiteKeywords(input.siteKeywords);
   if ('spellcheck' in input) patch.spellcheck = requireSpellcheck(input.spellcheck);
   if ('assistantPrompts' in input) patch.assistantPrompts = requireAssistantPrompts(input.assistantPrompts);
   if (patch.searchEngine === 'custom' && patch.customSearchTemplate === undefined) throw new Error('Enter a search address');
   if (patch.homePage === 'url' && patch.homePageUrl === undefined) throw new Error('Enter a web address');
-  if (patch.startup === 'pages' && !patch.startupPages?.length) throw new Error('Add at least one startup page.');
+  if (patch.newTab === 'url' && patch.newTabUrl === undefined) throw new Error('Enter a web address');
   return patch;
 }
 
@@ -241,6 +273,7 @@ export function mergeBrowserSettings(current: BrowserSettings, patch: BrowserSet
   const next: Record<string, unknown> = { ...current, ...patch };
   if (next.searchEngine !== 'custom') delete next.customSearchTemplate;
   if (next.homePage !== 'url') delete next.homePageUrl;
+  if (next.newTab !== 'url') delete next.newTabUrl;
   return sanitizeBrowserSettings(next);
 }
 
@@ -277,4 +310,9 @@ export function referenceSearchUrl(settings: BrowserSettings, keyword: string, r
 export function resolveHomeUrl(settings: BrowserSettings, protectedWorkspace: boolean): string {
   if (protectedWorkspace || settings.homePage !== 'url' || !settings.homePageUrl) return 'private://home';
   return settings.homePageUrl;
+}
+
+export function resolveNewTabUrl(settings: BrowserSettings, protectedWorkspace: boolean): string {
+  if (protectedWorkspace || settings.newTab !== 'url' || !settings.newTabUrl) return settings.newTab === 'blank' && !protectedWorkspace ? 'private://blank' : 'private://home';
+  return settings.newTabUrl;
 }

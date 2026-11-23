@@ -32,7 +32,7 @@ test.beforeAll(async () => {
   spkiHash = createHash('sha256').update(new X509Certificate(cert).publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
   server = createServer({ key: readFileSync(keyPath), cert }, (_request, response) => {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end('<!doctype html><title>Layout fixture</title><body style="margin:0;background:#22c55e;font:20px system-ui">Layout fixture</body>');
+    response.end('<!doctype html><title>Layout fixture</title><body style="margin:0;background:#22c55e;font:20px system-ui"><input id="fixture-input"><main>' + Array.from({ length: 100 }, (_, index) => `<p>Layout row ${index}</p>`).join('') + '</main></body>');
   });
   await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
   origin = `https://layout.example.test:${(server.address() as AddressInfo).port}`;
@@ -145,8 +145,47 @@ test('the page view follows the chrome through every layout change', async () =>
     await expect(page.getByRole('menu', { name: 'Browser menu' })).toBeVisible();
     await expect.poll(async () => (await measure(app, page)).native.views.length).toBe(0);
     await expect(page.locator('img.frozen-frame')).toBeVisible();
+    await expect(page.locator('img.frozen-frame')).toHaveAttribute('src', /^data:image\/jpeg/);
     await page.keyboard.press('Escape');
     await expectPageAligned(app, page);
+
+    const pageState = () => app.evaluate(async ({ BrowserWindow }) => {
+      const view = BrowserWindow.getAllWindows()[0].contentView.children.find((child) => (child as Electron.WebContentsView).webContents.getURL().includes('layout.example.test')) as Electron.WebContentsView;
+      return view.webContents.executeJavaScript('({ y: Math.round(window.scrollY), text: document.querySelector("#fixture-input").value })');
+    });
+    await app.evaluate(async ({ BrowserWindow }) => {
+      const view = BrowserWindow.getAllWindows()[0].contentView.children.find((child) => (child as Electron.WebContentsView).webContents.getURL().includes('layout.example.test')) as Electron.WebContentsView;
+      await view.webContents.executeJavaScript('window.scrollTo(0, 900); document.querySelector("#fixture-input").value = "kept typed input"');
+    });
+    const beforeMenu = await pageState();
+    for (let index = 0; index < 20; index++) {
+      const menuButton = page.getByRole('button', { name: 'Browser menu' });
+      if (index % 2 === 0) await menuButton.click();
+      else { await menuButton.focus(); await page.keyboard.press('Enter'); }
+      await expect(page.getByRole('menu', { name: 'Browser menu' })).toBeVisible();
+      await expect(page.locator('img.frozen-frame')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expectPageAligned(app, page);
+    }
+    expect(await pageState()).toEqual(beforeMenu);
+
+    const address = page.getByRole('combobox', { name: 'Address and search bar' });
+    for (const [theme, expected] of [['light', 'rgb(7, 94, 89)'], ['dark', 'rgb(45, 212, 191)']] as const) {
+      await page.evaluate((value) => window.privateBrowser.setUiPreferences({ theme: value }), theme);
+      await page.getByRole('button', { name: 'Home', exact: true }).focus();
+      await address.click();
+      await expect.poll(() => address.evaluate((input: HTMLInputElement) => input.selectionStart === 0 && input.selectionEnd === input.value.length)).toBe(true);
+      const selectionColor = await address.evaluate((input: HTMLInputElement) => getComputedStyle(input, '::selection').backgroundColor);
+      expect(selectionColor).toBe(expected);
+      await address.pressSequentially('replacement.test');
+      await expect(address).toHaveValue('replacement.test');
+      await address.evaluate((input: HTMLInputElement) => input.setSelectionRange(0, 11));
+      await expect.poll(() => address.evaluate((input: HTMLInputElement) => input.selectionStart === 0 && input.selectionEnd === 11)).toBe(true);
+      await address.pressSequentially('partial');
+      await expect(address).toHaveValue('partial.test');
+      await page.keyboard.press('Control+l');
+      await expect.poll(() => address.evaluate((input: HTMLInputElement) => input.selectionStart === 0 && input.selectionEnd === input.value.length)).toBe(true);
+    }
 
     // A permission prompt hides the page until it is answered.
     await app.evaluate(({ BrowserWindow }) => {

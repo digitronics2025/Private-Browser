@@ -13,10 +13,10 @@ describe('Chrome profile settings and import receipts', () => {
       patch: { homePage: 'url', homePageUrl: 'https://reference.example.test/' }, applied: ['home'], unavailable: [],
     });
     expect(selectedChromeSettings(preferences, { search: true, startup: true })).toEqual({
-      patch: { searchEngine: 'google', startup: 'pages', startupPages: ['https://start.example.test/'] },
+      patch: { searchEngine: 'google', startup: 'automatic', startupPages: ['https://start.example.test/'] },
       applied: ['search', 'startup'], unavailable: [],
     });
-    expect(selectedChromeSettings({ session: { restore_on_startup: 5 } }, { startup: true }).patch).toEqual({ startup: 'new-tab' });
+    expect(selectedChromeSettings({ session: { restore_on_startup: 5 } }, { startup: true }).patch).toEqual({ startup: 'automatic', startupNewTab: true });
   });
 
   it('rejects an unrecognized search engine and credential-bearing destinations', () => {

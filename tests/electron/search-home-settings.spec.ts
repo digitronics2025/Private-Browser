@@ -18,6 +18,7 @@ let server: Server;
 let origin = '';
 let spkiHash = '';
 let certificateDirectory = '';
+let askRequests = 0;
 
 test.beforeAll(async () => {
   certificateDirectory = mkdtempSync(join(tmpdir(), 'private-browser-settings-cert-'));
@@ -30,12 +31,41 @@ test.beforeAll(async () => {
   spkiHash = createHash('sha256').update(new X509Certificate(cert).publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
   server = createServer({ key: readFileSync(keyPath), cert }, (request, response) => {
     const url = new URL(request.url ?? '/', 'https://settings.example.test');
+    if (url.pathname === '/ask') askRequests++;
     const title = url.pathname === '/search' ? `Results for ${url.searchParams.get('q')}` : 'Settings home fixture';
-    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     response.end(`<!doctype html><title>${title.replace(/[<>&]/g, '')}</title><body>${title.replace(/[<>&]/g, '')}</body>`);
   });
   await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
   origin = `https://settings.example.test:${(server.address() as AddressInfo).port}`;
+});
+
+test('Ask startup keeps prior websites unloaded until the owner restores', async () => {
+  const userData = await mkdtemp(join(tmpdir(), 'private-browser-ask-startup-'));
+  let app = await electron.launch({ args: launchArguments(), env: environment(userData) });
+  try {
+    let page = await app.firstWindow();
+    await page.evaluate(async (url) => {
+      const api = window.privateBrowser;
+      const state = await api.getState();
+      await api.navigate(url + '/ask');
+      await api.setBrowserSettings({ startup: 'ask' }, state.activeWorkspaceId);
+    }, origin);
+    await expect(page.getByRole('tab', { name: /Settings home fixture/ })).toBeVisible();
+    await expect.poll(() => askRequests).toBeGreaterThan(0);
+    const beforeRestart = askRequests;
+    await app.close();
+    app = await electron.launch({ args: launchArguments(), env: environment(userData) });
+    page = await app.firstWindow();
+    await expect(page.getByText('Restore your previous session?', { exact: true })).toBeVisible();
+    expect(askRequests).toBe(beforeRestart);
+    await page.getByRole('button', { name: 'Restore', exact: true }).click();
+    await expect(page.getByRole('tab', { name: /Settings home fixture/ })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Address and search bar' })).toHaveValue(`${origin}/ask`);
+  } finally {
+    await app.close().catch(() => undefined);
+    await rm(userData, { recursive: true, force: true }).catch(() => undefined);
+  }
 });
 
 test.afterAll(async () => {
@@ -57,9 +87,14 @@ function launchArguments(): string[] {
 async function openSettings(page: Page) {
   await page.getByRole('button', { name: 'Browser menu' }).click();
   await page.getByRole('menu', { name: 'Browser menu' }).getByRole('menuitem', { name: 'Settings', exact: true }).click();
-  const panel = page.getByRole('complementary', { name: 'Side panel' });
+  await page.getByRole('complementary', { name: 'Side panel' }).getByRole('button', { name: 'Open full settings' }).click();
+  const panel = page.getByRole('dialog', { name: 'Private Browser settings' });
   await expect(panel.getByText('Search engine', { exact: true })).toBeVisible();
   return panel;
+}
+
+async function closeSettings(page: Page) {
+  await page.getByRole('button', { name: 'Close Settings', exact: true }).click();
 }
 
 test('New Tab shortcut order and the recent-visit preference survive a restart', async () => {
@@ -105,7 +140,7 @@ test('keeps Home, site keywords and startup pages in the chosen workspace after 
       const api = window.privateBrowser;
       await api.switchWorkspace('personal');
       await api.setBrowserSettings({ homePage: 'url', homePageUrl: url + '/personal' }, 'personal');
-      await api.setBrowserSettings({ startup: 'pages', startupPages: [url + '/one', url + '/two'], siteKeywords: [
+      await api.setBrowserSettings({ startup: 'automatic', startupPages: [url + '/one', url + '/two'], siteKeywords: [
         { keyword: 'gh', template: url + '/search?q=%s' },
       ] }, 'personal');
       await api.goHome();
@@ -120,7 +155,7 @@ test('keeps Home, site keywords and startup pages in the chosen workspace after 
       await api.setBrowserSettings({ homePage: 'url', homePageUrl: url + '/tenten' }, 'tenten');
       await api.goHome();
     }, origin);
-    await expect(page.evaluate(() => window.privateBrowser.setBrowserSettings({ startup: 'home' }, 'personal'))).rejects.toThrow(/workspace changed/i);
+    await expect(page.evaluate(() => window.privateBrowser.setBrowserSettings({ startup: 'automatic' }, 'personal'))).rejects.toThrow(/workspace changed/i);
     await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then((state) =>
       state.tabs.find((tab) => tab.id === state.activeTabId)?.url))).toBe(origin + '/tenten');
     const restored = await page.evaluate(async (url) => {
@@ -170,17 +205,20 @@ test('search engine, Home page and startup settings work in the real app and sur
     await custom.fill(`${origin}/search?q=%s`);
     await panel.getByRole('button', { name: 'Save search address' }).click();
     await expect(toast).toContainText('Search engine saved');
+    await closeSettings(page);
     await address().fill('hello world');
     await address().press('Enter');
     await expect(address()).toHaveValue(`${origin}/search?q=hello%20world`);
     await expect(page.getByRole('tab', { name: /Results for hello world/ })).toBeVisible({ timeout: 12_000 });
 
     // Home goes to the chosen address, from the button and from Alt+Home.
+    panel = await openSettings(page);
     const home = panel.getByRole('radiogroup', { name: 'Home page' });
     await home.getByRole('radio', { name: 'Web address' }).click();
     await panel.getByRole('textbox', { name: 'Home page address' }).fill(`${origin}/home`);
     await panel.getByRole('button', { name: 'Save Home page' }).click();
     await expect(toast).toContainText('Home page saved');
+    await closeSettings(page);
     await page.getByRole('button', { name: 'Home', exact: true }).click();
     await expect(address()).toHaveValue(`${origin}/home`);
     await expect(page.getByRole('tab', { name: /Settings home fixture/ })).toBeVisible();
@@ -190,25 +228,30 @@ test('search engine, Home page and startup settings work in the real app and sur
     await address().press('Alt+Home');
     await expect(address()).toHaveValue(`${origin}/home`);
 
-    // Ctrl+T still opens the New Tab page, not the Home address.
+    // Ctrl+T uses the independently saved New Tab preference.
     await address().press('Control+t');
     await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
 
+    panel = await openSettings(page);
     const startup = panel.getByRole('radiogroup', { name: 'On startup' });
-    await startup.getByRole('radio', { name: 'Also open Home page' }).click();
-    await expect(startup.getByRole('radio', { name: 'Also open Home page' })).toHaveAttribute('aria-checked', 'true');
+    await startup.getByRole('radio', { name: 'Restore automatically' }).click();
+    const startupHome = panel.getByLabel('Also open Home after the startup decision');
+    if (!await startupHome.isChecked()) await startupHome.click();
+    await expect(startupHome).toBeChecked();
+    await closeSettings(page);
     const before = await tabs().count();
 
     await app.close();
     app = await electron.launch({ args: launchArguments(), env: environment(userData) });
     page = await app.firstWindow();
-    // Every restored tab is kept and exactly one Home tab is added and active.
-    await expect(tabs()).toHaveCount(before + 1);
-    await expect(address()).toHaveValue(`${origin}/home`);
+    // Restored tabs remain; an already-open configured Home is not duplicated.
+    await expect(tabs()).toHaveCount(before);
+    await expect(page.getByRole('tab', { name: 'Settings home fixture' })).toBeVisible();
     panel = await openSettings(page);
     await expect(panel.getByLabel('Search engine')).toHaveValue('custom');
     await expect(panel.getByRole('textbox', { name: 'Custom search address' })).toHaveValue(`${origin}/search?q=%s`);
     await expect(panel.getByRole('textbox', { name: 'Home page address' })).toHaveValue(`${origin}/home`);
+    await closeSettings(page);
 
     // Banking never opens a web page for Home.
     await page.getByRole('button', { name: /^Account Space: / }).click();

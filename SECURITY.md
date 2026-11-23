@@ -122,15 +122,22 @@ Google-host-only, redirect-free, bounded and magic-byte validated.
 
 Remote sites are denied sensitive Electron permissions by default. Decisions are
 keyed by Account Space, exact origin and capability, with deny/once/session/always
-choices. Notifications are restricted to exact Gmail, Calendar and Meet origins;
+choices. Pop-up preferences are Ask by default and can be set to Allow or Block
+per exact origin and Account Space; Ask offers allow once, always allow for this
+site, or Block. Notifications are restricted to exact Gmail, Calendar and Meet origins;
 camera/microphone and display capture are Meet-only, and display capture requires
 the active visible tab plus a source picker every time. Banking denies before
-saved grants. Popups become tabs in the originating account, except a
-`window.open` popup from the page in front (payment and sign-in flows), which
-opens as a sandboxed, preload-free window in the same account session, titled
-with its host, confined to http(s), and closed with its tab. The initial
-request waits for a native confirmation bound to the opener, destination,
-method and Account Space. It expires after 30 seconds.
+saved grants. A foreground `window.open` popup opens as a sandboxed,
+preload-free window in the originating Account Space, titled with its host and
+closed with its opener. Its first address may be HTTP(S), empty or exactly
+`about:blank`; blank initial windows are limited to this popup path. Ask holds
+the child hidden until the trusted chrome prompt is answered. If an HTTP(S)
+navigation is already pending, it is held until that choice; subsequent
+navigations and redirects remain confined to HTTP(S). Allow uses the saved
+origin preference but never overrides Banking, rate limits, opener checks,
+sandboxing or navigation guards. Popups from background tabs cannot open a
+separate window. The address bar distinguishes preference blocks from browser
+security blocks.
 
 Google service access uses narrow main-process clients, bounded ten-second
 requests and scope checks. Gmail sends, calendar mutations, Drive permission

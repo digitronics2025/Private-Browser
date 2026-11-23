@@ -345,15 +345,34 @@ describe('browser settings in the v2 manifest', () => {
     const saved = JSON.parse(readFileSync(options.paths.manifestFilePath, 'utf8')) as Record<string, unknown>;
     writeFileSync(options.paths.manifestFilePath, JSON.stringify({ ...saved, settings: { searchEngine: 'custom', customSearchTemplate: 'javascript:%s', homePage: 42, startup: 'home' } }));
     const loaded = reload(options);
-    expect(loaded.settings).toEqual({ ...DEFAULT_BROWSER_SETTINGS, startup: 'home' });
+    expect(loaded.settings).toEqual({ ...DEFAULT_BROWSER_SETTINGS, startupHome: true });
     expect(loaded.accountSpaceIds).toEqual(manifest.accountSpaceIds);
     expect(loaded.activeWorkspaceId).toBe(manifest.activeWorkspaceId);
   });
 
   it('round-trips the chosen settings', () => {
     const { options, manifest } = migrated();
-    const settings = { searchEngine: 'custom' as const, customSearchTemplate: 'https://search.example.com/?q=%s', homePage: 'url' as const, homePageUrl: 'https://tenten.ma/', startup: 'home' as const };
+    const settings = { searchEngine: 'custom' as const, customSearchTemplate: 'https://search.example.com/?q=%s', homePage: 'url' as const, homePageUrl: 'https://tenten.ma/', newTab: 'start' as const, startup: 'automatic' as const, startupHome: true };
     new AccountSpaceStateStore(options).saveManifest({ ...manifest, settings });
     expect(reload(options).settings).toEqual(settings);
+  });
+
+  it('persists deferred startup tabs only inside their owning Account Space file', () => {
+    const { options } = migrated();
+    const disk = new AccountSpaceStateStore(options);
+    const store = new RuntimeStateStore(disk, options.accountStore, disk.initialize());
+    const state = store.get();
+    const accountSpaceId = state.activeAccountSpaceByWorkspace.personal!;
+    store.update((next) => {
+      next.deferredSessionsByAccountSpace = { [accountSpaceId]: {
+        version: 1, savedAt: NOW.toISOString(), activeTabId: 'p-second', tabs: [
+          { id: 'p-home', workspaceId: 'personal', accountSpaceId, title: 'Inbox', url: 'https://mail.google.com/', isHome: false },
+          { id: 'p-second', workspaceId: 'personal', accountSpaceId, title: 'Calendar', url: 'https://calendar.google.com/', isHome: false },
+        ],
+      } };
+    });
+    const loaded = new RuntimeStateStore(disk, options.accountStore, disk.initialize()).get();
+    expect(loaded.deferredSessionsByAccountSpace?.[accountSpaceId]).toMatchObject({ activeTabId: 'p-second', tabs: expect.arrayContaining([expect.objectContaining({ id: 'p-home' })]) });
+    expect(loaded.deferredSessionsByAccountSpace?.[state.activeAccountSpaceByWorkspace.tenten!]).toBeUndefined();
   });
 });

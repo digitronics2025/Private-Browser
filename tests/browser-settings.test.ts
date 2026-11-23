@@ -6,6 +6,7 @@ import {
   requireSearchTemplate,
   referenceSearchUrl,
   resolveHomeUrl,
+  resolveNewTabUrl,
   resolveWorkspaceNavigation,
   sanitizeBrowserSettings,
   searchEngineLabel,
@@ -15,14 +16,14 @@ import {
 
 describe('browser settings', () => {
   it('defaults to DuckDuckGo, the New Tab page and restoring the previous tabs', () => {
-    expect(DEFAULT_BROWSER_SETTINGS).toEqual({ searchEngine: 'duckduckgo', homePage: 'new-tab', startup: 'continue' });
+    expect(DEFAULT_BROWSER_SETTINGS).toEqual({ searchEngine: 'duckduckgo', homePage: 'new-tab', newTab: 'start', startup: 'automatic' });
     expect(sanitizeBrowserSettings(undefined)).toEqual(DEFAULT_BROWSER_SETTINGS);
     expect(sanitizeBrowserSettings(['google'])).toEqual(DEFAULT_BROWSER_SETTINGS);
   });
 
   it('falls back field by field for hostile values on disk instead of failing', () => {
     expect(sanitizeBrowserSettings({ searchEngine: 'google', homePage: 'shell', startup: 7 })).toEqual({ ...DEFAULT_BROWSER_SETTINGS, searchEngine: 'google' });
-    expect(sanitizeBrowserSettings({ searchEngine: 'custom', customSearchTemplate: 'javascript:alert(%s)', startup: 'home' })).toEqual({ ...DEFAULT_BROWSER_SETTINGS, startup: 'home' });
+    expect(sanitizeBrowserSettings({ searchEngine: 'custom', customSearchTemplate: 'javascript:alert(%s)', startup: 'home' })).toEqual({ ...DEFAULT_BROWSER_SETTINGS, startupHome: true });
     expect(sanitizeBrowserSettings({ homePage: 'url', homePageUrl: 'file:///C:/Windows' })).toEqual(DEFAULT_BROWSER_SETTINGS);
     expect(sanitizeBrowserSettings({ homePage: 'url', homePageUrl: 'https://tenten.ma/' })).toEqual({ ...DEFAULT_BROWSER_SETTINGS, homePage: 'url', homePageUrl: 'https://tenten.ma/' });
     expect(sanitizeBrowserSettings({ searchEngine: 'bing', customSearchTemplate: 'https://example.com/?q=%s' })).toEqual({ ...DEFAULT_BROWSER_SETTINGS, searchEngine: 'bing' });
@@ -77,6 +78,38 @@ describe('browser settings', () => {
     expect(resolveHomeUrl(home, false)).toBe('https://tenten.ma/');
     expect(resolveHomeUrl(home, true)).toBe('private://home');
     expect(resolveHomeUrl(DEFAULT_BROWSER_SETTINGS, false)).toBe('private://home');
+    expect(resolveNewTabUrl({ ...DEFAULT_BROWSER_SETTINGS, newTab: 'blank' }, true)).toBe('private://home');
+  });
+
+  it('keeps Home, New Tab and startup independent across every choice combination', () => {
+    const homes = [
+      { homePage: 'new-tab' as const },
+      { homePage: 'url' as const, homePageUrl: 'https://home.example.test/' },
+    ];
+    const newTabs = [
+      { newTab: 'start' as const },
+      { newTab: 'blank' as const },
+      { newTab: 'url' as const, newTabUrl: 'https://tab.example.test/' },
+    ];
+    const startups = ['fresh', 'ask', 'automatic'] as const;
+    let combinations = 0;
+    for (const home of homes) for (const newTab of newTabs) for (const startup of startups) {
+      const settings = sanitizeBrowserSettings({ ...home, ...newTab, startup });
+      expect(settings.startup).toBe(startup);
+      expect(resolveHomeUrl(settings, false)).toBe(home.homePage === 'url' ? 'https://home.example.test/' : 'private://home');
+      expect(resolveNewTabUrl(settings, false)).toBe(newTab.newTab === 'url' ? 'https://tab.example.test/'
+        : newTab.newTab === 'blank' ? 'private://blank' : 'private://home');
+      combinations++;
+    }
+    expect(combinations).toBe(18);
+  });
+
+  it('migrates each legacy startup choice without losing its add-on', () => {
+    expect(sanitizeBrowserSettings({ startup: 'continue' }).startup).toBe('automatic');
+    expect(sanitizeBrowserSettings({ startup: 'home' })).toMatchObject({ startup: 'automatic', startupHome: true });
+    expect(sanitizeBrowserSettings({ startup: 'new-tab' })).toMatchObject({ startup: 'automatic', startupNewTab: true });
+    expect(sanitizeBrowserSettings({ startup: 'pages', startupPages: ['https://start.example.test/'] }))
+      .toMatchObject({ startup: 'automatic', startupPages: ['https://start.example.test/'] });
   });
 
   it('preserves legacy settings and restricts startup pages and explicit site keywords by workspace', () => {
@@ -91,7 +124,7 @@ describe('browser settings', () => {
     expect(settingsForWorkspace(state, 'personal').startupPages).toEqual(['https://example.test/start']);
     expect(resolveWorkspaceNavigation('gh privacy & tabs', personal, false)).toBe('https://example.test/search?q=privacy%20%26%20tabs');
     expect(resolveWorkspaceNavigation('gh privacy & tabs', personal, true)).toBe('https://www.google.com/search?q=gh%20privacy%20%26%20tabs');
-    expect(() => requireBrowserSettingsPatch({ startup: 'pages', startupPages: [] })).toThrow();
+    expect(requireBrowserSettingsPatch({ startup: 'pages', startupPages: [] })).toMatchObject({ startup: 'automatic' });
     expect(() => requireBrowserSettingsPatch({ startupPages: ['file:///fixture'] })).toThrow();
     expect(() => requireBrowserSettingsPatch({ siteKeywords: [{ keyword: 'gh', template: 'http://example.test?q=%s' }] })).toThrow();
   });

@@ -444,6 +444,20 @@ test('search engine setting changes what the address bar and New Tab page search
   noErrors();
 });
 
+test('full Settings search finds a control and jumps to its section', async ({ page }) => {
+  await page.goto('/');
+  await openSettingsPanel(page);
+  await sidePanel(page).getByRole('button', { name: 'Open full settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Private Browser settings' });
+  await expect(settings).toBeVisible();
+  const search = settings.getByRole('searchbox', { name: 'Search settings' });
+  await search.fill('theme');
+  const result = settings.getByRole('button', { name: 'Theme and appearance' });
+  await expect(result).toBeVisible();
+  await result.click();
+  await expect(settings.getByRole('radiogroup', { name: 'Theme' })).toBeVisible();
+});
+
 test('home page setting decides where Home goes and refuses text that is not an address', async ({ page }) => {
   const noErrors = watchErrors(page);
   await page.goto('/');
@@ -461,15 +475,18 @@ test('home page setting decides where Home goes and refuses text that is not an 
   await expect(page.getByRole('status')).toContainText('Home page saved');
   await page.getByRole('button', { name: 'Home', exact: true }).click();
   await expect(address).toHaveValue('https://tenten.ma/');
+  await sidePanel(page).getByRole('button', { name: 'Use current page' }).click();
+  await expect(page.getByRole('status')).toContainText('Home page saved');
 
   await home.getByRole('radio', { name: 'New Tab page' }).click();
   await expect(field).toHaveCount(0);
   await page.getByRole('button', { name: 'Home', exact: true }).click();
   await expect(page.getByRole('main', { name: 'New Tab' })).toBeVisible();
 
-  const startup = sidePanel(page).getByRole('radiogroup', { name: 'On startup' });
-  await startup.getByRole('radio', { name: 'Also open Home page' }).click();
-  await expect(startup.getByRole('radio', { name: 'Also open Home page' })).toHaveAttribute('aria-checked', 'true');
+  const startup = sidePanel(page);
+  const alsoOpenHome = startup.getByLabel('Also open Home after the startup decision');
+  await alsoOpenHome.check();
+  await expect(alsoOpenHome).toBeChecked();
   noErrors();
 });
 

@@ -62,6 +62,8 @@ const api = {
   forward: (): Promise<void> => ipcRenderer.invoke('browser:forward'),
   reload: (): Promise<void> => ipcRenderer.invoke('browser:reload'),
   restoreSelectedTabs: (ids: string[]): Promise<void> => ipcRenderer.invoke('browser:restore-selected-tabs', ids),
+  restoreDeferredSession: (): Promise<void> => ipcRenderer.invoke('browser:restore-deferred-session'),
+  dismissDeferredSessionOffer: (): Promise<void> => ipcRenderer.invoke('browser:dismiss-deferred-session-offer'),
   organizeTab: (action: TabOrganizationAction): Promise<void> => ipcRenderer.invoke('browser:organize-tab', action),
   duplicateTab: (id: string): Promise<void> => ipcRenderer.invoke('browser:duplicate-tab', id),
   closeTabBatch: (id: string, scope: TabBatchScope, confirmedIds: string[]): Promise<void> => ipcRenderer.invoke('browser:close-tab-batch', id, scope, confirmedIds),
@@ -92,6 +94,8 @@ const api = {
   getSitePermissions: (tabId: string, origin: string): Promise<SitePermissionStatus[]> => ipcRenderer.invoke('permissions:site', tabId, origin),
   revokeSitePermission: (tabId: string, origin: string, capability: PermissionCapability): Promise<SitePermissionStatus[]> =>
     ipcRenderer.invoke('permissions:revoke-site', tabId, origin, capability),
+  setPopupPreference: (tabId: string, origin: string, decision: 'ask' | 'allow' | 'block'): Promise<SitePermissionStatus[]> =>
+    ipcRenderer.invoke('permissions:set-popups', tabId, origin, decision),
   listAccountPermissionGrants: (id: AccountSpaceId): Promise<PermissionGrantSummary[]> => ipcRenderer.invoke('permissions:list-account', id),
   configureGoogle: (clientId: string): Promise<void> => ipcRenderer.invoke('google:configure', clientId),
   getGoogleConnectionHealth: (id: AccountSpaceId): Promise<GoogleConnectionHealth> => ipcRenderer.invoke('google:connection-health', id),

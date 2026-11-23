@@ -19,22 +19,32 @@ const BrowsingPrivacySettings = lazy(() => import('./BrowsingPrivacySettings'));
 const THEME_OPTIONS = [['system', 'Match Windows'], ['light', 'Light'], ['dark', 'Dark']] as const;
 const BOOKMARK_BAR_OPTIONS = [['always', 'Always'], ['new-tab', 'New Tab only'], ['hidden', 'Hidden']] as const;
 const HOME_PAGE_OPTIONS = [['new-tab', 'New Tab page'], ['url', 'Web address']] as const;
-const STARTUP_OPTIONS = [['continue', 'Continue where you left off'], ['home', 'Also open Home page'], ['new-tab', 'Also open New Tab'], ['pages', 'Also open selected pages']] as const;
+const STARTUP_OPTIONS = [['fresh', 'Start fresh'], ['ask', 'Ask whether to restore'], ['automatic', 'Restore automatically']] as const;
 const CHROME_SETTINGS: Array<[ChromeSettingChoice, string]> = [['search', 'Search engine'], ['home', 'Home page'], ['startup', 'Startup settings']];
+const SETTINGS_SEARCH_INDEX = [
+  ['Search engine', 'setting-search-engine'], ['Home page', 'setting-home-page'],
+  ['New tabs', 'setting-new-tabs'], ['On startup', 'setting-startup'],
+  ['Startup pages', 'setting-startup'], ['Site keywords', 'setting-site-keywords'],
+  ['Theme and appearance', 'setting-appearance'], ['Spellcheck and languages', 'setting-spellcheck'],
+  ['Import from Chrome', 'setting-chrome-import'], ['Default browser', 'setting-default-browser'],
+] as const;
 
-export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, onOpenVault, onSetupExit, onUiChange, onToast }: {
+export function SettingsPanel({ state, ui, settings, entry, fullView = false, onManageAccounts, onOpenVault, onOpenFull, onSetupExit, onUiChange, onToast }: {
   state: BrowserSnapshot;
   ui: UiPreferences;
   settings: BrowserSettings;
   entry: 'overview' | 'setup';
+  fullView?: boolean;
   onManageAccounts: () => void;
   onOpenVault: () => void;
+  onOpenFull: () => void;
   onSetupExit: () => void;
   onUiChange: (patch: UiPreferencesPatch) => void;
   onToast: (message: string, kind?: 'ok' | 'error') => void;
 }) {
   const [isDefault, setIsDefault] = useState<boolean | null>(null);
   const [settingsPage, setSettingsPage] = useState<'overview' | 'updates' | 'setup' | 'agents' | 'passwords' | 'extensions'>(entry);
+  const [settingsSearch, setSettingsSearch] = useState('');
   const [reviewPrivacy, setReviewPrivacy] = useState(false);
   useEffect(() => { if (entry === 'setup') setSettingsPage('setup'); }, [entry]);
   const [updateStatus, setUpdateStatus] = useState<UpdateServiceStatus | null>(null);
@@ -59,6 +69,16 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
   const chromeImportSection = useRef<HTMLDivElement>(null);
   const searchSection = useRef<HTMLDivElement>(null);
   const workspace = state.workspaces.find((item) => item.id === state.activeWorkspaceId)!;
+  const currentTab = state.tabs.find((tab) => tab.id === state.activeTabId);
+  const currentPageUrl = currentTab && !currentTab.isHome && /^https?:\/\//i.test(currentTab.url) && state.activeWorkspaceId !== 'banking' ? currentTab.url : undefined;
+  const settingsResults = settingsSearch.trim() ? SETTINGS_SEARCH_INDEX.filter(([label, id]) =>
+    label.toLowerCase().includes(settingsSearch.trim().toLowerCase())
+    && (!workspace.protected || !['setting-home-page', 'setting-new-tabs', 'setting-startup', 'setting-site-keywords'].includes(id))) : [];
+  const jumpToSetting = (id: string) => {
+    const target = document.getElementById(id);
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target?.querySelector<HTMLElement>('input, select, textarea, button')?.focus({ preventScroll: true });
+  };
   const chromeDestinations = state.accountSpaces.filter((account) => account.workspaceId === state.activeWorkspaceId && account.workspaceId !== 'banking' && !account.locked);
   const chromeProfile = chromeProfiles.find((profile) => profile.id === chromeProfileId);
   const suggestedChromeDestination = chromeDestinations.find(({ id }) => id === chromeProfile?.suggestedAccountSpaceId);
@@ -327,12 +347,20 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
   }
   return <div className="side-panel">
     <PanelHeader icon={Settings} eyebrow="Application" title="Settings" />
-    {state.activeWorkspaceId !== 'banking' && <div className="settings-card">
+    {!fullView && <div className="panel-actions"><button type="button" onClick={onOpenFull}>Open full settings</button></div>}
+    {fullView && <div className="settings-search">
+      <label htmlFor="settings-search-input">Search settings</label>
+      <input id="settings-search-input" type="search" value={settingsSearch} onChange={(event) => setSettingsSearch(event.target.value)} placeholder="Search Home, startup, theme…" />
+      {settingsSearch.trim() && <div className="settings-search-results" role="region" aria-label="Matching settings" aria-live="polite">
+        {settingsResults.length ? settingsResults.map(([label, id]) => <button type="button" key={label} onClick={() => jumpToSetting(id)}>{label}</button>) : <p>No matching settings.</p>}
+      </div>}
+    </div>}
+    {state.activeWorkspaceId !== 'banking' && <div className="settings-card" id="setting-browser-setup">
       <div className="settings-row"><span><Settings size={17} /></span><div><strong>Browser setup</strong><small>Account Spaces, Chrome import, MyVault and optional services.</small></div>
         <button type="button" onClick={() => setSettingsPage('setup')}>Setup guide</button>
       </div>
     </div>}
-    <div className="settings-card">
+    <div className="settings-card" id="setting-default-browser">
       <div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Default browser</strong><small aria-live="polite">{isDefault === null ? 'Checking Windows association…' : isDefault ? 'Private Browser opens web links.' : 'Windows uses another browser for web links.'}</small></div>{isDefault && <b><Check size={14} /> Set</b>}</div>
       {!isDefault && <p className="import-note">In Windows Default apps, select Private Browser and choose Set default. If Windows lists individual link types, select Private Browser for HTTP and HTTPS.</p>}
       <div className="panel-actions">
@@ -345,10 +373,10 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
       <button type="button" onClick={() => setSettingsPage('extensions')}><Shield size={16} /> Extensions</button>
     </div></div>
     <div ref={searchSection} className="workspace-behavior">
-      <SearchHomeSettings key={workspace.id} workspace={workspace} settings={settings} onToast={onToast} />
+      <SearchHomeSettings key={workspace.id} workspace={workspace} settings={settings} currentPageUrl={currentPageUrl} onToast={onToast} />
     </div>
-    <WritingSettings key={workspace.id} workspace={workspace} writing={settings.spellcheck ?? DEFAULT_SPELLCHECK} available={state.availableSpellcheckLanguages} onToast={onToast} />
-    <div ref={chromeImportSection} className="settings-card chrome-import-settings">
+    <div id="setting-spellcheck"><WritingSettings key={workspace.id} workspace={workspace} writing={settings.spellcheck ?? DEFAULT_SPELLCHECK} available={state.availableSpellcheckLanguages} onToast={onToast} /></div>
+    <div ref={chromeImportSection} id="setting-chrome-import" className="settings-card chrome-import-settings">
       <div className="settings-row"><span><Upload size={17} /></span><div><strong>Import from Chrome</strong><small>Bookmarks, bookmark folders and browsing history stay on this computer.</small></div><button onClick={() => {
         if (chromeImportOpen) { chromeReviewRequest.current += 1; setChromeReview(undefined); setChromeImportOpen(false); }
         else void openChromeImport();
@@ -423,7 +451,7 @@ export function SettingsPanel({ state, ui, settings, entry, onManageAccounts, on
         {chromeResult && <div className="import-result"><Check size={15} /><div><strong>Import complete</strong><small>{chromeResult.imported.bookmarks} bookmarks · {chromeResult.imported.history} history · {chromeResult.imported.passwords} passwords</small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords > 0 && <small>{chromeResult.skipped.bookmarks + chromeResult.skipped.history + chromeResult.skipped.passwords} duplicate or unsafe entries skipped</small>}{chromeResult.warnings.map((warning) => <small className="warning" key={warning}>{warning}</small>)}</div></div>}
       </div>}
     </div>
-    <div className="settings-card"><div className="settings-row"><span><Palette size={17} /></span><div><strong>Appearance</strong><small>Theme for the browser frame, menus and the New Tab page.</small></div></div>
+    <div className="settings-card" id="setting-appearance"><div className="settings-row"><span><Palette size={17} /></span><div><strong>Appearance</strong><small>Theme for the browser frame, menus and the New Tab page.</small></div></div>
       <div className="segmented" role="radiogroup" aria-label="Theme">{THEME_OPTIONS.map(([theme, label]) => <button type="button" key={theme} role="radio" aria-checked={ui.theme === theme} className={ui.theme === theme ? 'active' : ''} onClick={() => onUiChange({ theme })}>{label}</button>)}</div>
     </div>
     <fieldset className="settings-card screen-privacy-settings">
@@ -642,19 +670,22 @@ function WritingSettings({ workspace, writing, available, onToast }: {
   </fieldset>;
 }
 
-function SearchHomeSettings({ workspace, settings, onToast }: { workspace: Workspace; settings: BrowserSettings; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
+function SearchHomeSettings({ workspace, settings, currentPageUrl, onToast }: { workspace: Workspace; settings: BrowserSettings; currentPageUrl?: string; onToast: (message: string, kind?: 'ok' | 'error') => void }) {
   const [customOpen, setCustomOpen] = useState(settings.searchEngine === 'custom');
   const [template, setTemplate] = useState(settings.customSearchTemplate ?? '');
   const [homeEditing, setHomeEditing] = useState(settings.homePage === 'url');
   const [homeUrl, setHomeUrl] = useState(settings.homePageUrl ?? '');
-  const [startupEditing, setStartupEditing] = useState(settings.startup === 'pages');
+  const [newTabEditing, setNewTabEditing] = useState(settings.newTab === 'url');
+  const [newTabUrl, setNewTabUrl] = useState(settings.newTabUrl ?? '');
+  const [startupEditing, setStartupEditing] = useState(false);
   const storedPages = settings.startupPages?.join('\n') ?? '';
   const storedKeywords = settings.siteKeywords?.map(({ keyword, template }) => keyword + ' ' + template).join('\n') ?? '';
   const [pages, setPages] = useState(storedPages);
   const [keywords, setKeywords] = useState(storedKeywords);
   useEffect(() => { setCustomOpen(settings.searchEngine === 'custom'); setTemplate(settings.customSearchTemplate ?? ''); }, [settings.searchEngine, settings.customSearchTemplate]);
   useEffect(() => { setHomeEditing(settings.homePage === 'url'); setHomeUrl(settings.homePageUrl ?? ''); }, [settings.homePage, settings.homePageUrl]);
-  useEffect(() => { setStartupEditing(settings.startup === 'pages'); setPages(storedPages); }, [settings.startup, storedPages]);
+  useEffect(() => { setNewTabEditing(settings.newTab === 'url'); setNewTabUrl(settings.newTabUrl ?? ''); }, [settings.newTab, settings.newTabUrl]);
+  useEffect(() => { setPages(storedPages); }, [storedPages]);
   useEffect(() => setKeywords(storedKeywords), [storedKeywords]);
   const save = async (patch: BrowserSettingsPatch, done?: string) => {
     try {
@@ -669,9 +700,10 @@ function SearchHomeSettings({ workspace, settings, onToast }: { workspace: Works
   };
   const saveTemplate = (event: FormEvent) => { event.preventDefault(); void save({ searchEngine: 'custom', customSearchTemplate: template }, 'Search engine saved'); };
   const saveHome = (event: FormEvent) => { event.preventDefault(); void save({ homePage: 'url', homePageUrl: homeUrl }, 'Home page saved'); };
+  const saveNewTabUrl = (event: FormEvent) => { event.preventDefault(); void save({ newTab: 'url', newTabUrl }, 'New Tab address saved'); };
   const savePages = (event: FormEvent) => {
     event.preventDefault();
-    void save({ startup: 'pages', startupPages: pages.split('\n').map((line) => line.trim()).filter(Boolean) }, 'Startup pages saved');
+    void save({ startupPages: pages.split('\n').map((line) => line.trim()).filter(Boolean) }, 'Startup pages saved');
   };
   const saveKeywords = (event: FormEvent) => {
     event.preventDefault();
@@ -682,7 +714,7 @@ function SearchHomeSettings({ workspace, settings, onToast }: { workspace: Works
     void save({ siteKeywords }, 'Site keywords saved');
   };
   return <>
-    <div className="settings-card"><div className="settings-row"><span><Search size={17} /></span><div><strong>Search engine</strong><small>Used for address-bar searches in {workspace.name}.</small></div></div>
+    <div className="settings-card" id="setting-search-engine"><div className="settings-row"><span><Search size={17} /></span><div><strong>Search engine</strong><small>Used for address-bar searches in {workspace.name}.</small></div></div>
       <label className="settings-field"><span>Search with</span><select aria-label="Search engine" value={customOpen ? 'custom' : settings.searchEngine} onChange={(event) => chooseEngine(event.target.value)}>
         {(Object.keys(SEARCH_ENGINES) as PresetSearchEngineId[]).map((id) => <option value={id} key={id}>{SEARCH_ENGINES[id].label}</option>)}
         <option value="custom">Custom…</option>
@@ -694,21 +726,38 @@ function SearchHomeSettings({ workspace, settings, onToast }: { workspace: Works
       </form>}
     </div>
     {workspace.protected ? <p className="import-note">Banking opens the local New Tab page. Startup pages and site keywords are unavailable here.</p> : <>
-    <div className="settings-card"><div className="settings-row"><span><Home size={17} /></span><div><strong>Home page</strong><small>What Home and Alt+Home open in {workspace.name}.</small></div></div>
+    <div className="settings-card" id="setting-home-page"><div className="settings-row"><span><Home size={17} /></span><div><strong>Home page</strong><small>What Home and Alt+Home open in {workspace.name}.</small></div></div>
       <div className="segmented" role="radiogroup" aria-label="Home page">{HOME_PAGE_OPTIONS.map(([mode, label]) => { const active = (homeEditing ? 'url' : settings.homePage) === mode; return <button type="button" key={mode} role="radio" aria-checked={active} className={active ? 'active' : ''} onClick={() => { if (mode === 'url') { setHomeEditing(true); return; } setHomeEditing(false); void save({ homePage: 'new-tab' }); }}>{label}</button>; })}</div>
       {homeEditing && <form className="settings-inline-form" onSubmit={saveHome}>
         <input aria-label="Home page address" inputMode="url" required maxLength={2048} placeholder="tenten.ma" value={homeUrl} onChange={(event) => setHomeUrl(event.target.value)} spellCheck={false} />
         <button type="submit" aria-label="Save Home page">Save</button>
       </form>}
+      {homeEditing && currentPageUrl && <button type="button" className="secondary-button" onClick={() => { setHomeUrl(currentPageUrl); void save({ homePage: 'url', homePageUrl: currentPageUrl }, 'Home page saved'); }}>Use current page</button>}
     </div>
-    <div className="settings-card"><div className="settings-row"><span><RefreshCw size={17} /></span><div><strong>On startup</strong><small>When {workspace.name} starts, keep restored tabs and optionally add other pages.</small></div></div>
-      <div className="segmented" role="radiogroup" aria-label="On startup">{STARTUP_OPTIONS.map(([mode, label]) => {
-        const selected = (startupEditing ? 'pages' : settings.startup) === mode;
+    <div className="settings-card" id="setting-new-tabs"><div className="settings-row"><span><Home size={17} /></span><div><strong>New tabs</strong><small>Used by the plus button, Ctrl+T and the browser menu in {workspace.name}.</small></div></div>
+      <div className="segmented" role="radiogroup" aria-label="New tabs">{([['start', 'Start page'], ['blank', 'Blank tab'], ['url', 'Web address']] as const).map(([mode, label]) => {
+        const selected = (newTabEditing ? 'url' : settings.newTab) === mode;
         return <button type="button" key={mode} role="radio" aria-checked={selected} className={selected ? 'active' : ''} onClick={() => {
-          setStartupEditing(mode === 'pages');
-          if (mode !== 'pages') void save({ startup: mode });
+          if (mode === 'url') { setNewTabEditing(true); return; }
+          setNewTabEditing(false); void save({ newTab: mode });
         }}>{label}</button>;
       })}</div>
+      {newTabEditing && <form className="settings-inline-form" onSubmit={saveNewTabUrl}>
+        <input aria-label="New Tab address" inputMode="url" required maxLength={2048} placeholder="example.com" value={newTabUrl} onChange={(event) => setNewTabUrl(event.target.value)} spellCheck={false} />
+        <button type="submit" aria-label="Save New Tab address">Save</button>
+      </form>}
+    </div>
+    <div className="settings-card" id="setting-startup"><div className="settings-row"><span><RefreshCw size={17} /></span><div><strong>On startup</strong><small>Applies on the next cold launch of {workspace.name}.</small></div></div>
+      <div className="segmented" role="radiogroup" aria-label="On startup">{STARTUP_OPTIONS.map(([mode, label]) => {
+        const selected = settings.startup === mode;
+        return <button type="button" key={mode} role="radio" aria-checked={selected} className={selected ? 'active' : ''} onClick={() => {
+          setStartupEditing(false);
+          void save({ startup: mode });
+        }}>{label}</button>;
+      })}</div>
+      <label><input type="checkbox" checked={settings.startupHome === true} onChange={(event) => void save({ startupHome: event.target.checked })} /> Also open Home after the startup decision</label>
+      <label><input type="checkbox" checked={settings.startupNewTab === true} onChange={(event) => void save({ startupNewTab: event.target.checked })} /> Also open a New Tab after the startup decision</label>
+      <button type="button" className="secondary-button" onClick={() => setStartupEditing((value) => !value)}>{startupEditing ? 'Hide startup pages' : 'Edit startup pages'}</button>
       {startupEditing && <form className="workspace-settings-form" onSubmit={savePages}>
         <label>Startup addresses<textarea rows={3} maxLength={MAX_STARTUP_PAGES * (MAX_SETTING_URL_LENGTH + 1)}
           value={pages} onChange={(event) => setPages(event.currentTarget.value)} spellCheck={false} /></label>
@@ -716,7 +765,7 @@ function SearchHomeSettings({ workspace, settings, onToast }: { workspace: Works
         <button type="submit" className="secondary-button" disabled={!pages.trim()}>Save startup pages</button>
       </form>}
     </div>
-    <div className="settings-card">
+    <div className="settings-card" id="setting-site-keywords">
       <div className="settings-row"><span><Globe2 size={17} /></span><div><strong>Site keywords</strong><small>Type a keyword and your search words, then press Enter.</small></div></div>
       <form className="workspace-settings-form" onSubmit={saveKeywords}>
         <label>Keywords and search addresses<textarea rows={3} maxLength={MAX_SITE_KEYWORDS * (MAX_SETTING_URL_LENGTH + 18)}

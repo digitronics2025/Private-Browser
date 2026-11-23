@@ -11,6 +11,7 @@ export const permissionLabels: Record<PermissionCapability, string> = {
   'clipboard-write': 'Write to clipboard',
   'file-system': 'File access',
   download: 'Downloads',
+  popups: 'Pop-ups',
 };
 
 export const permissionDuration: Record<PermissionGrantDuration, string> = {

@@ -964,7 +964,9 @@ test('profiles a 30-tab window under a download burst and checks shortcuts over 
   });
   await page.getByRole('button', { name: 'Browser menu' }).click();
   await expect(page.getByRole('menu', { name: 'Browser menu' })).toBeVisible();
-  await expect.poll(remoteVisible).toBe(false);
+  // Keep the native page live until its frame is captured. This avoids a blank
+  // flash if capture is delayed; the menu becomes visible after the native view hides.
+  await expect.poll(remoteVisible).toBe(true);
   await expect.poll(() => application!.evaluate(() => typeof Reflect.get(globalThis, 'fixtureFreezeRelease'))).toBe('function');
   await page.keyboard.press('Control+L');
   await expect(page.getByRole('combobox', { name: 'Address and search bar' })).toBeFocused();
@@ -973,6 +975,8 @@ test('profiles a 30-tab window under a download burst and checks shortcuts over 
     finish?.();
     return Boolean(finish);
   })).toBe(true);
+  await expect.poll(remoteVisible).toBe(false);
+  await expect(page.locator('.menu-surface.ready')).toBeVisible();
   console.log('Windows chrome profile ' + JSON.stringify({ ...timing, iconRequests, snapshotPushes, progressPushes }));
 });
 
