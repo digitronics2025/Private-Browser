@@ -68,6 +68,9 @@ Still ask first: force-push or history rewrites, changes to the trust boundary
 or signing identity, live Cloudflare changes, new credentials, and deleting user
 data. Missing access blocks only the dependent step.
 
+This section is guidance. The app's permission mode and `.claude/settings.json`
+decide what runs without a prompt, and this text cannot grant more.
+
 ## Agent tool permissions
 
 The owner pre-approved the four Cloudflare MCP tools (`search`, `docs`, `whoami`,

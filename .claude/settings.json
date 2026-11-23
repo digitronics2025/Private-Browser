@@ -26,9 +26,7 @@
       "Bash(node scripts/docs-find.mjs:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(npx vitest:*)",
-      "Bash(npx playwright test:*)"
+      "Bash(git log:*)"
     ]
   }
 }
