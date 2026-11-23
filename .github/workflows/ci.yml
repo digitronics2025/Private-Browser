@@ -334,7 +334,15 @@ jobs:
           )
           $code = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           if (-not $code) {
-            choco install vscode --no-progress -y
+            $installer = Join-Path $env:RUNNER_TEMP 'vscode-user-setup.exe'
+            Invoke-WebRequest -Uri 'https://update.code.visualstudio.com/latest/win32-x64-user/stable' -OutFile $installer
+            $signature = Get-AuthenticodeSignature -LiteralPath $installer
+            $publisher = if ($signature.SignerCertificate) { $signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) }
+            if ($signature.Status -ne 'Valid' -or $publisher -ne 'Microsoft Corporation') {
+              throw 'The downloaded VS Code installer did not have a valid Microsoft signature.'
+            }
+            $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/MERGETASKS=!runcode', '/copilotcli=none') -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw 'The verified VS Code installer failed.' }
             $code = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           }
           if (-not $code) { throw 'VS Code CLI is unavailable after installation' }

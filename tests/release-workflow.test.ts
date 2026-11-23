@@ -96,6 +96,15 @@ describe('release workflow', () => {
     expect(workflow).not.toContain('name: private-browser-windows');
   });
 
+  it('installs VS Code from Microsoft only after verifying its Authenticode publisher', () => {
+    const install = step('Smoke install the private VSIX in an isolated profile');
+    expect(install).toContain('https://update.code.visualstudio.com/latest/win32-x64-user/stable');
+    expect(install).toContain('Get-AuthenticodeSignature');
+    expect(install).toContain("$publisher -ne 'Microsoft Corporation'");
+    expect(install).not.toContain('choco install vscode');
+    expect(install).toContain('--install-extension');
+  });
+
   it('excludes credential bootstrapping from the build', () => {
     const { build } = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
     expect(JSON.stringify(build.extraResources)).not.toContain('private-browser-update.json');
