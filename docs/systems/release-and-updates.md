@@ -517,13 +517,16 @@ The electron-builder configuration lives **inline in `package.json`**, in the
   It is validated for its manifest and forbidden contents, installed into a fresh
   `--user-data-dir`/`--extensions-dir` profile in Windows CI, and uploaded as a
   private Actions artifact. The smoke test resolves the standard system and
-  per-user `code.cmd` locations and provisions VS Code with Chocolatey only when
-  neither location exists. It is never submitted to the Marketplace. The same
+  per-user `code.cmd` locations and, when absent, downloads the official
+  Microsoft user installer, verifies its Authenticode publisher, and installs it
+  silently. It is never submitted to the Marketplace. The same
   validated VSIX is copied into the packaged application's resources so the
   Developer panel installs a fixed artifact rather than downloading executable
   extension code.
-- Stable CI requires the production signing credentials and the approved public
-  certificate fingerprint. Ordinary Windows verification builds remain unsigned.
+- Stable CI records signed publisher evidence when the approved signing identity
+  is configured; otherwise it records explicit digest-bound unsigned evidence.
+  Ordinary Windows verification builds remain unsigned. Both paths retain the
+  exact-commit approval and production environment review gates.
 - `loadBrowserProcessSpecificV8Snapshot` stays disabled: enabling it without a
   matching packaged browser-process snapshot makes Electron fail before startup.
   This is a compatibility fuse, not a privilege boundary; the other sandbox,
