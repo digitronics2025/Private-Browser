@@ -261,7 +261,6 @@ jobs:
           npm run dist
           exit $LASTEXITCODE
       - name: Record Windows publisher evidence
-        if: env.PRIVATE_BROWSER_STABLE_BUILD == 'true'
         shell: pwsh
         env:
           EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256 }}
@@ -270,15 +269,29 @@ jobs:
           $installer = Get-Item -LiteralPath "release/Private-Browser-${{ steps.packaged-version.outputs.version }}-Setup.exe"
           $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $($installer.Name)" | Set-Content release/SHA256SUMS.txt
-          $publisherArgs = @('-Installer', $installer.FullName, '-Sha256', $hash, '-Destination', 'release/PUBLISHER.json')
-          if ($env:SIGNING_CONFIGURED -eq 'true') { $publisherArgs += @('-SigningConfigured', '-ExpectedCertificateSha256', $env:EXPECTED_CERTIFICATE_SHA256) }
-          ./cloudflare/scripts/record-windows-publisher.ps1 @publisherArgs
+          $publisherArgs = @{
+            Installer = $installer.FullName
+            Sha256 = $hash
+            Destination = 'release/PUBLISHER.json'
+          }
+          if ($env:SIGNING_CONFIGURED -eq 'true') {
+            $publisherArgs['SigningConfigured'] = $true
+            $publisherArgs['ExpectedCertificateSha256'] = $env:EXPECTED_CERTIFICATE_SHA256
+          }
+          & ./cloudflare/scripts/record-windows-publisher.ps1 @publisherArgs
           $app = Get-Item -LiteralPath 'release/win-unpacked/Private Browser.exe'
           $appHash = (Get-FileHash -LiteralPath $app.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          $appPublisherArgs = @('-Installer', $app.FullName, '-Sha256', $appHash, '-Destination', 'release/APP-PUBLISHER.json')
-          if ($env:SIGNING_CONFIGURED -eq 'true') { $appPublisherArgs += @('-SigningConfigured', '-ExpectedCertificateSha256', $env:EXPECTED_CERTIFICATE_SHA256) }
-          ./cloudflare/scripts/record-windows-publisher.ps1 @appPublisherArgs
-          npm sbom --sbom-format cyclonedx | Out-File -Encoding utf8 release/SBOM.cdx.json
+          $appPublisherArgs = @{
+            Installer = $app.FullName
+            Sha256 = $appHash
+            Destination = 'release/APP-PUBLISHER.json'
+          }
+          if ($env:SIGNING_CONFIGURED -eq 'true') {
+            $appPublisherArgs['SigningConfigured'] = $true
+            $appPublisherArgs['ExpectedCertificateSha256'] = $env:EXPECTED_CERTIFICATE_SHA256
+          }
+          & ./cloudflare/scripts/record-windows-publisher.ps1 @appPublisherArgs
+          npm sbom --omit=dev --sbom-format cyclonedx | Out-File -Encoding utf8 release/SBOM.cdx.json
           exit $LASTEXITCODE
       - name: Remove production signing certificate
         if: always() && steps.signer.outputs.thumbprint != ''
