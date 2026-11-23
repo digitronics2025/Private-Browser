@@ -29,6 +29,47 @@ lead with verified findings by severity and file:line, and say when none are fou
 App-improvement reviews explore practical options before priorities and remain
 read-only unless implementation is requested.
 
+## Ideas, experiments and creativity
+
+For open-ended improvement requests, give three or four distinct options, and
+make one of them bold. Tie each option to a real workflow: Account Spaces and
+Google, the vault, split view, Chrome import, Agent Mode, the in-app assistant
+(Darija and French sales replies, product specs and comparisons), or the
+download Worker. For each option, name who benefits, the benefit, the cost, the
+risk tier and what would prove it works.
+
+Before proposing, read `docs/follow-ups.md` and the matching
+`docs/systems/*.md` (find them with `npm run docs:find -- "<query>"`). Say when a
+recorded deferral is now unblocked. Do not re-propose a recorded rejection
+without new evidence.
+
+Prototypes are welcome. Build them on a scratch branch or behind a flag, label
+them "unverified", and keep them out of release branches until the applicable
+tier passes. A prototype never changes `electron/security.ts`,
+`electron/vault.ts`, `electron/preload.cts`, the Agent policy files or the
+AI-consent protocol; those follow the full tier.
+
+Before finishing runtime work, answer briefly: could a hostile page reach this,
+what only fails on Windows, and which system doc changed.
+
+## Owner-built personal app: autonomy
+
+This is the owner's personal, non-commercial app. That lowers business ceremony
+only. It does not lower security rules: hostile pages, vault data, Banking data,
+signed-in sessions and update configuration need the same care as before.
+
+Without asking, the assistant may: run `npm run typecheck`, `npm run test`,
+`npm run check` and `npm run docs:check`; read git state; commit task files on
+its working branch; push that branch; open a ready-for-review pull request; and
+merge an owned, clean pull request once mandatory checks pass.
+
+Still ask first: force-push or history rewrites, changes to the trust boundary
+or signing identity, live Cloudflare changes, new credentials, and deleting user
+data. Missing access blocks only the dependent step.
+
+This section is guidance. The app's permission mode and `.claude/settings.json`
+decide what runs without a prompt, and this text cannot grant more.
+
 ## Agent tool permissions
 
 The owner pre-approved the four Cloudflare MCP tools (`search`, `docs`, `whoami`,
