@@ -17,7 +17,18 @@
       "mcp__cloudflare_mcp__search",
       "mcp__cloudflare_mcp__docs",
       "mcp__cloudflare_mcp__whoami",
-      "mcp__cloudflare_mcp__execute"
+      "mcp__cloudflare_mcp__execute",
+      "Bash(npm run typecheck)",
+      "Bash(npm run test)",
+      "Bash(npm run check)",
+      "Bash(npm run docs:check)",
+      "Bash(npm run docs:find:*)",
+      "Bash(node scripts/docs-find.mjs:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npx playwright test:*)"
     ]
   }
 }
