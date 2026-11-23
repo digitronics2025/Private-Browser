@@ -81,7 +81,7 @@ export default function App() {
   const [prompt, setPrompt] = useState<PromptRequest | null>(null);
   const [clearDataFor, setClearDataFor] = useState<AccountSpaceId>();
   const [historyRevision, setHistoryRevision] = useState(0);
-  const [restoreOfferDismissed, setRestoreOfferDismissed] = useState(false);
+  const [dismissedRestoreOffers, setDismissedRestoreOffers] = useState<Set<string>>(() => new Set());
   const [bookmarkBatch, setBookmarkBatch] = useState<{ accountId: AccountSpaceId; items: Bookmark[] } | null>(null);
   const [pendingUi, setPendingUi] = useState<UiPreferencesPatch>({});
   const [liveWidth, setLiveWidth] = useState<number | null>(null);
@@ -125,7 +125,6 @@ export default function App() {
 
   useEffect(() => {
     setBookmarkBatch((batch) => batch?.accountId === state?.activeAccountSpaceId ? batch : null);
-    setRestoreOfferDismissed(false);
   }, [state?.activeAccountSpaceId]);
 
   useEffect(() => disposer(window.privateBrowser.onUpdateAvailable((result) => {
@@ -644,10 +643,10 @@ export default function App() {
           <div className="page-surface blank-tab-surface" aria-label="Blank tab" />
         ) : activeTab.isHome ? (
           <>
-          {state.deferredSession && browserSettings.startup === 'ask' && !restoreOfferDismissed && <section className="session-restore-offer" aria-label="Restore previous session">
+          {state.deferredSession && browserSettings.startup === 'ask' && activeAccount && !dismissedRestoreOffers.has(activeAccount.id) && <section className="session-restore-offer" aria-label="Restore previous session">
             <div><strong>Restore your previous session?</strong><p>{state.deferredSession.tabCount} tabs from {activeAccount.label} · saved {new Date(state.deferredSession.savedAt).toLocaleString()}</p></div>
             <button type="button" onClick={() => void act(() => window.privateBrowser.restoreDeferredSession(), 'Previous session restored')}>Restore</button>
-            <button type="button" onClick={() => { setRestoreOfferDismissed(true); void act(() => window.privateBrowser.dismissDeferredSessionOffer()); }}>Not now</button>
+            <button type="button" onClick={() => { setDismissedRestoreOffers((current) => new Set(current).add(activeAccount.id)); void act(() => window.privateBrowser.dismissDeferredSessionOffer()); }}>Not now</button>
           </section>}
           <NewTabPage
             searchPrompt={searchPrompt}

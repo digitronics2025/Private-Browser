@@ -125,6 +125,8 @@ describe('browser settings', () => {
     expect(resolveWorkspaceNavigation('gh privacy & tabs', personal, false)).toBe('https://example.test/search?q=privacy%20%26%20tabs');
     expect(resolveWorkspaceNavigation('gh privacy & tabs', personal, true)).toBe('https://www.google.com/search?q=gh%20privacy%20%26%20tabs');
     expect(requireBrowserSettingsPatch({ startup: 'pages', startupPages: [] })).toMatchObject({ startup: 'automatic' });
+    const withoutStartupPages = mergeBrowserSettings(personal, requireBrowserSettingsPatch({ startupPages: [] }));
+    expect(withoutStartupPages.startupPages).toBeUndefined();
     expect(() => requireBrowserSettingsPatch({ startupPages: ['file:///fixture'] })).toThrow();
     expect(() => requireBrowserSettingsPatch({ siteKeywords: [{ keyword: 'gh', template: 'http://example.test?q=%s' }] })).toThrow();
   });

@@ -762,7 +762,7 @@ function SearchHomeSettings({ workspace, settings, currentPageUrl, onToast }: { 
         <label>Startup addresses<textarea rows={3} maxLength={MAX_STARTUP_PAGES * (MAX_SETTING_URL_LENGTH + 1)}
           value={pages} onChange={(event) => setPages(event.currentTarget.value)} spellCheck={false} /></label>
         <small>Enter one web address per line. Up to eight pages.</small>
-        <button type="submit" className="secondary-button" disabled={!pages.trim()}>Save startup pages</button>
+        <button type="submit" className="secondary-button">Save startup pages</button>
       </form>}
     </div>
     <div className="settings-card" id="setting-site-keywords">
