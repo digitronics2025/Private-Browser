@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import type { Session } from 'electron';
 import { isAccountSpaceId } from './account-space-validation.js';
@@ -285,7 +285,24 @@ async function scanExtension(directory: string): Promise<{ sourcePath: string; p
       if (entries.length >= MAX_EXTENSION_FILES) throw new Error('Extension contains too many files.');
       total += info.size;
       if (total > MAX_EXTENSION_BYTES) throw new Error('Extension exceeds the 25 MB size limit.');
-      entries.push({ relative: rel, absolute, bytes: await readFile(absolute) });
+      // Read through one open handle and verify it still identifies the file we
+      // inspected. This prevents a concurrently swapped symlink/path from making
+      // the reviewed bytes differ from the regular file found during the scan.
+      const handle = await open(absolute, 'r');
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) {
+          throw new Error('Extension files changed while being reviewed. Choose the folder again.');
+        }
+        const bytes = await handle.readFile();
+        const afterRead = await handle.stat();
+        if (afterRead.size !== opened.size || afterRead.mtimeMs !== opened.mtimeMs || bytes.length !== opened.size) {
+          throw new Error('Extension files changed while being reviewed. Choose the folder again.');
+        }
+        entries.push({ relative: rel, absolute, bytes });
+      } finally {
+        await handle.close();
+      }
     }
   };
   await walk(root);
