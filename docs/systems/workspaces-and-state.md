@@ -96,20 +96,22 @@ The manifest also carries an optional `settings` object (`BrowserSettings`,
 [browser-settings.ts](../../electron/browser-settings.ts)): `searchEngine`
 (`duckduckgo` default, `google`, `bing`, `brave`, `startpage`, `ecosia`,
 `custom`), `customSearchTemplate` (only with `custom`), `homePage` (`new-tab`
-default, `url`), `homePageUrl` (only with `url`) and `startup` (`continue`
-default, `home`). It is browser-wide, not per Account Space, and holds no
+default, `url`), `homePageUrl` (only with `url`), `newTab` (`start`, `blank`, `url`) with an optional `newTabUrl`, and `startup` (`fresh`, `ask`, `automatic`). Optional startup add-ons are stored separately. Settings belong to the workspace, not an Account Space, and hold no
 secrets. `sanitizeBrowserSettings` falls back **field by field** — `custom`
 without a valid template becomes `duckduckgo`, `url` without an HTTP(S) address
 becomes `new-tab` — and never opens recovery. v1 migration writes the defaults.
 Builds before this field rebuild the manifest without it, so after a downgrade
 the choices reset to defaults on the next save; nothing else is lost. IPC patches
-use `requireBrowserSettingsPatch`, and the controller normalizes `homePageUrl`
-through `parseWebAddress` before `mergeBrowserSettings`.
+use `requireBrowserSettingsPatch`, and the controller normalizes `homePageUrl` and `newTabUrl` through `parseWebAddress` before `mergeBrowserSettings`. Legacy startup values migrate to automatic restore plus their equivalent optional add-on.
+
+Settings opens from the browser menu in the side panel. **Open full settings** shows a full-window view with a local, in-memory section index; results move focus to the selected control and make no network request. The view identifies the active workspace, while each setting's save or validation result is announced locally. The Home URL editor can use the current eligible HTTP(S) page; Banking never offers that action.
 
 Per-account browsing files contain URLs, titles, bookmark hierarchy, and history,
-along with workspace and account IDs. Optional tab metadata covers pins, named
+along with workspace and account IDs. A bounded optional `deferredSession` stores only tab metadata for Ask mode, in the same per-account file and with the same browsing protection. Trusted chrome receives only its tab count and save time. Optional tab metadata covers pins, named
 groups, collapse state, and paused restoration. Older files load with the normal
 tab layout. An optional flag records when the retention limit trimmed visits.
+
+On a cold launch with **Ask**, the saved eligible session remains deferred until the owner chooses Restore or dismisses the offer. Its website URLs are not loaded before Restore. The same bounded record can be opened from History, is isolated to its owning Account Space, and is removed with that space; clearing browsing data also clears its tabs. Restoration preserves tabs opened after launch and de-duplicates previously saved tabs. Start fresh discards only the selected launch space's deferred session; other spaces remain untouched.
 The optional `shortcuts` list (≤ 12 HTTP(S)
 New Tab tiles, sanitised by `sanitizeShortcutTiles`) that is present only once the
 user customises them. An optional `bookmarkIcons` map (host → image `data:` URL,
@@ -120,6 +122,11 @@ bookmarks. They do
 not contain email, display name, Google subject, partition key, OAuth data,
 permission grants, or descriptive account metadata. Those fields live in
 independent `safeStorage`-encrypted account records.
+
+The encrypted Account Space record also stores a bounded list of exact-origin
+pop-up choices (`allow` or `block`). Missing entries mean Ask, including for
+records created before this field existed. Selecting Ask removes the saved
+choice. These choices never override the Banking workspace policy.
 
 Chrome bookmark and history import requires an explicit non-Banking Account Space
 destination. Imported records carry that account ID at creation, and duplicate

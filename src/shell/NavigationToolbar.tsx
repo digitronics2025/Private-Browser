@@ -123,6 +123,13 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
             {warning === 'idn' ? 'Check domain' : 'Not secure'}
           </span>
         )}
+        {tab.popupBlockedReason && <button type="button" className="popup-blocked-chip" onClick={props.onSiteInfo}
+          title={tab.popupBlockedReason === 'preference' ? 'Blocked by your pop-up preference. Open site permissions.'
+            : tab.popupBlockedReason === 'banking' ? 'Blocked by Banking policy.' : 'Blocked by a browser security rule.'}
+          aria-label={tab.popupBlockedReason === 'preference' ? 'Pop-up blocked by your preference. Review site permissions.'
+            : tab.popupBlockedReason === 'banking' ? 'Pop-up blocked by Banking policy.' : 'Pop-up blocked by browser security.'}>
+          Pop-up blocked
+        </button>}
         <input
           ref={props.addressRef}
           role="combobox"
@@ -137,6 +144,15 @@ export function NavigationToolbar(props: NavigationToolbarProps) {
             setResponse(undefined);
             setSelected(-1);
             props.onAddressChange(event.target.value);
+          }}
+          onMouseDown={(event) => {
+            if (document.activeElement !== event.currentTarget) {
+              // Keep the focus-triggered full selection from collapsing to a
+              // caret when the same mouse click is dispatched afterward.
+              event.preventDefault();
+              event.currentTarget.focus();
+              event.currentTarget.select();
+            }
           }}
           onFocus={(event) => event.currentTarget.select()}
           onBlur={closeMatches}

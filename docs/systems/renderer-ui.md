@@ -8,7 +8,7 @@ verified_at: 9916c243
 
 # Renderer UI
 
-> Last verified: 2026-11-21
+> Last verified: 2026-11-23
 
 ## Agent Brief
 
@@ -243,8 +243,11 @@ inherit their saved settings until a workspace is customized. Users can choose
 a search engine from the Setup guide and configure explicit site keywords.
 The app builds a keyword search only after the user submits the address bar.
 The active workspace adds up to eight missing startup pages as background tabs
-and keeps restored tabs in place. Banking opens the local New Tab page and
-disables startup pages and site keywords.
+and keeps restored tabs in place. Chrome startup mode 6 imports its validated
+startup URLs alongside automatic restore. Clearing the startup-page editor
+removes those add-on pages; “Not now” dismisses a deferred restore offer for
+that Account Space for the current launch. Banking opens the local New Tab page
+and disables startup pages and site keywords.
 
 The zoom bubble and site details offer Reset view. Electron's persistent
 Account Space sessions keep site zoom independent across accounts. The

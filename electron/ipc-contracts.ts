@@ -146,6 +146,9 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
     case 'permissions:revoke-site':
       exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 2048);
       requirePermissionCapability(args[2]); return;
+    case 'permissions:set-popups':
+      exact(args, 3); requireNonEmptyText(args[0], 'tab identifier', 200); requireNonEmptyText(args[1], 'site origin', 2048);
+      if (args[2] !== 'ask' && args[2] !== 'allow' && args[2] !== 'block') throw new Error('Invalid pop-up preference'); return;
     case 'permissions:list-account':
       exact(args, 1); requireAccountSpaceId(args[0]); return;
     case 'permissions:respond':
@@ -580,7 +583,9 @@ export function validateIpcArguments(channel: string, args: unknown[]): void {
 
 /** Channels that carry no arguments at all. */
 const NO_ARGUMENT_CHANNELS: ReadonlySet<string> = new Set([
-  'browser:undo-tab-batch', 'pdf:open', 'pdf:save',
+  'browser:undo-tab-batch',
+  'browser:restore-deferred-session', 'browser:dismiss-deferred-session-offer',
+  'pdf:open', 'pdf:save',
   'ai:check-provider', 'ai:clear-provider', 'ai:local-models', 'ai:provider-status', 'ai:revoke', 'app:quit', 'bookmarks:export',
   'side-app:prepare-claude-excerpt',
   'browser:back', 'browser:forward', 'browser:freeze-content', 'browser:get-state', 'browser:hard-reload',

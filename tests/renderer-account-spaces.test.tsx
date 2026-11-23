@@ -31,7 +31,7 @@ describe('Account Space renderer contract', () => {
 
   it('hides native page content under menus, account and permission overlays', () => {
     expect(app).toContain('setOverlayOpen(overlayOpen)');
-    expect(app).toMatch(/const overlayOpen = overlayCount > 0 \|\| accountManagerOpen \|\| vaultFullOpen \|\| Boolean\(state\?\.pendingPermission\) \|\| Boolean\(state\?\.recovery\);/);
+    expect(app).toMatch(/const overlayOpen = overlayCount > 0 \|\| accountManagerOpen \|\| settingsFullOpen \|\| vaultFullOpen \|\| Boolean\(state\?\.pendingPermission\) \|\| Boolean\(state\?\.recovery\);/);
     expect(preload).toContain("ipcRenderer.invoke('browser:set-overlay-open', open)");
     expect(styles).toMatch(/\.modal-backdrop \{[^}]*z-index: 60/);
   });

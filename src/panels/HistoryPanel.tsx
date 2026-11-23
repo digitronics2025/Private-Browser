@@ -13,10 +13,12 @@ function dayBoundary(value: string, nextDay = false): number | null {
   return Number.isFinite(date.getTime()) ? date.getTime() : null;
 }
 
-export function HistoryPanel({ accountSpaceId, revision, protectedWorkspace, onOpen, onClearData, onToast }: {
+export function HistoryPanel({ accountSpaceId, revision, protectedWorkspace, deferredSession, onRestoreSession, onOpen, onClearData, onToast }: {
   accountSpaceId: AccountSpaceId;
   revision: string;
   protectedWorkspace: boolean;
+  deferredSession?: { tabCount: number; savedAt: string };
+  onRestoreSession: () => void;
   onOpen: (id: string) => void;
   onClearData: () => void;
   onToast: (message: string, kind?: 'ok' | 'error') => void;
@@ -55,6 +57,7 @@ export function HistoryPanel({ accountSpaceId, revision, protectedWorkspace, onO
     <div className="side-panel">
       <PanelHeader icon={Clock3} eyebrow="This Account Space" title="History" />
       {!protectedWorkspace && <>
+        {deferredSession && <div className="history-restore-session"><strong>Previous session</strong><span>{deferredSession.tabCount} tabs · {visitDate.format(new Date(deferredSession.savedAt))}</span><button type="button" onClick={onRestoreSession}>Restore previous session</button></div>}
         <label className="vault-search"><Search size={14} /><input aria-label="Search history" placeholder="Search history" maxLength={256} value={text} onChange={(event) => filter(setText, event.target.value)} /></label>
         <label className="vault-search"><Search size={14} /><input aria-label="Filter history by site" placeholder="Site, e.g. example.com" maxLength={255} value={site} onChange={(event) => filter(setSite, event.target.value)} /></label>
         <div className="history-dates">

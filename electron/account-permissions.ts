@@ -48,6 +48,11 @@ export class AccountPermissionManager {
     if (!isCapabilityAllowedAtOrigin(capability, origin)) return 'denied';
     const account = this.accounts.require(accountSpaceId);
     if (account.workspaceId !== workspaceId || account.locked) return 'denied';
+    if (capability === 'popups') {
+      const preference = account.popupPreferences?.find((item) => item.origin === origin)?.decision;
+      if (preference === 'block') return 'denied';
+      if (preference === 'allow') return 'granted';
+    }
     const key = grantKey(accountSpaceId, origin, capability);
     if (this.oneTimeGrants.has(key)) {
       if (consumeOnce) this.oneTimeGrants.delete(key);
@@ -86,6 +91,12 @@ export class AccountPermissionManager {
     const grants = new Map(this.grantsFor(account).filter((grant) => grant.origin === origin).map((grant) => [grant.capability, grant]));
     return PERMISSION_CAPABILITIES.map((capability) => {
       if (!isCapabilityAllowedAtOrigin(capability, origin)) return { capability, decision: 'blocked' };
+      if (capability === 'popups') {
+        const preference = account.popupPreferences?.find((item) => item.origin === origin)?.decision;
+        return preference === 'block' ? { capability, decision: 'blocked-preference' }
+          : preference === 'allow' ? { capability, decision: 'allowed', duration: 'until-revoked' }
+            : { capability, decision: 'ask' };
+      }
       const grant = grants.get(capability);
       return grant ? { capability, decision: 'allowed', duration: grant.duration } : { capability, decision: 'ask' };
     });
@@ -93,8 +104,17 @@ export class AccountPermissionManager {
 
   revoke(accountSpaceId: AccountSpaceId, workspaceId: WorkspaceId, originValue: string, capability: PermissionCapability): void {
     const origin = requireExactWebOrigin(originValue);
-    if (this.evaluate(accountSpaceId, workspaceId, origin, capability, false) !== 'granted') return;
     const key = grantKey(accountSpaceId, origin, capability);
+    if (capability === 'popups') {
+      this.accounts.update(accountSpaceId, (record) => {
+        record.popupPreferences = (record.popupPreferences ?? []).filter((item) => item.origin !== origin);
+        record.permissionGrants = record.permissionGrants.filter((grant) => !(grant.origin === origin && grant.capability === 'popups'));
+      });
+      this.sessionGrants.delete(key);
+      this.oneTimeGrants.delete(key);
+      return;
+    }
+    if (this.evaluate(accountSpaceId, workspaceId, origin, capability, false) !== 'granted') return;
     const matches = (grant: { origin: string; capability: PermissionCapability }) => grant.origin === origin && grant.capability === capability;
     if (this.accounts.require(accountSpaceId).permissionGrants.some(matches)) {
       this.accounts.update(accountSpaceId, (account) => { account.permissionGrants = account.permissionGrants.filter((grant) => !matches(grant)); });
@@ -118,6 +138,24 @@ export class AccountPermissionManager {
     };
   }
 
+  setPopupPreference(accountSpaceId: AccountSpaceId, workspaceId: WorkspaceId, originValue: string, decision: 'ask' | 'allow' | 'block'): void {
+    const origin = requireExactWebOrigin(originValue);
+    if (workspaceId === 'banking' || !isCapabilityAllowedAtOrigin('popups', origin)) throw new Error('Pop-up settings are unavailable for this site or Account Space');
+    const account = this.accounts.require(accountSpaceId);
+    if (account.workspaceId !== workspaceId || account.locked) throw new Error('Account Space is unavailable');
+    const key = grantKey(accountSpaceId, origin, 'popups');
+    this.accounts.update(accountSpaceId, (record) => {
+      record.popupPreferences = (record.popupPreferences ?? []).filter((item) => item.origin !== origin);
+      record.permissionGrants = record.permissionGrants.filter((grant) => !(grant.origin === origin && grant.capability === 'popups'));
+      if (decision !== 'ask') {
+        if (record.popupPreferences.length >= 100) throw new Error('Too many saved pop-up settings');
+        record.popupPreferences.push({ origin, decision });
+      }
+    });
+    this.sessionGrants.delete(key);
+    this.oneTimeGrants.delete(key);
+  }
+
   applyDecision(prompt: PermissionPrompt, decision: PermissionDecision, retainAllowOnce = false): boolean {
     if (this.consumedPromptIds.has(prompt.id)) throw new Error('Permission prompt was already used');
     this.consumedPromptIds.add(prompt.id);
@@ -129,16 +167,24 @@ export class AccountPermissionManager {
       return true;
     }
     if (decision === 'allow-session') {
+      if (prompt.capability === 'popups') return true;
       this.sessionGrants.set(key, { origin: prompt.origin, capability: prompt.capability, duration: 'session' });
       return true;
     }
     if (decision === 'allow-always') {
+      if (prompt.capability === 'popups') {
+        this.setPopupPreference(prompt.accountSpaceId, prompt.workspaceId, prompt.origin, 'allow');
+        return true;
+      }
       this.accounts.update(prompt.accountSpaceId, (record) => {
         if (!record.permissionGrants.some((grant) => grant.origin === prompt.origin && grant.capability === prompt.capability)) {
           record.permissionGrants.push({ origin: prompt.origin, capability: prompt.capability });
         }
       });
       return true;
+    }
+    if (prompt.capability === 'popups') {
+      this.setPopupPreference(prompt.accountSpaceId, prompt.workspaceId, prompt.origin, 'block');
     }
     return false;
   }
@@ -151,6 +197,7 @@ export class AccountPermissionManager {
 }
 
 export function isCapabilityAllowedAtOrigin(capability: PermissionCapability, origin: string): boolean {
+  if (capability === 'popups') return origin.startsWith('https://') || /^http:\/\/(?:localhost|127(?:\.\d{1,3}){3})(?::\d+)?$/.test(origin);
   if (capability === 'notifications') return NOTIFICATION_ORIGINS.has(origin);
   if (capability === 'microphone' || capability === 'camera' || capability === 'camera-and-microphone' || capability === 'display-capture') {
     return origin === MEET_ORIGIN;

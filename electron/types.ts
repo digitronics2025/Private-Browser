@@ -154,7 +154,8 @@ export type PermissionCapability =
   | 'clipboard-read'
   | 'clipboard-write'
   | 'file-system'
-  | 'download';
+  | 'download'
+  | 'popups';
 
 export type PermissionDecision = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 
@@ -166,7 +167,7 @@ export interface PermissionGrantSummary {
 }
 export type SitePermissionStatus =
   | { capability: PermissionCapability; decision: 'allowed'; duration: PermissionGrantDuration }
-  | { capability: PermissionCapability; decision: 'ask' | 'blocked' };
+  | { capability: PermissionCapability; decision: 'ask' | 'blocked' | 'blocked-preference' };
 
 export interface PermissionPrompt {
   id: string;
@@ -177,6 +178,9 @@ export interface PermissionPrompt {
   createdAt: string;
   expiresAt: string;
   displaySources?: Array<{ id: string; name: string }>;
+  popupDestination?: string;
+  popupAddressType?: 'empty' | 'about:blank' | 'http' | 'https' | 'other';
+  popupMethod?: 'GET' | 'POST';
 }
 
 export interface PermissionPromptResponse {
@@ -364,6 +368,7 @@ export interface AccountBrowsingStateV2 {
   bookmarks: AccountSpaceBookmark[];
   bookmarkFolders?: BookmarkFolder[];
   history: AccountSpaceHistoryEntry[];
+  deferredSession?: DeferredSessionSnapshot;
   historyTrimmed?: boolean;
   tabGroups?: TabGroup[];
   /** Absent until the user customises the New Tab shortcuts for this Account Space. */
@@ -371,6 +376,15 @@ export interface AccountBrowsingStateV2 {
   /** Remembered icons of bookmarked hosts, host → `data:` URL. See `bookmark-icons.ts`. */
   bookmarkIcons?: Record<string, string>;
   sidePanel?: AccountPanelPreferences;
+}
+
+/** Bounded tab-only snapshot retained locally until the owner chooses to restore it. */
+export interface DeferredSessionSnapshot {
+  version: 1;
+  savedAt: string;
+  activeTabId: string;
+  tabs: Array<Pick<AccountSpaceBrowserTab, 'id' | 'workspaceId' | 'accountSpaceId' | 'title' | 'url' | 'isHome' | 'restorePaused' | 'pinned' | 'groupId'>>;
+  tabGroups?: TabGroup[];
 }
 
 export interface ShortcutTile {
@@ -493,6 +507,7 @@ export interface BrowserTab {
   developerToolsAllowed: boolean;
   developerToolsOpen: boolean;
   securityWarning?: 'insecure' | 'idn';
+  popupBlockedReason?: 'preference' | 'security' | 'banking';
   audible?: boolean;
   muted?: boolean;
   zoomPercent?: number;
@@ -628,6 +643,7 @@ export interface BrowserSnapshot {
   bookmarks: Bookmark[];
   bookmarkFolders?: BookmarkFolder[];
   history: HistoryEntry[];
+  deferredSession?: { tabCount: number; savedAt: string };
   downloads: DownloadEntry[];
   downloadHistory?: DownloadHistoryStatus;
   downloadFolder?: DownloadFolderStatus;
@@ -756,6 +772,7 @@ export interface RuntimeBrowserStateV2 {
   shortcutsByAccountSpace: Record<string, ShortcutTile[]>;
   bookmarkIconsByAccountSpace: Record<string, Record<string, string>>;
   sidePanelsByAccountSpace?: Record<string, AccountPanelPreferences>;
+  deferredSessionsByAccountSpace?: Record<string, DeferredSessionSnapshot>;
   accountSpaces: AccountSpaceSummary[];
   accountHealth: AccountSpaceHealth[];
   recovery?: StateRecoveryStatus;

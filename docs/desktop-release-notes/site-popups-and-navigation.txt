@@ -1,0 +1,1 @@
+Choose Ask, Allow, or Block for pop-ups per site and Account Space, with safe blank-window sign-in flows able to continue to secure web addresses. Address-bar selection is clearer in both themes, and the overflow menu stays above the live page without losing its scroll position or typed input.

@@ -80,6 +80,12 @@ Details: [workspaces-and-state.md](workspaces-and-state.md). Encrypted `<uuid>.a
 colour, workspace ownership, partition key, Google identity, refresh token,
 grants, modules, permissions and backup settings.
 
+Exact-origin popup preferences (`Ask`, `Allow`, or `Block`) are stored in that
+same encrypted Account Space record. They are independent across Account Spaces;
+missing preferences migrate to `Ask`. Banking policy denies popups before any
+saved preference is consulted. See [SECURITY.md](../../SECURITY.md) for blank
+popup opening and subsequent navigation safeguards.
+
 Version-1 migration is transaction-like:
 
 1. Hash the original `browser-state.json` and write a timestamped byte-for-byte
@@ -249,9 +255,10 @@ disconnect and delete. Tab, tab-move, mute and bookmark-editing IPC act only on
 the active Account Space; `ipc-contracts.ts` validates their shapes (it also
 validates the `side-app:*` channels, which belong to no Account Space — see
 [side-apps.md](side-apps.md)). The native
-page view is hidden below menus, account, permission and recovery overlays (a
-still image of the page is shown instead, never for Banking or protected pages);
-focus returns on close.
+page view is hidden below account, permission, recovery and other content-covering
+overlays after the main process acknowledges the hide. An eligible still image
+may cover the page behind a menu; Banking and protected pages use a neutral
+surface. Focus returns on close.
 
 `npm run dev:preview` installs a credential-free renderer mock. Browser E2E checks
 desktop/mobile switching and management. Playwright Electron creates a fresh app

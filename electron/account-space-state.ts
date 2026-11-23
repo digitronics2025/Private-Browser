@@ -446,6 +446,16 @@ export function validateManifest(input: BrowserStateManifestV2): BrowserStateMan
 export const MAX_ACCOUNT_TABS = 100;
 export const MAX_ACCOUNT_BOOKMARKS = 25_000;
 
+function safeDeferredUrl(value: unknown): value is string {
+  if (value === 'private://home' || value === 'private://blank') return true;
+  if (typeof value !== 'string' || !isAllowedRemoteUrl(value)) return false;
+  try {
+    const url = new URL(value);
+    if (url.username || url.password || /(?:token|password|session|auth|secret|key|code)/i.test(url.hash)) return false;
+    return ![...url.searchParams.keys()].some((key) => /(?:token|password|session|auth|secret|key|code)/i.test(key));
+  } catch { return false; }
+}
+
 export function validateAccountState(input: AccountBrowsingStateV2): AccountBrowsingStateV2 {
   if (!input || typeof input !== 'object' || input.version !== 2 || !isAccountSpaceId(input.accountSpaceId)) {
     throw new Error('Invalid Account Space browsing state');
@@ -460,18 +470,33 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
   if (!Array.isArray(input.tabs)) throw new Error('Invalid Account Space tabs');
   const tabs = input.tabs.slice(0, MAX_ACCOUNT_TABS).filter((tab) =>
     tab && tab.accountSpaceId === input.accountSpaceId && tab.workspaceId === workspaceId && typeof tab.id === 'string'
-      && (tab.url === 'private://home' || isAllowedRemoteUrl(tab.url)),
+      && (tab.url === 'private://home' || tab.url === 'private://blank' || isAllowedRemoteUrl(tab.url)),
   ).map((tab) => ({
     id: tab.id.slice(0, 200),
     workspaceId,
     accountSpaceId: input.accountSpaceId,
     title: typeof tab.title === 'string' ? tab.title.slice(0, 500) : 'New tab',
     url: tab.url,
-    isHome: tab.url === 'private://home' || Boolean(tab.isHome),
+    isHome: tab.url === 'private://home' || tab.url === 'private://blank' || Boolean(tab.isHome),
       ...(tab.restorePaused === true ? { restorePaused: true } : {}),
       ...(tab.pinned === true ? { pinned: true } : {}),
       ...(tab.pinned !== true && tab.groupId && groupIds.has(tab.groupId) ? { groupId: tab.groupId } : {}),
   }));
+  let deferredSession: AccountBrowsingStateV2['deferredSession'];
+  const deferred = input.deferredSession;
+  if (deferred && deferred.version === 1 && typeof deferred.savedAt === 'string' && Number.isFinite(Date.parse(deferred.savedAt))
+    && Array.isArray(deferred.tabs) && deferred.tabs.length > 0 && deferred.tabs.length <= MAX_ACCOUNT_TABS) {
+    const deferredTabs = deferred.tabs.filter((tab) => tab && tab.accountSpaceId === input.accountSpaceId && tab.workspaceId === workspaceId
+      && typeof tab.id === 'string' && tab.id.length > 0 && safeDeferredUrl(tab.url))
+      .map((tab) => ({ id: tab.id.slice(0, 200), workspaceId, accountSpaceId: input.accountSpaceId,
+        title: typeof tab.title === 'string' ? tab.title.slice(0, 500) : 'New tab', url: tab.url,
+        isHome: tab.url === 'private://home' || tab.url === 'private://blank' || Boolean(tab.isHome),
+        ...(tab.restorePaused === true ? { restorePaused: true } : {}), ...(tab.pinned === true ? { pinned: true } : {}),
+        ...(tab.pinned !== true && tab.groupId && groupIds.has(tab.groupId) ? { groupId: tab.groupId } : {}) }));
+    if (deferredTabs.length) deferredSession = { version: 1, savedAt: new Date(deferred.savedAt).toISOString(),
+      activeTabId: deferredTabs.some((tab) => tab.id === deferred.activeTabId) ? deferred.activeTabId : deferredTabs[0].id,
+      tabs: deferredTabs, ...(groups.length ? { tabGroups: groups } : {}) };
+  }
   if (tabs.length === 0) {
     tabs.push({ id: randomUUID(), workspaceId, accountSpaceId: input.accountSpaceId, title: 'New tab', url: 'private://home', isHome: true });
   }
@@ -491,7 +516,7 @@ export function validateAccountState(input: AccountBrowsingStateV2): AccountBrow
   const tabGroups = groups.filter((group) => tabs.some((tab) => tab.groupId === group.id));
   const sidePanel = workspaceId === 'banking' ? undefined : sanitizeAccountPanel(input.sidePanel);
   return { version: 2, accountSpaceId: input.accountSpaceId, workspaceId, tabs: orderAccountTabs(tabs), activeTabId, bookmarks, history,
-    ...(bookmarkFolders.length ? { bookmarkFolders } : {}), ...(tabGroups.length ? { tabGroups } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}), ...(sidePanel ? { sidePanel } : {}) };
+    ...(bookmarkFolders.length ? { bookmarkFolders } : {}), ...(tabGroups.length ? { tabGroups } : {}), ...(deferredSession ? { deferredSession } : {}), ...(historyTrimmed ? { historyTrimmed: true } : {}), ...(shortcuts ? { shortcuts } : {}), ...(bookmarkIcons ? { bookmarkIcons } : {}), ...(sidePanel ? { sidePanel } : {}) };
 }
 
 export const MAX_SHORTCUT_TILES = 12;

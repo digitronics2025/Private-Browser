@@ -34,6 +34,7 @@ export const PERMISSION_CAPABILITIES: readonly PermissionCapability[] = [
   'clipboard-write',
   'file-system',
   'download',
+  'popups',
 ];
 const PERMISSION_DECISIONS = new Set<PermissionDecision>(['allow-once', 'allow-session', 'allow-always', 'deny']);
 

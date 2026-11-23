@@ -9,7 +9,8 @@ test('chooses a search engine during setup and edits behavior in the current wor
   const engine = panel.getByLabel('Search engine');
   await expect(engine).toBeFocused();
   await engine.selectOption('brave');
-  await panel.getByRole('radio', { name: 'Also open selected pages' }).click();
+  await panel.getByRole('radio', { name: 'Restore automatically' }).click();
+  await panel.getByRole('button', { name: 'Edit startup pages' }).click();
   await panel.getByLabel('Startup addresses').fill('https://example.test/dashboard\nexample.test/help');
   await panel.getByRole('button', { name: 'Save startup pages' }).click();
   await panel.getByLabel('Keywords and search addresses').fill('gh https://example.test/search?q=%s');
@@ -20,7 +21,7 @@ test('chooses a search engine during setup and edits behavior in the current wor
   await expect(address).toHaveValue('https://example.test/search?q=privacy%20tabs');
   await page.evaluate(() => window.privateBrowser.switchWorkspace('tenten'));
   await expect(engine).toHaveValue('duckduckgo');
-  await expect(panel.getByRole('radio', { name: 'Continue where you left off' })).toHaveAttribute('aria-checked', 'true');
+  await expect(panel.getByRole('radio', { name: 'Restore automatically' })).toHaveAttribute('aria-checked', 'true');
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   await expect(panel.getByLabel('Keywords and search addresses')).toHaveCount(0);
 });
