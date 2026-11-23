@@ -10,7 +10,7 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: 4ba349c
+verified_at: 3f1a6a7
 ---
 
 # Release and Updates
@@ -437,7 +437,9 @@ All Windows verification and production builds create checksum-bound publisher
 receipts through `record-windows-publisher.ps1`. The step uses named hashtable
 splatting for `Installer`, `Sha256` and `Destination`; array splatting passes
 positional values and cannot bind those named script parameters. Only production
-runs proceed to protected R2 staging and Worker publication.
+runs proceed to protected R2 staging and Worker publication. The CycloneDX SBOM
+uses the production dependency tree (`npm sbom --omit=dev`) so tooling-only
+dependency conflicts do not block evidence generation for the packaged app.
 
 | Job | Runs on | Does |
 | --- | --- | --- |
