@@ -63,6 +63,7 @@ describe('release workflow', () => {
     expect(step('Remove production signing certificate')).toContain('-DeleteKey');
     expect(signed).toContain('record-windows-publisher.ps1');
     expect(signed).toContain('SIGNING_CONFIGURED');
+    expect(signed).not.toContain("if: env.PRIVATE_BROWSER_STABLE_BUILD == 'true'");
     expect(signed).toContain('$publisherArgs = @{');
     expect(signed).toContain("Destination = 'release/PUBLISHER.json'");
     expect(signed).toContain('$appPublisherArgs = @{');

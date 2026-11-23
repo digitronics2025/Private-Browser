@@ -261,7 +261,6 @@ jobs:
           npm run dist
           exit $LASTEXITCODE
       - name: Record Windows publisher evidence
-        if: env.PRIVATE_BROWSER_STABLE_BUILD == 'true'
         shell: pwsh
         env:
           EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256 }}
