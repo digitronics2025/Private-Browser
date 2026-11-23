@@ -5,7 +5,7 @@ sources:
   - electron/types.ts
   - electron/ipc-guard.ts
   - electron/ipc-contracts.ts
-verified_at: 028b9d2d
+verified_at: df762099
 ---
 
 # IPC Contract
@@ -156,6 +156,11 @@ Every method returns a `Promise`, so the "Resolves with" column omits the wrappe
 | `browser:open-google-password-manager` | `openGooglePasswordManager()` | No arguments | `void` after Chrome starts. Trusted shell only, fixed Google vault URL. |
 | `browser:list-chrome-profiles` | `listChromeProfiles()` | — | `ChromeProfileSource[]` |
 | `browser:import-chrome` | `importChrome(options)` | `ChromeImportOptions` | `ChromeImportResult` |
+| `browser:extensions-list` | `listBrowserExtensions()` | No arguments; active eligible Account Space | Reviewed extension summaries |
+| `browser:extensions-inspect` | `inspectBrowserExtension()` | No arguments; native picker, active eligible Account Space | Short-lived review ticket, or `undefined` |
+| `browser:extension-install` | `installBrowserExtension(reviewId, origins)` | Review UUID and up to 40 explicitly selected HTTPS origins | Installed extension summary |
+| `browser:extension-sites` | `setBrowserExtensionSites(id, origins)` | SHA-256 extension ID and subset of reviewed origins | Updated extension summary |
+| `browser:extension-remove` | `removeBrowserExtension(id)` | SHA-256 extension ID | `void` |
 | `browser:toggle-tracker-blocking` | `toggleTrackerBlocking()` | — | `void` |
 | `browser:open-download` | `openDownload(id)` | `id: string` | `void` |
 | `browser:control-download` | `controlDownload(id, action)` | current account download and pause, resume, retry or cancel | `void` |
