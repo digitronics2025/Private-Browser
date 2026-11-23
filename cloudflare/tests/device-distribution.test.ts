@@ -37,6 +37,9 @@ it('requires verified enrollment for private feeds and range requests and reject
     database.prepare(`INSERT INTO releases (id,app_id,version,build_number,channel,object_key,filename,content_type,size_bytes,sha256,commit_sha,release_notes,published_at,is_active)
       VALUES ('stable-fixture','private-browser','0.7.1',10,'stable','fixture/setup.exe','Private-Browser-0.7.1-Setup.exe','application/octet-stream',4,?,?,'fixture notes','2026-11-20T12:00:00Z',1)`)
       .run('a'.repeat(64), 'b'.repeat(40));
+    database.exec(readFileSync(new URL('../migrations/0005_immutable_release_artifacts.sql', import.meta.url), 'utf8'));
+    expect(database.prepare('SELECT object_etag FROM releases WHERE id = ?').get('stable-fixture')).toMatchObject({ object_etag: null });
+    expect(() => database.prepare('UPDATE releases SET object_key = ? WHERE id = ?').run('fixture/replacement.exe', 'stable-fixture')).toThrow('release identity conflict');
     const publicResult = await fetch('/api/v1/releases/public/latest');
     expect(publicResult.status).toBe(200);
     const oldLink = (await publicResult.json() as { downloadUrl: string }).downloadUrl;

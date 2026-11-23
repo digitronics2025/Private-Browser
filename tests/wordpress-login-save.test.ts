@@ -24,11 +24,14 @@ it('accepts a profile change only after the same profile confirms the update', (
   const profile = origin + '/store/wp-admin/profile.php';
   const flow = wordPressLoginFlow(profile)!;
   const attempt = new WordPressLoginAttempt();
-  const nonce = attempt.arm(flow);
-  expect(attempt.submit('unrelated-nonce', 'fixture', 'changed-site-fixture')).toBe(false);
-  expect(attempt.submit(nonce, 'fixture', 'changed-site-fixture')).toBe(true);
+  attempt.arm(flow);
+  const submission = { id: 1, url: profile, initiatorOrigin: origin, bytes: Buffer.from('user_login=fixture&pass1=changed-site-fixture&pass2=changed-site-fixture') };
+  expect(attempt.submit(submission)).toBe(false);
+  attempt.noteGesture();
+  expect(attempt.submit({ ...submission, initiatorOrigin: 'https://unrelated.example.test' })).toBe(false);
+  expect(attempt.submit(submission)).toBe(true);
   const redirect = '/store/wp-admin/profile.php?updated=true';
-  attempt.response({ ...success, url: profile, responseHeaders: { ...success.responseHeaders, Location: [redirect] } });
+  attempt.response({ ...success, id: 1, url: profile, responseHeaders: { ...success.responseHeaders, Location: [redirect] } });
   const committed = attempt.commit(origin + redirect, 200);
   expect(committed?.username).toBe('fixture');
   expect(committed?.password.equals(Buffer.from('changed-site-fixture'))).toBe(true);

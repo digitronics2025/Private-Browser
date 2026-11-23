@@ -58,7 +58,7 @@ test.beforeEach(async () => {
   userDataPath = mkdtempSync(join(tmpdir(), 'private-browser-autofill-'));
   const keyPath = join(userDataPath, 'fixture-key.pem');
   const certPath = join(userDataPath, 'fixture-cert.pem');
-  const openssl = 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe';
+  const openssl = process.platform === 'win32' ? 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe' : 'openssl';
   const certificate = spawnSync(openssl, [
     'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', keyPath, '-out', certPath,
     '-subj', '/CN=autofill.example.test', '-addext', 'subjectAltName=DNS:autofill.example.test,IP:127.0.0.1', '-days', '1',

@@ -9,6 +9,7 @@ export interface ReleaseRecord {
   build_number: number;
   channel: 'stable' | 'beta';
   object_key: string;
+  object_etag?: string | null;
   filename: string;
   content_type: string;
   size_bytes: number;

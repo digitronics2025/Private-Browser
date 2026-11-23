@@ -79,10 +79,10 @@ describe('encrypted Account Space backup', () => {
     const payload = manager.buildPayload(ID, {
       bookmarks: [{ id: 'b1', accountSpaceId: ID, workspaceId: 'personal', title: 'Safe', url: 'https://example.com/', createdAt: '2026-09-12T10:00:00Z', location: 'bar', folderPath: [], order: 0, orderPath: [0] }],
       trackerBlocking: true,
-      openTabs: [{ id: 't1', accountSpaceId: ID, workspaceId: 'personal', title: 'Tab', url: 'https://example.com/', isHome: false, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false }],
+      openTabs: [{ id: 't1', accountSpaceId: ID, workspaceId: 'personal', title: 'Reset fixture', url: 'https://example.com/password-reset/fixture', isHome: false, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false }],
       history: [{ id: 'h1', accountSpaceId: ID, workspaceId: 'personal', title: 'History', url: 'https://example.com/', visitedAt: '2026-09-12T10:00:00Z' }],
     });
-    expect(payload.openTabs).toHaveLength(1);
+    expect(payload.openTabs).toMatchObject([{ url: 'https://example.com/', title: 'example.com' }]);
     expect(payload).not.toHaveProperty('history');
     expect(payload).not.toHaveProperty('cookies');
     expect(payload).not.toHaveProperty('tokens');

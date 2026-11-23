@@ -21,10 +21,16 @@ describe('release workflow', () => {
   });
 
   it('requires the owner-approved main commit before production publication', () => {
-    const publish = workflow.slice(workflow.indexOf('  publish-cloudflare-release:'));
-    const eligibility = publish.slice(0, publish.indexOf('\n    concurrency:'));
-    expect(eligibility).toContain("github.event_name == 'push' && github.ref == 'refs/heads/main'");
-    expect(eligibility).toContain('&& vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED == github.sha');
+    const windows = workflow.slice(workflow.indexOf('  windows-installer:'));
+    const approval = step('Validate exact-commit release approval');
+    expect(workflow).toContain('default: false');
+    expect(approval).toContain("github.event_name == 'workflow_dispatch' && inputs.publish");
+    expect(approval).toContain('vars.PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED');
+    expect(approval).toContain('github.ref_protected');
+    expect(approval).toContain('"$GITHUB_REF" != refs/heads/main || "$PROTECTED_REF" != true || "$APPROVED_SHA" != "$GITHUB_SHA"');
+    expect(windows).toContain("needs.verify.outputs.production == 'true'");
+    expect(windows).toContain("'production-release' || 'windows-verification'");
+    expect(step('Publish installer from private R2')).toContain("if: env.PRIVATE_BROWSER_STABLE_BUILD == 'true'");
   });
 
   // F-41: an app change whose run never published must still ship with the next push.
@@ -35,59 +41,63 @@ describe('release workflow', () => {
     expect(changes.indexOf('commitSha')).toBeLessThan(changes.indexOf('github.event.before'));
   });
 
-  // F-55: nothing that runs before the credentialed steps gets to execute
-  // dependency install scripts, and every action is pinned to a commit.
-  it('installs the publish job without dependency scripts and pins every action', () => {
-    const publish = workflow.slice(workflow.indexOf('  publish-cloudflare-release:'));
-    expect(publish).toContain('- run: npm ci --ignore-scripts');
-    // Only wrangler's engine packages may run install scripts, and nothing else.
-    expect(publish.match(/- run: npm (?:ci|install|rebuild)[^\r\n]*/g)).toEqual(['- run: npm ci --ignore-scripts', '- run: npm rebuild workerd esbuild']);
+  it('pins every workflow action and keeps Worker deploy credentials out of Actions', () => {
     for (const file of ['ci.yml', 'deploy-cloudflare.yml', 'codeql.yml']) {
       const text = readFileSync(join(process.cwd(), '.github/workflows', file), 'utf8');
       for (const [, reference] of text.matchAll(/uses: (\S+)/g)) expect(reference, `${file}: ${reference}`).toMatch(/@[0-9a-f]{40}$/);
+      if (file === 'deploy-cloudflare.yml') expect(text).not.toContain('secrets.');
     }
   });
 
-  // F-50: a release that fails its live check is replaced by the one before it.
-  it('restores the previous release when live verification fails', () => {
-    expect(step('Record the release being replaced')).toContain('cloudflare/scripts/read-active-release.mjs');
-    const verify = step('Verify authenticated download end to end');
-    expect(verify).toContain('PREVIOUS_RELEASE_ID: ${{ steps.previous.outputs.id }}');
-    expect(verify).toContain('node cloudflare/scripts/activate-release.mjs "$PREVIOUS_RELEASE_ID"');
-    expect(verify.trim().endsWith('exit 1')).toBe(true);
+  it('requires a signed candidate, verifies private R2 bytes and suspends a failed release without an eligible restore', () => {
+    const packaging = step('Build hardened Windows installer');
+    const loadSigner = step('Load approved Windows signing certificate');
+    const signed = step('Verify signed app and installer');
+    const stage = step('Stage and verify private R2 objects');
+    const publish = step('Publish installer from private R2');
+    expect(loadSigner).toContain('if: env.PRIVATE_BROWSER_STABLE_BUILD');
+    expect(loadSigner).toContain('import-windows-publisher.ps1');
+    expect(packaging).toContain('steps.signer.outputs.thumbprint');
+    expect(packaging).not.toContain('secrets.');
+    expect(step('Remove production signing certificate')).toContain('-DeleteKey');
+    expect(signed).toContain('record-windows-publisher.ps1');
+    expect(signed).toContain('win-unpacked/Private Browser.exe');
+    expect(stage).toContain('verify-release-candidate.mjs "$installer" "$candidate_dir/candidate.exe"');
+    expect(stage).toContain("put-object --bucket");
+    expect(stage).toContain("--if-none-match '*'");
+    expect(stage).toContain('get-object --bucket');
+    expect(stage).toContain('cmp --silent');
+    expect(stage).not.toContain('PRODUCTION_RELEASE_AUTOMATION_KEY');
+    expect(publish).not.toContain('PRODUCTION_RELEASE_R2_');
+    expect(publish).toContain('git ls-remote --exit-code origin refs/heads/main');
+    expect(stage.indexOf('Main advanced after release approval')).toBeLessThan(stage.indexOf('put-object --bucket'));
+    expect(publish.indexOf('read-active-release.mjs')).toBeLessThan(publish.indexOf('publish-release.mjs'));
+    expect(workflow.indexOf(stage)).toBeLessThan(workflow.indexOf(publish));
+    expect(publish).toContain('live.commitSha !== process.env.GITHUB_SHA || live.sha256 !== process.argv[3]');
+    expect(publish).toContain('Check that exact release in D1 before retrying.');
+    expect(publish).toContain('verify-live-release.mjs');
+    expect(publish).toContain('activate-release.mjs "$previous_id" "$published_id"');
+    expect(publish).toContain('suspend-release.mjs "$published_id"');
+    expect(workflow.indexOf(signed)).toBeLessThan(workflow.indexOf(publish));
   });
 
-  it('reads and verifies private candidate bytes before stable activation', () => {
-    const stage = step('Verify candidate bytes from private R2');
-    expect(stage).toContain('id: staged');
-    expect(stage).toContain('wrangler r2 object get "private-browser-releases/$OBJECT_KEY" --file "$candidate_file" --remote');
-    expect(stage).toContain('verify-release-candidate.mjs "$INSTALLER_PATH" "$candidate_file"');
-    expect(stage).toContain('verified=true');
-    expect(stage).toContain('$GITHUB_STEP_SUMMARY');
-    expect(workflow.indexOf(stage)).toBeLessThan(workflow.indexOf(step('Publish D1 release metadata')));
-    expect(step('Publish D1 release metadata')).toContain("steps.staged.outputs.verified == 'true'");
-    expect(step('Verify authenticated download end to end')).toContain('Stable installer verified');
-  });
-
-  it('gates the installer artifact on a smoke test of the installed candidate', () => {
+  it('smoke-tests the exact installer and excludes binaries from public artifact uploads', () => {
     const smoke = step('Exercise the installed Windows release candidate');
     expect(smoke).toContain('Start-Process -FilePath $installer.FullName');
     expect(smoke).toContain('playwright.packaged.config.ts');
     expect(smoke).toContain('Get-FileHash -LiteralPath $installer.FullName');
     expect(smoke.trim()).toMatch(/if \(\$testExit -ne 0\) \{ exit \$testExit \}$/);
     expect(workflow.indexOf(smoke)).toBeGreaterThan(workflow.indexOf(step('Build hardened Windows installer')));
-    expect(workflow.indexOf(smoke)).toBeLessThan(workflow.indexOf('name: private-browser-windows'));
+    expect(workflow.indexOf(smoke)).toBeLessThan(workflow.indexOf(step('Stage and verify private R2 objects')));
+    expect(step('Keep signed release evidence')).not.toMatch(/\.exe|\.vsix/);
+    expect(workflow).not.toContain('name: private-browser-windows');
   });
 
-  it('excludes credential bootstrapping from the build and checks the live feed before an upload', () => {
+  it('excludes credential bootstrapping from the build', () => {
     const { build } = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
     expect(JSON.stringify(build.extraResources)).not.toContain('private-browser-update.json');
     expect(workflow).not.toContain('write-update-bootstrap');
     expect(workflow).not.toContain('PRIVATE_BROWSER_BUNDLE_UPDATE_TOKEN');
-    const configured = step('Detect publishing configuration');
-    expect(configured).toContain('PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE: ${{ secrets.PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE }}');
-    expect(configured.indexOf('read-active-release.mjs')).toBeLessThan(configured.indexOf('ready=true'));
-    expect(step('Upload installer to private R2 bucket')).toContain("if: steps.configured.outputs.ready == 'true'");
   });
 
   it('reuses test builds while keeping the security suites and final versioned build', () => {

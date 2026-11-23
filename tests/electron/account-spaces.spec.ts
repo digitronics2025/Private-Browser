@@ -349,7 +349,7 @@ test('sleeps a static inactive tab and restores it without unloading forms or pi
   expect(retained).toEqual(awake);
 });
 
-test('checks the managed update in its own directory and opens it only on an eligible explicit action', async () => {
+test('blocks a managed update without an approved Windows signature', async () => {
   test.skip(process.platform !== 'win32', 'Exercises the Windows installer download marker.');
   const page = await application!.firstWindow();
   const targetVersion = '90.0.0';
@@ -381,17 +381,15 @@ test('checks the managed update in its own directory and opens it only on an eli
   const getState = () => page.evaluate(() => window.privateBrowser.getState());
   const openedPath = () => application!.evaluate(() => process.env.PRIVATE_BROWSER_TEST_MANAGED_OPEN);
   await page.evaluate(({ version, sha }) => window.privateBrowser.downloadManagedUpdate(version, sha), { version: targetVersion, sha: checksum });
-  expect((await getState()).managedUpdate).toMatchObject({ phase: 'ready', version: targetVersion });
+  expect((await getState()).managedUpdate).toMatchObject({ phase: 'failed', version: targetVersion, failure: 'verification',
+    message: expect.stringContaining('approved Private Browser publisher') });
+  const stages = join(userDataPath, 'update-installers');
+  expect(readdirSync(stages).filter(name => name.startsWith('installer-'))).toHaveLength(0);
+  await expect(page.evaluate(() => window.privateBrowser.installManagedUpdate())).rejects.toThrow(/verify the installer first/i);
   expect(await openedPath()).toBeUndefined();
   await page.evaluate(() => window.privateBrowser.switchWorkspace('banking'));
   expect((await getState()).managedUpdate).toBeUndefined();
   await expect(page.evaluate(() => window.privateBrowser.installManagedUpdate())).rejects.toThrow(/regular Account Space/);
-  await page.evaluate(() => window.privateBrowser.switchWorkspace('personal'));
-  await page.evaluate(() => window.privateBrowser.installManagedUpdate());
-  expect((await getState()).managedUpdate).toEqual({ phase: 'launched', version: targetVersion });
-  const path = (await openedPath())!;
-  expect(path).toMatch(/[/\\]update-installers[/\\]installer-[^/\\]+[/\\]PrivateBrowserUpdate\.exe$/);
-  expect(existsSync(path)).toBe(true);
 });
 
 test('previews a native Chrome import and undoes its untouched records only', async () => {
@@ -1154,7 +1152,7 @@ test('deletes only reviewed visits and website data in one Account Space', async
   expect(await cookie(secondUrl, 'count')).toBe(1);
 });
 
-test('rechecks the installer after a same-size file replacement before it reaches Windows Open', async () => {
+test('blocks a release download without an approved Windows signature even when its checksum matches', async () => {
   const page = await application!.firstWindow();
   const endpoint = 'https://private-browser-downloads.digitronics-electro.workers.dev';
   const manifest = {
@@ -1193,12 +1191,9 @@ test('rechecks the installer after a same-size file replacement before it reache
   expect(download.publisher).toMatchObject({ state: expect.stringMatching(/unsigned|unavailable/) });
   expect(download).not.toHaveProperty('expectedInstaller');
   const open = () => page.evaluate((id) => window.privateBrowser.openDownload(id), download.id);
-  await expect(open()).resolves.toBeUndefined();
-
-  writeFileSync(savePath, Buffer.alloc(manifest.sizeBytes, 0x42));
-  await expect(open()).rejects.toThrow(/changed or could not be verified/);
-  expect((await getState()).downloads[0]).toMatchObject({ checksum: 'mismatch' });
-  expect(await application!.evaluate(() => (globalThis as unknown as { fixtureOpenCount: number }).fixtureOpenCount)).toBe(1);
+  await expect(open()).rejects.toThrow(/approved Private Browser publisher/);
+  expect((await getState()).downloads[0]).toMatchObject({ checksum: 'verified', publisher: { approved: false } });
+  expect(await application!.evaluate(() => (globalThis as unknown as { fixtureOpenCount: number }).fixtureOpenCount)).toBe(0);
 });
 
 test('switches to an existing tab through the real address bar bridge', async () => {

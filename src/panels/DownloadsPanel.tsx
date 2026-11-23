@@ -22,7 +22,7 @@ const checksumText: Record<NonNullable<DownloadEntry['checksum']>, string> = {
 
 function publisherText(publisher: DownloadEntry['publisher']): string {
   switch (publisher?.state) {
-    case 'valid': return publisher.name ? `Verified by Windows · ${publisher.name}` : 'Verified by Windows';
+    case 'valid': return publisher.approved ? `Approved browser publisher · ${publisher.name ?? 'verified by Windows'}` : 'Windows verified a publisher outside the approved browser policy';
     case 'unsigned': return 'No Windows signature';
     case 'untrusted': return 'Windows did not verify the signature';
     case 'unavailable': return 'Windows signature check unavailable';

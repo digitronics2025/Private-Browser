@@ -1,13 +1,15 @@
 name: CodeQL
 
-# Main and weekly, not every pull request: a finding on main is fixed in the next PR, and
-# the weekly run catches new queries against unchanged code.
+# Analyze PRs to main so the required CodeQL check is available for merge.
+# The weekly run catches new queries against unchanged code.
 on:
   push:
     branches: [main]
     paths-ignore:
       - "docs/**"
       - "**.md"
+  pull_request:
+    branches: [main]
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:

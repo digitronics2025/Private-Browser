@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -56,6 +56,32 @@ function fixture() {
 }
 
 describe('v1 to Account Spaces v2 migration', () => {
+  it('minimizes previously stored sensitive tab and history addresses on restart', () => {
+    const { root, options } = fixture();
+    const origin = 'https://example.test';
+    const live = origin + '/password-reset/fixture-link';
+    try {
+      const disk = new AccountSpaceStateStore(options);
+      const initialized = disk.initialize();
+      if (initialized.status !== 'ready') throw new Error('Fixture did not migrate');
+      const personal = initialized.accountStates.find(account => account.workspaceId === 'personal')!;
+      const path = disk.recoveryTargetPath(personal.accountSpaceId);
+      writeFileSync(path, JSON.stringify({
+        ...personal,
+        tabs: personal.tabs.map(tab => tab.id === 'p-home' ? { ...tab, url: live, title: 'Reset fixture' } : tab),
+        history: [{ ...personal.history[0], url: live }, ...personal.history],
+      }));
+      const restored = new AccountSpaceStateStore(options).initialize();
+      if (restored.status !== 'ready') throw new Error('Fixture did not restore');
+      const state = restored.accountStates.find(account => account.accountSpaceId === personal.accountSpaceId)!;
+      expect(state.tabs.find(tab => tab.id === 'p-home')?.url).toBe(origin + '/');
+      expect(state.history.map(entry => entry.url)).toEqual(personal.history.map(entry => entry.url));
+      expect(readFileSync(path, 'utf8')).not.toContain('fixture-link');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('coalesces routine writes and saves only the changed account while intentional changes flush immediately', () => {
     vi.useFakeTimers();
     try {

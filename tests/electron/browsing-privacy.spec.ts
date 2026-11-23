@@ -1,10 +1,11 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createDefaultState } from '../../electron/state-store';
 
 const passphrase = 'Isolated Windows browsing archive fixture';
 
@@ -48,6 +49,8 @@ test('encrypts an existing Windows profile and restores its portable file in a c
     const address = fixture.address();
     if (!address || typeof address === 'string') throw new Error('Browsing fixture could not bind to loopback');
     const url = `http://127.0.0.1:${address.port}/private-document`;
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, 'browser-state.json'), JSON.stringify(createDefaultState()));
     const original = await launch(source);
     await expect(original.getByRole('main', { name: 'New Tab' })).toBeVisible();
     const id = (await state(original)).activeAccountSpaceId;
@@ -78,6 +81,7 @@ test('encrypts an existing Windows profile and restores its portable file in a c
     const restored = await launch(destination);
     await expect(restored.getByRole('main', { name: 'New Tab' })).toBeVisible();
     await settings(restored);
+    await expect(restored.getByText('Local browsing encryption is on.', { exact: true })).toBeVisible();
     await enterPassphrase(restored, false);
     await expect(restored.getByText('Browsing data merged.', { exact: true })).toBeVisible();
     const result = await state(restored);

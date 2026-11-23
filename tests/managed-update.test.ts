@@ -7,6 +7,11 @@ import { ManagedUpdate, streamUpdateInstaller } from '../electron/managed-update
 import type { ReleaseManifest, UpdateCheckResult } from '../electron/types.js';
 
 const testBytes = 'managed update fixture';
+const fingerprint = 'e'.repeat(64);
+const publisherPolicy = {
+  approvedPublishers: [fingerprint],
+  inspectPublisher: vi.fn(async () => ({ state: 'valid' as const, fingerprint })),
+};
 const checksum = createHash('sha256').update(testBytes).digest('hex');
 const url = 'https://updates.example.test/download/latest.exe?expires=100&signature=fixture';
 const manifest: ReleaseManifest = {
@@ -45,7 +50,7 @@ it('rejects a mismatched payload and refuses a modified file at install time', a
   const request = vi.fn<typeof fetch>().mockImplementation(async () => response());
   vi.stubGlobal('fetch', request);
   const installer = vi.fn(async () => '');
-  const update = new ManagedUpdate({ directory: root, currentVersion: '0.6.0', check, canUse: () => true, openInstaller: installer, notify: stages });
+  const update = new ManagedUpdate({ ...publisherPolicy, directory: root, currentVersion: '0.6.0', check, canUse: () => true, openInstaller: installer, notify: stages });
   await update.download(manifest.version, 'f'.repeat(64));
   expect(update.snapshot()).toMatchObject({ phase: 'failed', message: expect.stringContaining('available release changed') });
   expect(request).not.toHaveBeenCalled();
@@ -67,7 +72,7 @@ it('rechecks the release, requires user install and only reports an installed ve
   vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockImplementation(async () => response()));
   let scope = true;
   let active = manifest;
-  const options = { directory: root, currentVersion: '0.6.0', canUse: () => scope, notify: () => undefined,
+  const options = { ...publisherPolicy, directory: root, currentVersion: '0.6.0', canUse: () => scope, notify: () => undefined,
     check: async (): Promise<UpdateCheckResult> => ({ state: 'available', currentVersion: '0.6.0', latest: active, checkedAt: manifest.publishedAt }),
     openInstaller: vi.fn(async () => ''),
   };
@@ -88,4 +93,27 @@ it('rechecks the release, requires user install and only reports an installed ve
   expect(options.openInstaller).toHaveBeenCalledTimes(1);
   expect(new ManagedUpdate(options).snapshot()).toEqual({ phase: 'idle' });
   expect(new ManagedUpdate({ ...options, currentVersion: manifest.version }).snapshot()).toEqual({ phase: 'installed', version: manifest.version });
+});
+
+it('requires the configured Windows publisher when staging and again before launch', async () => {
+  const openInstaller = vi.fn(async () => '');
+  const inspectPublisher = vi.fn<NonNullable<ConstructorParameters<typeof ManagedUpdate>[0]['inspectPublisher']>>();
+  const update = new ManagedUpdate({
+    ...publisherPolicy, inspectPublisher, directory: root, currentVersion: '0.6.0',
+    canUse: () => true, notify: () => undefined, openInstaller,
+    request: vi.fn(async () => response()),
+    check: async () => ({ state: 'available', currentVersion: '0.6.0', latest: manifest, checkedAt: manifest.publishedAt }),
+  });
+  for (const result of [{ state: 'unsigned' }, { state: 'unavailable' }, { state: 'valid', fingerprint: 'a'.repeat(64) }] as const) {
+    inspectPublisher.mockResolvedValueOnce(result);
+    await update.download(manifest.version, checksum);
+    expect(update.snapshot()).toMatchObject({ phase: 'failed', failure: 'verification' });
+  }
+  inspectPublisher.mockResolvedValueOnce({ state: 'valid', fingerprint });
+  await update.download(manifest.version, checksum);
+  expect(update.snapshot().phase).toBe('ready');
+  inspectPublisher.mockResolvedValueOnce({ state: 'untrusted' });
+  await update.install();
+  expect(update.snapshot()).toMatchObject({ phase: 'failed', failure: 'verification' });
+  expect(openInstaller).not.toHaveBeenCalled();
 });

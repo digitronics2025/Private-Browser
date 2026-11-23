@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { requireHttpsEndpoint } from './require-https-endpoint.mjs';
+import { requireProductionReleaseEndpoint } from './require-https-endpoint.mjs';
 
 export const releaseVerifyDevice = () => {
   const value = process.env.PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE?.trim();
@@ -20,7 +20,7 @@ export async function readDistributionMode(endpoint) {
 
 export async function readActiveRelease() {
   if (!process.env.PRIVATE_BROWSER_DOWNLOAD_URL) return undefined;
-  const endpoint = requireHttpsEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
+  const endpoint = requireProductionReleaseEndpoint(process.env.PRIVATE_BROWSER_DOWNLOAD_URL);
   const mode = await readDistributionMode(endpoint);
   const device = mode === 'private' ? releaseVerifyDevice() : undefined;
   if (mode === 'private' && !device) throw new Error('The private release service requires the CI verification device.');
@@ -30,8 +30,8 @@ export async function readActiveRelease() {
   });
   if (response.status === 404 && mode === 'public') return undefined;
   if (!response.ok) throw new Error(`Cannot read the active release (${response.status})`);
-  const { version, buildNumber, commitSha } = await response.json();
-  return { version, buildNumber, commitSha };
+  const { version, buildNumber, commitSha, sha256 } = await response.json();
+  return { version, buildNumber, commitSha, sha256 };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

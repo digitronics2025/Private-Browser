@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 const script = '../scripts/read-active-release.mjs';
 const { readActiveRelease } = await import(script) as { readActiveRelease: () => Promise<unknown> };
 
-const origin = 'https://releases.example.test';
+const origin = 'https://private-browser-downloads.digitronics-electro.workers.dev';
 const metadata = { version: '1.2.3', buildNumber: 123, commitSha: 'a'.repeat(40) };
 
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
@@ -36,4 +36,13 @@ it('requires the pinned verification device when the service is private', async 
   vi.stubEnv('PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE', fixture);
   await expect(readActiveRelease()).resolves.toEqual(metadata);
   expect(request.mock.calls.at(-1)?.[0]).toBe(origin + '/update.json');
+});
+
+it('refuses to contact an alternate HTTPS origin even when an enrolled credential is configured', async () => {
+  vi.stubEnv('PRIVATE_BROWSER_DOWNLOAD_URL', 'https://other.example.test');
+  vi.stubEnv('PRIVATE_BROWSER_RELEASE_VERIFY_DEVICE', 'fixture');
+  const request = vi.fn();
+  vi.stubGlobal('fetch', request);
+  await expect(readActiveRelease()).rejects.toThrow(/approved production origin/);
+  expect(request).not.toHaveBeenCalled();
 });

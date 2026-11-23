@@ -79,6 +79,8 @@ interface UpdateEnvironment {
   request?: typeof fetch;
   readonly directory: string;
   readonly currentVersion: string;
+  readonly approvedPublishers: readonly string[];
+  readonly inspectPublisher?: typeof inspectDownloadPublisher;
   readonly check: () => Promise<UpdateCheckResult>;
   readonly canUse: () => boolean;
   readonly openInstaller: (path: string) => Promise<string>;
@@ -135,6 +137,14 @@ export class ManagedUpdate {
     });
   }
 
+  private async requireApprovedPublisher(path: string) {
+    const { state, name, fingerprint } = await (this.environment.inspectPublisher ?? inspectDownloadPublisher)(path);
+    if (state !== 'valid' || !fingerprint || !this.environment.approvedPublishers.includes(fingerprint)) {
+      throw new UpdateInstallError('verification', 'Windows could not verify an approved Private Browser publisher. The installer was blocked.');
+    }
+    return { state, name } as const;
+  }
+
   async download(expectedVersion: string, expectedSha: string): Promise<void> {
     this.assertUsable();
     if (this.abort || this.status.phase === 'verifying') throw new Error('An update is already in progress.');
@@ -159,7 +169,7 @@ export class ManagedUpdate {
       const path = await streamUpdateInstaller(latest, directory, { signal: operation.signal, report: progress, request: this.environment.request });
       this.publish({ phase: 'verifying', version });
       const stamp = downloadFileStamp(path);
-      const publisher = await inspectDownloadPublisher(path);
+      const publisher = await this.requireApprovedPublisher(path);
       operation.signal.throwIfAborted();
       if (!stamp || stamp !== downloadFileStamp(path)) throw new UpdateInstallError('verification', 'The downloaded installer changed. Download a new copy.');
       const prior = this.staged?.directory;
@@ -195,6 +205,7 @@ export class ManagedUpdate {
       if (state !== 'available' || !sameInstaller(latest, staged.release)) throw new UpdateInstallError('release', 'The available release changed. Check for updates again.');
       const stamp = downloadFileStamp(staged.path);
       const verified = stamp && await verifyDownload(staged.path, latest.filename, latest);
+      if (verified === 'verified') await this.requireApprovedPublisher(staged.path);
       this.assertUsable();
       if (verified !== 'verified' || stamp !== downloadFileStamp(staged.path)
         || (process.platform === 'win32' && readFileSync(staged.path + ':Zone.Identifier', 'utf8') !== internetZone)) {

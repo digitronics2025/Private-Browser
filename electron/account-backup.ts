@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AccountBrowsingStateV2, AccountSpaceBookmark, AccountSpaceHistoryEntry, AccountSpaceId, BackupGenerationSummary, BackupRestorePreview, BackupUploadPreview, BookmarkFolder, BrowserTab, HistoryEntry, WorkspaceId } from './types.js';
 import { MAX_ACCOUNT_BOOKMARKS, MAX_ACCOUNT_TABS, validateAccountState } from './account-space-state.js';
+import { minimizeRetainedTab, sensitiveNavigationUrl } from './security.js';
 import { RETAINED_HISTORY_LIMIT } from './history-query.js';
 import { AccountStore, type SafeStorageAdapter } from './account-store.js';
 import { appendBookmarkFolders, validateBookmarkFolders } from './bookmark-tree.js';
@@ -126,10 +127,10 @@ export class AccountBackupManager {
       settings: { trackerBlocking: value.trackerBlocking },
     };
     if (account.backup.includeOpenTabs) {
-      payload.openTabs = value.openTabs.filter((tab) => tab.accountSpaceId === accountSpaceId && tab.workspaceId === account.workspaceId).slice(0, 100).map(({ id, workspaceId, accountSpaceId: idOfAccount, title, url, isHome }) => ({ id, workspaceId, accountSpaceId: idOfAccount, title: title.slice(0, 500), url, isHome }));
+      payload.openTabs = value.openTabs.filter((tab) => tab.accountSpaceId === accountSpaceId && tab.workspaceId === account.workspaceId).slice(0, 100).map(({ id, workspaceId, accountSpaceId: idOfAccount, title, url, isHome }) => ({ id, workspaceId, accountSpaceId: idOfAccount, title: title.slice(0, 500), url, isHome })).map(minimizeRetainedTab);
     }
     if (account.backup.includeHistory) {
-      payload.history = value.history.filter((entry) => entry.accountSpaceId === accountSpaceId && entry.workspaceId === account.workspaceId).slice(0, 500).map((entry) => ({ ...entry, title: entry.title.slice(0, 500) }));
+      payload.history = value.history.filter((entry) => entry.accountSpaceId === accountSpaceId && entry.workspaceId === account.workspaceId && !sensitiveNavigationUrl(entry.url)).slice(0, 500).map((entry) => ({ ...entry, title: entry.title.slice(0, 500) }));
     }
     return payload;
   }
@@ -290,8 +291,8 @@ export function restorableItems(
   });
   return {
     bookmarks: clean.bookmarks,
-    ...(payload.history ? { history: clean.history } : {}),
-    ...(payload.openTabs?.length ? { openTabs: clean.tabs } : {}),
+    ...(payload.history ? { history: clean.history.filter(entry => !sensitiveNavigationUrl(entry.url)) } : {}),
+    ...(payload.openTabs?.length ? { openTabs: clean.tabs.map(minimizeRetainedTab) } : {}),
   };
 }
 

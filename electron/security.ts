@@ -58,6 +58,39 @@ export function stripTrackingParameters(value: string): string {
   }
 }
 
+/** Keep authentication handoffs and one-use links out of automatic browsing records. */
+export function sensitiveNavigationUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) return false;
+    const sensitiveKey = /(?:^|[_-])(?:token|code|state|password|secret|session|signature|credential|ticket|assertion|otp|key|jwt)(?:$|[_-])|^(?:samlresponse|relaystate|accessToken|idToken|refreshToken|sessionId|apiKey|authCode)$/i;
+    const queryKeys = [...url.searchParams.keys(), ...new URLSearchParams(url.hash.slice(1)).keys()];
+    const path = decodeURIComponent(url.pathname);
+    return Boolean(url.username || url.password || queryKeys.some(key => sensitiveKey.test(key))
+      || /(?:^|[\/?#_-])(?:oauth2?|saml|callback|reset(?:-password)?|password-reset|magic-link|invitation|invite|activate|verify-email)(?:$|[\/?#_.-])/i.test(path + url.hash)
+      || /[?&#][^=#&]*(?:token|secret|session|signature|credential|code)[^=#&]*=/i.test(url.hash));
+  } catch {
+    return true;
+  }
+}
+
+export function retainedTabUrl(value: string): string {
+  if (!sensitiveNavigationUrl(value)) return value;
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.origin + '/' : 'private://home';
+  } catch {
+    return 'private://home';
+  }
+}
+
+export function minimizeRetainedTab<T extends { url: string; title: string; isHome: boolean }>(tab: T): T {
+  const url = retainedTabUrl(tab.url);
+  if (url === tab.url) return tab;
+  const isHome = url === 'private://home';
+  return { ...tab, url, title: isHome ? 'New tab' : new URL(url).hostname, isHome };
+}
+
 /** Surface look-alike internationalised domains without blocking legitimate IDNs. */
 export function navigationWarning(value: string): 'insecure' | 'idn' | undefined {
   try {
