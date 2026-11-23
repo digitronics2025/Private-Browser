@@ -113,7 +113,7 @@ test('keeps loading and failure states explicit and retryable', async ({ page })
   await page.goto('/?update=loading');
   await openSettings(page);
   await expect(page.getByText('Checking the latest stable release…')).toBeVisible();
-  await page.waitForTimeout(1_050);
+  await page.waitForTimeout(3_050);
   await openUpdatesPage(page, 'Open');
   await expect(page.getByRole('heading', { name: 'Private Browser is up to date' })).toBeVisible();
 

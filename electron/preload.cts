@@ -17,6 +17,7 @@ import type { AgentDecision, AgentUiStatus } from './agent-types.js';
 import type { AgentSpaceSettings, ClientLimits } from '@private-browser/bridge-protocol/agent-permissions';
 import type { DownloadByteProgress } from './types.js';
 import type { NotesDraftChoice, NotesDraftReview, NotesPanelCommand, NotesPanelStatus } from './notes-panel.js';
+import type { BrowserExtensionReviewTicket, BrowserExtensionSummary } from './browser-extension-store.js';
 
 const api = {
   getAgentStatus: (): Promise<AgentUiStatus> => ipcRenderer.invoke('agents:status'),
@@ -182,6 +183,11 @@ const api = {
   quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
   openGooglePasswordManager: (): Promise<void> => ipcRenderer.invoke('browser:open-google-password-manager'),
   listChromeProfiles: (): Promise<ChromeProfileSource[]> => ipcRenderer.invoke('browser:list-chrome-profiles'),
+  listBrowserExtensions: (): Promise<BrowserExtensionSummary[]> => ipcRenderer.invoke('browser:extensions-list'),
+  inspectBrowserExtension: (): Promise<BrowserExtensionReviewTicket | undefined> => ipcRenderer.invoke('browser:extensions-inspect'),
+  installBrowserExtension: (reviewId: string, allowedOrigins: string[]): Promise<BrowserExtensionSummary> => ipcRenderer.invoke('browser:extension-install', reviewId, allowedOrigins),
+  setBrowserExtensionSites: (id: string, origins: string[]): Promise<BrowserExtensionSummary> => ipcRenderer.invoke('browser:extension-sites', id, origins),
+  removeBrowserExtension: (id: string): Promise<void> => ipcRenderer.invoke('browser:extension-remove', id),
   importChrome: (options: ChromeImportOptions): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:import-chrome', options),
   previewChromeImport: (options: ChromeImportOptions): Promise<ChromeImportReview> => ipcRenderer.invoke('browser:preview-chrome-import', options),
   confirmChromeImport: (id: string): Promise<ChromeImportResult> => ipcRenderer.invoke('browser:confirm-chrome-import', id),

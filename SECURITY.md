@@ -40,7 +40,18 @@ any tab's content, top-level navigation limited to each app's allowed
 hosts (Notes uses its exact workers.dev host only) (everything else opens as an ordinary tab), only clipboard
 write permission, dangerous downloads refused, and a renderer-supplied rectangle
 clamped to the side panel. Each is hidden and cannot open tabs while Banking is
-active. Browser extensions are not supported.
+active.
+
+Browser extensions are locally selected unpacked Manifest V3 packages, copied
+into the selected Account Space and loaded only in that space's Chromium session.
+Only content scripts, local MV3 service workers, exact HTTPS site patterns, and
+the `activeTab`, `scripting`, and `storage` permissions are supported. The user
+must approve each origin explicitly; no site is approved by default. Package
+metadata and grants are protected with Windows `safeStorage`, and package files
+are hash-checked before loading. Banking and Development never load extensions.
+Chrome Web Store/CRX packages, broad host patterns, browser-data permissions,
+toolbar popups, and unsupported manifest features are refused. The extension
+author remains trusted code on each site the user grants.
 
 Notes uses its own persistent partition across unprotected workspaces, separate
 from Claude and all Account Spaces. Its cloud deployment intentionally retains

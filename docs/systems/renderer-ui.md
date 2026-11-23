@@ -3,7 +3,7 @@ system: renderer-ui
 sources:
   - src/**
   - index.html
-verified_at: 9916c243
+verified_at: df762099
 ---
 
 # Renderer UI
@@ -267,7 +267,7 @@ bookmark is renamed or removed.
 | `automations` | `routines:*`; edit targets, preview a tab set, save it as a routine or bookmark folder, open a product reference in a saved search site, run and manually check off steps |
 | `downloads` | `openDownload`, `showDownload` |
 | `privacy` | none |
-| `settings` | default browser; Search engine (preset `<select>` or a custom `https://…%s` address), Home page (New Tab page or a web address) and On startup, through `setBrowserSettings`; update service, Chrome import, `setUiPreferences` (theme, bar mode) |
+| `settings` | default browser; Search engine (preset `<select>` or a custom `https://…%s` address), Home page (New Tab page or a web address) and On startup, through `setBrowserSettings`; update service, Chrome import, `setUiPreferences` (theme, bar mode); `BrowserExtensionsPanel` reviews local MV3 packages and exact site grants per Account Space |
 | `bookmarks` | open, rename, edit address, remove and export bookmarks. Duplicate review and confirmed bulk moves/deletions use a bounded per-account Undo. |
 | `history` | `navigate`, `clearAccountSpaceData` (confirmed) |
 

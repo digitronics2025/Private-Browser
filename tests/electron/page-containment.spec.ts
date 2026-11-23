@@ -46,7 +46,7 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
   const page = await application!.firstWindow();
   const origin = `http://127.0.0.1:${port}`;
   const url = origin + '/context';
-  type Capture = { labels: string[]; source?: string; calls: number; copies: number; open?: () => void; copy?: () => void };
+  type Capture = { labels: string[]; source?: string; calls: number; copies: number; open?: () => void; foreground?: () => void; copy?: () => void };
   await application!.evaluate(({ Menu, BrowserWindow }) => {
     const capture: Capture = { labels: [], calls: 0, copies: 0 };
     Object.assign(globalThis, { pageMenuCapture: capture });
@@ -54,6 +54,8 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
       capture.calls += 1;
       capture.source = options?.sourceType;
       capture.labels = this.items.map((item) => item.label);
+      const foreground = this.items.find((item) => item.label === 'Open link in new tab');
+      if (foreground) capture.foreground = () => Reflect.apply(foreground.click, foreground, [foreground, BrowserWindow.getAllWindows()[0], {}]);
       const open = this.items.find((item) => item.label === 'Open link in background tab');
       if (open) capture.open = () => Reflect.apply(open.click, open, [open, BrowserWindow.getAllWindows()[0], {}]);
       const copy = this.items.find((item) => item.label === 'Copy selected text');
@@ -83,7 +85,7 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
     }
     return delivered;
   }, { target, command });
-  const invoke = (command: 'open' | 'copy') => application!.evaluate((_electron, action) => {
+  const invoke = (command: 'open' | 'foreground' | 'copy') => application!.evaluate((_electron, action) => {
     (globalThis as unknown as { pageMenuCapture: Capture }).pageMenuCapture[action]?.();
   }, command);
   const getState = () => page.evaluate(() => window.privateBrowser.getState());
@@ -91,11 +93,18 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
   await page.evaluate((target) => window.privateBrowser.navigate(target), url);
   const active = (await getState()).activeTabId;
   expect(await openAt(url, 'mouse')).toBe('mouse');
-  await expect.poll(capture).toMatchObject({ source: 'mouse', labels: ['Open link in background tab', 'Copy link address'] });
+  await expect.poll(capture).toMatchObject({ source: 'mouse', labels: ['Open link in new tab', 'Open link in background tab', 'Copy link address'] });
+  await invoke('foreground');
+  const openedForeground = await getState();
+  expect(openedForeground.activeTabId).not.toBe(active);
+  expect(openedForeground.tabs.filter((tab) => tab.url === origin + '/background-menu')).toHaveLength(1);
+  await page.evaluate((tabId) => window.privateBrowser.activateTab(tabId), active);
   await invoke('open');
   const opened = await getState();
   expect(opened.activeTabId).toBe(active);
-  expect(opened.tabs.filter((tab) => tab.url === origin + '/background-menu')).toMatchObject([{ accountSpaceId: opened.activeAccountSpaceId }]);
+  const openedLinks = opened.tabs.filter((tab) => tab.url === origin + '/background-menu');
+  expect(openedLinks).toHaveLength(2);
+  expect(openedLinks.every((tab) => tab.accountSpaceId === opened.activeAccountSpaceId)).toBe(true);
 
   expect(await openAt(url, 'keyboard')).toBe('keyboard');
   await expect.poll(capture).toMatchObject({ source: 'keyboard', labels: ['Copy selected text', 'Paste'] });
@@ -111,7 +120,7 @@ test('page context menu responds to mouse and keyboard, with commands scoped to 
   expect((await capture()).calls).toBe(before);
   expect((await getState()).tabs.filter((tab) => tab.url === origin + '/background-menu')).toHaveLength(0);
   await page.evaluate((workspaceId) => window.privateBrowser.switchWorkspace(workspaceId), opened.activeWorkspaceId);
-  expect((await getState()).tabs.filter((tab) => tab.url === origin + '/background-menu')).toHaveLength(1);
+  expect((await getState()).tabs.filter((tab) => tab.url === origin + '/background-menu')).toHaveLength(2);
 });
 
 // F-28: a punycode first address used to throw inside view creation, leaving

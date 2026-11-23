@@ -3,6 +3,7 @@ import { ArrowLeft, Bookmark, Home, Search, Palette, Check, ChevronRight, Code2,
 import type { AccountSpaceId, BrowserSettings, BrowserSettingsPatch, BrowserSnapshot, ChromeImportResult, ChromeProfileSource, UpdateCheckResult, UpdateServiceInput, UpdateServiceStatus, UiPreferences, UiPreferencesPatch } from '../../electron/types';
 import type { ChromeImportReview, ChromeSettingChoice, ChromeSettingsSelection, ManagedUpdateStatus } from '../../electron/types';
 import { PanelHeader } from './common';
+import { BrowserExtensionsPanel } from './BrowserExtensionsPanel';
 import { ChromePasswordImportWizard } from './ChromePasswordImportWizard';
 import { formatReleaseDate, humanBytes, timeAgo } from '../lib/format';
 import { DEFAULT_SPELLCHECK, MAX_SETTING_URL_LENGTH, MAX_SITE_KEYWORDS, MAX_STARTUP_PAGES, SEARCH_ENGINES, SPELLCHECK_LANGUAGES, type PresetSearchEngineId, type SpellcheckLanguage, type SpellcheckSettings } from '../../electron/browser-settings';
@@ -311,10 +312,7 @@ export function SettingsPanel({ state, ui, settings, entry, fullView = false, on
       <PanelHeader icon={passwords ? LockKeyhole : Shield} eyebrow={account?.label ?? workspace.name} title={passwords ? 'Passwords' : 'Extensions'} />
       {passwords && state.activeWorkspaceId !== 'banking' ? <>
         <PasswordSettings key={state.activeAccountSpaceId} canImport={state.activeWorkspaceId !== 'development' && Boolean(account && !account.locked)} onOpenVault={onOpenVault} />
-      </> : passwords ? <p>Choose an eligible Account Space to open Passwords.</p> : <section className="settings-card">
-        <h3>Jumia + MarjaneMall Stock Checker</h3><strong>Version 0.5.2 · Blocked before activation</strong>
-        <p>This version requests access across seller sites and saves an Accounting token in extension storage. Continue using the stock checker in Chrome.</p>
-      </section>}
+      </> : passwords ? <p>Choose an eligible Account Space to open Passwords.</p> : account ? <BrowserExtensionsPanel key={`${account.id}:${state.activeWorkspaceId}`} accountSpaceId={account.id} accountLabel={account.label} workspaceId={state.activeWorkspaceId} onToast={onToast} /> : <p>Choose an Account Space to manage extensions.</p>}
     </div>;
   }
   if (settingsPage === 'agents') return <AgentsPanel onBack={() => setSettingsPage('overview')} onToast={onToast} />;

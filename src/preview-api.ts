@@ -1470,7 +1470,7 @@ export function installPreviewApi(): void {
     getUpdateService: async () => ({ configured: false, currentVersion: '0.5.7', source: 'public' as const, endpoint: 'https://private-browser-downloads.digitronics-electro.workers.dev' }),
     checkForUpdates: async () => {
       const updateMode = new URLSearchParams(location.search).get('update');
-      if (updateMode === 'loading') await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+      if (updateMode === 'loading') await new Promise((resolve) => window.setTimeout(resolve, 3_000));
       if (updateMode === 'error') throw new Error('The public update service could not be reached');
       const latestVersion = updateMode === 'available' ? '0.5.8' : '0.5.7';
       return {
@@ -1542,6 +1542,11 @@ export function installPreviewApi(): void {
       return (['connect', 'locked', 'no-match', 'unsupported', 'ready', 'choose-login'] as const)
         .find((candidate) => candidate === value) ?? 'unsupported';
     },
+    listBrowserExtensions: async () => [],
+    inspectBrowserExtension: async () => { throw new Error('Extension installation is available in the desktop app.'); },
+    installBrowserExtension: async () => { throw new Error('Extension installation is available in the desktop app.'); },
+    setBrowserExtensionSites: async () => { throw new Error('Extension permissions are available in the desktop app.'); },
+    removeBrowserExtension: async () => { throw new Error('Extension management is available in the desktop app.'); },
   };
   Object.defineProperty(window, 'privateBrowser', { value: handlers, configurable: true });
   document.documentElement.dataset.browserPreview = 'synthetic';
