@@ -68,6 +68,7 @@ describe('release workflow', () => {
     expect(signed).toContain("Destination = 'release/PUBLISHER.json'");
     expect(signed).toContain('$appPublisherArgs = @{');
     expect(signed).toContain("Destination = 'release/APP-PUBLISHER.json'");
+    expect(signed).toContain('npm sbom --omit=dev --sbom-format cyclonedx');
     expect(signed).not.toContain("@('-Installer'");
     expect(stage).toContain('Valid signed or explicit unsigned publisher evidence is required');
     expect(signed).toContain('win-unpacked/Private Browser.exe');

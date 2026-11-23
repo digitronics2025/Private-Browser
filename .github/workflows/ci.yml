@@ -291,7 +291,7 @@ jobs:
             $appPublisherArgs['ExpectedCertificateSha256'] = $env:EXPECTED_CERTIFICATE_SHA256
           }
           & ./cloudflare/scripts/record-windows-publisher.ps1 @appPublisherArgs
-          npm sbom --sbom-format cyclonedx | Out-File -Encoding utf8 release/SBOM.cdx.json
+          npm sbom --omit=dev --sbom-format cyclonedx | Out-File -Encoding utf8 release/SBOM.cdx.json
           exit $LASTEXITCODE
       - name: Remove production signing certificate
         if: always() && steps.signer.outputs.thumbprint != ''
