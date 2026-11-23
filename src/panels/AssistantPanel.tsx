@@ -332,7 +332,7 @@ export function AssistantPanel({ accountId, workspace, policy, presets, tabs, on
               const id = event.target.value as AssistantPresetId | '';
               setPreset(id);
               if (id) setQuestion(presets?.[id] ?? ASSISTANT_PRESETS[id].question);
-              setWithEvidence(id === 'specs' || id === 'comparison');
+              setWithEvidence(id === 'specs' || id === 'comparison' || id === 'listingCheck');
               setReview(null);
             }}>
               <option value="">Custom question</option>
