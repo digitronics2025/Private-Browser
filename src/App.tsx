@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
 import { Check, KeyRound, LoaderCircle, ShieldCheck, X } from 'lucide-react';
 import type { AccountSpaceId, Bookmark, BookmarkFolder, BookmarkLevelInput, BrowserSnapshot, PageExcerptReview, Shortcut, ShortcutTile, SidePanelTool, UiPreferences, UiPreferencesPatch, WindowState } from '../electron/types';
 import { bookmarkFolderKey, bookmarkFolderLabel, bookmarkFolders } from '../electron/bookmark-maintenance';
@@ -70,6 +70,7 @@ export default function App() {
   const [address, setAddress] = useState('');
   const [toast, setToast] = useState<{ text: string; kind: 'ok' | 'error' } | null>(null);
   const [accountManagerOpen, setAccountManagerOpen] = useState(false);
+  const [settingsFullOpen, setSettingsFullOpen] = useState(false);
   const [claudeExcerpt, setClaudeExcerpt] = useState<PageExcerptReview>();
   const [notesDraft, setNotesDraft] = useState<NotesDraftReview>();
   const [settingsEntry, setSettingsEntry] = useState<'overview' | 'setup'>('overview');
@@ -80,6 +81,7 @@ export default function App() {
   const [prompt, setPrompt] = useState<PromptRequest | null>(null);
   const [clearDataFor, setClearDataFor] = useState<AccountSpaceId>();
   const [historyRevision, setHistoryRevision] = useState(0);
+  const [dismissedRestoreOffers, setDismissedRestoreOffers] = useState<Set<string>>(() => new Set());
   const [bookmarkBatch, setBookmarkBatch] = useState<{ accountId: AccountSpaceId; items: Bookmark[] } | null>(null);
   const [pendingUi, setPendingUi] = useState<UiPreferencesPatch>({});
   const [liveWidth, setLiveWidth] = useState<number | null>(null);
@@ -111,7 +113,7 @@ export default function App() {
   const ui: UiPreferences = { ...DEFAULT_UI_PREFERENCES, ...state?.ui, ...pendingUi };
   const windowState = state?.windowState ?? DEFAULT_WINDOW_STATE;
 
-  const overlayOpen = overlayCount > 0 || accountManagerOpen || vaultFullOpen || Boolean(state?.pendingPermission) || Boolean(state?.recovery);
+  const overlayOpen = overlayCount > 0 || accountManagerOpen || settingsFullOpen || vaultFullOpen || Boolean(state?.pendingPermission) || Boolean(state?.recovery);
 
   useEffect(() => {
     void window.privateBrowser.getState().then(setState);
@@ -168,6 +170,7 @@ export default function App() {
     if (!tabChanged && addressEdited.current) return;
     addressEdited.current = false;
     setAddress(activeTab.isHome ? '' : activeTab.url);
+    if (activeTab.url === 'private://blank') requestAnimationFrame(() => addressRef.current?.focus());
   }, [activeTab?.id, activeTab?.url, activeTab?.isHome]);
 
   const editAddress = (value: string) => {
@@ -225,22 +228,25 @@ export default function App() {
 
   // Paint a backdrop before hiding the native view. A ready still can replace
   // the backdrop while preparing the overlay. The menu never waits for capture.
-  useEffect(() => {
-    if (state?.sessionLock) return;
+  useLayoutEffect(() => {
+    if (state?.sessionLock) { document.documentElement.dataset.nativeOverlayPending = 'false'; return; }
+    document.documentElement.dataset.nativeOverlayPending = overlayOpen ? 'true' : 'false';
     let cancelled = false;
     if (overlayOpen) {
       setOverlayReady(false);
       setFrozenFrame('');
       void (async () => {
-        let preparing = true;
-        void window.privateBrowser.freezeContent().then((frame) => {
-          if (frame && preparing && !cancelled) setFrozenFrame(frame);
-        }).catch(() => undefined);
+        let frame: string | null = null;
+        try { frame = await window.privateBrowser.freezeContent(); } catch { /* Sensitive or unavailable frames use the neutral surface. */ }
+        if (frame && !cancelled) setFrozenFrame(frame);
         await nextPaint();
-        preparing = false;
         if (cancelled) return;
-        await window.privateBrowser.setOverlayOpen(overlayOpen).catch(() => undefined);
-        if (!cancelled) setOverlayReady(true);
+        let acknowledged = false;
+        try { await window.privateBrowser.setOverlayOpen(true); acknowledged = true; } catch { /* Keep the overlay hidden if native content did not hide. */ }
+        if (!cancelled && acknowledged) {
+          document.documentElement.dataset.nativeOverlayPending = 'false';
+          setOverlayReady(true);
+        }
       })();
     } else {
       setOverlayReady(true);
@@ -500,7 +506,7 @@ export default function App() {
       case 'privacy': return <PrivacyPanel state={state} />;
       case 'settings': return <SettingsPanel state={state} ui={ui} settings={browserSettings} entry={settingsEntry}
         onSetupExit={() => setSettingsEntry('overview')} onManageAccounts={() => setAccountManagerOpen(true)}
-        onOpenVault={() => openTool('vault')} onUiChange={setUi} onToast={showToast} />;
+        onOpenVault={() => openTool('vault')} onOpenFull={() => setSettingsFullOpen(true)} onUiChange={setUi} onToast={showToast} />;
       case 'bookmarks': return <BookmarksPanel key={activeAccount.id} bookmarks={accountBookmarks} savedFolders={accountFolders} favicons={favicons} undo={state.bookmarkUndo}
         syncAccount={state.browsingProtection !== undefined && !workspace.protected ? activeAccount : undefined}
         onOpen={bookmarkActions.open} onRename={bookmarkActions.rename} onRemove={bookmarkActions.remove}
@@ -514,6 +520,7 @@ export default function App() {
         onUndo={() => window.privateBrowser.undoBookmarks(activeAccount.id)} />;
       case 'history': return <HistoryPanel key={activeAccount.id} accountSpaceId={activeAccount.id}
         revision={(recentHistory[0]?.id ?? '') + ':' + recentHistory.length + ':' + historyRevision} protectedWorkspace={workspace.protected}
+        deferredSession={state.deferredSession} onRestoreSession={() => void act(() => window.privateBrowser.restoreDeferredSession(), 'Previous session restored')}
         onOpen={(id) => void act(() => window.privateBrowser.openAddressMatch(activeAccount.id, 'history', id))}
         onClearData={clearBrowsingData} onToast={showToast} />;
       default: return null;
@@ -632,7 +639,15 @@ export default function App() {
           </div>
         ) : activeTab.restorePaused || activeTab.problem ? (
           <PageRecovery tab={activeTab} onReload={() => void act(() => window.privateBrowser.reload())} onBack={() => void act(() => window.privateBrowser.back())} />
+        ) : activeTab.url === 'private://blank' ? (
+          <div className="page-surface blank-tab-surface" aria-label="Blank tab" />
         ) : activeTab.isHome ? (
+          <>
+          {state.deferredSession && browserSettings.startup === 'ask' && activeAccount && !dismissedRestoreOffers.has(activeAccount.id) && <section className="session-restore-offer" aria-label="Restore previous session">
+            <div><strong>Restore your previous session?</strong><p>{state.deferredSession.tabCount} tabs from {activeAccount.label} · saved {new Date(state.deferredSession.savedAt).toLocaleString()}</p></div>
+            <button type="button" onClick={() => void act(() => window.privateBrowser.restoreDeferredSession(), 'Previous session restored')}>Restore</button>
+            <button type="button" onClick={() => { setDismissedRestoreOffers((current) => new Set(current).add(activeAccount.id)); void act(() => window.privateBrowser.dismissDeferredSessionOffer()); }}>Not now</button>
+          </section>}
           <NewTabPage
             searchPrompt={searchPrompt}
             workspace={workspace}
@@ -662,6 +677,7 @@ export default function App() {
             onTheme={(theme) => setUi({ theme })}
             onManageBackup={() => setAccountManagerOpen(true)}
           />
+          </>
         ) : (
           <div className="page-surface" aria-hidden="true">
             {frozenFrame ? <img className="frozen-frame" src={frozenFrame} alt="" draggable={false} /> : null}
@@ -753,10 +769,18 @@ export default function App() {
           />
         )}
 
-        {state.pendingPermission && <PermissionOverlay key={state.pendingPermission.id} state={state} onRespond={(decision, sourceId) => void act(() => window.privateBrowser.respondToPermissionPrompt(state.pendingPermission!.id, decision, sourceId))} />}
-        {state.recovery && <RecoveryOverlay state={state} />}
-        {accountManagerOpen && <AccountManager state={state} onClose={() => { setAccountManagerOpen(false); profileButtonRef.current?.focus(); }} onToast={showToast} />}
-        {vaultFullOpen && <VaultFullView onClose={() => setVaultFullOpen(false)}><VaultPanel accountId={state.activeAccountSpaceId} workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></VaultFullView>}
+        {overlayReady && state.pendingPermission && <PermissionOverlay key={state.pendingPermission.id} state={state} onRespond={(decision, sourceId) => void act(() => window.privateBrowser.respondToPermissionPrompt(state.pendingPermission!.id, decision, sourceId))} />}
+        {overlayReady && state.recovery && <RecoveryOverlay state={state} />}
+        {overlayReady && accountManagerOpen && <AccountManager state={state} onClose={() => { setAccountManagerOpen(false); profileButtonRef.current?.focus(); }} onToast={showToast} />}
+        {overlayReady && settingsFullOpen && <section className="settings-full-overlay" role="dialog" aria-modal="true" aria-label="Private Browser settings">
+          <div className="settings-full-shell"><header><div><span>PRIVATE BROWSER</span><h1>Settings</h1><p>{workspace.name} workspace · Browser changes save locally for this workspace.</p></div>
+            <button type="button" className="icon-button" aria-label="Close Settings" onClick={() => { setSettingsFullOpen(false); profileButtonRef.current?.focus(); }}><X size={18} /></button></header>
+            <SettingsPanel state={state} ui={ui} settings={browserSettings} entry={settingsEntry} fullView
+              onSetupExit={() => setSettingsEntry('overview')} onManageAccounts={() => setAccountManagerOpen(true)}
+              onOpenVault={() => { setSettingsFullOpen(false); openTool('vault'); }} onOpenFull={() => undefined} onUiChange={setUi} onToast={showToast} />
+          </div>
+        </section>}
+        {overlayReady && vaultFullOpen && <VaultFullView onClose={() => setVaultFullOpen(false)}><VaultPanel accountId={state.activeAccountSpaceId} workspaceId={state.activeWorkspaceId} activeOrigin={activeTab.isHome ? undefined : activeTab.url} onToast={showToast} /></VaultFullView>}
         {prompt && <PromptDialog request={prompt} onDone={() => setPrompt(null)} />}
         {claudeExcerpt && <ClaudeExcerptDialog review={claudeExcerpt} onClose={() => setClaudeExcerpt(undefined)} onCopied={() => {
           setClaudeExcerpt(undefined);

@@ -331,6 +331,7 @@ export class RuntimeStateStore {
         bookmarks: bookmarksByAccount.get(account.id) ?? [],
         ...(next.bookmarkFoldersByAccountSpace?.[account.id]?.length ? { bookmarkFolders: next.bookmarkFoldersByAccountSpace[account.id] } : {}),
         history: historyByAccount.get(account.id) ?? [],
+        ...(next.deferredSessionsByAccountSpace?.[account.id] ? { deferredSession: next.deferredSessionsByAccountSpace[account.id] } : {}),
         ...(next.historyTrimmedByAccountSpace?.[account.id] ? { historyTrimmed: true } : {}),
         ...(next.tabGroupsByAccountSpace?.[account.id]?.length ? { tabGroups: next.tabGroupsByAccountSpace[account.id] } : {}),
         ...(next.shortcutsByAccountSpace[account.id] ? { shortcuts: next.shortcutsByAccountSpace[account.id] } : {}),
@@ -436,6 +437,7 @@ function combine(
     shortcutsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.shortcuts).map((state) => [state.accountSpaceId, state.shortcuts!])),
     bookmarkIconsByAccountSpace: Object.fromEntries(accountStates.filter((state) => state.bookmarkIcons).map((state) => [state.accountSpaceId, state.bookmarkIcons!])),
     sidePanelsByAccountSpace: Object.fromEntries(accountStates.flatMap((state) => state.sidePanel ? [[state.accountSpaceId, state.sidePanel]] : [])),
+    deferredSessionsByAccountSpace: Object.fromEntries(accountStates.flatMap((state) => state.deferredSession ? [[state.accountSpaceId, state.deferredSession]] : [])),
     accountSpaces,
     accountHealth,
     recovery: firstRecovery,
@@ -457,6 +459,8 @@ function normalizeRuntimeState(state: RuntimeBrowserStateV2, recovering: Readonl
     if (!active || !members.some((account) => account.id === active)) state.activeAccountSpaceByWorkspace[workspace.id] = members[0].id;
   }
   const seenTabIds = new Set<string>();
+  state.deferredSessionsByAccountSpace = Object.fromEntries(Object.entries(state.deferredSessionsByAccountSpace ?? {})
+    .filter(([id]) => accountsById.has(id as AccountSpaceId)));
   state.tabs = state.tabs.filter((tab) => {
     if (seenTabIds.has(tab.id) || accountsById.get(tab.accountSpaceId)?.workspaceId !== tab.workspaceId) return false;
     seenTabIds.add(tab.id);

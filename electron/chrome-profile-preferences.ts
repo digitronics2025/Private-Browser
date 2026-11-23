@@ -76,10 +76,10 @@ export function selectedChromeSettings(value: unknown, choice: ChromeSettingsSel
     const mode = session.restore_on_startup;
     const pages = Array.isArray(session.startup_urls)
       ? [...new Set(session.startup_urls.slice(0, MAX_STARTUP_PAGES).map(safeSettingAddress).filter((url): url is string => Boolean(url)))] : [];
-    if (mode === 1) { patch.startup = 'continue'; applied.push('startup'); }
-    else if (mode === 5) { patch.startup = 'new-tab'; applied.push('startup'); }
+    if (mode === 1) { patch.startup = 'automatic'; applied.push('startup'); }
+    else if (mode === 5) { patch.startup = 'automatic'; patch.startupNewTab = true; applied.push('startup'); }
     else if ((mode === 4 || mode === 6) && pages.length) {
-      patch.startup = 'pages'; patch.startupPages = pages; applied.push('startup');
+      patch.startup = 'automatic'; patch.startupPages = pages; applied.push('startup');
     } else unavailable.push('startup');
   }
   return { patch, applied, unavailable };

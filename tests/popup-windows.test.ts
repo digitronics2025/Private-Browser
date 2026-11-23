@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { BrowserWindow } from 'electron';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PopupReview, popupTitle, popupWindowResponse, wantsPopupWindow } from '../electron/popup-windows';
+import { isAllowedPopupOpeningAddress, popupAddressType, PopupReview, popupTitle, popupWindowResponse, wantsPopupWindow } from '../electron/popup-windows';
 
 const request = { webContentsId: 4, url: 'https://wallet.example/charge', resourceType: 'mainFrame', method: 'POST' };
 
@@ -28,6 +28,18 @@ describe('popup windows', () => {
     for (const disposition of ['default', 'foreground-tab', 'background-tab', 'other'] as const) {
       expect(wantsPopupWindow(disposition)).toBe(false);
     }
+  });
+
+  it('accepts only empty/about:blank as non-HTTP(S) popup opening addresses', () => {
+    expect(popupAddressType('')).toBe('empty');
+    expect(popupAddressType('about:blank')).toBe('about:blank');
+    expect(popupAddressType('https://accounts.google.com/signin?code=secret')).toBe('https');
+    expect(popupAddressType('file:///private')).toBe('other');
+    expect(isAllowedPopupOpeningAddress('')).toBe(true);
+    expect(isAllowedPopupOpeningAddress('about:blank')).toBe(true);
+    expect(isAllowedPopupOpeningAddress('https://accounts.google.com/')).toBe(true);
+    expect(isAllowedPopupOpeningAddress('about:srcdoc')).toBe(false);
+    expect(isAllowedPopupOpeningAddress('file:///private')).toBe(false);
   });
 
   it('always leads the title with the host the popup is showing', () => {
@@ -81,5 +93,26 @@ describe('popup windows', () => {
     expect(fixture.continueRequest).toHaveBeenCalledExactlyOnceWith(false);
     expect(fixture.finish).toHaveBeenCalledExactlyOnceWith('changed');
     expect(fixture.show).not.toHaveBeenCalled();
+  });
+
+  it('holds the first safe HTTPS navigation after a blank opening until its permission decision', async () => {
+    const show = vi.fn();
+    const destroy = vi.fn();
+    const child = Object.assign(new EventEmitter(), { webContents: { id: 4 }, show, destroy, isDestroyed: () => false });
+    let answer!: (approved: boolean) => void;
+    const decision = new Promise<boolean>((resolve) => { answer = resolve; });
+    const finish = vi.fn();
+    const reply = vi.fn();
+    const review = new PopupReview();
+    review.start(child as unknown as BrowserWindow, {
+      url: 'about:blank', method: 'GET', ask: () => decision, finish, current: () => true,
+    });
+    expect(review.hold({ webContentsId: 4, url: 'https://accounts.google.com/signin?code=synthetic', resourceType: 'mainFrame', method: 'GET' }, reply)).toBe(true);
+    expect(review.hold({ webContentsId: 4, url: 'file:///private', resourceType: 'mainFrame', method: 'GET' }, vi.fn())).toBe(true);
+    answer(true);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(reply).toHaveBeenCalledExactlyOnceWith(true);
+    expect(show).toHaveBeenCalledOnce();
+    expect(finish).toHaveBeenCalledExactlyOnceWith('continued');
   });
 });

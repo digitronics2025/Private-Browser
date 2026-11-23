@@ -254,7 +254,7 @@ export function installPreviewApi(): void {
     const selected = options.settings ?? {};
     const patch: BrowserSettingsPatch = {
       ...(selected.search ? { searchEngine: 'google' } : {}), ...(selected.home ? { homePage: 'url', homePageUrl: 'https://reference.example.test/' } : {}),
-      ...(selected.startup ? { startup: 'new-tab' } : {}),
+      ...(selected.startup ? { startup: 'automatic', startupNewTab: true } : {}),
     };
     const appliedSettings = (['search', 'home', 'startup'] as const).filter((key) => selected[key]);
     return { patch: appliedSettings.length ? patch : undefined, appliedSettings };
@@ -263,6 +263,7 @@ export function installPreviewApi(): void {
     { origin: 'https://example.test', capability: 'download', duration: 'until-revoked' },
     { origin: 'https://mail.google.com', capability: 'notifications', duration: 'session' },
   ] : [];
+  const samplePopupPreferences = new Map<string, 'allow' | 'block'>();
   let previewProvider: AiProviderStatus = { configured: false };
   let assistantHistory: AssistantTurn[] = [];
   let historyBinding = '';
@@ -640,9 +641,12 @@ export function installPreviewApi(): void {
     getSitePermissions: async (id, origin) => {
       const tab = state.tabs.find((item) => item.id === id && item.id === state.activeTabId);
       if (!tab || tab.isHome || new URL(tab.url).origin !== origin) throw new Error('The page changed. Open site information again.');
-      return (['download', 'camera', 'notifications'] as const).map((capability): SitePermissionStatus => {
+      const popupPreference = samplePopupPreferences.get(tab.accountSpaceId + '|' + origin);
+      return (['download', 'camera', 'notifications', 'popups'] as const).map((capability): SitePermissionStatus => {
         const grant = tab.accountSpaceId === google && sampleGrants.find((item) => item.origin === origin && item.capability === capability);
         if (state.activeWorkspaceId === 'banking' || capability === 'camera') return { capability, decision: 'blocked' };
+        if (capability === 'popups') return popupPreference === 'allow' ? { capability, decision: 'allowed', duration: 'until-revoked' }
+          : popupPreference === 'block' ? { capability, decision: 'blocked-preference' } : { capability, decision: 'ask' };
         return grant ? { capability, decision: 'allowed', duration: grant.duration } : { capability, decision: 'ask' };
       });
     },
@@ -650,6 +654,15 @@ export function installPreviewApi(): void {
       await handlers.getSitePermissions(id, origin);
       if (state.activeWorkspaceId === 'banking' || state.activeAccountSpaceId !== google) throw new Error('Permission changes are unavailable in this Account Space.');
       sampleGrants = sampleGrants.filter((item) => item.origin !== origin || item.capability !== capability);
+      if (capability === 'popups') samplePopupPreferences.delete(state.activeAccountSpaceId + '|' + origin);
+      return handlers.getSitePermissions(id, origin);
+    },
+    setPopupPreference: async (id, origin, decision) => {
+      await handlers.getSitePermissions(id, origin);
+      if (state.activeWorkspaceId === 'banking') throw new Error('Pop-up settings are unavailable in Banking.');
+      const key = state.activeAccountSpaceId + '|' + origin;
+      if (decision === 'ask') samplePopupPreferences.delete(key);
+      else samplePopupPreferences.set(key, decision);
       return handlers.getSitePermissions(id, origin);
     },
     listAccountPermissionGrants: async (id) => state.activeWorkspaceId === 'personal' && id === google
@@ -746,6 +759,8 @@ export function installPreviewApi(): void {
       else await handlers.newTab();
       publish();
     },
+    restoreDeferredSession: async () => { throw new Error('Previous session restore is available in the Windows app'); },
+    dismissDeferredSessionOffer: async () => undefined,
     reviewBrowsingData: async (value) => {
       const input = requireBrowsingDataInput(value);
       if (!state.accountSpaces.some((account) => account.id === input.accountSpaceId && account.workspaceId === state.activeWorkspaceId && !account.locked)) {

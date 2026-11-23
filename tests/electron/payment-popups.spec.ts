@@ -20,6 +20,9 @@ const PAGES: Record<string, string> = {
   '/wallet': `<!doctype html><title>Wallet</title><script>
     if (window.opener) window.opener.postMessage('wallet-ready', '*');
   </script>`,
+  '/blank-result': `<!doctype html><title>Verification result</title><script>
+    if (window.opener) window.opener.postMessage('verification-result', location.origin);
+  </script>`,
 };
 
 test.beforeEach(async () => {
@@ -63,23 +66,13 @@ function runInCheckout<T>(script: string): Promise<T> {
   }, { url: `${origin}/checkout`, code: script }) as Promise<T>;
 }
 
-async function capturePopupReview() {
-  await application!.evaluate(({ dialog }) => {
-    const fixture = globalThis as typeof globalThis & { popupReview?: { detail: string; signal?: AbortSignal; reply: (choice: number) => void } };
-    const original = dialog.showMessageBox;
-    dialog.showMessageBox = ((parent: Electron.BrowserWindow, options: Electron.MessageBoxOptions) => {
-      if (options?.title !== 'Review site-opened window') return original(parent, options);
-      return new Promise<Electron.MessageBoxReturnValue>((resolve) => {
-        fixture.popupReview = { detail: options.detail ?? '', signal: options.signal, reply: (response) => resolve({ response, checkboxChecked: false }) };
-        options.signal?.addEventListener('abort', () => resolve({ response: 1, checkboxChecked: false }), { once: true });
-      });
-    }) as typeof dialog.showMessageBox;
-  });
+async function popupPrompt() {
+  const page = await application!.firstWindow();
   return {
-    detail: () => application!.evaluate(() => (globalThis as { popupReview?: { detail: string } }).popupReview?.detail ?? ''),
-    answer: (choice: number) => application!.evaluate((_electron, value) => {
-      (globalThis as { popupReview?: { reply: (response: number) => void } }).popupReview?.reply(value);
-    }, choice),
+    state: () => page.evaluate(async () => (await window.privateBrowser.getState()).pendingPermission),
+    answer: async (decision: 'allow-once' | 'deny' | 'allow-always') => page.getByRole('button', {
+      name: decision === 'allow-once' ? 'Allow once' : decision === 'allow-always' ? 'Always allow for this site' : 'Block',
+    }).click(),
   };
 }
 
@@ -92,16 +85,15 @@ test('a payment popup opens as a real window that can talk to the checkout page'
     return activeTabId;
   });
   const windowsBefore = await windowCount();
-  const review = await capturePopupReview();
+  const prompt = await popupPrompt();
 
   expect(await runInCheckout<boolean>(`window.wallet = window.open('/wallet', 'wallet', 'popup,width=420,height=560'); Boolean(window.wallet)`)).toBe(true);
   await expect.poll(windowCount).toBe(windowsBefore + 1);
-  await expect.poll(review.detail).toContain('Requesting site: ' + origin);
-  expect(await review.detail()).toContain('Destination: ' + origin);
-  expect(await review.detail()).toContain('Account Space: Personal');
+  await expect.poll(prompt.state).toMatchObject({ capability: 'popups', origin, popupDestination: origin, popupMethod: 'GET' });
+  await expect(page.getByText('Initial destination:', { exact: false })).toBeVisible();
   expect(walletRequests).toBe(0);
   expect(await runInCheckout<string[]>('window.received')).toEqual([]);
-  await review.answer(0);
+  await prompt.answer('allow-once');
   await expect.poll(() => runInCheckout<string[]>('window.received')).toEqual(['wallet-ready']);
   expect(walletRequests).toBe(1);
 
@@ -134,18 +126,106 @@ test('a payment popup opens as a real window that can talk to the checkout page'
   await expect.poll(windowCount).toBe(windowsBefore);
 });
 
-test('cancel closes the held popup before a request can reach the wallet', async () => {
+test('blocking closes the held popup before a request can reach the wallet', async () => {
   const page = await openCheckout('personal');
   const windowsBefore = await windowCount();
-  const review = await capturePopupReview();
+  const prompt = await popupPrompt();
   expect(await runInCheckout<boolean>(`Boolean(window.open('/wallet', 'wallet', 'popup,width=420,height=560'))`)).toBe(true);
-  await expect.poll(review.detail).toContain('expires after 30 seconds');
+  await expect.poll(prompt.state).toMatchObject({ capability: 'popups', origin });
   expect(walletRequests).toBe(0);
-  await review.answer(1);
+  await prompt.answer('deny');
   await expect.poll(windowCount).toBe(windowsBefore);
   expect(walletRequests).toBe(0);
   await expect.poll(() => page.evaluate(() => window.privateBrowser.getState().then(({ privacyLog }) =>
-    privacyLog.find(({ title }) => title === 'Site-opened window stopped')?.detail))).toContain('Try again from the original page.');
+    privacyLog.find(({ title }) => title === 'Popup blocked by your preference')?.detail))).toContain('Open Site permissions');
+});
+
+test('an initial blank popup can navigate safely and return a result to its opener', async () => {
+  const page = await openCheckout('personal');
+  const prompt = await popupPrompt();
+  expect(await runInCheckout<boolean>(`window.verification = window.open('', 'google-verification', 'popup,width=480,height=640'); Boolean(window.verification)`)).toBe(true);
+  await expect.poll(prompt.state).toMatchObject({ capability: 'popups', origin, popupAddressType: expect.stringMatching(/^(empty|about:blank)$/) });
+  expect(walletRequests).toBe(0);
+  await prompt.answer('allow-once');
+  await expect.poll(windowCount).toBe(2);
+  await application!.evaluate(async ({ BrowserWindow }, target) => {
+    const child = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL() === 'about:blank');
+    if (!child) throw new Error('Expected the allowed blank popup to remain available');
+    await child.webContents.executeJavaScript(`location.href = ${JSON.stringify(target + '/blank-result')}; true`);
+  }, origin);
+  await expect.poll(() => runInCheckout<string[]>('window.received')).toEqual(['verification-result']);
+  const child = await application!.evaluate(async ({ BrowserWindow }) => {
+    const popup = BrowserWindow.getAllWindows().find((window) => window.webContents.getURL().endsWith('/blank-result'))!;
+    return { url: new URL(popup.webContents.getURL()).pathname, opener: await popup.webContents.executeJavaScript('Boolean(window.opener)') };
+  });
+  expect(child).toEqual({ url: '/blank-result', opener: true });
+  expect(await page.evaluate(({ id, origin }) => window.privateBrowser.getSitePermissions(id, origin), { id: (await page.evaluate(() => window.privateBrowser.getState())).activeTabId, origin })).toContainEqual({
+    capability: 'popups', decision: 'ask',
+  });
+});
+
+test('site controls allow, block with an actionable indicator, and reset to Ask', async () => {
+  const page = await openCheckout('personal');
+  const state = () => page.evaluate(() => window.privateBrowser.getState());
+  const currentTabId = (await state()).activeTabId;
+  const permissions = () => page.evaluate(({ id, origin }) => window.privateBrowser.getSitePermissions(id, origin), { id: currentTabId, origin });
+  expect(await permissions()).toContainEqual({ capability: 'popups', decision: 'ask' });
+
+  await page.getByRole('button', { name: 'View site information' }).click();
+  await page.getByText('Site permissions', { exact: true }).click();
+  await page.getByLabel('Pop-ups').selectOption('allow');
+  expect(await permissions()).toContainEqual({ capability: 'popups', decision: 'allowed', duration: 'until-revoked' });
+  await page.getByRole('button', { name: 'View site information' }).click();
+  await page.waitForTimeout(250);
+  expect(await runInCheckout<boolean>(`Boolean(window.open('/wallet', 'wallet-allowed', 'popup,width=420,height=560'))`)).toBe(true);
+  await expect.poll(() => runInCheckout<string[]>('window.received')).toContain('wallet-ready');
+
+  await page.getByRole('button', { name: 'View site information' }).click();
+  await page.getByText('Site permissions', { exact: true }).click();
+  await page.getByLabel('Pop-ups').selectOption('block');
+  expect(await runInCheckout<boolean>(`Boolean(window.open('/wallet', 'wallet-blocked', 'popup,width=420,height=560'))`)).toBe(false);
+  await expect.poll(state).toMatchObject({ tabs: expect.arrayContaining([expect.objectContaining({ id: currentTabId, popupBlockedReason: 'preference' })]) });
+  expect(await permissions()).toContainEqual({ capability: 'popups', decision: 'blocked-preference' });
+
+  await page.getByLabel('Pop-ups').selectOption('ask');
+  expect(await permissions()).toContainEqual({ capability: 'popups', decision: 'ask' });
+  expect((await state()).tabs.find((tab) => tab.id === currentTabId)?.popupBlockedReason).toBeUndefined();
+});
+
+test('Always allow saves the exact origin choice across an app restart', async () => {
+  const page = await openCheckout('personal');
+  const prompt = await popupPrompt();
+  const tabId = (await page.evaluate(() => window.privateBrowser.getState())).activeTabId;
+  expect(await runInCheckout<boolean>(`Boolean(window.open('/wallet', 'wallet-always', 'popup,width=420,height=560'))`)).toBe(true);
+  await expect.poll(prompt.state).toMatchObject({ capability: 'popups', origin });
+  await prompt.answer('allow-always');
+  await expect.poll(() => page.evaluate(({ id, origin }) => window.privateBrowser.getSitePermissions(id, origin), { id: tabId, origin })).toContainEqual({
+    capability: 'popups', decision: 'allowed', duration: 'until-revoked',
+  });
+
+  await application!.close();
+  application = await electron.launch({ args: [join(process.cwd(), 'dist-electron/main.js'), `--user-data-dir=${userDataPath}`], env: { ...process.env, NODE_ENV: 'test' } });
+  const restarted = await application.firstWindow();
+  await restarted.evaluate(async ({ origin }) => {
+    await window.privateBrowser.switchWorkspace('personal');
+    await window.privateBrowser.navigate(origin + '/checkout');
+  }, { origin });
+  const restartedState = () => restarted.evaluate(() => window.privateBrowser.getState());
+  await expect.poll(async () => {
+    const state = await restartedState();
+    return state.tabs.find((tab) => tab.id === state.activeTabId)?.url;
+  }).toBe(`${origin}/checkout`);
+  const activeId = (await restartedState()).activeTabId;
+  await expect.poll(() => restarted.evaluate(({ id, origin }) => window.privateBrowser.getSitePermissions(id, origin), { id: activeId, origin })).toContainEqual({
+    capability: 'popups', decision: 'allowed', duration: 'until-revoked',
+  });
+  const openedAfterRestart = await application.evaluate(async ({ webContents }, target) => {
+    const checkout = webContents.getAllWebContents().find((contents) => contents.getURL() === target)!;
+    return checkout.executeJavaScript(`Boolean(window.open('/wallet', 'wallet-after-restart', 'popup,width=420,height=560'))`);
+  }, `${origin}/checkout`);
+  expect(openedAfterRestart).toBe(true);
+  await expect.poll(() => restarted.evaluate(() => window.privateBrowser.getState().then((state) => state.pendingPermission))).toBeUndefined();
+  await expect.poll(() => runInCheckout<string[]>('window.received')).toContain('wallet-ready');
 });
 
 test('Banking still refuses payment popups', async () => {

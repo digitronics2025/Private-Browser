@@ -62,7 +62,7 @@ import { needsChromeFocus, resolveShortcut } from './shortcuts.js';
 import { FAVICON_TYPES, MAX_FAVICON_BYTES, rememberBookmarkIcon } from './bookmark-icons.js';
 import { appendBookmarkFolders, appendImportedBookmarks, createBookmarkFolder, editBookmarkFolder, exportBookmarksHtml, moveTabWithinAccountSpace, nextBookmarkOrder, removeBookmark, renameBookmark, reorderBookmarkLevel, undoImportedBookmarkFolders } from './bookmark-tree.js';
 import { readBookmarkHtml } from './bookmark-html.js';
-import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettings, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
+import { DEFAULT_BROWSER_SETTINGS, mergeBrowserSettings, nextZoomPercent, referenceSearchUrl, resolveHomeUrl, resolveNewTabUrl, resolveWorkspaceNavigation, settingsForWorkspace, SPELLCHECK_LANGUAGES, spellingDictionary, type BrowserSettings, type BrowserSettingsPatch, type SpellcheckLanguage, type SpellcheckSettings } from './browser-settings.js';
 import { browsingDataVisitIds, requireBrowsingDataInput } from './browsing-data.js';
 import { DEFAULT_UI_PREFERENCES, isPinnablePanelTool, mergeUiPreferences, sanitizeAccountPanel, type PinnablePanelTool, type SidePanelTool, type UiPreferencesPatch } from './ui-preferences.js';
 import { sanitizeShortcutTiles } from './account-space-state.js';
@@ -185,7 +185,7 @@ import { chromeProfileKey, MAX_CHROME_PROFILE_RECEIPTS } from './chrome-profile-
 import { chromeImportBookmarkStamp, chromeImportKey, planChromeImport } from './chrome-import-review.js';
 import type { ChromeImportReview } from './types.js';
 import { VscodeBridgeServer } from './vscode-bridge.js';
-import { adoptPopupWindow, guardPageNavigation, PopupReview, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
+import { adoptPopupWindow, guardPageNavigation, isAllowedPopupOpeningAddress, popupAddressType, PopupReview, popupWindowResponse, wantsPopupWindow } from './popup-windows.js';
 import { TemporaryBrowsing } from './temporary-browsing.js';
 import { blockInlinePdf, pdfResponse, ProtectedPdfPreview, type PdfDocumentStatus } from './pdf-preview.js';
 import { SideAppHost } from './side-apps.js';
@@ -238,7 +238,7 @@ type Layout = ContentInsets;
 const WHEEL_ZOOM_INTERVAL_MS = 100;
 const MAX_CLOSED_TABS = 25;
 const DOWNLOAD_PROGRESS_INTERVAL_MS = 120;
-const MENU_FREEZE_BUDGET_MS = 75;
+const MENU_FREEZE_BUDGET_MS = 300;
 
 const AUTOMATIC_FILL_RETRY_DELAYS_MS = [0, 300, 1_000, 2_500] as const;
 /** At most this many popups per page view in any rolling window. */
@@ -314,6 +314,7 @@ class BrowserController {
   private pendingChromePasswords?: { id: string; accountId: AccountSpaceId; path: string; digest: string; revision: string; expiresAt: number };
   private selectingChromePasswords = false;
   private readonly runtimeTabs = new Map<string, RuntimeTab>();
+  private readonly popupBlockedByTab = new Map<string, BrowserTab['popupBlockedReason']>();
   private readonly contentsTabs = new Map<number, RuntimeTab>();
   private sweepingMemory = false;
   private readonly downloads = new Map<string, LocalDownload>();
@@ -429,6 +430,8 @@ class BrowserController {
   });
   /** A menu or dialog covers the chrome: the side app hides with the page. */
   private overlayOpen = false;
+  private startupDecisionPending = false;
+  private startupDecisionAccount?: AccountSpaceId;
 
   constructor(
     private readonly store: RuntimeStateStore,
@@ -561,7 +564,35 @@ class BrowserController {
 
   private async restoreStartupTab(): Promise<void> {
     const state = this.store.get();
-    const tab = this.activeTab(state);
+    let tab = this.activeTab(state);
+    const account = state.accountSpaces.find((item) => item.id === tab.accountSpaceId);
+    const settings = settingsForWorkspace(state, tab.workspaceId);
+    if (account && !account.locked && tab.workspaceId !== 'banking' && (settings.startup === 'ask' || settings.startup === 'fresh')) {
+      const ownedTabs = state.tabs.filter((item) => item.accountSpaceId === account.id);
+      const saved = settings.startup === 'ask' && ownedTabs.length
+        ? { version: 1 as const, savedAt: new Date().toISOString(), activeTabId: state.activeTabByAccountSpace[account.id] ?? tab.id,
+            tabs: ownedTabs.map(({ id, workspaceId, accountSpaceId, title, url, isHome, restorePaused, pinned, groupId }) =>
+              ({ id, workspaceId, accountSpaceId, title, url, isHome, restorePaused, pinned, groupId })),
+            ...(state.tabGroupsByAccountSpace?.[account.id]?.length ? { tabGroups: state.tabGroupsByAccountSpace[account.id] } : {}) }
+        : undefined;
+      this.closeAccountViews(account.id);
+      const id = randomUUID();
+      this.store.update((next) => {
+        next.tabs = next.tabs.filter((item) => item.accountSpaceId !== account.id);
+        next.tabs.push({ id, accountSpaceId: account.id, workspaceId: account.workspaceId, title: 'New tab', url: 'private://home',
+          isHome: true, loading: false, canGoBack: false, canGoForward: false, developerToolsAllowed: false, developerToolsOpen: false });
+        next.activeTabByAccountSpace[account.id] = id;
+        const deferred = next.deferredSessionsByAccountSpace ??= {};
+        if (settings.startup === 'fresh') delete deferred[account.id];
+        else if (saved) deferred[account.id] = saved;
+      });
+      this.startupRestoreJournal.clear();
+      this.startupDecisionPending = settings.startup === 'ask' && Boolean(saved);
+      this.startupDecisionAccount = this.startupDecisionPending ? account.id : undefined;
+      this.broadcast();
+      await this.showActiveTab();
+      return;
+    }
     if (this.store.isReadOnly() || tab.isHome || tab.restorePaused || state.recovery?.accountSpaceId === tab.accountSpaceId
       || state.accountSpaces.find((account) => account.id === tab.accountSpaceId)?.locked) {
       this.startupRestoreJournal.clear();
@@ -596,6 +627,41 @@ class BrowserController {
     else await this.newTab();
   }
 
+  async restoreDeferredSession(): Promise<void> {
+    const state = this.store.get();
+    const accountId = this.activeAccountSpaceId(state);
+    const account = state.accountSpaces.find((item) => item.id === accountId);
+    const saved = state.deferredSessionsByAccountSpace?.[accountId];
+    if (!account || account.locked || account.workspaceId === 'banking' || !saved) throw new Error('The previous session is unavailable in this Account Space');
+    const added = saved.tabs.filter((tab) => !state.tabs.some((current) => current.id === tab.id));
+    this.store.update((next) => {
+      next.tabs.push(...added.map((tab) => ({ ...tab, loading: false, canGoBack: false, canGoForward: false,
+        developerToolsAllowed: false, developerToolsOpen: false, restorePaused: undefined })));
+      next.activeTabByAccountSpace[accountId] = saved.activeTabId;
+      const groups = next.tabGroupsByAccountSpace ??= {};
+      if (saved.tabGroups?.length) groups[accountId] = saved.tabGroups;
+      delete next.deferredSessionsByAccountSpace?.[accountId];
+    });
+    for (const tab of added) this.runtimeTabs.set(tab.id, this.newRuntimeTab());
+    this.startupTabRecovery = undefined;
+    this.startupRestoreJournal.clear();
+    const finishStartupDecision = this.startupDecisionPending;
+    const decisionAccount = this.startupDecisionAccount;
+    this.startupDecisionPending = false;
+    this.startupDecisionAccount = undefined;
+    this.broadcast();
+    await this.showActiveTab();
+    if (finishStartupDecision && decisionAccount === accountId) await this.openStartupAddons(state, accountId);
+  }
+
+  async dismissDeferredSessionOffer(): Promise<void> {
+    if (!this.startupDecisionPending || this.startupDecisionAccount !== this.activeAccountSpaceId(this.store.get())) return;
+    this.startupDecisionPending = false;
+    this.startupDecisionAccount = undefined;
+    const state = this.store.get();
+    await this.openStartupAddons(state, this.activeAccountSpaceId(state));
+  }
+
   getSnapshot(): BrowserSnapshot {
     if (this.sessionLock.reason) return {
       sessionLock: this.sessionLock.reason,
@@ -626,6 +692,7 @@ class BrowserController {
         problem: runtime?.problem,
         sleeping: runtime?.sleeping || undefined,
         securityWarning: tab.isHome ? undefined : navigationWarning(tab.url),
+        popupBlockedReason: this.popupBlockedByTab.get(tab.id),
         ...this.runtimeMedia(runtime),
       };
     });
@@ -657,6 +724,10 @@ class BrowserController {
       bookmarkFolders: downloadAccount ? persisted.bookmarkFoldersByAccountSpace?.[downloadAccount] : undefined,
       bookmarkUndo: bookmarkUndo ? { kind: bookmarkUndo.kind, count: bookmarkUndo.before.length } : undefined,
       history: persisted.history,
+      ...(persisted.deferredSessionsByAccountSpace?.[activeAccountSpaceId] ? { deferredSession: {
+        tabCount: persisted.deferredSessionsByAccountSpace[activeAccountSpaceId].tabs.length,
+        savedAt: persisted.deferredSessionsByAccountSpace[activeAccountSpaceId].savedAt,
+      } } : {}),
       ...(downloadAccount ? { ...this.downloadSnapshot(downloadAccount), downloadProgressRevision: this.downloadProgressRevision } : { downloads: [] }),
       downloadHistory: !downloadAccount ? undefined : this.downloadHistoryFailures.has(downloadAccount)
         ? 'unavailable' : this.downloadHistory.status(downloadAccount),
@@ -894,18 +965,20 @@ class BrowserController {
   }
 
   private backgroundTab(workspaceId: WorkspaceId, url: string, accountSpaceId: AccountSpaceId, title?: string): BrowserTab {
-    return { id: randomUUID(), accountSpaceId, workspaceId, title: title || new URL(url).hostname, url,
-      isHome: false, loading: false, canGoBack: false, canGoForward: false,
+    const local = url === 'private://home' || url === 'private://blank';
+    return { id: randomUUID(), accountSpaceId, workspaceId, title: title || (local ? 'New tab' : new URL(url).hostname), url,
+      isHome: local, loading: false, canGoBack: false, canGoForward: false,
       developerToolsAllowed: false, developerToolsOpen: false };
   }
 
-  async newTab(workspaceId?: WorkspaceId, url = 'private://home', accountSpaceId?: AccountSpaceId): Promise<void> {
+  async newTab(workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId): Promise<void> {
     const state = this.store.get();
     const targetWorkspace = WORKSPACES.some((item) => item.id === workspaceId) ? workspaceId! : state.activeWorkspaceId;
     const targetAccount = accountSpaceId ?? state.activeAccountSpaceByWorkspace[targetWorkspace];
     if (!targetAccount || !state.accountSpaces.some((account) => account.id === targetAccount && account.workspaceId === targetWorkspace)) {
       throw new Error('Account Space does not belong to the selected workspace');
     }
+    const target = url ?? resolveNewTabUrl(settingsForWorkspace(state, targetWorkspace), targetWorkspace === 'banking');
     const id = randomUUID();
     this.hideAllViews();
     this.store.update((next) => {
@@ -916,7 +989,7 @@ class BrowserController {
         accountSpaceId: targetAccount,
         workspaceId: targetWorkspace,
         title: 'New tab',
-        url: 'private://home',
+        url: target === 'private://blank' ? target : 'private://home',
         isHome: true,
         loading: false,
         canGoBack: false,
@@ -928,7 +1001,7 @@ class BrowserController {
     });
     this.runtimeTabs.set(id, this.newRuntimeTab());
     this.broadcast();
-    if (url !== 'private://home') await this.navigate(url);
+    if (target !== 'private://home' && target !== 'private://blank') await this.navigate(target);
   }
 
   private canUseRoutines(state: RuntimeBrowserStateV2): boolean {
@@ -1515,6 +1588,7 @@ class BrowserController {
     this.store.update((state) => {
       state.history = state.history.filter((entry) => entry.accountSpaceId !== accountSpaceId);
       if (state.historyTrimmedByAccountSpace) delete state.historyTrimmedByAccountSpace[accountSpaceId];
+      delete state.deferredSessionsByAccountSpace?.[accountSpaceId];
       for (const tab of state.tabs.filter((candidate) => candidate.accountSpaceId === accountSpaceId)) {
         tab.title = 'New tab';
         tab.url = 'private://home';
@@ -1640,6 +1714,12 @@ class BrowserController {
     let allowed = false;
     try {
       allowed = this.permissions.applyDecision(pending.prompt, decision, pending.retainAllowOnce);
+      if (pending.prompt.capability === 'popups' && decision === 'deny') {
+        const active = this.activeTab(this.store.get());
+        if (active.accountSpaceId === pending.prompt.accountSpaceId && safeOrigin(active.url) === pending.prompt.origin) {
+          this.popupBlockedByTab.set(active.id, 'preference');
+        }
+      }
       if (allowed && pending.prompt.capability === 'display-capture'
         && !pending.prompt.displaySources?.some((source) => source.id === displaySourceId)) {
         allowed = false;
@@ -1648,7 +1728,8 @@ class BrowserController {
       pending.respond(allowed, displaySourceId);
       if (!allowed) {
         const reason = Date.parse(pending.prompt.expiresAt) <= Date.now() ? 'The permission request expired.' : 'The permission was declined or the source was unavailable.';
-        this.logBlockedPermission(pending.prompt.accountSpaceId, pending.prompt.capability, reason + ' Request it again from the page.');
+        if (pending.prompt.capability === 'popups') this.addPrivacyEvent('blocked', 'Popup blocked by your preference', 'This site is set to block pop-ups. Open Site permissions to change it.', pending.prompt.accountSpaceId);
+        else this.logBlockedPermission(pending.prompt.accountSpaceId, pending.prompt.capability, reason + ' Request it again from the page.');
       }
       this.broadcast();
       await this.showActiveTab();
@@ -1667,6 +1748,15 @@ class BrowserController {
 
   getSitePermissions(tabId: string, origin: string) {
     const tab = this.activePermissionSite(tabId, origin);
+    return this.permissions.siteStatus(tab.accountSpaceId, tab.workspaceId, origin);
+  }
+
+  setSitePopupPreference(tabId: string, origin: string, decision: 'ask' | 'allow' | 'block') {
+    const tab = this.activePermissionSite(tabId, origin);
+    if (this.store.isReadOnly() || tab.workspaceId === 'banking') throw new Error('Pop-up settings are unavailable in this Account Space.');
+    this.permissions.setPopupPreference(tab.accountSpaceId, tab.workspaceId, origin, decision);
+    this.popupBlockedByTab.delete(tabId);
+    this.broadcast();
     return this.permissions.siteStatus(tab.accountSpaceId, tab.workspaceId, origin);
   }
 
@@ -2298,40 +2388,39 @@ class BrowserController {
     await this.navigate(resolveHomeUrl(settingsForWorkspace(state, state.activeWorkspaceId), Boolean(workspace?.protected)));
   }
 
-  /**
-   * Applies the launch-time Home or startup page settings after restoring tabs.
-   * Restored tabs stay open and a failed Home load does not stop startup.
-   */
-  async openStartupHome(atLaunch: RuntimeBrowserStateV2): Promise<void> {
+  /** Add configured startup pages after automatic launch or the Ask decision. */
+  async openStartupHome(initial: RuntimeBrowserStateV2): Promise<void> {
     const state = this.store.get();
-    if (state.recovery || this.startupTabRecovery || state.activeWorkspaceId === 'banking') return;
-    const accountId = this.activeAccountSpaceId(state);
-    if (state.activeWorkspaceId !== atLaunch.activeWorkspaceId || accountId !== this.activeAccountSpaceId(atLaunch)) return;
-    const settings = settingsForWorkspace(atLaunch, atLaunch.activeWorkspaceId);
-    if (settings.startup === 'pages' && settings.startupPages?.length) {
-      const account = state.accountSpaces.find((candidate) => candidate.id === accountId);
-      if (!account || !isAvailableRegularAccount(state, account)) return;
-      const seen = new Set(state.tabs.filter((tab) => tab.accountSpaceId === account.id && !tab.isHome && isAllowedRemoteUrl(tab.url))
-        .map((tab) => canonicalRoutineUrl(tab.url)));
-      const tabs: BrowserTab[] = [];
-      for (const url of settings.startupPages) {
-        const address = canonicalRoutineUrl(url);
-        if (seen.has(address)) continue;
-        seen.add(address);
-        tabs.push(this.backgroundTab(account.workspaceId, address, account.id));
-      }
-      if (tabs.length) {
-        this.store.update((next) => { next.tabs.push(...tabs); });
-        this.broadcast();
-      }
-      return;
-    }
-    if (settings.startup !== 'home' && settings.startup !== 'new-tab') return;
-    try {
-      const url = settings.startup === 'home' ? resolveHomeUrl(settings, false) : 'private://home';
-      await this.newTab(state.activeWorkspaceId, url, accountId);
-    } catch {
-      this.addPrivacyEvent('blocked', 'Home page could not open at startup', 'The browser started with the restored tabs');
+    if (state.recovery || this.startupTabRecovery || state.activeWorkspaceId === 'banking'
+      || state.activeWorkspaceId !== initial.activeWorkspaceId
+      || this.activeAccountSpaceId(state) !== this.activeAccountSpaceId(initial)) return;
+    const settings = settingsForWorkspace(initial, initial.activeWorkspaceId);
+    if (settings.startup === 'ask') return;
+    if (settings.startup !== 'automatic' && settings.startup !== 'fresh') return;
+    await this.openStartupAddons(initial, this.activeAccountSpaceId(state));
+  }
+
+  private async openStartupAddons(initial: RuntimeBrowserStateV2, accountSpaceId: AccountSpaceId): Promise<void> {
+    const state = this.store.get();
+    if (state.activeWorkspaceId === 'banking' || state.activeWorkspaceId !== initial.activeWorkspaceId
+      || this.activeAccountSpaceId(state) !== accountSpaceId || this.startupTabRecovery || state.recovery) return;
+    const account = state.accountSpaces.find((candidate) => candidate.id === accountSpaceId);
+    if (!account || !isAvailableRegularAccount(state, account)) return;
+    const settings = settingsForWorkspace(initial, account.workspaceId);
+    const seen = new Set(state.tabs.filter((tab) => tab.accountSpaceId === account.id && isAllowedRemoteUrl(tab.url)).map((tab) => canonicalRoutineUrl(tab.url)));
+    const additions: BrowserTab[] = [];
+    const add = (url: string) => {
+      const key = isAllowedRemoteUrl(url) ? canonicalRoutineUrl(url) : url;
+      if (seen.has(key) || additions.length >= 8 || state.tabs.filter((tab) => tab.accountSpaceId === account.id).length + additions.length >= 100) return;
+      seen.add(key); additions.push(this.backgroundTab(account.workspaceId, url, account.id));
+    };
+    if (settings.startupHome) add(resolveHomeUrl(settings, false));
+    if (settings.startupNewTab) add(resolveNewTabUrl(settings, false));
+    for (const url of settings.startupPages ?? []) add(url);
+    if (additions.length) {
+      this.store.update((next) => { next.tabs.push(...additions); });
+      for (const tab of additions) this.runtimeTabs.set(tab.id, this.newRuntimeTab());
+      this.broadcast();
     }
   }
 
@@ -2341,8 +2430,8 @@ class BrowserController {
     if (patch.assistantPrompts && !workspaceVaultPolicy(workspace).aiExtraction) {
       throw new Error('Assistant presets are unavailable in this workspace.');
     }
-    if (workspace === 'banking' && (patch.homePage !== undefined || patch.homePageUrl !== undefined
-      || patch.startup !== undefined || patch.startupPages !== undefined || patch.siteKeywords !== undefined)) {
+    if (workspace === 'banking' && (patch.homePage !== undefined || patch.homePageUrl !== undefined || patch.newTab !== undefined || patch.newTabUrl !== undefined
+      || patch.startup !== undefined || patch.startupHome !== undefined || patch.startupNewTab !== undefined || patch.startupPages !== undefined || patch.siteKeywords !== undefined)) {
       throw new Error('Home, startup pages and site keywords are unavailable in Banking.');
     }
     const next = { ...patch };
@@ -2353,6 +2442,11 @@ class BrowserController {
       const url = parseWebAddress(next.homePageUrl);
       if (!url || !isAllowedRemoteUrl(url)) throw new Error('Enter a web address, for example tenten.ma');
       next.homePageUrl = url;
+    }
+    if (next.newTabUrl !== undefined) {
+      const url = parseWebAddress(next.newTabUrl);
+      if (!url || !isAllowedRemoteUrl(url)) throw new Error('Enter a web address, for example tenten.ma');
+      next.newTabUrl = url;
     }
     this.store.update((state) => {
       const settings = state.workspaceSettings ??= {};
@@ -5183,17 +5277,30 @@ class BrowserController {
     const openFromPage = ({ url, disposition, postBody }: HandlerDetails, popup?: BrowserWindow): WindowOpenHandlerResponse => {
       if (agentHost?.isLentContents(view.webContents.id)) return { action: 'deny' };
       if (tab.workspaceId === 'banking') {
+        this.popupBlockedByTab.set(tabId, 'banking');
+        this.broadcast();
         this.addPrivacyEvent('blocked', 'Popup blocked in Banking', 'Banking blocks site-opened windows. Open a link yourself from the original tab if you trust the address.', tab.accountSpaceId);
         return { action: 'deny' };
       }
-      if (!isAllowedRemoteUrl(url)) {
-        this.addPrivacyEvent('blocked', 'Popup address blocked', 'Site-opened windows require an HTTP or HTTPS address. Check the link on the original page.', tab.accountSpaceId);
+      const openingType = popupAddressType(url);
+      if (!isAllowedPopupOpeningAddress(url)) {
+        this.popupBlockedByTab.set(tabId, 'security');
+        this.broadcast();
+        this.addPrivacyEvent('blocked', 'Popup address blocked', `Opening address type: ${openingType}. Only HTTP(S) navigation or an initial blank window is permitted.`, tab.accountSpaceId);
+        return { action: 'deny' };
+      }
+      if ((url === '' || url === 'about:blank') && !wantsPopupWindow(disposition)) {
+        this.popupBlockedByTab.set(tabId, 'security');
+        this.broadcast();
+        this.addPrivacyEvent('blocked', 'Popup address blocked', `Opening address type: ${openingType}. Blank initial windows are allowed only for sandboxed pop-up windows.`, tab.accountSpaceId);
         return { action: 'deny' };
       }
       const now = Date.now();
       while (popupTimes.length && now - popupTimes[0]! > POPUP_WINDOW_MS) popupTimes.shift();
       if (popupTimes.length >= MAX_POPUPS_PER_WINDOW) {
-        this.addPrivacyEvent('blocked', 'Popups blocked', `${urlOriginForSharing(url)} opened too many windows. Wait a few seconds, then reopen the page.`, tab.accountSpaceId);
+        this.popupBlockedByTab.set(tabId, 'security');
+        this.broadcast();
+        this.addPrivacyEvent('blocked', 'Popups blocked', 'This page opened too many windows. Wait a few seconds, then reopen the page.', tab.accountSpaceId);
         return { action: 'deny' };
       }
       popupTimes.push(now);
@@ -5203,7 +5310,23 @@ class BrowserController {
       const inForeground = popup
         ? !popup.isDestroyed() && popup.isFocused()
         : opener.id === tabId && view.getVisible() && !this.window.isDestroyed() && this.window.isFocused();
-      if (inForeground && wantsPopupWindow(disposition)) {
+      const popupRequest = wantsPopupWindow(disposition);
+      const popupDecision = popupRequest
+        ? this.permissions.evaluate(tab.accountSpaceId, tab.workspaceId, safeOrigin(popup?.webContents.getURL() ?? view.webContents.getURL()), 'popups', false)
+        : 'granted';
+      if (popupRequest && popupDecision === 'denied') {
+        this.popupBlockedByTab.set(tabId, 'preference');
+        this.broadcast();
+        this.addPrivacyEvent('blocked', 'Popup blocked by your preference', 'This site is set to block pop-ups. Open Site permissions to change it.', tab.accountSpaceId);
+        return { action: 'deny' };
+      }
+      if (popupRequest && !inForeground) {
+        this.popupBlockedByTab.set(tabId, 'security');
+        this.broadcast();
+        this.addPrivacyEvent('blocked', 'Popup blocked by browser security', 'A background page cannot open a separate window. Open the page and try again.', tab.accountSpaceId);
+        return { action: 'deny' };
+      }
+      if (inForeground && popupRequest) {
         if (this.popupReview.pending || this.pendingPermission) {
           this.addPrivacyEvent('blocked', 'Popup waiting for an earlier decision', 'Finish the open permission or window review, then try again from the page.', tab.accountSpaceId);
           return { action: 'deny' };
@@ -5213,8 +5336,6 @@ class BrowserController {
         const destination = safeOrigin(url);
         const generation = runtime.navigationGeneration;
         const requestPage = from.getURL();
-        const account = this.accounts.require(tab.accountSpaceId);
-        const accountLabel = account.label.replace(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '').slice(0, 100);
         return popupWindowResponse(this.window, (options) => {
           const child = new BrowserWindow({ ...options, show: false });
           adoptPopupWindow(child, (window) => (details) => openFromPage(details, window));
@@ -5223,17 +5344,31 @@ class BrowserController {
             current: () => !this.sessionIsLocked && !from.isDestroyed() && from.getURL() === requestPage
               && runtime.navigationGeneration === generation && this.activeTab(this.store.get()).id === tabId
               && !agentHost?.isLentContents(view.webContents.id),
-            ask: (signal) => dialog.showMessageBox(this.window, {
-              type: 'question', title: 'Review site-opened window', message: 'Open this window?',
-              detail: ['Requesting site: ' + requestOrigin, 'Destination: ' + destination, 'Account Space: ' + accountLabel,
-                'Continue only if you expected this sign-in or payment. This request expires after 30 seconds.'].join('\n'),
-              buttons: ['Continue', 'Cancel'], defaultId: 1, cancelId: 1, signal,
-            }).then(({ response }) => response === 0),
+            ask: (signal) => {
+              if (popupDecision === 'granted') return Promise.resolve(true);
+              const prompt = this.permissions.createPrompt(tab.accountSpaceId, tab.workspaceId, requestOrigin, 'popups');
+              Object.assign(prompt, { popupAddressType: openingType, popupDestination: destination || undefined, popupMethod: postBody ? 'POST' : 'GET' });
+              return new Promise<boolean>((resolve) => {
+                const abort = () => {
+                  if (this.pendingPermission?.prompt.id !== prompt.id) return;
+                  const pending = this.pendingPermission;
+                  this.pendingPermission = undefined;
+                  pending.respond(false);
+                  this.broadcast();
+                  void this.showActiveTab();
+                };
+                signal.addEventListener('abort', abort, { once: true });
+                this.queuePermissionPrompt(prompt, (allowed) => {
+                  signal.removeEventListener('abort', abort);
+                  resolve(allowed);
+                });
+              });
+            },
             finish: (outcome) => {
-              if (outcome === 'continued' || this.window.isDestroyed()) return;
+              if (outcome === 'continued' || this.window.isDestroyed() || this.window.webContents.isDestroyed()) return;
               const reason = outcome === 'expired' ? 'The window review expired.'
                 : outcome === 'changed' ? 'The original page or Account Space changed.' : 'You cancelled the window.';
-              this.addPrivacyEvent('blocked', 'Site-opened window stopped', reason + ' Try again from the original page.', tab.accountSpaceId);
+              this.addPrivacyEvent('blocked', 'Site-opened window stopped', reason, tab.accountSpaceId);
             },
           });
           return child.webContents;
@@ -5257,6 +5392,7 @@ class BrowserController {
         runtime.pdf = undefined;
         if (runtime.inlinePdfUrl !== url) runtime.inlinePdfUrl = undefined;
       }
+      this.popupBlockedByTab.delete(tabId);
       if (this.wordPressPrompt && this.activeTab(this.store.get()).id === tabId) this.wordPressPrompt.abort();
       if (isProtectedPage(url)) this.endSplitForTab(tabId, tab.accountSpaceId);
       if (runtime.problem && !this.overlayOpen && this.activeTab(this.store.get()).id === tabId) view.setVisible(true);
@@ -5824,7 +5960,7 @@ class BrowserController {
     const runtime = this.runtimeTabs.get(active.id);
     const bounds = this.currentContentBounds();
     const pair = this.splitPair(state, active);
-    const panes = pair && runtime?.view?.getVisible() && !this.overlayOpen && !this.sessionIsLocked && !this.window.isFullScreen()
+    const panes = pair && runtime?.view?.getVisible() && !this.overlayOpen && !this.pendingPermission && !this.sessionIsLocked && !this.window.isFullScreen()
       ? splitBounds(bounds) : undefined;
     const otherId = panes && pair ? (pair.leftTabId === active.id ? pair.rightTabId : pair.leftTabId) : undefined;
     if (this.visibleSplitTabId !== otherId) {
@@ -5845,7 +5981,7 @@ class BrowserController {
     const other = state.tabs.find((item) => item.id === otherId)!;
     const view = this.ensureView(otherId);
     view.setBounds(pair.leftTabId === otherId ? panes.left : panes.right);
-    view.setVisible(true);
+    view.setVisible(!this.overlayOpen && !this.pendingPermission && !this.sessionIsLocked);
     const contents = view.webContents;
     if (!contents.getURL() && !contents.isLoading()) {
       void contents.loadURL(other.url).catch(() => {
@@ -6233,6 +6369,8 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('browser:forward', () => controller!.goForward());
   handle('browser:reload', () => controller!.reload());
   handle('browser:restore-selected-tabs', (_event, ids: string[]) => controller!.restoreSelectedTabs(ids));
+  handle('browser:restore-deferred-session', () => controller!.restoreDeferredSession());
+  handle('browser:dismiss-deferred-session-offer', () => controller!.dismissDeferredSessionOffer());
   handle('browser:stop', () => controller!.stop());
   handle('browser:new-tab', (_event, workspaceId?: WorkspaceId, url?: string, accountSpaceId?: AccountSpaceId) => controller!.newTab(workspaceId, url, accountSpaceId));
   handle('browser:open-temporary-browsing', (_event, id: AccountSpaceId) => controller!.openTemporaryBrowsing(id));
@@ -6258,6 +6396,7 @@ if (hasSingleInstanceLock) void app.whenReady().then(async () => {
   handle('permissions:respond', (_event, promptId: string, decision: PermissionDecision, displaySourceId?: string) => controller!.respondToPermissionPrompt(promptId, decision, displaySourceId));
   handle('permissions:site', (_event, tabId: string, origin: string) => controller!.getSitePermissions(tabId, origin));
   handle('permissions:revoke-site', (_event, tabId: string, origin: string, capability: PermissionCapability) => controller!.revokeSitePermission(tabId, origin, capability));
+  handle('permissions:set-popups', (_event, tabId: string, origin: string, decision: 'ask' | 'allow' | 'block') => controller!.setSitePopupPreference(tabId, origin, decision));
   handle('permissions:list-account', (_event, id: AccountSpaceId) => controller!.listAccountPermissionGrants(id));
   handle('google:configure', (_event, clientId: string) => controller!.configureGoogle(clientId));
   handle('google:clear-configuration', () => controller!.clearGoogleConfiguration());

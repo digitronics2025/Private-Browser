@@ -17,9 +17,10 @@ const SECOND_ID = '6ba2c705-9ba8-4f4a-9af2-46f8a36f9fc4' as AccountSpaceId;
 
 function fixture(workspaceId: 'personal' | 'banking' = 'personal') {
   let now = new Date('2026-09-12T10:00:00Z');
-  const store = new AccountStore(mkdtempSync(join(tmpdir(), 'permissions-')), new TestEncryption(), () => now);
+  const directory = mkdtempSync(join(tmpdir(), 'permissions-'));
+  const store = new AccountStore(directory, new TestEncryption(), () => now);
   store.createLocal({ id: ID, workspaceId, label: 'Account', color: 'indigo', order: 0 });
-  return { store, manager: new AccountPermissionManager(store, () => now), advance: () => { now = new Date(now.getTime() + 61_000); } };
+  return { directory, store, manager: new AccountPermissionManager(store, () => now), advance: () => { now = new Date(now.getTime() + 61_000); } };
 }
 
 describe('Account Space exact-origin permissions', () => {
@@ -97,5 +98,33 @@ describe('Account Space exact-origin permissions', () => {
     expect(source).toContain("desktopCapturer.getSources({ types: ['screen', 'window']");
     expect(source).toContain('sources.find((candidate) => candidate.id === sourceId)');
     expect(source).toContain('{ useSystemPicker: false }');
+  });
+
+  it('persists pop-up choices by exact origin and Account Space and resets to Ask', () => {
+    const { directory, store, manager } = fixture();
+    const origin = 'https://business.facebook.com';
+    store.createLocal({ id: SECOND_ID, workspaceId: 'personal', label: 'Second', color: 'sky', order: 1 });
+    manager.setPopupPreference(ID, 'personal', origin, 'allow');
+    expect(manager.evaluate(ID, 'personal', origin, 'popups', false)).toBe('granted');
+    expect(manager.evaluate(SECOND_ID, 'personal', origin, 'popups', false)).toBe('prompt');
+    expect(manager.siteStatus(ID, 'personal', origin)).toContainEqual({ capability: 'popups', decision: 'allowed', duration: 'until-revoked' });
+
+    const reopened = new AccountStore(directory, new TestEncryption());
+    const afterRestart = new AccountPermissionManager(reopened);
+    expect(afterRestart.evaluate(ID, 'personal', origin, 'popups', false)).toBe('granted');
+    afterRestart.setPopupPreference(ID, 'personal', origin, 'block');
+    expect(afterRestart.evaluate(ID, 'personal', origin, 'popups', false)).toBe('denied');
+    expect(afterRestart.siteStatus(ID, 'personal', origin)).toContainEqual({ capability: 'popups', decision: 'blocked-preference' });
+    afterRestart.setPopupPreference(ID, 'personal', origin, 'ask');
+    expect(afterRestart.evaluate(ID, 'personal', origin, 'popups', false)).toBe('prompt');
+    expect(afterRestart.siteStatus(ID, 'personal', origin)).toContainEqual({ capability: 'popups', decision: 'ask' });
+  });
+
+  it('keeps Banking pop-ups blocked even when a stored preference says allow', () => {
+    const { store, manager } = fixture('banking');
+    store.update(ID, (record) => { record.popupPreferences = [{ origin: 'https://business.facebook.com', decision: 'allow' }]; });
+    expect(manager.evaluate(ID, 'banking', 'https://business.facebook.com', 'popups', false)).toBe('denied');
+    expect(() => manager.setPopupPreference(ID, 'banking', 'https://business.facebook.com', 'allow')).toThrow(/unavailable/);
+    expect(manager.siteStatus(ID, 'banking', 'https://business.facebook.com')).toContainEqual({ capability: 'popups', decision: 'blocked' });
   });
 });

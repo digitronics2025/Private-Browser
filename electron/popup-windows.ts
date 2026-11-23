@@ -13,6 +13,24 @@ export function wantsPopupWindow(disposition: HandlerDetails['disposition']): bo
   return disposition === 'new-window';
 }
 
+export type PopupAddressType = 'empty' | 'about:blank' | 'http' | 'https' | 'other';
+
+/** Classifies only the opening address; never returns path, query or fragment data. */
+export function popupAddressType(value: string): PopupAddressType {
+  if (value === '') return 'empty';
+  if (value === 'about:blank') return 'about:blank';
+  try {
+    const protocol = new URL(value).protocol;
+    if (protocol === 'http:') return 'http';
+    if (protocol === 'https:') return 'https';
+  } catch { /* classify malformed and non-web values without exposing them */ }
+  return 'other';
+}
+
+export function isAllowedPopupOpeningAddress(value: string): boolean {
+  return isAllowedRemoteUrl(value) || value === '' || value === 'about:blank';
+}
+
 /**
  * A popup window has no address bar, so its title always leads with the host
  * it is showing: a page cannot dress itself up as another site's sign-in box.
@@ -79,7 +97,7 @@ export class PopupReview {
       clearTimeout(timer);
       abort.abort();
       child.removeListener('closed', finishChild);
-      const allowed = outcome === 'continued' && Boolean(active.hold) && request.current() && !child.isDestroyed();
+      const allowed = outcome === 'continued' && request.current() && !child.isDestroyed();
       active.hold?.(allowed);
       if (allowed) child.show();
       else if (!child.isDestroyed()) child.destroy();
@@ -87,21 +105,25 @@ export class PopupReview {
     };
     this.active = active;
     child.once('closed', finishChild);
+    void Promise.resolve().then(() => request.ask(abort.signal)).then(
+      (approved) => active.settle(approved ? 'continued' : 'cancelled'), () => active.settle('cancelled'),
+    );
   }
 
   hold(details: { webContentsId?: number; url: string; resourceType: string; method: string }, reply: (allowed: boolean) => void): boolean {
     const active = this.active;
     if (!active || details.webContentsId !== active.contentsId) return false;
-    const url = new URL(active.request.url);
-    url.hash = '';
-    if (active.hold || details.resourceType !== 'mainFrame' || details.url !== url.href || details.method !== active.request.method) {
+    const isBlankStart = active.request.url === '' || active.request.url === 'about:blank';
+    const url = isBlankStart ? undefined : new URL(active.request.url);
+    if (url) url.hash = '';
+    const matchesInitialRequest = url
+      ? details.url === url.href && details.method === active.request.method
+      : isAllowedRemoteUrl(details.url) && (details.method === 'GET' || details.method === 'POST');
+    if (active.hold || details.resourceType !== 'mainFrame' || !matchesInitialRequest) {
       reply(false);
       return true;
     }
     active.hold = reply;
-    void Promise.resolve().then(() => active.request.ask(active.signal)).then(
-      (approved) => active.settle(approved ? 'continued' : 'cancelled'), () => active.settle('cancelled'),
-    );
     return true;
   }
 }
