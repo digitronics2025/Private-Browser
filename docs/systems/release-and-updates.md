@@ -10,7 +10,7 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: aeb3251
+verified_at: 4ba349c
 ---
 
 # Release and Updates
@@ -433,9 +433,11 @@ patch version when the declared version is not higher. The Windows job patches
 both package files in its runner. The same job builds, smoke-tests and publishes
 that version from the same installer file.
 
-The Windows publisher-evidence step invokes `record-windows-publisher.ps1` with
-named hashtable splatting for `Installer`, `Sha256` and `Destination`. Array
-splatting passes positional values and cannot bind those named script parameters.
+All Windows verification and production builds create checksum-bound publisher
+receipts through `record-windows-publisher.ps1`. The step uses named hashtable
+splatting for `Installer`, `Sha256` and `Destination`; array splatting passes
+positional values and cannot bind those named script parameters. Only production
+runs proceed to protected R2 staging and Worker publication.
 
 | Job | Runs on | Does |
 | --- | --- | --- |
