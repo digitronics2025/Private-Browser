@@ -10,12 +10,12 @@ sources:
   - electron/update-bootstrap.ts
   - scripts/stage-vsix.mjs
   - vscode-extension/package.json
-verified_at: 361627a
+verified_at: aeb3251
 ---
 
 # Release and Updates
 
-> Last verified: 2026-09-25
+> Last verified: 2026-11-23
 
 ## Agent Brief
 
@@ -432,6 +432,10 @@ a manually raised stable version from `package.json`, or increments the active
 patch version when the declared version is not higher. The Windows job patches
 both package files in its runner. The same job builds, smoke-tests and publishes
 that version from the same installer file.
+
+The Windows publisher-evidence step invokes `record-windows-publisher.ps1` with
+named hashtable splatting for `Installer`, `Sha256` and `Destination`. Array
+splatting passes positional values and cannot bind those named script parameters.
 
 | Job | Runs on | Does |
 | --- | --- | --- |
