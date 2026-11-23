@@ -162,6 +162,12 @@ async function releasePublisher(env: Env, release: Pick<ReleaseRecord, 'object_k
   }
 }
 
+/** Publisher evidence may be an Authenticode verification or an explicit unsigned receipt.
+ * Both are bound to the exact release digest by parsePublisherReceipt. */
+function hasReleasePublisherEvidence(publisher: PublisherStatus | undefined): publisher is PublisherStatus {
+  return publisher?.status === 'unsigned' || (publisher?.status === 'verified' && Boolean(publisher.signerSha256));
+}
+
 function createDownloadPageModel(request: Request, release: ReleaseRecord, history: ReleaseRecord[], downloadUrl: string, publisher?: PublisherStatus): DownloadPageModel {
   return {
     release,
@@ -195,6 +201,7 @@ async function handleBinary(request: Request, env: Env, url: URL, mode: 'public'
   if (!isLiveExpiry(expires, Date.now() / 1000)) return notFound();
   const release = await latestRelease(env);
   if (!release || !(await verifySignedValue(env.SIGNING_SECRET, `binary\n${release.id}\n${expires}`, signature))) return notFound();
+  if (!hasReleasePublisherEvidence(await releasePublisher(env, release))) return notFound();
 
   const objectHead = await env.RELEASES.head(release.object_key);
   if (!objectHead || objectHead.size !== release.size_bytes || (release.object_etag && objectHead.etag !== release.object_etag)) return notFound();
@@ -360,7 +367,7 @@ async function handlePublish(request: Request, env: Env): Promise<Response> {
     }, 409, { 'cache-control': PRIVATE_CACHE });
   }
   const publisher = await releasePublisher(env, { object_key: input.objectKey, sha256: input.sha256 });
-  if (publisher?.status !== 'verified' || !publisher.signerSha256) return json({ error: 'verified_publisher_required' }, 409, { 'cache-control': PRIVATE_CACHE });
+  if (!hasReleasePublisherEvidence(publisher)) return json({ error: 'publisher_evidence_required' }, 409, { 'cache-control': PRIVATE_CACHE });
   const etag = await verifyArtifact(env.RELEASES, input.objectKey, input.sizeBytes, input.sha256);
   if (!etag) return json({ error: 'release_artifact_verification_failed' }, 409, { 'cache-control': PRIVATE_CACHE });
   try {
@@ -419,7 +426,7 @@ async function handleActivate(request: Request, env: Env): Promise<Response> {
   const row = await env.DB.prepare('SELECT * FROM releases WHERE id = ?1 AND app_id = ?2 AND channel = ?3').bind(id, APP_ID, channel).first<Pick<ReleaseRecord, 'id' | 'object_key' | 'size_bytes' | 'version' | 'build_number' | 'sha256' | 'object_etag'>>();
   if (!row) return json({ error: 'release_not_found' }, 404, { 'cache-control': PRIVATE_CACHE });
   const publisher = await releasePublisher(env, row);
-  const etag = publisher?.status === 'verified' && publisher.signerSha256 && await verifyArtifact(env.RELEASES, row.object_key, row.size_bytes, row.sha256);
+  const etag = hasReleasePublisherEvidence(publisher) && await verifyArtifact(env.RELEASES, row.object_key, row.size_bytes, row.sha256);
   if (!etag || !row.object_etag || etag !== row.object_etag) {
     return json({ error: 'verified_restore_artifact_required' }, 409, { 'cache-control': PRIVATE_CACHE });
   }
@@ -462,7 +469,8 @@ async function handleHealth(request: Request, env: Env): Promise<Response> {
       databaseReady = true;
       const object = release && await env.RELEASES.head(release.object_key);
       releaseReady = Boolean(object && release && object.size === release.size_bytes
-        && (!release.object_etag || (object.etag === release.object_etag && (await releasePublisher(env, release))?.status === 'verified')));
+        && hasReleasePublisherEvidence(await releasePublisher(env, release))
+        && (!release.object_etag || object.etag === release.object_etag));
     } catch {
       // Return the public readiness status without provider details.
     }

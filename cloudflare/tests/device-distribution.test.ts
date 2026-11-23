@@ -20,7 +20,11 @@ it('requires verified enrollment for private feeds and range requests and reject
   };
   const RELEASES = {
     head: async () => ({ httpEtag: '"fixture"', size: 4 }),
-    get: async (_key: string, options?: { range?: { offset: number; length: number } }) => ({ body: options?.range ? 'ab' : 'abcd' }),
+    get: async (key: string, options?: { range?: { offset: number; length: number } }) => ({
+      ...(key.endsWith('.publisher.json')
+        ? { size: 120, json: async () => ({ schemaVersion: 1, status: 'unsigned', sha256: 'a'.repeat(64) }), body: { cancel: async () => undefined } }
+        : { body: options?.range ? 'ab' : 'abcd' }),
+    }),
   };
   const env = { DB, RELEASES, DOWNLOAD_ACCESS_TOKEN: 'fixture-legacy-' + 'a'.repeat(32), SIGNING_SECRET: 'fixture-signer-' + 'b'.repeat(32), ADMIN_API_KEY: 'fixture-admin-' + 'c'.repeat(32) } as unknown as Env;
   const origin = 'https://release-fixture.example.test';

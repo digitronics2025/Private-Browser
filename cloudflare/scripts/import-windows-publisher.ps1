@@ -1,8 +1,15 @@
 $ErrorActionPreference = 'Stop'
 $approved = @($env:EXPECTED_CERTIFICATE_SHA256 -split '\s+' | Where-Object { $_ })
+$signingValues = @($env:WINDOWS_SIGNING_PFX, $env:WINDOWS_SIGNING_PASSWORD, ($approved -join ' '))
+$signingConfigured = @($signingValues | Where-Object { $_ }).Count -gt 0
+if (-not $signingConfigured) {
+    "configured=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+    Write-Output 'No Windows signing identity is configured; stable installer will be explicitly unsigned.'
+    exit 0
+}
 if (!$env:WINDOWS_SIGNING_PFX -or !$env:WINDOWS_SIGNING_PASSWORD -or !$approved.Count -or
     ($approved | Where-Object { $_ -notmatch '^[a-f0-9]{64}$' })) {
-    throw 'Production signing and the approved publisher fingerprint are required.'
+    throw 'Windows signing is partially configured; provide the complete approved certificate set or clear it for an unsigned release.'
 }
 
 $certificates = [Security.Cryptography.X509Certificates.X509Certificate2Collection]::new()
@@ -26,6 +33,7 @@ try {
     $store.Open('ReadWrite')
     $store.Add($signers[0])
     "thumbprint=$($signers[0].Thumbprint)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+    "configured=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 } finally {
     $store.Dispose()
     $certificates | ForEach-Object { $_.Dispose() }

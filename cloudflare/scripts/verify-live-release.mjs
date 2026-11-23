@@ -20,7 +20,7 @@ const expectedVersion = JSON.parse(readFileSync(new URL('../../package.json', im
 const expectedBuild = Number(process.env.GITHUB_RUN_NUMBER);
 assert(/^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA ?? '') && Number.isSafeInteger(expectedBuild) && expectedBuild > 0, 'Live verification requires the candidate commit and build number');
 const publisher = parsePublisherReceipt(JSON.parse(readFileSync(join(dirname(installerPath), 'PUBLISHER.json'), 'utf8').replace(/^\uFEFF/, '')), expectedHash);
-assert(publisher?.status === 'verified', 'Approved Windows publisher evidence is required for the installer');
+assert(publisher?.status === 'unsigned' || (publisher?.status === 'verified' && publisher.signerSha256), 'Valid Windows publisher evidence is required for the installer');
 const publisherStatus = `data-publisher-status="${publisher.status}"`;
 
 await expectStatus(`${endpoint}/update.json`, 404);

@@ -452,13 +452,15 @@ saving production credentials. Immediately before uploading, the workflow
 checks that the approved commit is still at the tip of `main`. Other Windows
 builds use the `windows-verification` environment without production credentials.
 
-Production builds sign the application and installer, verify the approved
-timestamped publisher, and smoke-test the installed candidate. Publication
-stages the exact candidate under a digest-bound private R2 key with
-bucket-scoped S3 credentials. The workflow verifies the readback before using
-its separate Worker key to register the candidate. GitHub artifacts carry only test and release
-evidence. When live verification fails, the workflow restores an eligible
-signed release or suspends the exact failed release.
+When signing is configured, production builds sign the application and installer
+and verify the approved timestamped publisher. Without signing credentials, the
+workflow records explicit unsigned evidence tied to the exact installer digest.
+Both paths smoke-test the installed candidate and retain the exact-commit approval,
+protected production review, immutable publication, and private R2 readback gates.
+Unsigned download pages clearly report the lack of a Windows publisher signature;
+the managed updater continues to reject unsigned installers. GitHub artifacts
+carry only test and release evidence. When live verification fails, the workflow
+restores an eligible release or suspends the exact failed release.
 
 Write a short [desktop release highlight](../desktop-release-notes/README.md)
 for visible changes. The publisher reads new highlights from the exact candidate
@@ -467,7 +469,7 @@ commit and compares them with the active release commit.
 ### Worker deployment
 
 Workers Builds owns production Worker deployment. The GitHub manual workflow
-shows deployment guidance. Before the first signed publication, apply migration
+shows deployment guidance. Before the first publication, apply migration
 0005 through the approved Cloudflare process and verify stable readiness, the
 active Worker version and the authenticated release flow.
 
@@ -515,13 +517,16 @@ The electron-builder configuration lives **inline in `package.json`**, in the
   It is validated for its manifest and forbidden contents, installed into a fresh
   `--user-data-dir`/`--extensions-dir` profile in Windows CI, and uploaded as a
   private Actions artifact. The smoke test resolves the standard system and
-  per-user `code.cmd` locations and provisions VS Code with Chocolatey only when
-  neither location exists. It is never submitted to the Marketplace. The same
+  per-user `code.cmd` locations and, when absent, downloads the official
+  Microsoft user installer, verifies its Authenticode publisher, and installs it
+  silently. It is never submitted to the Marketplace. The same
   validated VSIX is copied into the packaged application's resources so the
   Developer panel installs a fixed artifact rather than downloading executable
   extension code.
-- Stable CI requires the production signing credentials and the approved public
-  certificate fingerprint. Ordinary Windows verification builds remain unsigned.
+- Stable CI records signed publisher evidence when the approved signing identity
+  is configured; otherwise it records explicit digest-bound unsigned evidence.
+  Ordinary Windows verification builds remain unsigned. Both paths retain the
+  exact-commit approval and production environment review gates.
 - `loadBrowserProcessSpecificV8Snapshot` stays disabled: enabling it without a
   matching packaged browser-process snapshot makes Electron fail before startup.
   This is a compatibility fuse, not a privilege boundary; the other sandbox,

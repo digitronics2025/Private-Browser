@@ -121,13 +121,17 @@ class FakeDatabase {
 class FakeBucket {
   object = bytes;
   keys = new Set([release.object_key]);
+  publisherReceipt: Record<string, unknown> = {
+    schemaVersion: 1, status: 'verified', sha256: release.sha256, publisher: 'Fixture Publisher',
+    signerSha256: 'e'.repeat(64), timestamped: true,
+  };
   async head(key: string) {
     if (!this.keys.has(key)) return null;
     return { etag: 'test-etag', size: this.object.byteLength, httpEtag: '"test-etag"' };
   }
   async get(key: string, options?: { range?: { offset: number; length: number } }) {
     if (key.endsWith('.publisher.json') && this.keys.has(key.slice(0, -'.publisher.json'.length))) {
-      const receipt = { schemaVersion: 1, status: 'verified', sha256: release.sha256, publisher: 'Fixture Publisher', signerSha256: 'e'.repeat(64), timestamped: true };
+      const receipt = this.publisherReceipt;
       const body = new Blob([JSON.stringify(receipt)]);
       return { size: body.size, body: body.stream(), json: async () => receipt };
     }
@@ -413,6 +417,47 @@ ${expires}`));
     expect((await publish(input)).status).toBe(200);
     expect((await publish({ ...input, commitSha: 'c'.repeat(40) })).status).toBe(409);
     expect(database.batches).toBe(1);
+  });
+
+  it('publishes an explicit unsigned build with digest checks and an honest public warning', async () => {
+    const input = {
+      version: '0.3.1', buildNumber: 4, channel: 'stable', objectKey: 'releases/test/unsigned.exe',
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    bucket.keys.add(input.objectKey);
+    bucket.publisherReceipt = { schemaVersion: 1, status: 'unsigned', sha256: input.sha256 };
+    const published = await request('/api/v1/admin/releases', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(input),
+    });
+    expect(published.status).toBe(201);
+    expect((await request('/health')).status).toBe(200);
+
+    const latest = await request('/api/v1/releases/public/latest');
+    expect(latest.status).toBe(200);
+    const item = await latest.json() as ReleaseManifest;
+    const pageUrl = new URL(item.downloadPageUrl);
+    const page = await request(pageUrl.pathname + pageUrl.search);
+    const html = await page.text();
+    expect(html).toContain('data-publisher-status="unsigned"');
+    expect(html).toContain('Windows reported this installer as unsigned.');
+    const installerUrl = new URL(item.downloadUrl);
+    const installer = await request(installerUrl.pathname + installerUrl.search);
+    expect(installer.status).toBe(200);
+    expect(new Uint8Array(await installer.arrayBuffer())).toEqual(bytes);
+  });
+
+  it('rejects unsigned publisher evidence bound to a different digest', async () => {
+    const input = {
+      version: '0.3.1', buildNumber: 4, channel: 'stable', objectKey: 'releases/test/wrong-digest.exe',
+      filename: release.filename, sizeBytes: bytes.byteLength, sha256: release.sha256, commitSha: release.commit_sha,
+    };
+    bucket.keys.add(input.objectKey);
+    bucket.publisherReceipt = { schemaVersion: 1, status: 'unsigned', sha256: 'f'.repeat(64) };
+    const response = await request('/api/v1/admin/releases', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': releaseKey }, body: JSON.stringify(input),
+    });
+    expect(response.status).toBe(409);
+    expect(database.batches).toBe(0);
   });
 
   it('refuses to publish without the separate release key', async () => {
