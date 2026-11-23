@@ -278,22 +278,22 @@ async function scanExtension(directory: string): Promise<{ sourcePath: string; p
       const rel = prefix ? `${prefix}/${child.name}` : child.name;
       if (rel.split('/').some((part) => part === '.' || part === '..' || part.startsWith('.stage-'))) continue;
       const absolute = join(current, child.name);
-      const info = await lstat(absolute);
-      if (info.isSymbolicLink()) throw new Error('Extensions containing symbolic links are not supported.');
-      if (info.isDirectory()) { await walk(absolute, rel); continue; }
-      if (!info.isFile()) throw new Error('Extension contains an unsupported filesystem entry.');
+      if (child.isSymbolicLink()) throw new Error('Extensions containing symbolic links are not supported.');
+      if (child.isDirectory()) { await walk(absolute, rel); continue; }
+      if (!child.isFile()) throw new Error('Extension contains an unsupported filesystem entry.');
       if (entries.length >= MAX_EXTENSION_FILES) throw new Error('Extension contains too many files.');
-      total += info.size;
-      if (total > MAX_EXTENSION_BYTES) throw new Error('Extension exceeds the 25 MB size limit.');
       // Read through one open handle and verify it still identifies the file we
       // inspected. This prevents a concurrently swapped symlink/path from making
       // the reviewed bytes differ from the regular file found during the scan.
       const handle = await open(absolute, 'r');
       try {
         const opened = await handle.stat();
-        if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino) {
+        const current = await lstat(absolute);
+        if (current.isSymbolicLink() || !current.isFile() || !opened.isFile() || opened.dev !== current.dev || opened.ino !== current.ino) {
           throw new Error('Extension files changed while being reviewed. Choose the folder again.');
         }
+        total += opened.size;
+        if (total > MAX_EXTENSION_BYTES) throw new Error('Extension exceeds the 25 MB size limit.');
         const bytes = await handle.readFile();
         const afterRead = await handle.stat();
         if (afterRead.size !== opened.size || afterRead.mtimeMs !== opened.mtimeMs || bytes.length !== opened.size) {
