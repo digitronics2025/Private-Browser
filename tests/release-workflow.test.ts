@@ -63,6 +63,11 @@ describe('release workflow', () => {
     expect(step('Remove production signing certificate')).toContain('-DeleteKey');
     expect(signed).toContain('record-windows-publisher.ps1');
     expect(signed).toContain('SIGNING_CONFIGURED');
+    expect(signed).toContain('$publisherArgs = @{');
+    expect(signed).toContain("Destination = 'release/PUBLISHER.json'");
+    expect(signed).toContain('$appPublisherArgs = @{');
+    expect(signed).toContain("Destination = 'release/APP-PUBLISHER.json'");
+    expect(signed).not.toContain("@('-Installer'");
     expect(stage).toContain('Valid signed or explicit unsigned publisher evidence is required');
     expect(signed).toContain('win-unpacked/Private Browser.exe');
     expect(stage).toContain('verify-release-candidate.mjs "$installer" "$candidate_dir/candidate.exe"');
