@@ -12,6 +12,8 @@ WebRTC is restricted to the default public interface, and IPC payloads are
 size-bounded and rate-limited after a main-frame trusted-sender check. The chrome
 renderer is pinned to its packaged file (or the configured local dev origin), so
 a remote page cannot navigate the privileged window and inherit its preload API.
+Packaged browser and Agent chrome ignore the development URL and verify the
+exact trusted main-frame document before accepting a privileged message.
 
 Each Account Space uses a separate persistent Electron session partition,
 preventing cookies and authenticated sessions from crossing accounts. Fixed
@@ -75,11 +77,12 @@ restarting the app.
 
 Saved credentials, Account Space metadata and grants, the AI provider key and the
 download-service token are encrypted with Electron `safeStorage`. Each account
-has an independent encrypted file so corruption is quarantined. **Browsing
-history, bookmarks, open-tab URLs, routines and the privacy log are not encrypted**; they
-are split into a minimal v2 manifest and per-account JSON. Anyone running as the
-Windows user may read those URLs and titles. Plaintext state contains only opaque
-account/workspace IDs, never email, Google subject, partition key or OAuth data.
+has an independent encrypted file so corruption is quarantined. New supported
+Windows profiles encrypt browser-managed tabs, bookmarks and history. Existing
+profiles can enable encryption in Settings. Recognized credential-bearing URLs
+are excluded from automatic history and reduced to the site origin for tab
+restoration. The manifest, older backups and Chromium's own data stores have
+their own protection and retention boundaries.
 
 Version-1 migration preserves the source and a timestamped byte-for-byte backup,
 stages per-account files first and publishes the manifest last. Unknown/corrupt
@@ -157,8 +160,8 @@ download type — executables, scripts, installers such as `.msix`, disk images,
 shortcuts — and every deceptive double extension is labelled and cannot be
 opened from Private Browser unless it matches the checksum of the release
 manifest. The main process rechecks the installer before opening it.
-Authenticode publisher evidence is displayed separately and grants no
-additional open permission.
+A matching installer must also have a timestamped embedded Authenticode
+signature from a publisher approved by the packaged client.
 
 ## Developer tools
 
@@ -268,8 +271,8 @@ Binary and private-page URLs are HMAC-signed, purpose-bound and expire after 15
 minutes. Signatures bind binary access to the active D1 release ID, so replacing
 the active release invalidates prior installer links. Invalid or expired
 credentials return a generic `404`. Responses disable caching and referrers and
-carry a restrictive Content Security Policy; the private token pages
-(`/download/<token>`) are `noindex`.
+carry a restrictive Content Security Policy. The legacy token-bearing download
+page returns 404.
 
 Installers use a credential-free bootstrap. The release owner selects Public
 or Private and can enroll or revoke individual devices. Each enrolled device
@@ -286,7 +289,9 @@ validated byte range per request.
 Managed updates use a main-process HTTPS stream without redirects, a private
 staging directory, an installer size cap, and the Windows Internet zone marker.
 Opening requires an explicit action in an unlocked regular Account Space,
-a fresh matching release manifest, and a second hash of the staged file.
+a fresh matching release manifest, a second hash of the staged file and a
+Windows verification of the approved publisher. New stable releases require
+verified publisher evidence and an immutable D1 record bound to verified R2 bytes.
 
 ## Credentials in the repository
 
@@ -300,9 +305,9 @@ Local values belong in `.env` or `cloudflare/.dev.vars`; production values are s
 
 ## Known external requirement
 
-The workflow is ready to sign the Windows installer when `WINDOWS_CODE_SIGNING_CERTIFICATE` and
-`WINDOWS_CODE_SIGNING_PASSWORD` repository secrets are configured. Until then,
-the release remains unsigned and Windows can show an unknown-publisher warning.
+Stable publication requires an owner-approved Windows publisher. Configure the
+protected signing environment and verify the first signed installer through an
+independent channel for users upgrading from an unsigned build.
 A commercial URL-reputation feed is also still required for live phishing and
 malware-site intelligence; Google Safe Browsing's free service is not licensed
 for this business use case.

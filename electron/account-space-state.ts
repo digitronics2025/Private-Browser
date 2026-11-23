@@ -28,13 +28,20 @@ import { AccountStore, type AccountSpaceRecord, type SafeStorageAdapter } from '
 import { BrowsingProtection, type BrowsingProtectionStatus } from './browsing-protection.js';
 import { isAccountSpaceId, requireWorkspaceId } from './account-space-validation.js';
 import { pruneBookmarkIcons, sanitizeBookmarkIcons } from './bookmark-icons.js';
-import { isAllowedRemoteUrl } from './security.js';
+import { isAllowedRemoteUrl, minimizeRetainedTab, sensitiveNavigationUrl } from './security.js';
 import { DEFAULT_BROWSER_SETTINGS, sanitizeBrowserSettings, sanitizeWorkspaceSettings } from './browser-settings.js';
 import { chromeProfileReceipts } from './chrome-profile-preferences.js';
 import { sanitizeAccountPanel, sanitizeUiPreferences } from './ui-preferences.js';
 import { WORKSPACES, sanitizeState } from './state-store.js';
 import { sanitizeBrowserRoutines } from './browser-routines.js';
 import { orderAccountTabs } from './tab-organization.js';
+
+function minimizeStoredNavigation(state: AccountBrowsingStateV2): AccountBrowsingStateV2 {
+  const tabs = state.tabs.map(minimizeRetainedTab);
+  const history = state.history.filter(entry => !sensitiveNavigationUrl(entry.url));
+  if (history.length === state.history.length && tabs.every((tab, index) => tab === state.tabs[index])) return state;
+  return { ...state, tabs, history };
+}
 
 interface MigrationJournal {
   version: 1;
@@ -65,6 +72,7 @@ export interface AccountSpaceStateStoreOptions {
   paths: AccountSpaceStatePaths;
   accountStore: AccountStore;
   browsingEncryption?: SafeStorageAdapter;
+  encryptNewProfiles?: boolean;
   now?: () => Date;
   onMigrationPhase?: (phase: 'journal' | 'accounts' | 'account-states' | 'manifest') => void;
 }
@@ -91,7 +99,7 @@ export class AccountSpaceStateStore {
   }
 
   saveAccountState(state: AccountBrowsingStateV2): void {
-    const sanitized = validateAccountState(state);
+    const sanitized = minimizeStoredNavigation(validateAccountState(state));
     this.writeBrowsingState(this.accountStatePath(sanitized.accountSpaceId), sanitized);
   }
 
@@ -114,13 +122,14 @@ export class AccountSpaceStateStore {
     atomicWriteJson(path, this.protection.isEnabled() ? this.protection.encode(state.accountSpaceId, state) : state);
   }
 
-  private readBrowsingState(id: AccountSpaceId): { state: AccountBrowsingStateV2; protected: boolean } {
+  private readBrowsingState(id: AccountSpaceId): { state: AccountBrowsingStateV2; protected: boolean; minimized: boolean } {
     const parsed: unknown = JSON.parse(readFileSync(this.accountStatePath(id), 'utf8'));
     const result = this.protection.decode(id, parsed);
     if (!result.protected && this.protection.status() === 'unavailable') throw new Error('The local browsing encryption key is unavailable.');
     const state = validateAccountState(result.value as AccountBrowsingStateV2);
     if (state.accountSpaceId !== id) throw new Error('Account state identity mismatch');
-    return { state, protected: result.protected };
+    const minimized = minimizeStoredNavigation(state);
+    return { state: minimized, protected: result.protected, minimized: minimized !== state };
   }
 
   recoveryTargetPath(accountSpaceId?: AccountSpaceId): string {
@@ -186,6 +195,7 @@ export class AccountSpaceStateStore {
   }
 
   private createFresh(): AccountSpaceStateInitialization {
+    if (this.options.encryptNewProfiles && this.options.browsingEncryption?.isEncryptionAvailable()) this.protection.enable(atomicWriteJson);
     const fingerprint = createHash('sha256').update(`fresh:${randomUUID()}`).digest('hex');
     const ids = createStableAccountIds(fingerprint);
     const accounts = this.ensureDefaultAccounts(ids, fingerprint);
@@ -274,9 +284,9 @@ export class AccountSpaceStateStore {
       }
       accounts.push(loadedAccount.record);
       try {
-        const { state, protected: encrypted } = this.readBrowsingState(accountSpaceId);
+        const { state, protected: encrypted, minimized } = this.readBrowsingState(accountSpaceId);
         if (state.workspaceId !== loadedAccount.record.workspaceId) throw new Error('Account state ownership mismatch');
-        if (this.protection.isEnabled() && !encrypted) {
+        if (minimized || (this.protection.isEnabled() && !encrypted)) {
           try { this.saveAccountState(state); }
           catch { this.protectionPending = true; }
         }
@@ -358,7 +368,7 @@ export class AccountSpaceStateStore {
   }
 
   private stageAccountState(state: AccountBrowsingStateV2): void {
-    this.writeBrowsingState(`${this.accountStatePath(state.accountSpaceId)}.staged`, validateAccountState(state));
+    this.writeBrowsingState(`${this.accountStatePath(state.accountSpaceId)}.staged`, minimizeStoredNavigation(validateAccountState(state)));
   }
 
   private publishStagedAccountState(id: AccountSpaceId): void {

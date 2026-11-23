@@ -92,8 +92,8 @@ test('separates file type, checksum and publisher and only enables eligible file
   await expect(verified.getByText('EXE · May run code')).toBeVisible();
   await expect(verified.getByText('Matches the published release')).toBeVisible();
   await expect(verified.getByText('No Windows signature')).toBeVisible();
-  await verified.getByRole('button', { name: 'Open', exact: true }).click();
-  await expect(page.getByRole('status').filter({ hasText: 'This preview cannot open files' })).toBeVisible();
+  await expect(verified.getByRole('button', { name: 'Open', exact: true })).toBeDisabled();
+  await expect(verified.getByRole('button', { name: 'Show folder' })).toBeEnabled();
   const mismatch = page.locator('.download-card').filter({ hasText: 'invalid-installer.exe' });
   await expect(mismatch.getByRole('button', { name: 'Open', exact: true })).toBeDisabled();
   await expect(mismatch.getByRole('button', { name: 'Show folder' })).toBeEnabled();

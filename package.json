@@ -14,7 +14,16 @@
   ],
   "overrides": {
     "sharp": "0.35.5",
-    "brace-expansion@^5.0.0": "5.0.12"
+    "brace-expansion@^5.0.0": "5.0.12",
+    "@electron/universal": {
+      "minimatch": "11.0.9"
+    },
+    "@vscode/vsce": {
+      "minimatch": "11.0.9"
+    },
+    "app-builder-lib": {
+      "minimatch": "11.0.9"
+    }
   },
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && npm run electron:compile && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist-electron/main.js\"",
@@ -50,7 +59,7 @@
     "docs:find": "node scripts/docs-find.mjs",
     "docs:stale": "node scripts/docs-guard.mjs stale",
     "check": "npm run secrets:check && npm run docs:check && npm run bridge:build && npm run typecheck && npm run worker:typecheck && npm run scripts:typecheck && npm run test && npm run extension:package && npm run extension:validate && npm run build && npm run test:e2e:only && npm run test:electron:ci && npm run worker:build",
-    "dist": "npm run extension:package && npm run build && npm run agent:stage && electron-builder --win nsis --x64 --publish never && npm run extension:stage && node scripts/verify-windows-registration.mjs",
+    "dist": "npm run extension:package && npm run build && npm run agent:stage && node scripts/stage-windows-publishers.mjs && node scripts/build-windows-installer.mjs && npm run extension:stage && node scripts/verify-windows-registration.mjs",
     "start": "electron dist-electron/main.js"
   },
   "dependencies": {
@@ -65,24 +74,24 @@
     "tldts": "^7.4.15"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20260910.1",
+    "@cloudflare/workers-types": "^5.20261120.1",
     "@electron/fuses": "1.8.0",
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "electron": "44.10.2",
+    "electron": "44.11.5",
     "electron-builder": "^26.15.3",
-    "esbuild": "0.25.12",
-    "pdfjs-dist": "6.4.299",
+    "esbuild": "0.28.2",
+    "pdfjs-dist": "6.5.438",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
-    "vitest": "^5.0.0",
+    "vitest": "^5.1.1",
     "wait-on": "^8.0.1",
-    "wrangler": "^4.131.1",
+    "wrangler": "^4.165.0",
     "yauzl": "^3.4.0"
   },
   "build": {

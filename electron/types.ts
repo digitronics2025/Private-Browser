@@ -583,7 +583,7 @@ export interface DownloadEntry {
   /** Set once a completed download has been compared against the release manifest. */
   checksum?: 'checking' | 'verified' | 'mismatch' | 'unchecked';
   extension?: string;
-  publisher?: { state: 'unsigned' | 'valid' | 'untrusted' | 'unavailable'; name?: string };
+  publisher?: { state: 'unsigned' | 'valid' | 'untrusted' | 'unavailable'; name?: string; approved?: boolean };
   risk: 'ordinary' | 'dangerous' | 'deceptive';
   origin?: string;
   finishedAt?: string;

@@ -12,11 +12,12 @@ if ($Sha256 -cnotmatch '^[a-f0-9]{64}$') { throw 'Installer checksum is invalid.
 $signature = Get-AuthenticodeSignature -LiteralPath $Installer
 $receipt = @{ schemaVersion = 1; sha256 = $Sha256 }
 if ($SigningConfigured) {
-    if ($ExpectedCertificateSha256 -notmatch '^[a-f0-9]{64}$') {
+    $approved = @($ExpectedCertificateSha256 -split '\s+' | Where-Object { $_ })
+    if (!$approved.Count -or ($approved | Where-Object { $_ -notmatch '^[a-f0-9]{64}$' })) {
         throw 'Set the approved Windows publisher certificate SHA-256 before publishing a signed installer.'
     }
-    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or $signature.SignatureType -ne 'Authenticode') {
-        throw 'The installer has no valid embedded Authenticode signature.'
+    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate -or $signature.SignatureType -ne 'Authenticode' -or -not $signature.TimeStamperCertificate) {
+        throw 'The installer has no valid timestamped embedded Authenticode signature.'
     }
     $sha = [Security.Cryptography.SHA256]::Create()
     try {
@@ -24,7 +25,7 @@ if ($SigningConfigured) {
     } finally {
         $sha.Dispose()
     }
-    if ($certificateHash -ine $ExpectedCertificateSha256) {
+    if ($approved -notcontains $certificateHash) {
         throw 'The signer certificate differs from the approved Windows publisher certificate.'
     }
     $publisher = $signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false).Trim()
@@ -33,6 +34,8 @@ if ($SigningConfigured) {
     }
     $receipt.status = 'verified'
     $receipt.publisher = $publisher
+    $receipt.signerSha256 = $certificateHash.ToLowerInvariant()
+    $receipt.timestamped = $true
 } else {
     if ($signature.Status -ne 'NotSigned') { throw 'The installer has an unexpected Windows signature status.' }
     $receipt.status = 'unsigned'

@@ -115,16 +115,16 @@ message and returns 500 `internal_error`.
 
 | Route | Methods | Auth | Behaviour |
 | --- | --- | --- | --- |
-| `/health` | GET, HEAD | none | 503 `{status:'degraded'}` if `secretsReady` is false or the D1 query throws. Otherwise 200 `{status:'ok', service, database:'ok', releaseReady}`, where `releaseReady` is whether the newest active release's R2 object exists. `cache-control: no-store`. |
+| `/live` | GET, HEAD | none | Confirms the Worker responds. |
+| `/health` | GET, HEAD | none | Stable readiness. Returns 503 unless the stable release and its matching R2 object are available. |
 | `/favicon.ico` | GET, HEAD | none | Cacheable SVG application icon used by the public download page; unsupported methods return 405. |
 | `/` | GET, HEAD | none | `handlePublicDownloadPage`. Renders the canonical public page, current release, five previous stable releases and a freshly signed installer URL. |
 | `/api/v1/releases/public/latest` | GET, HEAD | none | `handlePublicLatest`. Returns the active stable signed manifest for installed-app version checks. Requires deployment secrets, returns 404 when no release exists, and never returns a client or administrator credential. |
 | `/api/v1/releases/latest` | GET, HEAD | client bearer | `handleLatest`. 404 on bad token or no release. Returns the signed manifest; HEAD returns the headers with no body. |
 | `/update.json` | GET, HEAD | client bearer | **The same handler.** This is the path the desktop client calls. |
-| `/api/v1/admin/releases` | POST | admin `x-api-key` | `handlePublish`. Registers a release (body ≤ 32 KB, else 413). See below. |
+| `/api/v1/admin/releases` | POST | release automation `x-api-key` | `handlePublish`. Registers a release (body ≤ 32 KB, else 413). See below. |
 | `/api/v1/admin/releases/activate` | POST | admin `x-api-key` | `handleActivate`: `{id, channel}` re-activates an existing release whose R2 object still matches; the pipeline's rollback. |
 | `/download` | GET, HEAD | none | Alias of the canonical public page. Existing signed manifest URLs continue to work, but each page load creates a new installer signature rather than extending or reusing the query expiry. |
-| `/download/<token>` | GET, HEAD | client token in path | `handleStableDownloadPage`. Permanent private entry page for a human browser; always shows the active release and mints a fresh signed installer link on each load. Wrong tokens return the generic 404. |
 | `/download/latest.exe` | GET, HEAD | signed link | `handleBinary`. Streams the R2 object, with single-range support. |
 
 `releaseHistory` reads only the same `app_id` and stable channel, excludes the
@@ -160,8 +160,7 @@ private, no-store, max-age=0`; public visibility does not make expiring links
 cacheable. Download pages add a script-blocking CSP (`default-src 'none';
 style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; base-uri
 'none'; form-action 'none'; frame-ancestors 'none'`). `/` and `/download` carry
-`x-robots-tag: index, follow`; `/download/<token>` remains `noindex, nofollow,
-noarchive`.
+`x-robots-tag: index, follow`.
 
 ## Worker Authentication
 
@@ -170,17 +169,14 @@ Two distinct levels, and they never overlap.
 | Level | Function | Credential | Header | Routes |
 | --- | --- | --- | --- | --- |
 | Client | `isClientAuthorized` | `DOWNLOAD_ACCESS_TOKEN` | `authorization: Bearer <token>` | `/api/v1/releases/latest`, `/update.json` |
-| Install page | `handleStableDownloadPage` | `DOWNLOAD_ACCESS_TOKEN` | final `/download/<token>` path segment | Stable human-facing install page; token is compared in constant time and never rendered into the HTML. |
-| Admin | `isAdminAuthorized` | `ADMIN_API_KEY` | `x-api-key` | `POST /api/v1/admin/releases` |
+| Release automation | `isReleaseAutomationAuthorized` | `RELEASE_AUTOMATION_KEY` | `x-api-key` | Registration and recovery of the exact failed release |
+| Admin | `isAdminAuthorized` | `ADMIN_API_KEY` | `x-api-key` | Distribution, device administration and explicit restore |
 
 `/`, `/download` and `/api/v1/releases/public/latest` are intentionally public but
 still require `secretsReady` because their installer links must be signed.
-`/download/latest.exe` is authorised
-only by its signed link. `/download/<token>` is the persistent private entry point:
-it validates `DOWNLOAD_ACCESS_TOKEN` directly, then creates a fresh signed
-binary URL without echoing the token into the HTML. The tokenized URL remains
-valid until that Worker secret is rotated, so it belongs in a private bookmark,
-not messages, screenshots, logs or public documentation.
+An installer request needs a signed link. Private distribution also requires an
+enrolled device on each request. Reusable credentials travel in authorization
+headers. The former token-bearing page returns 404.
 
 **Both failures return `notFound()` — a 404 identical to an unknown path.** A
 caller cannot tell a wrong token from a route that does not exist, and
@@ -231,8 +227,7 @@ time.
 The manifest retains a signed `/download` URL because existing desktop clients
 validate that exact schema, origin and query shape. The route itself is public and
 ignores the legacy page signature; every visit to `/` or `/download` mints a new
-installer expiry and signature. `/download/<token>` does the same only after its
-constant-time token check. Every actual R2 installer link therefore remains
+installer expiry and signature. Every actual R2 installer link remains
 short-lived even though the landing page is public and bookmarkable.
 
 ## Range Serving
@@ -265,7 +260,8 @@ and status with no body.
 ## Database Tables
 
 Migrations live in [cloudflare/migrations](../../cloudflare/migrations) and are
-applied `--remote` by the deploy workflow.
+applied through the Cloudflare owner workflow. Migration 0005 adds the verified
+R2 ETag and blocks changes to existing release identity fields.
 
 **`releases`** ([0001_releases.sql](../../cloudflare/migrations/0001_releases.sql))
 — one row per published build, global (there is no tenant concept).
@@ -333,10 +329,10 @@ the Worker, never in this repo.
 | `SIGNING_SECRET` | `secrets.PRIVATE_BROWSER_SIGNING_SECRET` | HMAC for the expiring links |
 | `ADMIN_API_KEY` | `secrets.PRIVATE_BROWSER_ADMIN_API_KEY` | `x-api-key` on the publish route |
 
-The workflows additionally read `secrets.CLOUDFLARE_API_TOKEN`,
-`secrets.CLOUDFLARE_ACCOUNT_ID`, `secrets.CLOUDFLARE_D1_DATABASE_ID` (deploy
-only) and `vars.PRIVATE_BROWSER_DOWNLOAD_URL` — a repository **variable**, not a
-secret, because it is just the Worker's public URL.
+Workers Builds owns the deployment credentials. The Windows release workflow
+reads its staging, publishing, and signing credentials from the
+[protected production environment](../reference/windows-publisher-verification.md).
+`PRIVATE_BROWSER_DOWNLOAD_URL` is the public Worker origin.
 
 **The `database_id` in the tracked file is a placeholder of all zeros.** It is
 not the real database. [render-config.mjs](../../cloudflare/scripts/render-config.mjs)
@@ -405,17 +401,18 @@ runs **only for pull requests** — a `main` run is never cancelled. Node 22 wit
 npm cache in every job.
 
 **CI levels.** Draft PR: nothing. Ready PR: `verify` on Ubuntu only. An app change
-on `main` runs verification and the Windows installer job. An owner-approved
-public release also requires the exact approved commit SHA in the
-`PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED` GitHub Actions repository variable.
-Windows-specific PRs use a manual
-dispatch on their branch to verify and package without publishing.
+on `main` runs verification and builds an unsigned Windows installer.
+Windows-specific PRs use manual dispatch on their branch with the default
+unchecked publish input. For production, the owner sets the exact approved
+commit SHA in the `PRIVATE_BROWSER_AGENT_MODE_RELEASE_APPROVED` repository
+variable. The operator dispatches the workflow on protected `main` with
+**Sign and publish the owner-approved main commit** enabled.
 
 **No job declares secrets.** Every credential is attached to the one step that
 uses it, so `npm ci` and the test suite never run with production values in their
-environment where a dependency's install script could read them (audit finding
-F-11). `publish-cloudflare-release` has its own non-cancelling group; a cancel
-between the R2 upload and D1 registration would strand the object (F-21, F-41).
+environment where a dependency's install script could read them (F-11).
+Production and verification runs on `main` share a concurrency group that
+leaves the running job active (F-21, F-41).
 
 **A failed `verify` keeps its browser test evidence.** The `playwright-evidence`
 artifact (`test-results/` and `blob-report/`, 7 days) is uploaded only on failure.
@@ -425,84 +422,54 @@ profiles, never real browsing data.
 **A documentation-only push builds and publishes nothing.** The `changes` job checks out at
 `fetch-depth: 0` and diffs against the commit production runs (the public
 manifest's `commitSha`, if an ancestor), else `github.event.before`, else
-`HEAD~1`; if every changed path is docs, Windows and publish are skipped. An app change whose run never published still ships with the next push (F-04, F-41).
+`HEAD~1`. When only documentation changed, the Windows verification job is
+skipped (F-04, F-41).
 
-**Application releases are versioned automatically.** On a `main` push,
+**Application releases are versioned automatically.** During production dispatch,
 `prepare-release-version.mjs` reads the public manifest (no configured URL or no
 release yet: it keeps the declared version, so forks still build). It keeps
 a manually raised stable version from `package.json`, or increments the active
 patch version when the declared version is not higher. The Windows job patches
-both package files only in its runner, builds that version and adds `VERSION.txt`
-to the artifact. The publish job restores that exact version before writing R2
-and D1, so the installer filename, object key and manifest cannot disagree.
+both package files in its runner. The same job builds, smoke-tests and publishes
+that version from the same installer file.
 
 | Job | Runs on | Does |
 | --- | --- | --- |
 | `changes` | ubuntu, push only | Summarizes installer inputs against the live release and Worker inputs against the previous push. |
 | `verify` | ubuntu, 15 min | `npm ci`, `npm audit --audit-level=high`, `npm run check` (typecheck → worker typecheck → both Vitest projects → Vite/Electron build → `wrangler deploy --dry-run`) |
 | `windows-installer` | windows, 25 min, needs `verify`, `app=true` or dispatch | Runs Windows tests, packages the installer and runs the [installed smoke](../packaged-windows-smoke.md). Records checksums, SBOM and VSIX evidence. |
-| `publish-cloudflare-release` | ubuntu, 15 min, needs `windows-installer` with `app=true` | Verifies the Windows artifact and its private R2 readback before D1 activation. Records a receipt for the live check and restores the previous release on failure. |
 
 ### codeql.yml
 
 [codeql.yml](../../.github/workflows/codeql.yml) runs GitHub CodeQL's
-`security-extended` JavaScript/TypeScript queries on non-docs pushes to `main`,
-every Monday, and on dispatch (not on PRs). It has read-only repository access plus the minimum
+`security-extended` JavaScript/TypeScript queries on pull requests to `main`,
+non-docs pushes to `main`, every Monday, and on dispatch. It has read-only repository access plus the minimum
 `security-events: write` permission required to publish findings.
 
-The publish job applies the validated `VERSION.txt`, uploads the exe with
-`wrangler r2 object put private-browser-releases/releases/<version>/<run-number>/<basename> --remote`,
-then runs [publish-release.mjs](../../cloudflare/scripts/publish-release.mjs):
-version from `package.json`, `buildNumber` from `GITHUB_RUN_NUMBER`, `commitSha`
-from `GITHUB_SHA`, SHA-256 and size computed locally and required to equal the
-Windows job's `SHA256SUMS.txt`, POSTed to `/api/v1/admin/releases` with
-`redirect: 'error'` and a 30-second timeout.
+An approved production dispatch uses the `production-release` environment.
+Configure required review and restrict deployments to protected `main` before
+saving production credentials. Immediately before uploading, the workflow
+checks that the approved commit is still at the tip of `main`. Other Windows
+builds use the `windows-verification` environment without production credentials.
+
+Production builds sign the application and installer, verify the approved
+timestamped publisher, and smoke-test the installed candidate. Publication
+stages the exact candidate under a digest-bound private R2 key with
+bucket-scoped S3 credentials. The workflow verifies the readback before using
+its separate Worker key to register the candidate. GitHub artifacts carry only test and release
+evidence. When live verification fails, the workflow restores an eligible
+signed release or suspends the exact failed release.
 
 Write a short [desktop release highlight](../desktop-release-notes/README.md)
-for visible changes. The publisher reads new highlight files from the exact
-candidate commit and compares it with the active release commit. The Updates
-screen and download page render those notes as plain text. Release history
-and the public changelog cover earlier versions.
+for visible changes. The publisher reads new highlights from the exact candidate
+commit and compares them with the active release commit.
 
-Every action is pinned to a commit SHA (Dependabot updates the pins).
+### Worker deployment
 
-**Both Cloudflare jobs no-op gracefully.** A "Detect … configuration" step writes
-`ready=true` to `$GITHUB_OUTPUT` only when every required credential is present
-— including `PRIVATE_BROWSER_DOWNLOAD_TOKEN` at 32 characters or more —
-and each subsequent step is gated on it. With no secrets the job prints
-"Cloudflare release publishing is not configured; the verified GitHub artifact
-remains available" and **succeeds** — a fork or a fresh clone gets a green build
-and a downloadable installer, not a wall of failures.
-
-### deploy-cloudflare.yml
-
-[deploy-cloudflare.yml](../../.github/workflows/deploy-cloudflare.yml) —
-`workflow_dispatch` only; pushes deploy via ci.yml's `deploy-download-service`. Concurrency
-group `private-browser-cloudflare-production` with **`cancel-in-progress:
-false`** — a production deploy is never cancelled mid-flight by a following push.
-
-**It runs the whole gate before touching production.** `npm run check` runs
-before the migration and deploy steps (F-10); the push path gets the same gate
-from `verify`, a `needs` of `deploy-download-service`.
-
-Its gate is stricter than the publish job's: ready only when the API token,
-account id and D1 database id are all non-empty **and** all three Worker secrets
-are at least 32 characters — the same threshold `secretsReady` enforces at
-runtime, so a deploy that would fail closed never happens.
-
-A manual dispatch is an explicit request to release, so it always runs the full
-gate — Playwright Chromium, then `npm run check` — before touching production.
-
-Steps, in order, all gated:
-
-1. `npx playwright install --with-deps chromium`
-2. `npm run check`
-3. `node cloudflare/scripts/render-config.mjs` — writes `wrangler.deploy.jsonc`
-4. `wrangler d1 migrations apply DB --remote --config cloudflare/wrangler.deploy.jsonc`
-5. `wrangler deploy --config cloudflare/wrangler.deploy.jsonc --keep-vars`
-6. `wrangler secret bulk` fed a JSON object of the three secrets on stdin
-
-Migrations run before the deploy; secrets are installed after it.
+Workers Builds owns production Worker deployment. The GitHub manual workflow
+shows deployment guidance. Before the first signed publication, apply migration
+0005 through the approved Cloudflare process and verify stable readiness, the
+active Worker version and the authenticated release flow.
 
 ### The release scripts
 
@@ -512,10 +479,10 @@ mistake in them used to surface live. They are now type-checked by
 ([tsconfig.scripts.json](../../cloudflare/tsconfig.scripts.json), `checkJs` with
 `strictNullChecks` on and `noImplicitAny` off) inside the gate — F-22.
 
-Both scripts that carry a credential call `requireHttpsEndpoint`
+Scripts that carry credentials call `requireProductionReleaseEndpoint`
 ([require-https-endpoint.mjs](../../cloudflare/scripts/require-https-endpoint.mjs))
 before their first request: a bare public HTTPS origin, no embedded credentials,
-no path, no query, no private host. `PRIVATE_BROWSER_DOWNLOAD_URL` is a GitHub
+no path or query, and an exact match for the reviewed production origin. `PRIVATE_BROWSER_DOWNLOAD_URL` is a GitHub
 *variable*, not a secret — unmasked in logs, edited through a weaker part of the
 settings UI than the admin key it addresses — and was used unvalidated, so
 editing one field could redirect that key to another host or downgrade it to
@@ -553,9 +520,8 @@ The electron-builder configuration lives **inline in `package.json`**, in the
   validated VSIX is copied into the packaged application's resources so the
   Developer panel installs a fixed artifact rather than downloading executable
   extension code.
-- CI signs when both `WINDOWS_CODE_SIGNING_CERTIFICATE` and
-  `WINDOWS_CODE_SIGNING_PASSWORD` exist. Without that pair the build remains
-  verifiable but Windows shows an unknown-publisher warning.
+- Stable CI requires the production signing credentials and the approved public
+  certificate fingerprint. Ordinary Windows verification builds remain unsigned.
 - `loadBrowserProcessSpecificV8Snapshot` stays disabled: enabling it without a
   matching packaged browser-process snapshot makes Electron fail before startup.
   This is a compatibility fuse, not a privilege boundary; the other sandbox,

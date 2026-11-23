@@ -60,18 +60,32 @@ async function githubStatus(workflow, options, repo) {
   }
 }
 
+async function probeReleaseStatus(endpoint) {
+  const origin = requireHttpsEndpoint(endpoint);
+  const distribution = await fetch(origin + '/api/v1/distribution', requestOptions());
+  if (distribution.status === 404) return probePublicRelease(origin);
+  if (!distribution.ok) throw new Error('Could not determine download distribution mode.');
+  const { mode } = await distribution.json();
+  if (mode === 'public') return probePublicRelease(origin);
+  if (mode !== 'private') throw new Error('Unknown download distribution mode.');
+  const readiness = await fetch(origin + '/health', requestOptions());
+  return { private: true, releaseReady: readiness.ok && (await readiness.json()).releaseReady === true };
+}
+
 async function report() {
   const repo = process.env.GITHUB_REPOSITORY || 'digitronics2025/Private-Browser';
   const mainPush = ['--branch', 'main', '--event', 'push'];
-  const [app, appFailure, worker, publicResult] = await Promise.all([
+  const [app, appFailure, result] = await Promise.all([
     githubStatus('ci.yml', mainPush, repo),
     githubStatus('ci.yml', [...mainPush, '--status', 'failure'], repo),
-    githubStatus('deploy-cloudflare.yml', ['--branch', 'main'], repo),
-    probePublicRelease(process.env.PRIVATE_BROWSER_DOWNLOAD_URL).catch(() => undefined),
+    probeReleaseStatus(process.env.PRIVATE_BROWSER_DOWNLOAD_URL).catch(() => undefined),
   ]);
   const lines = ['## Private Browser release status', ''];
-  if (publicResult) {
-    const { version, build, commit, manifestAgeHours, publishedAt, releaseReady, rangeAvailable } = publicResult;
+  if (result?.private) {
+    lines.push(`- Private stable release **${result.releaseReady ? 'ready' : 'unavailable'}**`,
+      '- Installer delivery is verified by the authenticated production release job.');
+  } else if (result) {
+    const { version, build, commit, manifestAgeHours, publishedAt, releaseReady, rangeAvailable } = result;
     lines.push(
       `- Active installer **${version}** (build ${build}, revision \`${commit.slice(0, 12)}\`)`,
       `- Manifest published ${manifestAgeHours} hours ago (${publishedAt})`,
@@ -80,11 +94,11 @@ async function report() {
     );
   } else lines.push('- Public manifest and installer probe **unavailable**');
   lines.push(`- Latest main installer workflow ${app}`, `- Last failed main installer workflow ${appFailure}`,
-    `- Latest manual Worker deploy workflow ${worker}`, '');
+    '');
   const summary = lines.join('\n');
   process.stdout.write(summary);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
-  if (!publicResult?.releaseReady || !publicResult.rangeAvailable) process.exitCode = 1;
+  if (!result?.releaseReady || (!result.private && !result.rangeAvailable)) process.exitCode = 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await report();

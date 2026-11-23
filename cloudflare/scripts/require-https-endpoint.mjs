@@ -35,3 +35,11 @@ export function requireHttpsEndpoint(value, variableName = 'PRIVATE_BROWSER_DOWN
 
   return url.origin;
 }
+
+export const productionReleaseOrigin = 'https://private-browser-downloads.digitronics-electro.workers.dev';
+
+export function requireProductionReleaseEndpoint(value) {
+  const origin = requireHttpsEndpoint(value);
+  if (origin !== productionReleaseOrigin) throw new Error('Release credentials require the approved production origin.');
+  return origin;
+}

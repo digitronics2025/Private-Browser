@@ -71,7 +71,7 @@ describe('Cloudflare release protocol', () => {
       DOWNLOAD_ACCESS_TOKEN: access, SIGNING_SECRET: 'fixture-signing-'.repeat(3), ADMIN_API_KEY: 'fixture-admin-'.repeat(3),
     };
     const get = (path: string) => worker.fetch(new Request('https://downloads.example.test' + path), env);
-    for (const path of ['/', '/download/' + access]) {
+    for (const path of ['/', '/download']) {
       const response = await get(path);
       expect(response.status).toBe(200);
       const html = await response.text();
