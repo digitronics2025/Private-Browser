@@ -290,8 +290,10 @@ Managed updates use a main-process HTTPS stream without redirects, a private
 staging directory, an installer size cap, and the Windows Internet zone marker.
 Opening requires an explicit action in an unlocked regular Account Space,
 a fresh matching release manifest, a second hash of the staged file and a
-Windows verification of the approved publisher. New stable releases require
-verified publisher evidence and an immutable D1 record bound to verified R2 bytes.
+Windows verification of the approved publisher. Unsigned public installers are
+available only with explicit digest-bound unsigned evidence and a visible warning
+on the download page; the managed updater continues to block them. Stable release
+records remain immutable and bound to verified R2 bytes.
 
 ## Credentials in the repository
 
@@ -305,9 +307,13 @@ Local values belong in `.env` or `cloudflare/.dev.vars`; production values are s
 
 ## Known external requirement
 
-Stable publication requires an owner-approved Windows publisher. Configure the
-protected signing environment and verify the first signed installer through an
-independent channel for users upgrading from an unsigned build.
+Stable publication may be signed with an owner-approved Windows publisher or
+explicitly unsigned. Unsigned releases retain exact-commit approval, protected
+production review, immutable digest-bound publisher evidence and R2 readback
+verification; the public download page identifies the installer as unsigned.
+Managed updates continue to require an approved Windows publisher. Users installing
+an unsigned build must review the published checksum and Windows may show a
+SmartScreen warning.
 A commercial URL-reputation feed is also still required for live phishing and
 malware-site intelligence; Google Safe Browsing's free service is not licensed
 for this business use case.

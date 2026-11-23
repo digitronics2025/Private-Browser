@@ -1,10 +1,13 @@
 # Windows publisher verification
 
-The production workflow signs both the installed application and the final
-installer. It checks the embedded Authenticode signature, the timestamp and the
-SHA-256 fingerprint of the signing certificate. The approved fingerprint is
-packaged into the application. Managed updates and the Downloads panel
-verify it on Windows before opening a release installer.
+When signing is configured, the production workflow signs both the installed
+application and final installer. It checks the embedded Authenticode signature,
+timestamp and SHA-256 certificate fingerprint. The approved fingerprint is
+packaged into the application. Managed updates and the Downloads panel verify it
+on Windows before opening a release installer. The private owner may instead
+publish an explicitly unsigned release without signing secrets. The public page
+warns that Windows reported no publisher signature and provides the installer
+checksum. Managed updates still block unsigned installers.
 
 Configure the GitHub environment named `production-release` with an approved
 reviewer and a deployment policy restricted to protected `main`. Use these
@@ -41,7 +44,9 @@ disposable Windows profiles. Distribute the expected publisher identity via a
 trusted administrator or independently controlled owner channel. The older
 unsigned client itself cannot enforce an independent publisher identity.
 
-The workflow tests the exact signed installer. The staging step uses the
+The workflow tests the exact installer. Signed builds require verified publisher
+evidence; unsigned builds require an explicit unsigned receipt bound to the exact
+installer SHA-256. In either case the staging step uses the
 bucket-scoped S3 credential to write new objects conditionally and verify the
 private R2 readback. A separate step uses the scoped Worker release key to
 publish. Retain the `.publisher.json` object

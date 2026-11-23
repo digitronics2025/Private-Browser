@@ -30,5 +30,8 @@ The usual download and update routes serve the current build.
    deliberate manual install after reviewing profile compatibility.
 
 The automated release pipeline uses the same activation route when its live
-verification fails. If no eligible signed release can be restored, it suspends
-the exact failed build. Prepare a higher-version signed forward fix in that case. The history keeps direct links to retained installer objects private.
+verification fails. An eligible signed release or an explicitly unsigned release
+with digest-bound publisher evidence can be restored. If no eligible release can
+be restored, it suspends the exact failed build. Prepare a higher-version forward
+fix in that case. The history keeps direct links to retained installer objects
+private.

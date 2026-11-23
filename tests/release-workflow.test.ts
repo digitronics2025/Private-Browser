@@ -49,18 +49,21 @@ describe('release workflow', () => {
     }
   });
 
-  it('requires a signed candidate, verifies private R2 bytes and suspends a failed release without an eligible restore', () => {
+  it('requires digest-bound publisher evidence, verifies private R2 bytes and suspends a failed release without an eligible restore', () => {
     const packaging = step('Build hardened Windows installer');
     const loadSigner = step('Load approved Windows signing certificate');
-    const signed = step('Verify signed app and installer');
+    const signed = step('Record Windows publisher evidence');
     const stage = step('Stage and verify private R2 objects');
     const publish = step('Publish installer from private R2');
     expect(loadSigner).toContain('if: env.PRIVATE_BROWSER_STABLE_BUILD');
     expect(loadSigner).toContain('import-windows-publisher.ps1');
+    expect(readFileSync(join(process.cwd(), 'cloudflare/scripts/import-windows-publisher.ps1'), 'utf8')).toContain('configured=false');
     expect(packaging).toContain('steps.signer.outputs.thumbprint');
     expect(packaging).not.toContain('secrets.');
     expect(step('Remove production signing certificate')).toContain('-DeleteKey');
     expect(signed).toContain('record-windows-publisher.ps1');
+    expect(signed).toContain('SIGNING_CONFIGURED');
+    expect(stage).toContain('Valid signed or explicit unsigned publisher evidence is required');
     expect(signed).toContain('win-unpacked/Private Browser.exe');
     expect(stage).toContain('verify-release-candidate.mjs "$installer" "$candidate_dir/candidate.exe"');
     expect(stage).toContain("put-object --bucket");
@@ -89,7 +92,7 @@ describe('release workflow', () => {
     expect(smoke.trim()).toMatch(/if \(\$testExit -ne 0\) \{ exit \$testExit \}$/);
     expect(workflow.indexOf(smoke)).toBeGreaterThan(workflow.indexOf(step('Build hardened Windows installer')));
     expect(workflow.indexOf(smoke)).toBeLessThan(workflow.indexOf(step('Stage and verify private R2 objects')));
-    expect(step('Keep signed release evidence')).not.toMatch(/\.exe|\.vsix/);
+    expect(step('Keep release evidence')).not.toMatch(/\.exe|\.vsix/);
     expect(workflow).not.toContain('name: private-browser-windows');
   });
 

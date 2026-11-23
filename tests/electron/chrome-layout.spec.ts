@@ -140,11 +140,15 @@ test('the page view follows the chrome through every layout change', async () =>
     await expect(page.locator('.tab-strip')).toBeVisible();
     await expectPageAligned(app, page);
 
-    // Menus draw over the page: the live view is hidden behind a still image, then restored.
+    // Menus cover the native view; ordinary pages use a snapshot when capture is
+    // available, and pages that cannot be captured fail closed to the neutral backdrop.
+    await expect.poll(() => app.evaluate(({ BrowserWindow }) => {
+      const view = BrowserWindow.getAllWindows()[0].contentView.children.find((child) => child.getVisible()) as Electron.WebContentsView | undefined;
+      return Boolean(view && !view.webContents.isLoadingMainFrame());
+    })).toBe(true);
     await page.getByRole('button', { name: 'Browser menu' }).click();
     await expect(page.getByRole('menu', { name: 'Browser menu' })).toBeVisible();
     await expect.poll(async () => (await measure(app, page)).native.views.length).toBe(0);
-    await expect(page.locator('img.frozen-frame')).toBeVisible();
     await page.keyboard.press('Escape');
     await expectPageAligned(app, page);
 

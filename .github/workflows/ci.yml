@@ -253,26 +253,31 @@ jobs:
         shell: pwsh
         env:
           PRIVATE_BROWSER_WINDOWS_SIGNER_THUMBPRINT: ${{ steps.signer.outputs.thumbprint }}
-          PRIVATE_BROWSER_WINDOWS_PUBLISHERS: ${{ env.PRIVATE_BROWSER_STABLE_BUILD == 'true' && vars.WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256 || '' }}
+          PRIVATE_BROWSER_WINDOWS_PUBLISHERS: ${{ steps.signer.outputs.configured == 'true' && vars.WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256 || '' }}
         run: |
-          if ($env:PRIVATE_BROWSER_STABLE_BUILD -eq 'true' -and !$env:PRIVATE_BROWSER_WINDOWS_SIGNER_THUMBPRINT) {
+          if ($env:PRIVATE_BROWSER_STABLE_BUILD -eq 'true' -and '${{ steps.signer.outputs.configured }}' -eq 'true' -and !$env:PRIVATE_BROWSER_WINDOWS_SIGNER_THUMBPRINT) {
             throw 'Production signing certificate is missing from the Windows certificate store.'
           }
           npm run dist
           exit $LASTEXITCODE
-      - name: Verify signed app and installer
+      - name: Record Windows publisher evidence
         if: env.PRIVATE_BROWSER_STABLE_BUILD == 'true'
         shell: pwsh
         env:
           EXPECTED_CERTIFICATE_SHA256: ${{ vars.WINDOWS_CODE_SIGNING_CERTIFICATE_SHA256 }}
+          SIGNING_CONFIGURED: ${{ steps.signer.outputs.configured }}
         run: |
           $installer = Get-Item -LiteralPath "release/Private-Browser-${{ steps.packaged-version.outputs.version }}-Setup.exe"
           $hash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $($installer.Name)" | Set-Content release/SHA256SUMS.txt
-          ./cloudflare/scripts/record-windows-publisher.ps1 -Installer $installer.FullName -Sha256 $hash -Destination release/PUBLISHER.json -SigningConfigured -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256
+          $publisherArgs = @('-Installer', $installer.FullName, '-Sha256', $hash, '-Destination', 'release/PUBLISHER.json')
+          if ($env:SIGNING_CONFIGURED -eq 'true') { $publisherArgs += @('-SigningConfigured', '-ExpectedCertificateSha256', $env:EXPECTED_CERTIFICATE_SHA256) }
+          ./cloudflare/scripts/record-windows-publisher.ps1 @publisherArgs
           $app = Get-Item -LiteralPath 'release/win-unpacked/Private Browser.exe'
           $appHash = (Get-FileHash -LiteralPath $app.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          ./cloudflare/scripts/record-windows-publisher.ps1 -Installer $app.FullName -Sha256 $appHash -Destination release/APP-PUBLISHER.json -SigningConfigured -ExpectedCertificateSha256 $env:EXPECTED_CERTIFICATE_SHA256
+          $appPublisherArgs = @('-Installer', $app.FullName, '-Sha256', $appHash, '-Destination', 'release/APP-PUBLISHER.json')
+          if ($env:SIGNING_CONFIGURED -eq 'true') { $appPublisherArgs += @('-SigningConfigured', '-ExpectedCertificateSha256', $env:EXPECTED_CERTIFICATE_SHA256) }
+          ./cloudflare/scripts/record-windows-publisher.ps1 @appPublisherArgs
           npm sbom --sbom-format cyclonedx | Out-File -Encoding utf8 release/SBOM.cdx.json
           exit $LASTEXITCODE
       - name: Remove production signing certificate
@@ -368,7 +373,7 @@ jobs:
           "${s3[@]}" put-object --bucket "$bucket" --key "$object_key" --body "$installer" --content-type application/vnd.microsoft.portable-executable --if-none-match '*' >/dev/null
           "${s3[@]}" get-object --bucket "$bucket" --key "$object_key" "$candidate_dir/candidate.exe" >/dev/null
           receipt="$(node cloudflare/scripts/verify-release-candidate.mjs "$installer" "$candidate_dir/candidate.exe")"
-          node --input-type=module -e 'import { readFileSync } from "node:fs"; import { parsePublisherReceipt } from "./cloudflare/src/publisher-receipt.mjs"; const receipt = JSON.parse(process.argv[1]); const publisher = JSON.parse(readFileSync("release/PUBLISHER.json", "utf8").replace(/^\uFEFF/, "")); if (!parsePublisherReceipt(publisher, receipt.sha256)?.signerSha256) throw new Error("Approved Windows publisher evidence is required");' "$receipt"
+          node --input-type=module -e 'import { readFileSync } from "node:fs"; import { parsePublisherReceipt } from "./cloudflare/src/publisher-receipt.mjs"; const receipt = JSON.parse(process.argv[1]); const publisher = JSON.parse(readFileSync("release/PUBLISHER.json", "utf8").replace(/^\uFEFF/, "")); const evidence = parsePublisherReceipt(publisher, receipt.sha256); if (!evidence || (evidence.status === "verified" && !evidence.signerSha256)) throw new Error("Valid signed or explicit unsigned publisher evidence is required");' "$receipt"
           "${s3[@]}" put-object --bucket "$bucket" --key "$object_key.publisher.json" --body release/PUBLISHER.json --content-type application/json --if-none-match '*' >/dev/null
           "${s3[@]}" get-object --bucket "$bucket" --key "$object_key.publisher.json" "$candidate_dir/publisher.json" >/dev/null
           cmp --silent release/PUBLISHER.json "$candidate_dir/publisher.json"
@@ -420,7 +425,7 @@ jobs:
             fi
             exit 1
           fi
-      - name: Keep signed release evidence
+      - name: Keep release evidence
         if: env.PRIVATE_BROWSER_STABLE_BUILD == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
