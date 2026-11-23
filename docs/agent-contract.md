@@ -20,6 +20,15 @@ do not authorize product deployment, migrations, APK publication or new credenti
 Preserve mandatory human approval and signing identity. Update behavior docs when
 their contract changes. Edit this authored source and regenerate all entrypoints.
 
+## Advice, improvement requests and reviews
+
+For advice, comparisons and open-ended improvement requests, surface relevant,
+distinct options before prioritizing them. Ground options in project workflows and
+evidence; name likely beneficiaries, benefits and material tradeoffs. Defect reviews
+lead with verified findings by severity and file:line, and say when none are found.
+App-improvement reviews explore practical options before priorities and remain
+read-only unless implementation is requested.
+
 ## Agent tool permissions
 
 The owner pre-approved the four Cloudflare MCP tools (`search`, `docs`, `whoami`,
