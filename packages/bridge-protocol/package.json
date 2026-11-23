@@ -46,7 +46,7 @@
   },
   "dependencies": {
     "zod": "4.6.7",
-    "tldts": "^7.4.15"
+    "tldts": "^7.5.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
